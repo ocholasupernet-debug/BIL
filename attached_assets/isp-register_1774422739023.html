@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register Your ISP — OcholaSupernet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen flex" style="background:#0d1117">
+
+  <!-- Left panel -->
+  <div class="hidden lg:flex flex-col justify-center px-14 w-80 flex-shrink-0 border-r border-white/8" style="background:#070b13">
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background:#6366f1">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
+      </div>
+      <span class="text-white font-bold text-base">isplatty.org</span>
+    </div>
+    <h1 class="text-2xl font-bold text-white leading-snug mb-3">Launch your ISP<br /><span style="color:#818cf8">in minutes.</span></h1>
+    <p class="text-slate-400 text-sm leading-relaxed mb-6">Register and get a fully managed admin portal with customer billing, hotspot &amp; PPPoE management.</p>
+    <div class="space-y-2.5">
+      <div class="flex items-center gap-2 text-sm text-slate-400"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#818cf8" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Dedicated subdomain portal</div>
+      <div class="flex items-center gap-2 text-sm text-slate-400"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#818cf8" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>M-Pesa STK Push billing</div>
+      <div class="flex items-center gap-2 text-sm text-slate-400"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#818cf8" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>MikroTik router integration</div>
+      <div class="flex items-center gap-2 text-sm text-slate-400"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#818cf8" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>FreeRADIUS accounting</div>
+    </div>
+  </div>
+
+  <!-- Right form -->
+  <div class="flex-1 flex items-center justify-center p-6">
+    <div class="w-full max-w-md">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#0d1117">
+        <div class="px-8 py-5 border-b border-white/6" style="background:#161b22">
+          <h2 class="text-base font-bold text-white">Register Your ISP</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Create your account and choose your portal URL</p>
+        </div>
+        <div class="px-8 py-6 space-y-4">
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">ISP / Company Name <span class="text-red-400">*</span></label>
+            <input type="text" placeholder="My Fiber ISP Ltd" oninput="autoSlug(this.value)"
+              class="w-full text-sm px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600 bg-transparent" style="background:#0a0f14"/>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Username <span class="text-red-400">*</span></label>
+              <input type="text" placeholder="admin_user" class="w-full text-sm px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0a0f14"/>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Password <span class="text-red-400">*</span></label>
+              <input type="password" placeholder="••••••••" class="w-full text-sm px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0a0f14"/>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Email</label>
+              <input type="email" placeholder="you@myisp.com" class="w-full text-sm px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0a0f14"/>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Phone</label>
+              <input type="text" placeholder="+254 7XX XXX XXX" class="w-full text-sm px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0a0f14"/>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">License Key <span class="text-red-400">*</span></label>
+            <input type="text" placeholder="OCH-PRO-2026-XXXX-XXXX" class="w-full text-sm font-mono px-4 py-2.5 rounded-lg border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0a0f14"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Portal Subdomain <span class="text-red-400">*</span></label>
+            <div class="flex items-center rounded-lg border border-white/10 overflow-hidden" style="background:#0a0f14">
+              <span class="text-slate-600 text-xs px-3 border-r border-white/8 py-2.5 font-mono">/admin/</span>
+              <input id="slugInput" type="text" placeholder="myisp" oninput="updatePreview()"
+                class="flex-1 text-sm font-mono px-3 py-2.5 bg-transparent" style="color:#818cf8;outline:none"/>
+            </div>
+            <p id="urlPreview" class="text-[11px] font-mono mt-1.5 hidden" style="color:#818cf8">→ <span id="urlText"></span></p>
+          </div>
+          <button onclick="showSuccess()"
+            class="w-full text-sm font-bold py-3 rounded-xl text-white transition mt-1"
+            style="background:linear-gradient(135deg,#6366f1,#4f46e5)">
+            Register ISP →
+          </button>
+          <p class="text-center text-xs text-slate-600">Your account will be activated by the Super Admin.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Success overlay -->
+  <div id="successOverlay" class="hidden fixed inset-0 flex items-center justify-center p-6 z-50" style="background:#0d1117">
+    <div class="w-full max-w-sm rounded-2xl border border-white/10 p-8 text-center" style="background:#161b22">
+      <div class="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4" style="background:rgba(16,185,129,0.15)">
+        <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <h2 class="text-lg font-bold text-white mb-2">Registration Submitted!</h2>
+      <p class="text-slate-400 text-sm mb-5">Pending Super Admin approval. Your portal will be at:</p>
+      <div class="rounded-xl border border-indigo-500/20 p-3 mb-5" style="background:rgba(30,27,75,0.3)">
+        <p class="font-mono text-sm" style="color:#818cf8" id="successUrl">https://isplatty.org/admin/myisp</p>
+      </div>
+      <button onclick="location.href='admin-login.html'" class="w-full py-2.5 rounded-xl text-sm font-semibold text-white" style="background:linear-gradient(135deg,#6366f1,#4f46e5)">Go to Login →</button>
+    </div>
+  </div>
+
+  <script>
+    function autoSlug(v) { document.getElementById('slugInput').value = v.toLowerCase().replace(/[^a-z0-9]/g,''); updatePreview(); }
+    function updatePreview() { const s = document.getElementById('slugInput').value; const p = document.getElementById('urlPreview'); if(s){p.classList.remove('hidden');document.getElementById('urlText').textContent='https://isplatty.org/admin/'+s;}else{p.classList.add('hidden');} }
+    function showSuccess() { const s = document.getElementById('slugInput').value||'myisp'; document.getElementById('successUrl').textContent='https://isplatty.org/admin/'+s; document.getElementById('successOverlay').classList.remove('hidden'); }
+  </script>
+</body>
+</html>

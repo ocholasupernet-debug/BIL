@@ -1,22 +1,36 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: OcholaSupernet API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: isps
+    description: ISP management
+  - name: users
+    description: User management
+  - name: customers
+    description: Customer management
+  - name: plans
+    description: Plan management
+  - name: vouchers
+    description: Voucher management
+  - name: transactions
+    description: Transaction management
+  - name: routers
+    description: Router/network management
+  - name: sessions
+    description: PPPoE sessions
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +38,450 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /isps:
+    get:
+      operationId: listIsps
+      tags: [isps]
+      summary: List all ISPs
+      responses:
+        "200":
+          description: List of ISPs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Isp"
+    post:
+      operationId: createIsp
+      tags: [isps]
+      summary: Create an ISP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIspBody"
+      responses:
+        "201":
+          description: Created ISP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Isp"
+
+  /isps/{id}:
+    get:
+      operationId: getIsp
+      tags: [isps]
+      summary: Get an ISP
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ISP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Isp"
+    patch:
+      operationId: updateIsp
+      tags: [isps]
+      summary: Update an ISP
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIspBody"
+      responses:
+        "200":
+          description: Updated ISP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Isp"
+
+  /customers:
+    get:
+      operationId: listCustomers
+      tags: [customers]
+      summary: List customers
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of customers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Customer"
+    post:
+      operationId: createCustomer
+      tags: [customers]
+      summary: Create a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerBody"
+      responses:
+        "201":
+          description: Created customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+
+  /customers/{id}:
+    get:
+      operationId: getCustomer
+      tags: [customers]
+      summary: Get a customer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+    patch:
+      operationId: updateCustomer
+      tags: [customers]
+      summary: Update a customer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerBody"
+      responses:
+        "200":
+          description: Updated customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+    delete:
+      operationId: deleteCustomer
+      tags: [customers]
+      summary: Delete a customer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /plans:
+    get:
+      operationId: listPlans
+      tags: [plans]
+      summary: List plans
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+        - name: type
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Plan"
+    post:
+      operationId: createPlan
+      tags: [plans]
+      summary: Create a plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanBody"
+      responses:
+        "201":
+          description: Created plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+
+  /plans/{id}:
+    patch:
+      operationId: updatePlan
+      tags: [plans]
+      summary: Update a plan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePlanBody"
+      responses:
+        "200":
+          description: Updated plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+    delete:
+      operationId: deletePlan
+      tags: [plans]
+      summary: Delete a plan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /vouchers:
+    get:
+      operationId: listVouchers
+      tags: [vouchers]
+      summary: List vouchers
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of vouchers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Voucher"
+    post:
+      operationId: generateVouchers
+      tags: [vouchers]
+      summary: Generate vouchers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateVouchersBody"
+      responses:
+        "201":
+          description: Generated vouchers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Voucher"
+
+  /transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List transactions
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+        - name: customerId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+  /routers:
+    get:
+      operationId: listRouters
+      tags: [routers]
+      summary: List routers
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of routers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Router"
+    post:
+      operationId: createRouter
+      tags: [routers]
+      summary: Create a router
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRouterBody"
+      responses:
+        "201":
+          description: Created router
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Router"
+
+  /routers/{id}:
+    patch:
+      operationId: updateRouter
+      tags: [routers]
+      summary: Update a router
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRouterBody"
+      responses:
+        "200":
+          description: Updated router
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Router"
+    delete:
+      operationId: deleteRouter
+      tags: [routers]
+      summary: Delete a router
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: List active PPPoE sessions
+      parameters:
+        - name: ispId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+
+  /stats/platform:
+    get:
+      operationId: getPlatformStats
+      tags: [isps]
+      summary: Get platform-level stats for super admin
+      responses:
+        "200":
+          description: Platform stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformStats"
+
+  /stats/isp/{ispId}:
+    get:
+      operationId: getIspStats
+      tags: [isps]
+      summary: Get ISP-level stats
+      parameters:
+        - name: ispId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ISP stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IspStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +492,478 @@ components:
       required:
         - status
 
+    Isp:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        licenseKey:
+          type: string
+        status:
+          type: string
+          enum: [active, pending, suspended, expired]
+        licenseExpiry:
+          type: string
+          format: date
+        customerCount:
+          type: integer
+        revenueMonth:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - slug
+        - status
+        - createdAt
+
+    CreateIspBody:
+      type: object
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+      required:
+        - name
+        - slug
+
+    UpdateIspBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        status:
+          type: string
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        planId:
+          type: integer
+        planName:
+          type: string
+        status:
+          type: string
+          enum: [active, expired, suspended, pending]
+        balance:
+          type: number
+        ipAddress:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - ispId
+        - name
+        - username
+        - status
+        - createdAt
+
+    CreateCustomerBody:
+      type: object
+      properties:
+        ispId:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        planId:
+          type: integer
+        password:
+          type: string
+      required:
+        - ispId
+        - name
+        - username
+
+    UpdateCustomerBody:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        planId:
+          type: integer
+        status:
+          type: string
+        balance:
+          type: number
+
+    Plan:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum: [pppoe, hotspot]
+        price:
+          type: number
+        speed:
+          type: string
+        duration:
+          type: integer
+        durationUnit:
+          type: string
+          enum: [hours, days, months]
+        dataLimit:
+          type: string
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - ispId
+        - name
+        - type
+        - price
+        - speed
+        - duration
+        - durationUnit
+        - active
+        - createdAt
+
+    CreatePlanBody:
+      type: object
+      properties:
+        ispId:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum: [pppoe, hotspot]
+        price:
+          type: number
+        speed:
+          type: string
+        duration:
+          type: integer
+        durationUnit:
+          type: string
+          enum: [hours, days, months]
+        dataLimit:
+          type: string
+      required:
+        - ispId
+        - name
+        - type
+        - price
+        - speed
+        - duration
+        - durationUnit
+
+    UpdatePlanBody:
+      type: object
+      properties:
+        name:
+          type: string
+        price:
+          type: number
+        speed:
+          type: string
+        duration:
+          type: integer
+        durationUnit:
+          type: string
+        dataLimit:
+          type: string
+        active:
+          type: boolean
+
+    Voucher:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        code:
+          type: string
+        planId:
+          type: integer
+        planName:
+          type: string
+        status:
+          type: string
+          enum: [unused, used, expired]
+        usedBy:
+          type: string
+        usedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - ispId
+        - code
+        - status
+        - createdAt
+
+    GenerateVouchersBody:
+      type: object
+      properties:
+        ispId:
+          type: integer
+        planId:
+          type: integer
+        quantity:
+          type: integer
+        prefix:
+          type: string
+      required:
+        - ispId
+        - planId
+        - quantity
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        customerId:
+          type: integer
+        customerName:
+          type: string
+        type:
+          type: string
+          enum: [payment, renewal, topup, refund]
+        amount:
+          type: number
+        method:
+          type: string
+          enum: [mpesa, cash, bank]
+        mpesaRef:
+          type: string
+        status:
+          type: string
+          enum: [success, pending, failed]
+        planName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - ispId
+        - type
+        - amount
+        - method
+        - status
+        - createdAt
+
+    Router:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        name:
+          type: string
+        ipAddress:
+          type: string
+        model:
+          type: string
+        location:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, maintenance]
+        uptime:
+          type: string
+        apiUser:
+          type: string
+        apiPort:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - ispId
+        - name
+        - ipAddress
+        - status
+        - createdAt
+
+    CreateRouterBody:
+      type: object
+      properties:
+        ispId:
+          type: integer
+        name:
+          type: string
+        ipAddress:
+          type: string
+        model:
+          type: string
+        location:
+          type: string
+        apiUser:
+          type: string
+        apiPassword:
+          type: string
+        apiPort:
+          type: integer
+      required:
+        - ispId
+        - name
+        - ipAddress
+
+    UpdateRouterBody:
+      type: object
+      properties:
+        name:
+          type: string
+        ipAddress:
+          type: string
+        model:
+          type: string
+        location:
+          type: string
+        status:
+          type: string
+        apiUser:
+          type: string
+        apiPassword:
+          type: string
+        apiPort:
+          type: integer
+
+    Session:
+      type: object
+      properties:
+        id:
+          type: integer
+        ispId:
+          type: integer
+        username:
+          type: string
+        ipAddress:
+          type: string
+        uptime:
+          type: string
+        rxBytes:
+          type: string
+        txBytes:
+          type: string
+        routerName:
+          type: string
+        status:
+          type: string
+          enum: [online, offline]
+      required:
+        - id
+        - ispId
+        - username
+        - ipAddress
+        - status
+
+    PlatformStats:
+      type: object
+      properties:
+        totalIsps:
+          type: integer
+        activeIsps:
+          type: integer
+        pendingIsps:
+          type: integer
+        activeLicenses:
+          type: integer
+        expiringLicenses:
+          type: integer
+        platformRevenue:
+          type: number
+        totalCustomers:
+          type: integer
+      required:
+        - totalIsps
+        - activeIsps
+        - pendingIsps
+        - activeLicenses
+        - expiringLicenses
+        - platformRevenue
+        - totalCustomers
+
+    IspStats:
+      type: object
+      properties:
+        customerCount:
+          type: integer
+        activePlans:
+          type: integer
+        revenueMonth:
+          type: number
+        vouchersLeft:
+          type: integer
+        onlineRouters:
+          type: integer
+        totalRouters:
+          type: integer
+        activeSessions:
+          type: integer
+      required:
+        - customerCount
+        - activePlans
+        - revenueMonth
+        - vouchersLeft
+        - onlineRouters
+        - totalRouters
+        - activeSessions

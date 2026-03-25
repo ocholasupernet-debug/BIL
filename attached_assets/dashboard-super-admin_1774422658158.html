@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Super Admin — OcholaSupernet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+
+<body style="background:linear-gradient(135deg,#1e3a8a 0%,#6366f1 100%);color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+
+<!-- Login screen -->
+<div id="loginScreen" class="min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3" style="background:#6366f1">
+        <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+      </div>
+      <h1 class="text-xl font-bold text-white">Super Admin</h1>
+      <p class="text-slate-500 text-xs mt-1">OcholaSupernet Platform Control</p>
+    </div>
+    <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+      <div class="p-6 space-y-3">
+        <div>
+          <label class="text-xs font-medium text-slate-400 mb-1.5 block">Username</label>
+          <input id="saUser" type="text" placeholder="superadmin" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0f172a"/>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-slate-400 mb-1.5 block">Password</label>
+          <input id="saPass" type="password" placeholder="••••••••" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600" style="background:#0f172a"/>
+        </div>
+        <div id="saErr" class="hidden rounded-lg p-3 text-xs text-red-400 border border-red-500/20" style="background:rgba(239,68,68,0.05)">Invalid super admin credentials.</div>
+        <button onclick="saLogin()" class="w-full py-2.5 rounded-xl text-sm font-bold text-white transition" style="background:#6366f1">Sign In</button>
+        <p class="text-center text-xs text-slate-600">Hint: any username / any password</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Super Admin Dashboard -->
+<div id="dashScreen" class="hidden flex min-h-screen">
+  <!-- Sidebar -->
+  <aside class="w-60 flex-shrink-0 flex flex-col border-r border-white/10 shadow-xl" style="background:linear-gradient(160deg,#312e81 0%,#6366f1 100%)">
+    <div class="flex items-center gap-2.5 px-4 py-5 border-b border-white/10">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg" style="background:linear-gradient(135deg,#6366f1 0%,#818cf8 100%)">
+        <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+      </div>
+      <span class="font-bold text-lg text-white tracking-wide">Platform Admin</span>
+    </div>
+  <nav class="flex-1 py-4 px-3 space-y-1 text-sm">
+  <div class="flex items-center justify-between px-3 mb-2">
+    <span></span>
+    <button title="Notifications" class="relative focus:outline-none">
+      <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="#fff" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+      <span class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>
+    </button>
+  </div>
+  <button onclick="switchSATab('overview')" id="sa-tab-overview" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-white font-semibold shadow transition" style="background:rgba(99,102,241,0.18);border:1.5px solid rgba(99,102,241,0.25)"><span style="color:#818cf8">📊 Overview</span></button>
+  <button onclick="switchSATab('isps')" id="sa-tab-isps" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">🏢 ISPs</button>
+  <button onclick="switchSATab('users')" id="sa-tab-users" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">👤 User Management</button>
+  <button onclick="switchSATab('licenses')" id="sa-tab-licenses" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">🔑 Licenses</button>
+  <button onclick="switchSATab('revenue')" id="sa-tab-revenue" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">💰 Revenue</button>
+  <button onclick="switchSATab('logs')" id="sa-tab-logs" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">📝 System Logs</button>
+  <button onclick="switchSATab('settings')" id="sa-tab-settings" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow">⚙️ Settings</button>
+  <a href="#" class="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-200 hover:text-white hover:bg-white/10 transition shadow"><span>❓ Support</span></a>
+    </nav>
+    <div class="p-4 border-t border-white/10">
+      <div class="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-white/10 cursor-pointer">
+        <img src="https://ui-avatars.com/api/?name=Super+Admin&background=6366f1&color=fff&size=48" class="w-9 h-9 rounded-full shadow border-2 border-white/20" alt="Super Admin" />
+        <div class="flex-1 min-w-0"><p class="text-sm font-semibold text-white">Super Admin</p><p class="text-xs text-slate-400">Platform Owner</p></div>
+        <button onclick="saLogout()" class="text-xs text-red-400 hover:text-red-300 font-bold">Sign Out</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="flex-1 overflow-auto" style="background:linear-gradient(120deg,#1e293b 60%,#6366f1 100%)">
+    <!-- Overview panel -->
+    <div id="panel-overview" class="p-7 space-y-6">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 class="text-xl font-bold text-white">Platform Overview</h1>
+          <p class="text-slate-500 text-xs mt-0.5">OcholaSupernet — All ISPs</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="px-4 py-2 rounded-lg bg-green-500 text-white text-xs font-semibold shadow hover:bg-green-600 transition">+ Add ISP</button>
+          <button class="px-4 py-2 rounded-lg bg-blue-500 text-white text-xs font-semibold shadow hover:bg-blue-600 transition">Broadcast Message</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <div class="rounded-2xl border border-white/10 p-6 shadow-lg hover:scale-105 transition-transform duration-200" style="background:linear-gradient(120deg,#6366f1 0%,#312e81 100%)"><p class="text-xs text-slate-200 mb-2">Total ISPs</p><p class="text-3xl font-extrabold text-white drop-shadow">28</p><p class="text-xs text-slate-300 mt-1">3 pending</p></div>
+        <div class="rounded-2xl border border-white/10 p-6 shadow-lg hover:scale-105 transition-transform duration-200" style="background:linear-gradient(120deg,#818cf8 0%,#6366f1 100%)"><p class="text-xs text-slate-200 mb-2">Active Licenses</p><p class="text-3xl font-extrabold" style="color:#fff;text-shadow:0 2px 8px #6366f1">25</p><p class="text-xs text-slate-300 mt-1">2 expiring</p></div>
+        <div class="rounded-2xl border border-white/10 p-6 shadow-lg hover:scale-105 transition-transform duration-200" style="background:linear-gradient(120deg,#4ade80 0%,#6366f1 100%)"><p class="text-xs text-slate-200 mb-2">Platform Revenue</p><p class="text-3xl font-extrabold" style="color:#fff;text-shadow:0 2px 8px #4ade80">KES 140k</p><p class="text-xs text-slate-300 mt-1">This month</p></div>
+        <div class="rounded-2xl border border-white/10 p-6 shadow-lg hover:scale-105 transition-transform duration-200" style="background:linear-gradient(120deg,#6366f1 0%,#818cf8 100%)"><p class="text-xs text-slate-200 mb-2">Total Customers</p><p class="text-3xl font-extrabold text-white drop-shadow">3,842</p><p class="text-xs text-slate-300 mt-1">Across all ISPs</p></div>
+      </div>
+    <!-- User Management panel -->
+    <div id="panel-users" class="hidden p-7 space-y-5">
+      <div class="flex items-center justify-between"><div><h1 class="text-xl font-bold text-white">User Management</h1><p class="text-slate-500 text-xs mt-0.5">Manage platform admins and sub-admins</p></div><button class="text-sm font-semibold px-4 py-2.5 rounded-xl text-white" style="background:#6366f1">+ Add User</button></div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f172a"><th class="px-5 py-3 text-left font-medium text-slate-500">Name</th><th class="px-5 py-3 text-left font-medium text-slate-500">Role</th><th class="px-5 py-3 text-left font-medium text-slate-500">Email</th><th class="px-5 py-3 text-left font-medium text-slate-500">Status</th><th class="px-5 py-3"></th></tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-medium">Chris Ochola</td><td class="px-5 py-3 text-slate-400">Super Admin</td><td class="px-5 py-3 text-slate-400">chris@ochola.com</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td><td class="px-5 py-3"><button class="text-[11px] px-2.5 py-1 rounded-lg border border-white/8 text-slate-400 hover:text-white hover:bg-white/5">Edit</button></td></tr>
+            <tr class="hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-medium">Jane Doe</td><td class="px-5 py-3 text-slate-400">Sub Admin</td><td class="px-5 py-3 text-slate-400">jane@ochola.com</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(234,179,8,0.1);color:#facc15;border-color:rgba(234,179,8,0.25)">pending</span></td><td class="px-5 py-3"><button class="text-[11px] px-2.5 py-1 rounded-lg border border-white/8 text-slate-400 hover:text-white hover:bg-white/5">Edit</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- System Logs panel -->
+    <div id="panel-logs" class="hidden p-7 space-y-5">
+      <div class="flex items-center justify-between"><div><h1 class="text-xl font-bold text-white">System Logs</h1><p class="text-slate-500 text-xs mt-0.5">Recent platform activity and audit trail</p></div></div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f172a"><th class="px-5 py-3 text-left font-medium text-slate-500">Timestamp</th><th class="px-5 py-3 text-left font-medium text-slate-500">User</th><th class="px-5 py-3 text-left font-medium text-slate-500">Action</th></tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-400">2026-03-25 10:12</td><td class="px-5 py-3 text-slate-300 font-medium">Chris Ochola</td><td class="px-5 py-3 text-slate-400">Approved ISP 'FastNet Kenya'</td></tr>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-400">2026-03-25 09:55</td><td class="px-5 py-3 text-slate-300 font-medium">Jane Doe</td><td class="px-5 py-3 text-slate-400">Generated new license key</td></tr>
+            <tr class="hover:bg-white/2"><td class="px-5 py-3 text-slate-400">2026-03-25 09:30</td><td class="px-5 py-3 text-slate-300 font-medium">Chris Ochola</td><td class="px-5 py-3 text-slate-400">Added new sub admin</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-2xl border border-white/8 p-5" style="background:#1e293b">
+          <p class="text-sm font-semibold text-white mb-4">Platform Revenue (6 months)</p>
+          <canvas id="saRevenueChart" height="120"></canvas>
+        </div>
+        <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+          <div class="px-5 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">Pending ISP Approvals</p></div>
+          <div class="divide-y divide-white/4">
+            <div class="px-5 py-3 flex items-center justify-between">
+              <div><p class="text-xs text-slate-300 font-medium">FastNet Kenya</p><p class="text-[10px] text-slate-500">Registered: Mar 22, 2026</p></div>
+              <div class="flex gap-2"><button class="text-[11px] px-2.5 py-1 rounded-lg text-green-400 border border-green-500/25 hover:bg-green-500/5 transition">Approve</button><button class="text-[11px] px-2.5 py-1 rounded-lg text-red-400 border border-red-500/25 hover:bg-red-500/5 transition">Reject</button></div>
+            </div>
+            <div class="px-5 py-3 flex items-center justify-between">
+              <div><p class="text-xs text-slate-300 font-medium">TelcoHub Ltd</p><p class="text-[10px] text-slate-500">Registered: Mar 21, 2026</p></div>
+              <div class="flex gap-2"><button class="text-[11px] px-2.5 py-1 rounded-lg text-green-400 border border-green-500/25 hover:bg-green-500/5 transition">Approve</button><button class="text-[11px] px-2.5 py-1 rounded-lg text-red-400 border border-red-500/25 hover:bg-red-500/5 transition">Reject</button></div>
+            </div>
+            <div class="px-5 py-3 flex items-center justify-between">
+              <div><p class="text-xs text-slate-300 font-medium">NetWave ISP</p><p class="text-[10px] text-slate-500">Registered: Mar 20, 2026</p></div>
+              <div class="flex gap-2"><button class="text-[11px] px-2.5 py-1 rounded-lg text-green-400 border border-green-500/25 hover:bg-green-500/5 transition">Approve</button><button class="text-[11px] px-2.5 py-1 rounded-lg text-red-400 border border-red-500/25 hover:bg-red-500/5 transition">Reject</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ISPs panel -->
+    <div id="panel-isps" class="hidden p-7 space-y-5">
+      <div class="flex items-center justify-between"><div><h1 class="text-xl font-bold text-white">All ISPs</h1><p class="text-slate-500 text-xs mt-0.5">Registered ISP accounts on the platform</p></div><button class="text-sm font-semibold px-4 py-2.5 rounded-xl text-white" style="background:#6366f1">+ Add ISP</button></div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f172a"><th class="px-5 py-3 text-left font-medium text-slate-500">ISP Name</th><th class="px-5 py-3 text-left font-medium text-slate-500">Slug</th><th class="px-5 py-3 text-left font-medium text-slate-500">Customers</th><th class="px-5 py-3 text-left font-medium text-slate-500">Revenue</th><th class="px-5 py-3 text-left font-medium text-slate-500">License</th><th class="px-5 py-3 text-left font-medium text-slate-500">Status</th><th class="px-5 py-3"></th></tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-medium">Ochola ISP</td><td class="px-5 py-3 font-mono text-slate-500">ochola</td><td class="px-5 py-3 text-slate-400">124</td><td class="px-5 py-3 text-green-400 font-semibold">KES 145k</td><td class="px-5 py-3 font-mono text-slate-500">OCH-PRO-2026-DEMO-0001</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td><td class="px-5 py-3"><button class="text-[11px] px-2.5 py-1 rounded-lg border border-white/8 text-slate-400 hover:text-white hover:bg-white/5">Impersonate</button></td></tr>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-medium">FastNet Kenya</td><td class="px-5 py-3 font-mono text-slate-500">fastnet</td><td class="px-5 py-3 text-slate-400">87</td><td class="px-5 py-3 text-green-400 font-semibold">KES 98k</td><td class="px-5 py-3 font-mono text-slate-500">OCH-PRO-2026-FNKE-0012</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td><td class="px-5 py-3"><button class="text-[11px] px-2.5 py-1 rounded-lg border border-white/8 text-slate-400 hover:text-white hover:bg-white/5">Impersonate</button></td></tr>
+            <tr class="hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-medium">TelcoHub Ltd</td><td class="px-5 py-3 font-mono text-slate-500">telcohub</td><td class="px-5 py-3 text-slate-400">0</td><td class="px-5 py-3 text-slate-500">—</td><td class="px-5 py-3 font-mono text-slate-500">—</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(234,179,8,0.1);color:#facc15;border-color:rgba(234,179,8,0.25)">pending</span></td><td class="px-5 py-3"><div class="flex gap-1.5"><button class="text-[11px] px-2.5 py-1 rounded-lg text-green-400 border border-green-500/25">Approve</button><button class="text-[11px] px-2.5 py-1 rounded-lg text-red-400 border border-red-500/25">Reject</button></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Licenses panel -->
+    <div id="panel-licenses" class="hidden p-7 space-y-5">
+      <div class="flex items-center justify-between"><div><h1 class="text-xl font-bold text-white">License Keys</h1><p class="text-slate-500 text-xs mt-0.5">Manage platform license keys</p></div><button class="text-sm font-semibold px-4 py-2.5 rounded-xl text-white" style="background:#6366f1">Generate Key</button></div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f172a"><th class="px-5 py-3 text-left font-medium text-slate-500">License Key</th><th class="px-5 py-3 text-left font-medium text-slate-500">Assigned ISP</th><th class="px-5 py-3 text-left font-medium text-slate-500">Issued</th><th class="px-5 py-3 text-left font-medium text-slate-500">Expires</th><th class="px-5 py-3 text-left font-medium text-slate-500">Status</th></tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 font-mono text-slate-300">OCH-PRO-2026-DEMO-0001</td><td class="px-5 py-3 text-slate-400">Ochola ISP</td><td class="px-5 py-3 text-slate-500">Jan 1, 2026</td><td class="px-5 py-3 text-slate-500">Dec 31, 2026</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td></tr>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 font-mono text-slate-300">OCH-PRO-2026-FNKE-0012</td><td class="px-5 py-3 text-slate-400">FastNet Kenya</td><td class="px-5 py-3 text-slate-500">Feb 15, 2026</td><td class="px-5 py-3 text-slate-500">Feb 15, 2027</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td></tr>
+            <tr class="hover:bg-white/2"><td class="px-5 py-3 font-mono text-slate-300">OCH-PRO-2026-XXXX-XXXX</td><td class="px-5 py-3 text-slate-500">Unassigned</td><td class="px-5 py-3 text-slate-500">Mar 1, 2026</td><td class="px-5 py-3 text-slate-500">Mar 1, 2027</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(71,85,105,0.15);color:#94a3b8;border-color:rgba(71,85,105,0.3)">unused</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Revenue panel -->
+    <div id="panel-revenue" class="hidden p-7 space-y-5">
+      <div><h1 class="text-xl font-bold text-white">Platform Revenue</h1><p class="text-slate-500 text-xs mt-0.5">License fee collection from all ISPs</p></div>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="rounded-2xl border border-white/8 p-5" style="background:#1e293b"><p class="text-xs text-slate-400 mb-1">This Month</p><p class="text-2xl font-bold" style="color:#4ade80">KES 140,000</p></div>
+        <div class="rounded-2xl border border-white/8 p-5" style="background:#1e293b"><p class="text-xs text-slate-400 mb-1">This Year</p><p class="text-2xl font-bold" style="color:#818cf8">KES 1.2M</p></div>
+        <div class="rounded-2xl border border-white/8 p-5" style="background:#1e293b"><p class="text-xs text-slate-400 mb-1">Avg / ISP</p><p class="text-2xl font-bold text-white">KES 5,600</p></div>
+      </div>
+      <div class="rounded-2xl border border-white/8 p-5" style="background:#1e293b">
+        <p class="text-sm font-semibold text-white mb-4">Monthly Collections</p>
+        <canvas id="saRevChart2" height="80"></canvas>
+      </div>
+    </div>
+
+    <!-- Settings panel -->
+    <div id="panel-settings" class="hidden p-7 space-y-5">
+      <div><h1 class="text-xl font-bold text-white">Platform Settings</h1><p class="text-slate-500 text-xs mt-0.5">Global configuration for OcholaSupernet</p></div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#1e293b">
+        <div class="px-6 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">White Label</p></div>
+        <div class="p-6 grid md:grid-cols-2 gap-4">
+          <div><label class="text-xs text-slate-400 mb-1 block">Platform Name</label><input type="text" value="OcholaSupernet" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0f172a"/></div>
+          <div><label class="text-xs text-slate-400 mb-1 block">Platform Domain</label><input type="text" value="isplatty.org" class="w-full text-sm font-mono px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0f172a"/></div>
+          <div><label class="text-xs text-slate-400 mb-1 block">Support Email</label><input type="email" value="support@isplatty.org" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0f172a"/></div>
+          <div><label class="text-xs text-slate-400 mb-1 block">License Price (KES/mo)</label><input type="number" value="5000" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0f172a"/></div>
+        </div>
+      </div>
+      <button class="text-sm font-semibold px-6 py-2.5 rounded-xl text-white" style="background:#6366f1">Save Platform Settings</button>
+    </div>
+  </main>
+</div>
+
+<script>
+  const saTabs=['overview','isps','users','licenses','revenue','logs','settings'];
+  function switchSATab(t) {
+    saTabs.forEach(x=>{
+      document.getElementById('panel-'+x).classList.toggle('hidden',x!==t);
+      const btn=document.getElementById('sa-tab-'+x);
+      if(x===t){btn.style.background='rgba(99,102,241,0.15)';btn.style.border='1px solid rgba(99,102,241,0.2)';btn.querySelector('span').style.color='#818cf8';}
+      else{btn.style.background='';btn.style.border='none';btn.querySelector('span')?btn.querySelector('span').style.color='':null;btn.style.color='#94a3b8';}
+    });
+  }
+  function saLogin() {
+    const u=document.getElementById('saUser').value,p=document.getElementById('saPass').value;
+    if(!u||!p){document.getElementById('saErr').classList.remove('hidden');return;}
+    document.getElementById('loginScreen').classList.add('hidden');
+    const d=document.getElementById('dashScreen');d.classList.remove('hidden');d.style.display='flex';
+    setTimeout(()=>{
+      new Chart(document.getElementById('saRevenueChart').getContext('2d'),{type:'line',data:{labels:['Oct','Nov','Dec','Jan','Feb','Mar'],datasets:[{data:[85000,100000,120000,110000,130000,140000],borderColor:'#818cf8',backgroundColor:'rgba(99,102,241,0.08)',fill:true,tension:0.4,pointRadius:0}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}},y:{ticks:{color:'#64748b',font:{size:10},callback:v=>'KES '+(v/1000)+'k'},grid:{color:'rgba(255,255,255,0.04)'}}}}});
+    },100);
+  }
+  function saLogout() {
+    document.getElementById('dashScreen').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+  }
+  document.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!document.getElementById('loginScreen').classList.contains('hidden'))saLogin(); });
+</script>
+</body>
+</html>

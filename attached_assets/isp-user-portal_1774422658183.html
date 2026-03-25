@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Self-Service Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4" style="background:#0d1117">
+
+  <!-- Login View -->
+  <div id="loginView" class="w-full max-w-sm">
+    <div class="text-center mb-6">
+      <div class="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-3" style="background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.25)">
+        <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="#06b6d4" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+      </div>
+      <h1 class="text-lg font-bold text-white">Customer Portal</h1>
+      <p class="text-slate-500 text-xs mt-0.5">Sign in to view your account</p>
+    </div>
+
+    <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+      <div class="p-6 space-y-3">
+        <div>
+          <label class="text-xs font-medium text-slate-400 mb-1.5 block">Username / Phone</label>
+          <input id="loginUser" type="text" placeholder="john_otieno"
+            class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600"
+            style="background:#0d1117"/>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-slate-400 mb-1.5 block">Password</label>
+          <div class="relative">
+            <input id="loginPass" type="password" placeholder="••••••••"
+              class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600 pr-10"
+              style="background:#0d1117"/>
+            <button onclick="document.getElementById('loginPass').type==='password'?document.getElementById('loginPass').type='text':document.getElementById('loginPass').type='password'" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+          </div>
+        </div>
+        <button onclick="doLogin()" id="loginBtn" class="w-full py-2.5 rounded-xl text-sm font-bold text-white transition" style="background:#0e7490">Sign In</button>
+      </div>
+    </div>
+    <p class="text-center text-xs text-slate-700 mt-4">Powered by <span class="text-slate-500">OcholaSupernet</span></p>
+  </div>
+
+  <!-- Dashboard View -->
+  <div id="dashView" class="hidden w-full max-w-sm">
+    <!-- Header -->
+    <div class="text-center mb-5">
+      <div class="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-2" style="background:#06b6d4">
+        <span class="text-white text-xl font-bold" id="avatarLetter">J</span>
+      </div>
+      <p class="text-base font-bold text-white" id="displayName">John Otieno</p>
+      <p class="text-xs text-slate-500 mt-0.5">10Mbps Home Plan</p>
+      <button onclick="doLogout()" class="text-[11px] text-slate-600 hover:text-slate-400 mt-1 transition">Sign out</button>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div class="rounded-2xl border border-white/6 p-4 text-center" style="background:#161b22">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="1.5" class="mx-auto mb-1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <p class="text-[10px] text-slate-500">Balance</p>
+        <p class="text-base font-bold text-white mt-0.5">KES 1,500</p>
+      </div>
+      <div class="rounded-2xl border border-white/6 p-4 text-center" style="background:#161b22">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#06b6d4" stroke-width="1.5" class="mx-auto mb-1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <p class="text-[10px] text-slate-500">Expires</p>
+        <p class="text-base font-bold text-white mt-0.5">Apr 23</p>
+      </div>
+    </div>
+
+    <!-- Current session -->
+    <div class="rounded-2xl border border-white/6 p-4 mb-3" style="background:#161b22">
+      <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-3">Current Session</p>
+      <div class="space-y-2.5">
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-slate-500">Type</p>
+          <p class="text-xs font-medium text-cyan-400">PPPoE</p>
+        </div>
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-slate-500">IP Address</p>
+          <p class="text-xs font-medium font-mono text-slate-300">10.0.0.11</p>
+        </div>
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-slate-500">Uptime</p>
+          <p class="text-xs font-medium text-slate-300" id="sessionUptime">3h 42m</p>
+        </div>
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-slate-500">Status</p>
+          <span class="text-[11px] px-2 py-0.5 rounded-full font-medium" style="background:rgba(6,182,212,0.1);color:#06b6d4;border:1px solid rgba(6,182,212,0.2)">Online</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pay plan button -->
+    <button onclick="showPayment()" class="w-full py-3 rounded-xl text-sm font-bold text-white mb-3 transition" style="background:#0e7490">Renew / Pay Plan</button>
+
+    <!-- Payment modal -->
+    <div id="payModal" class="hidden rounded-2xl border border-white/8 p-4 mb-3" style="background:#161b22">
+      <p class="text-xs font-semibold text-slate-300 mb-3">M-Pesa STK Push</p>
+      <input type="text" placeholder="+254 7XX XXX XXX" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600 mb-2" style="background:#0d1117"/>
+      <input type="number" placeholder="Amount (KES)" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200 placeholder-slate-600 mb-3" style="background:#0d1117"/>
+      <button onclick="doPayment()" class="w-full py-2.5 rounded-xl text-sm font-bold text-white" style="background:#16a34a">Initiate Payment</button>
+      <div id="paySuccess" class="hidden mt-3 text-center text-xs text-green-400">✓ STK Push sent to your phone!</div>
+    </div>
+
+    <p class="text-center text-xs text-slate-700">Powered by <span class="text-slate-500">OcholaSupernet</span></p>
+  </div>
+
+  <script>
+    function doLogin() {
+      const u=document.getElementById('loginUser').value||'John Otieno';
+      document.getElementById('loginBtn').textContent='Signing in…';
+      setTimeout(()=>{
+        document.getElementById('loginView').classList.add('hidden');
+        document.getElementById('dashView').classList.remove('hidden');
+        document.getElementById('avatarLetter').textContent=u[0].toUpperCase();
+        document.getElementById('displayName').textContent=u;
+      },1200);
+    }
+    function doLogout() {
+      document.getElementById('dashView').classList.add('hidden');
+      document.getElementById('loginView').classList.remove('hidden');
+      document.getElementById('loginBtn').textContent='Sign In';
+    }
+    function showPayment() { document.getElementById('payModal').classList.toggle('hidden'); }
+    function doPayment() { document.getElementById('paySuccess').classList.remove('hidden'); }
+  </script>
+</body>
+</html>

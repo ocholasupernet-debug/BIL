@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connections — OcholaSupernet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body style="background:#0d1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+<div class="flex min-h-screen">
+  <aside class="w-56 flex-shrink-0 flex flex-col border-r border-white/8" style="background:#0f1923">
+    <div class="flex items-center gap-2.5 px-4 py-4 border-b border-white/8">
+      <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#06b6d4"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg></div>
+      <span class="font-bold text-sm text-white">OcholaVPN</span>
+    </div>
+    <nav class="flex-1 py-3 px-2 space-y-0.5 text-xs">
+      <a href="dashboard.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">📊 Dashboard</a>
+      <a href="devices.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">🔧 Devices</a>
+      <a href="vpn-configs.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">🛡 VPN Configs</a>
+      <a href="connections.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-white font-medium" style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.15)"><span style="color:#06b6d4">⚡ Connections</span></a>
+      <a href="remote-access.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">🖥 Remote Access</a>
+    </nav>
+  </aside>
+
+  <main class="flex-1 p-7 space-y-6 overflow-auto">
+    <div>
+      <h1 class="text-2xl font-bold text-white">Connections</h1>
+      <p class="text-slate-400 text-sm mt-1">VPN sessions and RADIUS accounting</p>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div class="rounded-xl border border-white/6 p-4 text-center" style="background:#161b22"><p class="text-2xl font-bold" style="color:#06b6d4">5</p><p class="text-xs text-slate-500 mt-1">VPN Active</p></div>
+      <div class="rounded-xl border border-white/6 p-4 text-center" style="background:#161b22"><p class="text-2xl font-bold text-white">47</p><p class="text-xs text-slate-500 mt-1">VPN Total</p></div>
+      <div class="rounded-xl border border-white/6 p-4 text-center" style="background:#161b22"><p class="text-2xl font-bold" style="color:#4ade80">12</p><p class="text-xs text-slate-500 mt-1">RADIUS Active</p></div>
+      <div class="rounded-xl border border-white/6 p-4 text-center" style="background:#161b22"><p class="text-2xl font-bold text-white">284</p><p class="text-xs text-slate-500 mt-1">RADIUS Total</p></div>
+    </div>
+
+    <!-- Tab switch -->
+    <div class="flex gap-1 border-b border-white/8">
+      <button onclick="switchTab('vpn')" id="tab-vpn" class="px-4 py-2.5 text-xs font-semibold text-cyan-400 border-b-2 border-cyan-500">VPN Sessions</button>
+      <button onclick="switchTab('radius')" id="tab-radius" class="px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent">RADIUS Sessions</button>
+    </div>
+
+    <!-- VPN table -->
+    <div id="panel-vpn">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f1923">
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Config</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Client IP</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Status</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Download</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Upload</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Connected</th>
+          </tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2 transition"><td class="px-5 py-3 text-slate-300 font-medium">Office-WG-01</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.5</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border font-medium" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td><td class="px-5 py-3 text-slate-400">↓ 45.2 MB</td><td class="px-5 py-3 text-slate-400">↑ 12.1 MB</td><td class="px-5 py-3 text-slate-500">2h ago</td></tr>
+            <tr class="border-b border-white/4 hover:bg-white/2 transition"><td class="px-5 py-3 text-slate-300 font-medium">Branch-OVP-01</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.8</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border font-medium" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td><td class="px-5 py-3 text-slate-400">↓ 112 MB</td><td class="px-5 py-3 text-slate-400">↑ 33.4 MB</td><td class="px-5 py-3 text-slate-500">5h ago</td></tr>
+            <tr class="hover:bg-white/2 transition"><td class="px-5 py-3 text-slate-300 font-medium">Office-WG-01</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.3</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border font-medium" style="background:rgba(71,85,105,0.15);color:#94a3b8;border-color:rgba(71,85,105,0.3)">inactive</span></td><td class="px-5 py-3 text-slate-400">↓ 8.3 MB</td><td class="px-5 py-3 text-slate-400">↑ 2.1 MB</td><td class="px-5 py-3 text-slate-500">1d ago</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- RADIUS table -->
+    <div id="panel-radius" class="hidden">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <table class="w-full text-xs">
+          <thead><tr class="border-b border-white/8" style="background:#0f1923">
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Username</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">NAS IP</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Framed IP</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Session Time</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Download</th>
+            <th class="px-5 py-3 text-left font-medium text-slate-500">Status</th>
+          </tr></thead>
+          <tbody>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-mono font-medium">john.otieno</td><td class="px-5 py-3 font-mono text-slate-500">192.168.88.1</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.11</td><td class="px-5 py-3 text-slate-400">3h 42m</td><td class="px-5 py-3 text-slate-400">↓ 1.2 GB</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td></tr>
+            <tr class="border-b border-white/4 hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-mono font-medium">mary.wanjiku</td><td class="px-5 py-3 font-mono text-slate-500">192.168.88.1</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.14</td><td class="px-5 py-3 text-slate-400">1h 12m</td><td class="px-5 py-3 text-slate-400">↓ 340 MB</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(34,197,94,0.1);color:#4ade80;border-color:rgba(34,197,94,0.25)">active</span></td></tr>
+            <tr class="hover:bg-white/2"><td class="px-5 py-3 text-slate-300 font-mono font-medium">david.kamau</td><td class="px-5 py-3 font-mono text-slate-500">192.168.88.1</td><td class="px-5 py-3 font-mono text-slate-400">10.0.0.18</td><td class="px-5 py-3 text-slate-400">22m</td><td class="px-5 py-3 text-slate-400">↓ 78 MB</td><td class="px-5 py-3"><span class="text-[10px] px-2 py-0.5 rounded-full border" style="background:rgba(71,85,105,0.15);color:#94a3b8;border-color:rgba(71,85,105,0.3)">stopped</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+<script>
+  function switchTab(t) {
+    document.getElementById('panel-vpn').classList.toggle('hidden', t!=='vpn');
+    document.getElementById('panel-radius').classList.toggle('hidden', t!=='radius');
+    document.getElementById('tab-vpn').className=t==='vpn'?'px-4 py-2.5 text-xs font-semibold text-cyan-400 border-b-2 border-cyan-500':'px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent';
+    document.getElementById('tab-radius').className=t==='radius'?'px-4 py-2.5 text-xs font-semibold text-cyan-400 border-b-2 border-cyan-500':'px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent';
+  }
+</script>
+</body>
+</html>

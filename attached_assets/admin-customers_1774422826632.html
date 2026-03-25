@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ISP Admin — Customers</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#080c10;color:white;min-height:100vh;display:flex}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+    .sidebar{width:228px;flex-shrink:0;background:#0c1218;border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column}
+    .sb-brand{padding:1.125rem 1rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.75rem}
+    .sb-logo{width:32px;height:32px;border-radius:.625rem;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 16px rgba(6,182,212,.3)}
+    .sb-nav{flex:1;overflow-y:auto;padding:.625rem}
+    .sb-item{display:flex;align-items:center;gap:.625rem;padding:.4375rem .75rem;border-radius:.5rem;font-size:.8125rem;font-weight:500;color:#475569;text-decoration:none;transition:all .15s;border:none;background:none;width:100%;text-align:left;font-family:'Inter',sans-serif;cursor:pointer}
+    .sb-item:hover{background:rgba(255,255,255,.04);color:#94a3b8}
+    .sb-item.active{background:rgba(6,182,212,.1);color:#22d3ee;font-weight:600}
+    .sb-section{font-size:.625rem;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:.1em;padding:.75rem .75rem .25rem}
+    .sb-sub{border-left:1px solid rgba(255,255,255,.06);margin-left:1.25rem;padding-left:.5rem}
+    .sb-sub-item{display:flex;align-items:center;padding:.3125rem .5rem;border-radius:.375rem;font-size:.75rem;font-weight:500;color:#334155;text-decoration:none;transition:all .15s}
+    .sb-sub-item:hover{color:#94a3b8}
+    .sb-user{padding:.75rem .625rem;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.625rem}
+    .sb-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:800;flex-shrink:0}
+    main{flex:1;display:flex;flex-direction:column;min-width:0}
+    .topbar{display:flex;align-items:center;gap:.75rem;padding:.875rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.06);background:#0c1218}
+    .content{flex:1;overflow-y:auto;padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem}
+    .card{border-radius:.875rem;border:1px solid rgba(255,255,255,.07);background:#111820;overflow:hidden}
+    .card-head{padding:1rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .stat-card{border-radius:.875rem;border:1px solid rgba(255,255,255,.07);background:#111820;padding:1.125rem 1.25rem;position:relative;overflow:hidden;transition:border-color .2s,transform .2s}
+    .stat-card:hover{border-color:rgba(255,255,255,.12);transform:translateY(-1px)}
+    .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+    .stat-cyan::before{background:linear-gradient(90deg,#06b6d4,#0891b2)}
+    .stat-green::before{background:linear-gradient(90deg,#10b981,#059669)}
+    .stat-amber::before{background:linear-gradient(90deg,#f59e0b,#d97706)}
+    .stat-red::before{background:linear-gradient(90deg,#ef4444,#dc2626)}
+    .stat-violet::before{background:linear-gradient(90deg,#8b5cf6,#6d28d9)}
+    .stat-blue::before{background:linear-gradient(90deg,#3b82f6,#2563eb)}
+    .stat-label{font-size:.6875rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.5rem}
+    .stat-value{font-size:1.875rem;font-weight:800;color:white;letter-spacing:-.02em;line-height:1}
+    .stat-sub{font-size:.75rem;color:#334155;margin-top:.375rem}
+    .badge{display:inline-flex;align-items:center;padding:.1875rem .5rem;border-radius:9999px;font-size:.6875rem;font-weight:600;border:1px solid}
+    .badge-green{background:rgba(74,222,128,.12);color:#4ade80;border-color:rgba(74,222,128,.25)}
+    .badge-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.25)}
+    .badge-amber{background:rgba(251,191,36,.12);color:#fbbf24;border-color:rgba(251,191,36,.25)}
+    .badge-cyan{background:rgba(34,211,238,.12);color:#22d3ee;border-color:rgba(34,211,238,.25)}
+    .badge-slate{background:rgba(148,163,184,.12);color:#94a3b8;border-color:rgba(148,163,184,.25)}
+    .badge-violet{background:rgba(139,92,246,.12);color:#a78bfa;border-color:rgba(139,92,246,.25)}
+    table{width:100%;border-collapse:collapse;font-size:.8125rem}
+    th{text-align:left;padding:.75rem 1.25rem;color:#334155;font-weight:600;font-size:.6875rem;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid rgba(255,255,255,.06);white-space:nowrap}
+    td{padding:.75rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.04);color:#94a3b8;vertical-align:middle}
+    tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:rgba(255,255,255,.02)}
+    .btn{display:inline-flex;align-items:center;gap:.375rem;padding:.4375rem .875rem;border-radius:.5rem;font-size:.8125rem;font-weight:600;cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .15s;text-decoration:none}
+    .btn-cyan{background:linear-gradient(135deg,#06b6d4,#0891b2);color:white;box-shadow:0 2px 8px rgba(6,182,212,.25)}
+    .btn-cyan:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(6,182,212,.35)}
+    .btn-ghost{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#64748b}
+    .btn-ghost:hover{background:rgba(255,255,255,.07);color:#94a3b8}
+    .fi{padding:.5rem .875rem;border-radius:.5rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:white;font-family:'Inter',sans-serif;font-size:.8125rem;outline:none;transition:border-color .2s,box-shadow .2s}
+    .fi:focus{border-color:rgba(6,182,212,.5);box-shadow:0 0 0 3px rgba(6,182,212,.1)}
+    .fi::placeholder{color:#334155}
+    select.fi,.fi option{background:#111820}
+    .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;backdrop-filter:blur(6px);align-items:center;justify-content:center}
+    .modal-backdrop.open{display:flex}
+    .modal{background:#111820;border:1px solid rgba(255,255,255,.1);border-radius:1rem;width:100%;max-width:520px;position:relative;animation:mIn .25s ease}
+    .modal::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#06b6d4,#0891b2,#6366f1);border-radius:1rem 1rem 0 0}
+    @keyframes mIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .modal-head{padding:1.25rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .modal-body{padding:1.5rem}
+    label{display:block;font-size:.6875rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.375rem}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .content>*:nth-child(1){animation:fadeUp .35s ease both}
+    .content>*:nth-child(2){animation:fadeUp .35s .07s ease both}
+    .content>*:nth-child(3){animation:fadeUp .35s .14s ease both}
+    .content>*:nth-child(4){animation:fadeUp .35s .21s ease both}
+
+    .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:.875rem;margin-bottom:.875rem}
+  </style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-logo"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg></div>
+    <div><p style="font-size:.875rem;font-weight:800;color:white">ISP Admin</p><p style="font-size:.625rem;color:#22d3ee;font-weight:600;letter-spacing:.1em;text-transform:uppercase">OcholaSupernet</p></div>
+  </div>
+  <nav class="sb-nav"><a href="admin-dashboard.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a><a href="admin-customers.html" class="sb-item active"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path stroke-linecap="round" stroke-linejoin="round" d="M23 21v-2a4 4 0 00-3-3.87m-4-12a4 4 0 010 7.75"/></svg>Customers</a><a href="admin-vouchers.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>Hotspot Vouchers</a><a href="admin-plans.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>Packages / Plans</a><a href="admin-transactions.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Transactions</a>
+    <p class="sb-section">Network</p>
+    <div class="sb-sub">
+      <a href="network-routers.html" class="sb-sub-item">Routers</a>
+      <a href="network-pppoe.html" class="sb-sub-item">PPPoE</a>
+      <a href="network-queues.html" class="sb-sub-item">Queues</a>
+      <a href="network-ippool.html" class="sb-sub-item">IP Pool</a>
+    </div>
+    <a href="admin-radius.html" class="sb-item" style="margin-top:.5rem"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>FreeRADIUS</a>
+    <a href="admin-settings.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Settings</a>
+  </nav>
+  <div class="sb-user">
+    <div class="sb-avatar">A</div>
+    <div><p style="font-size:.8125rem;font-weight:600;color:white">Admin</p><p style="font-size:.6875rem;color:#334155">admin@isplatty.org</p></div>
+  </div>
+</aside>
+<main>
+  <div class="topbar">
+    <h1 style="font-size:.9375rem;font-weight:700;color:white">Customers</h1>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:.75rem">
+      <button class="btn btn-cyan" onclick="document.getElementById('addModal').classList.add('open')">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>Add Customer
+      </button>
+      <button onclick="location.href='admin-login.html'" style="color:#334155;border:none;background:none;cursor:pointer" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#334155'"><svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg></button>
+    </div>
+  </div>
+  <div class="content">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+      <div class="stat-card stat-cyan"><div class="stat-label">Total Customers</div><div class="stat-value">72</div><div class="stat-sub">All time registered</div></div>
+      <div class="stat-card stat-green"><div class="stat-label">Active</div><div class="stat-value">47</div><div class="stat-sub">Valid subscription</div></div>
+      <div class="stat-card stat-red"><div class="stat-label">Expired</div><div class="stat-value">12</div><div class="stat-sub">Need renewal</div></div>
+      <div class="stat-card stat-amber"><div class="stat-label">Hotspot / PPPoE</div><div class="stat-value" style="font-size:1.5rem">28<span style="color:#334155;font-size:1rem"> / </span>44</div><div class="stat-sub">Plan type split</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px;position:relative">
+        <svg style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:#475569;pointer-events:none" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>
+        <input class="fi" style="width:100%;padding:.5rem .875rem .5rem 2.25rem" type="text" id="searchInput" placeholder="Search by name, phone, IP…" oninput="filterTable()" />
+      </div>
+      <select class="fi" id="filterStatus" onchange="filterTable()"><option value="">All Status</option><option value="Active">Active</option><option value="Expired">Expired</option><option value="Suspended">Suspended</option></select>
+      <select class="fi" id="filterPlan" onchange="filterTable()"><option value="">All Plans</option><option value="Hotspot">Hotspot</option><option value="PPPoE">PPPoE</option></select>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span style="font-size:.9375rem;font-weight:700;color:white">Customer List</span>
+        <span style="font-size:.75rem;color:#334155" id="count-label">72 customers</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table><thead><tr><th>#</th><th>Customer</th><th>Phone</th><th>Plan</th><th>IP / Username</th><th>Expiry</th><th>Paid</th><th>Status</th><th></th></tr></thead><tbody id="cust-tbody"></tbody></table>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="modal-backdrop" id="addModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal">
+    <div class="modal-head">
+      <span style="font-size:1rem;font-weight:700;color:white">Add New Customer</span>
+      <button onclick="document.getElementById('addModal').classList.remove('open')" style="background:none;border:none;cursor:pointer;color:#475569" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'"><svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="fgrid">
+        <div><label>Full Name</label><input class="fi" style="width:100%" type="text" placeholder="e.g. John Kamau" /></div>
+        <div><label>Phone Number</label><input class="fi" style="width:100%" type="text" placeholder="0712345678" /></div>
+        <div><label>Username</label><input class="fi" style="width:100%" type="text" placeholder="john.kamau" /></div>
+        <div><label>Password</label><input class="fi" style="width:100%" type="password" placeholder="••••••••" /></div>
+        <div><label>Plan Type</label><select class="fi" style="width:100%"><option>Hotspot</option><option>PPPoE</option><option>Static IP</option></select></div>
+        <div><label>Package</label><select class="fi" style="width:100%"><option>Hotspot 10Mbps — Ksh 500</option><option>PPPoE 20Mbps — Ksh 1,200</option></select></div>
+        <div><label>Router</label><select class="fi" style="width:100%"><option>Router 01 — Nairobi HQ</option><option>Router 02 — Karen</option></select></div>
+        <div><label>IP Address</label><input class="fi" style="width:100%" type="text" placeholder="Leave blank for auto" /></div>
+      </div>
+      <div style="margin-bottom:.875rem"><label>Notes</label><input class="fi" style="width:100%" type="text" placeholder="Optional notes…" /></div>
+      <div style="display:flex;gap:.75rem;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="document.getElementById('addModal').classList.remove('open')">Cancel</button>
+        <button class="btn btn-cyan"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>Add Customer</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const CUSTS=[
+  {id:1,name:"John Kamau",phone:"0712345678",plan:"Hotspot 10Mbps",ip:"192.168.1.101",expiry:"2026-03-27",paid:500,status:"Active",initials:"JK",color:"#06b6d4"},
+  {id:2,name:"Mary Wanjiku",phone:"0723456789",plan:"PPPoE 20Mbps",ip:"pppoe-mwanjiku",expiry:"2026-04-01",paid:1200,status:"Active",initials:"MW",color:"#8b5cf6"},
+  {id:3,name:"Peter Otieno",phone:"0734567890",plan:"Hotspot 5Mbps",ip:"192.168.1.102",expiry:"2026-03-24",paid:300,status:"Expired",initials:"PO",color:"#f59e0b"},
+  {id:4,name:"Grace Muthoni",phone:"0745678901",plan:"PPPoE 10Mbps",ip:"pppoe-gmuthoni",expiry:"2026-04-05",paid:800,status:"Active",initials:"GM",color:"#10b981"},
+  {id:5,name:"David Njoroge",phone:"0756789012",plan:"Hotspot 10Mbps",ip:"192.168.1.103",expiry:"2026-03-27",paid:500,status:"Active",initials:"DN",color:"#ec4899"},
+  {id:6,name:"Alice Wairimu",phone:"0767890123",plan:"PPPoE 50Mbps",ip:"pppoe-awairimu",expiry:"2026-03-22",paid:3500,status:"Expired",initials:"AW",color:"#ef4444"},
+  {id:7,name:"Samuel Kipchoge",phone:"0778901234",plan:"Hotspot 20Mbps",ip:"192.168.1.104",expiry:"2026-03-30",paid:800,status:"Active",initials:"SK",color:"#3b82f6"},
+  {id:8,name:"Fatuma Hassan",phone:"0789012345",plan:"PPPoE 20Mbps",ip:"pppoe-fhassan",expiry:"2026-04-02",paid:1200,status:"Active",initials:"FH",color:"#14b8a6"},
+  {id:9,name:"Joseph Mutua",phone:"0790123456",plan:"Hotspot 5Mbps",ip:"192.168.1.105",expiry:"2026-03-25",paid:300,status:"Active",initials:"JM",color:"#f97316"},
+  {id:10,name:"Ruth Achieng",phone:"0701234567",plan:"PPPoE 10Mbps",ip:"pppoe-rachieng",expiry:"2026-04-08",paid:800,status:"Suspended",initials:"RA",color:"#6366f1"},
+];
+const stBadge={Active:"badge-green",Expired:"badge-red",Suspended:"badge-amber"};
+function renderRows(data){
+  document.getElementById("count-label").textContent=data.length+" customer"+(data.length!==1?"s":"");
+  document.getElementById("cust-tbody").innerHTML=data.map(c=>`<tr>
+    <td style="color:#334155;font-size:.75rem">${c.id}</td>
+    <td><div style="display:flex;align-items:center;gap:.75rem">
+      <div style="width:34px;height:34px;border-radius:50%;background:${c.color}22;color:${c.color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:800;flex-shrink:0">${c.initials}</div>
+      <p style="font-size:.875rem;font-weight:600;color:white">${c.name}</p>
+    </div></td>
+    <td style="font-family:monospace;font-size:.75rem">${c.phone}</td>
+    <td style="color:white;font-weight:500">${c.plan}</td>
+    <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">${c.ip}</td>
+    <td>${c.expiry}</td>
+    <td style="color:white;font-weight:600">Ksh ${c.paid.toLocaleString()}</td>
+    <td><span class="badge ${stBadge[c.status]}">${c.status}</span></td>
+    <td><div style="display:flex;gap:.375rem">
+      <button style="padding:.3125rem .625rem;border-radius:.375rem;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.2);color:#22d3ee;font-size:.6875rem;font-weight:600;cursor:pointer;font-family:Inter,sans-serif">Edit</button>
+      <button style="padding:.3125rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;font-weight:600;cursor:pointer;font-family:Inter,sans-serif">Del</button>
+    </div></td>
+  </tr>`).join("");
+}
+function filterTable(){
+  const q=document.getElementById("searchInput").value.toLowerCase();
+  const st=document.getElementById("filterStatus").value;
+  const pl=document.getElementById("filterPlan").value;
+  renderRows(CUSTS.filter(c=>(!q||(c.name+c.phone+c.ip).toLowerCase().includes(q))&&(!st||c.status===st)&&(!pl||c.plan.includes(pl))));
+}
+renderRows(CUSTS);
+</script>
+</body>
+</html>

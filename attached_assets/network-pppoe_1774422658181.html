@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Network — PPPoE Sign In</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#0d1117;color:white;min-height:100vh;display:flex}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+    .sidebar{width:220px;flex-shrink:0;background:#0f1923;border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column}
+    .sb-brand{padding:1rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.625rem}
+    .sb-icon{width:28px;height:28px;border-radius:.5rem;background:#06b6d4;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .sb-nav{flex:1;overflow-y:auto;padding:.5rem}
+    .sb-link{display:flex;align-items:center;gap:.625rem;padding:.4375rem .75rem;border-radius:.5rem;font-size:.75rem;font-weight:500;color:#64748b;text-decoration:none;transition:all .15s}
+    .sb-link:hover{background:rgba(255,255,255,.04);color:white}
+    .sb-group-label{font-size:.6875rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;padding:.5rem .75rem .25rem}
+    .sb-sub{border-left:1px solid rgba(255,255,255,.06);margin-left:1.25rem;padding-left:.5rem}
+    .sb-sub-link{display:flex;align-items:center;gap:.5rem;padding:.3125rem .5rem;border-radius:.375rem;font-size:.6875rem;font-weight:500;color:#475569;text-decoration:none;transition:all .15s}
+    .sb-sub-link:hover{color:white}
+    .sb-sub-link.active{color:#22d3ee;background:rgba(6,182,212,.08)}
+    main{flex:1;display:flex;flex-direction:column;min-width:0}
+    .topbar{display:flex;align-items:center;gap:.75rem;padding:.875rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.06);background:#0f1923}
+    .content{flex:1;overflow-y:auto;padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem}
+    .card{border-radius:.75rem;border:1px solid rgba(255,255,255,.07);background:#161b22;overflow:hidden}
+    .card-head{padding:.875rem 1.125rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .card-body{padding:1.25rem}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.875rem}
+    input,select,textarea{font-family:inherit;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:white;border-radius:.5rem;padding:.5rem .75rem;font-size:.8125rem;outline:none;width:100%;transition:border-color .2s}
+    input:focus,select:focus,textarea:focus{border-color:rgba(6,182,212,.5);box-shadow:0 0 0 2px rgba(6,182,212,.1)}
+    input::placeholder,textarea::placeholder{color:#475569}
+    select option{background:#161b22}
+    textarea{resize:none}
+    label{display:block;font-size:.6875rem;font-weight:600;color:#64748b;margin-bottom:.375rem;text-transform:uppercase;letter-spacing:.06em}
+    .btn{display:inline-flex;align-items:center;gap:.375rem;padding:.4375rem .875rem;border-radius:.5rem;font-size:.75rem;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:all .15s}
+    .btn-cyan{background:linear-gradient(135deg,#06b6d4,#0891b2);color:white}
+    .btn-ghost{background:none;border:1px solid rgba(255,255,255,.1);color:#94a3b8}
+    .btn-ghost:hover{border-color:rgba(255,255,255,.2);color:white}
+    table{width:100%;border-collapse:collapse;font-size:.75rem}
+    th{text-align:left;padding:.75rem 1rem;color:#475569;font-weight:500;border-bottom:1px solid rgba(255,255,255,.06)}
+    td{padding:.75rem 1rem;border-bottom:1px solid rgba(255,255,255,.04);color:#94a3b8}
+    tr:hover td{background:rgba(255,255,255,.015)}
+    .badge{display:inline-flex;padding:.1875rem .5rem;border-radius:9999px;font-size:.6875rem;font-weight:600;border:1px solid}
+    .badge-green{background:rgba(34,197,94,.12);color:#4ade80;border-color:rgba(34,197,94,.25)}
+    .badge-slate{background:rgba(100,116,139,.12);color:#94a3b8;border-color:rgba(100,116,139,.25)}
+    .badge-amber{background:rgba(245,158,11,.12);color:#fbbf24;border-color:rgba(245,158,11,.25)}
+    .hint{font-size:.75rem;color:#475569;margin-top:.375rem}
+    .preview-pill{display:inline-flex;align-items:center;gap:.5rem;padding:.375rem .875rem;border-radius:9999px;font-size:.75rem;font-weight:500;background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);color:#22d3ee;cursor:pointer;text-decoration:none;transition:background .15s}
+    .preview-pill:hover{background:rgba(6,182,212,.18)}
+  </style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-icon"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg></div>
+    <div><p style="font-size:.8125rem;font-weight:700;color:white">ISP Admin</p><p style="font-size:.625rem;color:#22d3ee;font-weight:600;text-transform:uppercase;letter-spacing:.1em">Management</p></div>
+  </div>
+  <nav class="sb-nav">
+    <a href="admin-dashboard.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a>
+    <a href="admin-customers.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>Customers</a>
+    <a href="admin-plans.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>Packages / Plans</a>
+    <a href="admin-transactions.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75"/></svg>Transactions</a>
+    <div style="margin-top:.5rem">
+      <p class="sb-group-label">Network</p>
+      <div class="sb-sub">
+        <a href="network-routers.html" class="sb-sub-link">Routers</a>
+        <a href="network-pppoe.html" class="sb-sub-link active">PPPoE Sign In</a>
+        <a href="network-self-install.html" class="sb-sub-link">Self Install</a>
+        <a href="network-replace-router.html" class="sb-sub-link">Replace Router</a>
+        <a href="network-queues.html" class="sb-sub-link">Queues</a>
+        <a href="network-ippool.html" class="sb-sub-link">IP Pool</a>
+        <a href="network-wireless.html" class="sb-sub-link">Wireless</a>
+      </div>
+    </div>
+    <a href="admin-settings.html" class="sb-link" style="margin-top:.5rem"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Settings</a>
+  </nav>
+</aside>
+<main>
+  <div class="topbar">
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="#22d3ee" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/></svg>
+    <h1 style="font-size:.9375rem;font-weight:700;color:white">Network — PPPoE Sign In</h1>
+    <div style="margin-left:auto;display:flex;gap:.5rem">
+      <a href="pppoe-login.html" target="_blank" class="preview-pill">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>
+        Preview Portal
+      </a>
+      <button class="btn btn-cyan" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+  <div class="content">
+
+    <!-- Portal Settings -->
+    <div class="card">
+      <div class="card-head">
+        <span style="font-size:.875rem;font-weight:700;color:white">Portal Branding</span>
+        <span class="badge badge-green" style="font-size:.6875rem">Live</span>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div><label>Portal URL</label><input id="s-url" value="https://isplatty.org/pppoe" /><p class="hint">Customer-facing login page URL</p></div>
+          <div><label>Brand Name</label><input id="s-brand" value="OcholaSupernet" /></div>
+          <div><label>Primary Color</label><input id="s-color" type="color" value="#06b6d4" style="height:40px;padding:.25rem" /></div>
+          <div><label>Support Phone</label><input id="s-phone" value="0791941974" /></div>
+          <div><label>M-Pesa Paybill / Till</label><input id="s-paybill" value="247247" /></div>
+          <div><label>M-Pesa Account Name</label><input id="s-mpesa-name" value="OCHOLASUPERNET" /></div>
+        </div>
+        <div style="margin-top:1rem">
+          <label>Welcome Message</label>
+          <textarea id="s-welcome" rows="2" placeholder="Welcome to our broadband network…">High-speed home and office internet. Choose a plan and pay via M-Pesa to get connected instantly.</textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- RADIUS / Auth -->
+    <div class="card">
+      <div class="card-head"><span style="font-size:.875rem;font-weight:700;color:white">RADIUS / Authentication Settings</span></div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div><label>RADIUS Server IP</label><input value="127.0.0.1" /></div>
+          <div><label>RADIUS Port</label><input value="1812" /></div>
+          <div><label>RADIUS Secret</label><input type="password" value="radiussecret" /></div>
+          <div><label>Auth Method</label>
+            <select><option>PAP</option><option selected>CHAP</option><option>MS-CHAPv2</option></select>
+          </div>
+          <div><label>Session Timeout (min)</label><input value="0" /></div>
+          <div><label>Idle Timeout (min)</label><input value="30" /></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active PPPoE Sessions -->
+    <div class="card">
+      <div class="card-head">
+        <span style="font-size:.875rem;font-weight:700;color:white">Active PPPoE Sessions</span>
+        <div style="display:flex;gap:.5rem">
+          <span style="font-size:.75rem;color:#64748b;align-self:center" id="session-count">4 sessions</span>
+          <button class="btn btn-ghost" style="padding:.375rem .75rem" onclick="refreshSessions()">Refresh</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Username</th><th>IP Address</th><th>Uptime</th><th>Rx</th><th>Tx</th><th>Router</th><th>Status</th><th style="text-align:right">Action</th>
+          </tr></thead>
+          <tbody id="sessions-tbody">
+            <tr><td style="color:white;font-weight:500">john.kamau</td><td style="font-family:monospace;font-size:.7rem">10.0.0.50</td><td>3h 22m</td><td style="color:#22d3ee">142 MB</td><td style="color:#a78bfa">78 MB</td><td>Router 01</td><td><span class="badge badge-green">active</span></td><td style="text-align:right"><button class="btn btn-ghost" style="padding:.25rem .5rem;font-size:.6875rem;color:#f87171;border-color:rgba(239,68,68,.2)" onclick="disconnectSession('john.kamau')">Disconnect</button></td></tr>
+            <tr><td style="color:white;font-weight:500">mary.wanjiku</td><td style="font-family:monospace;font-size:.7rem">10.0.0.51</td><td>1d 4h</td><td style="color:#22d3ee">2.4 GB</td><td style="color:#a78bfa">310 MB</td><td>Router 01</td><td><span class="badge badge-green">active</span></td><td style="text-align:right"><button class="btn btn-ghost" style="padding:.25rem .5rem;font-size:.6875rem;color:#f87171;border-color:rgba(239,68,68,.2)" onclick="disconnectSession('mary.wanjiku')">Disconnect</button></td></tr>
+            <tr><td style="color:white;font-weight:500">peter.otieno</td><td style="font-family:monospace;font-size:.7rem">10.0.0.52</td><td>7h 18m</td><td style="color:#22d3ee">680 MB</td><td style="color:#a78bfa">120 MB</td><td>Router 02</td><td><span class="badge badge-green">active</span></td><td style="text-align:right"><button class="btn btn-ghost" style="padding:.25rem .5rem;font-size:.6875rem;color:#f87171;border-color:rgba(239,68,68,.2)" onclick="disconnectSession('peter.otieno')">Disconnect</button></td></tr>
+            <tr><td style="color:#64748b;font-weight:500">alice.muthoni</td><td style="font-family:monospace;font-size:.7rem">—</td><td>—</td><td>—</td><td>—</td><td>Router 02</td><td><span class="badge badge-amber">expired</span></td><td style="text-align:right"><span style="font-size:.6875rem;color:#475569">—</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MikroTik PPPoE Script -->
+    <div class="card">
+      <div class="card-head"><span style="font-size:.875rem;font-weight:700;color:white">MikroTik PPPoE Server Script</span></div>
+      <div class="card-body">
+        <p style="font-size:.8125rem;color:#64748b;margin-bottom:.875rem">Paste this in your MikroTik terminal to configure the PPPoE server with RADIUS authentication.</p>
+        <div style="border-radius:.625rem;background:#0d1117;padding:1rem;font-family:monospace;font-size:.75rem;color:#4ade80;overflow-x:auto;line-height:1.8">
+          <pre id="pppoe-script">/interface pppoe-server server
+add authentication=mschap2 default-profile=pppoe-default \
+    interface=ether1-WAN max-mtu=1480 max-mru=1480 \
+    mrru=disabled name=pppoe-in1 one-session-per-host=yes
+
+/ppp profile
+set *0 local-address=10.0.0.1 remote-address=pppoe-pool use-radius=yes
+
+/ip pool
+add name=pppoe-pool ranges=10.0.0.10-10.0.0.200
+
+/radius
+add address=127.0.0.1 secret=radiussecret service=ppp timeout=3000ms</pre>
+        </div>
+        <button class="btn btn-ghost" style="margin-top:.75rem" onclick="copyScript()">
+          <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+          Copy Script
+        </button>
+      </div>
+    </div>
+
+  </div>
+</main>
+<script>
+function saveSettings(){const btn=event.target;btn.textContent="Saving…";btn.disabled=true;setTimeout(()=>{btn.textContent="Saved ✓";setTimeout(()=>{btn.textContent="Save Settings";btn.disabled=false;},1500);},800);}
+function refreshSessions(){const btn=event.target;btn.textContent="Refreshing…";setTimeout(()=>{btn.textContent="Refresh";},1200);}
+function disconnectSession(u){if(confirm("Disconnect "+u+"?")){alert("Session for "+u+" terminated.");}}
+function copyScript(){navigator.clipboard.writeText(document.getElementById("pppoe-script").textContent).then(()=>{const btn=event.target.closest("button");btn.textContent="Copied!";setTimeout(()=>{btn.innerHTML='<svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg> Copy Script';},1500);});}
+</script>
+</body>
+</html>

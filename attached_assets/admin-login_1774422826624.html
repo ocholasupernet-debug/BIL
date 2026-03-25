@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OcholaSupernet — Admin Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#080c10;color:white;min-height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    /* Decorative grid */
+    .grid-bg{position:fixed;inset:0;background-image:linear-gradient(rgba(6,182,212,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(6,182,212,.04) 1px,transparent 1px);background-size:48px 48px;mask-image:radial-gradient(ellipse 80% 80% at 50% 50%,black 40%,transparent 100%)}
+    /* Glows */
+    .glow-1{position:fixed;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(6,182,212,.12),transparent 70%);top:-120px;left:-120px;pointer-events:none}
+    .glow-2{position:fixed;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.08),transparent 70%);bottom:-200px;right:-200px;pointer-events:none}
+    .card{position:relative;z-index:10;width:100%;max-width:400px;padding:0 1rem}
+    .logo-wrap{display:flex;flex-direction:column;align-items:center;margin-bottom:2rem}
+    .logo-icon{width:64px;height:64px;border-radius:1.125rem;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;margin-bottom:1rem;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 20px 40px rgba(6,182,212,.25);position:relative}
+    .logo-icon::after{content:'';position:absolute;inset:-1px;border-radius:1.125rem;background:linear-gradient(135deg,rgba(255,255,255,.15),transparent);pointer-events:none}
+    .logo-ring{position:absolute;inset:-8px;border-radius:calc(1.125rem + 8px);border:1px solid rgba(6,182,212,.2);animation:ping 2s ease-in-out infinite}
+    .logo-ring2{position:absolute;inset:-16px;border-radius:calc(1.125rem + 16px);border:1px solid rgba(6,182,212,.1);animation:ping 2s ease-in-out infinite .5s}
+    @keyframes ping{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(1.02)}}
+    h1{font-size:1.625rem;font-weight:800;color:white;text-align:center;letter-spacing:-.02em}
+    .sub{font-size:.875rem;color:#475569;text-align:center;margin-top:.375rem}
+    .form-card{background:rgba(19,25,32,.8);border:1px solid rgba(255,255,255,.08);border-radius:1.125rem;padding:1.75rem;backdrop-filter:blur(24px);box-shadow:0 24px 64px rgba(0,0,0,.5);position:relative;overflow:hidden}
+    .form-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#06b6d4,#0891b2,#6366f1)}
+    .field{margin-bottom:1.125rem}
+    .field-label{display:block;font-size:.6875rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.5rem}
+    .field-wrap{position:relative}
+    .field-icon{position:absolute;left:.875rem;top:50%;transform:translateY(-50%);color:#475569;pointer-events:none}
+    .field-input{width:100%;padding:.75rem .875rem .75rem 2.625rem;border-radius:.625rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:white;font-family:'Inter',sans-serif;font-size:.875rem;outline:none;transition:border-color .2s,box-shadow .2s}
+    .field-input:focus{border-color:rgba(6,182,212,.5);box-shadow:0 0 0 3px rgba(6,182,212,.1)}
+    .field-input::placeholder{color:#334155}
+    .toggle-pw{position:absolute;right:.875rem;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#475569;transition:color .15s;padding:.125rem}
+    .toggle-pw:hover{color:#94a3b8}
+    .login-btn{width:100%;padding:.875rem;border-radius:.625rem;border:none;background:linear-gradient(135deg,#06b6d4,#0891b2);color:white;font-family:'Inter',sans-serif;font-size:.9375rem;font-weight:700;cursor:pointer;margin-top:.5rem;transition:all .2s;box-shadow:0 4px 16px rgba(6,182,212,.3),inset 0 1px 0 rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;gap:.5rem;text-decoration:none}
+    .login-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(6,182,212,.4),inset 0 1px 0 rgba(255,255,255,.15)}
+    .login-btn:active{transform:translateY(0)}
+    .divider{display:flex;align-items:center;gap:.75rem;margin:.875rem 0}
+    .divider-line{flex:1;height:1px;background:rgba(255,255,255,.07)}
+    .divider-text{font-size:.6875rem;color:#334155;font-weight:500}
+    .demo-btn{width:100%;padding:.625rem;border-radius:.625rem;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);color:#64748b;font-family:'Inter',sans-serif;font-size:.8125rem;font-weight:500;cursor:pointer;transition:all .15s}
+    .demo-btn:hover{background:rgba(255,255,255,.06);color:#94a3b8;border-color:rgba(255,255,255,.12)}
+    .footer-note{text-align:center;font-size:.75rem;color:#1e293b;margin-top:1.5rem}
+    .footer-note span{color:#22d3ee;font-weight:600}
+    .status-bar{display:flex;align-items:center;justify-content:center;gap:.5rem;margin-top:.875rem}
+    .status-dot{width:6px;height:6px;border-radius:50%;background:#4ade80;position:relative}
+    .status-dot::after{content:'';position:absolute;inset:-3px;border-radius:50%;background:rgba(74,222,128,.3);animation:pulse 2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.5}}
+    .status-text{font-size:.75rem;color:#475569;font-weight:500}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .logo-wrap{animation:fadeUp .5s ease both}
+    .form-card{animation:fadeUp .5s ease .1s both}
+    .footer-note{animation:fadeUp .5s ease .2s both}
+  </style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow-1"></div>
+<div class="glow-2"></div>
+
+<div class="card">
+  <div class="logo-wrap">
+    <div class="logo-icon" style="position:relative">
+      <div class="logo-ring"></div>
+      <div class="logo-ring2"></div>
+      <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/>
+      </svg>
+    </div>
+    <h1>OcholaSupernet</h1>
+    <p class="sub">ISP Admin Portal — Sign in to continue</p>
+  </div>
+
+  <div class="form-card">
+    <div class="field">
+      <label class="field-label">Username</label>
+      <div class="field-wrap">
+        <span class="field-icon">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+        </span>
+        <input class="field-input" type="text" id="un" placeholder="Enter your username" autocomplete="username" />
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">Password</label>
+      <div class="field-wrap">
+        <span class="field-icon">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+        </span>
+        <input class="field-input" type="password" id="pw" placeholder="Enter your password" autocomplete="current-password" />
+        <button class="toggle-pw" onclick="togglePw()" type="button">
+          <svg id="eyeIcon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </button>
+      </div>
+    </div>
+    <a href="admin-dashboard.html" class="login-btn" id="loginBtn">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+      Sign In
+    </a>
+    <div class="divider"><div class="divider-line"></div><span class="divider-text">or</span><div class="divider-line"></div></div>
+    <button class="demo-btn" onclick="location.href='admin-dashboard.html'">Continue as Demo Admin</button>
+
+    <div class="status-bar" style="margin-top:1.25rem">
+      <div class="status-dot"></div>
+      <span class="status-text">All systems operational · isplatty.org</span>
+    </div>
+  </div>
+
+  <p class="footer-note">Powered by <span>OcholaSupernet</span> · © 2026</p>
+</div>
+<script>
+function togglePw(){const i=document.getElementById('pw');i.type=i.type==='password'?'text':'password';}
+</script>
+</body>
+</html>

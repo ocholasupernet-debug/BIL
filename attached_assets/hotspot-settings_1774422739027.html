@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hotspot Settings — Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body style="background:#0d1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+<div class="flex min-h-screen">
+  <!-- Sidebar (same as admin-dashboard) -->
+  <aside class="w-56 flex-shrink-0 flex flex-col border-r border-white/8" style="background:#0f1923">
+    <div class="flex items-center gap-2.5 px-4 py-4 border-b border-white/8">
+      <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background:#06b6d4">
+        <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
+      </div>
+      <span class="font-bold text-sm text-white">My ISP Admin</span>
+    </div>
+    <nav class="flex-1 py-3 px-2 space-y-0.5 text-xs">
+      <a href="admin-dashboard.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">📊 Dashboard</a>
+      <a href="admin-customers.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">👥 Customers</a>
+      <a href="admin-plans.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">📋 Plans</a>
+      <a href="admin-transactions.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">💳 Transactions</a>
+      <a href="admin-vouchers.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">🎟️ Vouchers</a>
+      <a href="admin-network.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">🔧 Network</a>
+      <a href="admin-radius.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">📡 RADIUS</a>
+      <a href="hotspot-settings.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-white font-medium" style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.15)"><span style="color:#06b6d4">📶 Hotspot Settings</span></a>
+      <a href="admin-settings.html" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition">⚙️ Settings</a>
+    </nav>
+    <div class="p-3 border-t border-white/8">
+      <div class="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-white/5 cursor-pointer transition">
+        <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#06b6d4">A</div>
+        <div class="flex-1 min-w-0">
+          <p class="text-xs font-medium text-slate-300 truncate">Admin</p>
+          <p class="text-[10px] text-slate-600 truncate">ISP Admin</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="flex-1 p-7 space-y-6 overflow-auto">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-bold text-white">Hotspot Settings</h1>
+        <p class="text-slate-500 text-xs mt-0.5">Configure your MikroTik hotspot portal and login page</p>
+      </div>
+      <button onclick="saveSettings()" class="text-sm font-semibold px-5 py-2.5 rounded-xl text-white transition" style="background:#0e7490">Save Settings</button>
+    </div>
+
+    <!-- Tab nav -->
+    <div class="flex gap-1 border-b border-white/8">
+      <button onclick="switchTab('general')" id="tab-general" class="px-4 py-2.5 text-xs font-semibold text-cyan-400 border-b-2 border-cyan-500">General</button>
+      <button onclick="switchTab('appearance')" id="tab-appearance" class="px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent">Appearance</button>
+      <button onclick="switchTab('walled')" id="tab-walled" class="px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent">Walled Garden</button>
+      <button onclick="switchTab('mikrotik')" id="tab-mikrotik" class="px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent">MikroTik Sync</button>
+    </div>
+
+    <!-- General panel -->
+    <div id="panel-general" class="space-y-4">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <div class="px-6 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">Hotspot Portal</p></div>
+        <div class="p-6 grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Portal Name</label>
+            <input type="text" value="My ISP Hotspot" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Router IP Address</label>
+            <input type="text" value="192.168.88.1" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Hotspot Interface</label>
+            <input type="text" value="wlan1" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Login Method</label>
+            <select class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117">
+              <option>Voucher</option>
+              <option>Username / Password</option>
+              <option>Both</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Session Timeout (hrs)</label>
+            <input type="number" value="24" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Idle Timeout (mins)</label>
+            <input type="number" value="30" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+        </div>
+      </div>
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <div class="px-6 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">Bandwidth Limits</p></div>
+        <div class="p-6 grid grid-cols-3 gap-4">
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Default Download (Mbps)</label>
+            <input type="number" value="5" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Default Upload (Mbps)</label>
+            <input type="number" value="2" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Shared Limit</label>
+            <select class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117">
+              <option>Per user</option>
+              <option>Shared</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Appearance panel -->
+    <div id="panel-appearance" class="hidden space-y-4">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <div class="px-6 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">Portal Branding</p></div>
+        <div class="p-6 grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Company Name</label>
+            <input type="text" value="My ISP Hotspot" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Accent Color</label>
+            <input type="color" value="#06b6d4" class="w-full h-10 rounded-xl border border-white/10 cursor-pointer" style="background:#0d1117"/>
+          </div>
+          <div class="col-span-2">
+            <label class="text-xs font-medium text-slate-400 mb-1.5 block">Footer Message</label>
+            <input type="text" value="Powered by OcholaSupernet" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Walled Garden panel -->
+    <div id="panel-walled" class="hidden space-y-4">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <div class="px-6 py-4 border-b border-white/6 flex items-center justify-between">
+          <p class="text-sm font-semibold text-white">Walled Garden Hosts</p>
+          <button onclick="addHost()" class="text-xs text-cyan-400 border border-cyan-500/25 rounded-lg px-3 py-1.5 hover:bg-cyan-500/5 transition">+ Add Host</button>
+        </div>
+        <div class="p-6 space-y-2" id="walledList">
+          <div class="flex items-center gap-3">
+            <input type="text" value="*.mpesa.safaricom.com" class="flex-1 text-sm font-mono px-4 py-2 rounded-xl border border-white/10 text-slate-300" style="background:#0d1117"/>
+            <button class="text-red-400 hover:text-red-300 text-xs">Remove</button>
+          </div>
+          <div class="flex items-center gap-3">
+            <input type="text" value="*.isplatty.org" class="flex-1 text-sm font-mono px-4 py-2 rounded-xl border border-white/10 text-slate-300" style="background:#0d1117"/>
+            <button class="text-red-400 hover:text-red-300 text-xs">Remove</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MikroTik Sync panel -->
+    <div id="panel-mikrotik" class="hidden space-y-4">
+      <div class="rounded-2xl border border-white/8 overflow-hidden" style="background:#161b22">
+        <div class="px-6 py-4 border-b border-white/6"><p class="text-sm font-semibold text-white">MikroTik Router Sync</p></div>
+        <div class="p-6 space-y-4">
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Router IP</label>
+              <input type="text" value="192.168.88.1" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">API Port</label>
+              <input type="text" value="8728" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-400 mb-1.5 block">Username</label>
+              <input type="text" value="admin" class="w-full text-sm px-4 py-2.5 rounded-xl border border-white/10 text-slate-200" style="background:#0d1117"/>
+            </div>
+          </div>
+          <button onclick="testConn()" class="text-sm font-semibold px-5 py-2.5 rounded-xl text-white border border-cyan-500/30 hover:bg-cyan-500/5 transition" style="color:#06b6d4">Test Connection</button>
+          <div id="connResult" class="hidden rounded-xl p-3 border border-green-500/20 text-xs text-green-400" style="background:rgba(16,185,129,0.05)">✓ Connected to MikroTik successfully</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save toast -->
+    <div id="saveToast" class="hidden fixed bottom-6 right-6 rounded-xl border border-green-500/20 px-4 py-3 text-sm text-green-400 shadow-xl" style="background:#0d1f15">✓ Settings saved successfully</div>
+  </main>
+</div>
+
+<script>
+  const tabs = ['general','appearance','walled','mikrotik'];
+  function switchTab(t) {
+    tabs.forEach(x=>{
+      document.getElementById('panel-'+x).classList.toggle('hidden',x!==t);
+      const el=document.getElementById('tab-'+x);
+      el.className=x===t?'px-4 py-2.5 text-xs font-semibold text-cyan-400 border-b-2 border-cyan-500':'px-4 py-2.5 text-xs font-semibold text-slate-500 border-b-2 border-transparent';
+    });
+  }
+  function addHost() { const d=document.getElementById('walledList'); const r=document.createElement('div'); r.className='flex items-center gap-3'; r.innerHTML='<input type="text" placeholder="example.com" class="flex-1 text-sm font-mono px-4 py-2 rounded-xl border border-white/10 text-slate-300" style="background:#0d1117"/><button onclick="this.parentElement.remove()" class="text-red-400 hover:text-red-300 text-xs">Remove</button>'; d.appendChild(r); }
+  function testConn() { const r=document.getElementById('connResult'); r.classList.remove('hidden'); }
+  function saveSettings() { const t=document.getElementById('saveToast'); t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),3000); }
+</script>
+</body>
+</html>

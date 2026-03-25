@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Network — Replace Router</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#0d1117;color:white;min-height:100vh;display:flex}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+    .sidebar{width:220px;flex-shrink:0;background:#0f1923;border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column}
+    .sb-brand{padding:1rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.625rem}
+    .sb-icon{width:28px;height:28px;border-radius:.5rem;background:#06b6d4;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .sb-nav{flex:1;overflow-y:auto;padding:.5rem}
+    .sb-link{display:flex;align-items:center;gap:.625rem;padding:.4375rem .75rem;border-radius:.5rem;font-size:.75rem;font-weight:500;color:#64748b;text-decoration:none;transition:all .15s}
+    .sb-link:hover{background:rgba(255,255,255,.04);color:white}
+    .sb-group-label{font-size:.6875rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;padding:.5rem .75rem .25rem}
+    .sb-sub{border-left:1px solid rgba(255,255,255,.06);margin-left:1.25rem;padding-left:.5rem}
+    .sb-sub-link{display:flex;align-items:center;gap:.5rem;padding:.3125rem .5rem;border-radius:.375rem;font-size:.6875rem;font-weight:500;color:#475569;text-decoration:none;transition:all .15s}
+    .sb-sub-link:hover{color:white}
+    .sb-sub-link.active{color:#22d3ee;background:rgba(6,182,212,.08)}
+    main{flex:1;display:flex;flex-direction:column;min-width:0}
+    .topbar{display:flex;align-items:center;gap:.75rem;padding:.875rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.06);background:#0f1923}
+    .content{flex:1;overflow-y:auto;padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem}
+    .card{border-radius:.75rem;border:1px solid rgba(255,255,255,.07);background:#161b22;overflow:hidden}
+    .card-head{padding:.875rem 1.125rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .card-body{padding:1.25rem}
+    .btn{display:inline-flex;align-items:center;gap:.375rem;padding:.4375rem .875rem;border-radius:.5rem;font-size:.75rem;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:all .15s}
+    .btn-cyan{background:linear-gradient(135deg,#06b6d4,#0891b2);color:white}
+    .btn-ghost{background:none;border:1px solid rgba(255,255,255,.1);color:#94a3b8}
+    .btn-ghost:hover{border-color:rgba(255,255,255,.2);color:white}
+    .btn-danger{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:#f87171}
+    input,select{font-family:inherit;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:white;border-radius:.5rem;padding:.5rem .75rem;font-size:.8125rem;outline:none;width:100%;transition:border-color .2s}
+    input:focus,select:focus{border-color:rgba(6,182,212,.5);box-shadow:0 0 0 2px rgba(6,182,212,.1)}
+    input::placeholder{color:#475569}
+    select option{background:#161b22}
+    label{display:block;font-size:.6875rem;font-weight:600;color:#64748b;margin-bottom:.375rem;text-transform:uppercase;letter-spacing:.06em}
+    .step-row{display:flex;gap:1rem;padding:.875rem 0;border-bottom:1px solid rgba(255,255,255,.04)}
+    .step-row:last-child{border-bottom:none}
+    .step-num{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:800;flex-shrink:0;margin-top:.125rem}
+    .step-active{background:linear-gradient(135deg,#f59e0b,#d97706);color:white}
+    .step-done{background:rgba(74,222,128,.15);color:#4ade80;border:1px solid rgba(74,222,128,.25)}
+    .warn-box{border-radius:.625rem;padding:.875rem 1rem;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);display:flex;gap:.75rem;align-items:flex-start}
+    .info-box{border-radius:.625rem;padding:.875rem 1rem;background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.2);display:flex;gap:.75rem;align-items:flex-start}
+    .code-block{background:#0d1117;border:1px solid rgba(255,255,255,.07);border-radius:.625rem;padding:1rem;font-family:monospace;font-size:.75rem;color:#4ade80;overflow-x:auto;line-height:1.8;margin:.75rem 0}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.875rem}
+    .router-card-pair{display:grid;grid-template-columns:1fr auto 1fr;gap:.875rem;align-items:center}
+  </style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-icon"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg></div>
+    <div><p style="font-size:.8125rem;font-weight:700;color:white">ISP Admin</p><p style="font-size:.625rem;color:#22d3ee;font-weight:600;text-transform:uppercase;letter-spacing:.1em">Management</p></div>
+  </div>
+  <nav class="sb-nav">
+    <a href="admin-dashboard.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a>
+    <a href="admin-customers.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0z"/></svg>Customers</a>
+    <a href="admin-plans.html" class="sb-link"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/></svg>Packages / Plans</a>
+    <div style="margin-top:.5rem">
+      <p class="sb-group-label">Network</p>
+      <div class="sb-sub">
+        <a href="network-routers.html" class="sb-sub-link">Routers</a>
+        <a href="network-pppoe.html" class="sb-sub-link">PPPoE Sign In</a>
+        <a href="network-self-install.html" class="sb-sub-link">Self Install</a>
+        <a href="network-replace-router.html" class="sb-sub-link active">Replace Router</a>
+        <a href="network-queues.html" class="sb-sub-link">Queues</a>
+        <a href="network-ippool.html" class="sb-sub-link">IP Pool</a>
+        <a href="network-wireless.html" class="sb-sub-link">Wireless</a>
+      </div>
+    </div>
+    <a href="admin-settings.html" class="sb-link" style="margin-top:.5rem"><svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Settings</a>
+  </nav>
+</aside>
+<main>
+  <div class="topbar">
+    <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="#f59e0b" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-4.566l3.181 3.182m0-4.991v4.99"/></svg>
+    <h1 style="font-size:.9375rem;font-weight:700;color:white">Network — Replace Router</h1>
+    <div style="margin-left:auto">
+      <button class="btn btn-cyan" onclick="startReplacement()">Start Replacement Wizard</button>
+    </div>
+  </div>
+  <div class="content">
+
+    <!-- Warning -->
+    <div class="warn-box">
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#fbbf24" stroke-width="2" style="flex-shrink:0;margin-top:.125rem"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+      <div>
+        <p style="font-size:.8125rem;font-weight:600;color:#fbbf24;margin-bottom:.25rem">Caution — Customer Downtime</p>
+        <p style="font-size:.8125rem;color:#78716c;line-height:1.6">Replacing a router will cause downtime for all customers connected through it. Schedule this during off-peak hours. Export the router config backup before proceeding.</p>
+      </div>
+    </div>
+
+    <!-- Router Selection -->
+    <div class="card">
+      <div class="card-head"><span style="font-size:.875rem;font-weight:700;color:white">Select Routers</span></div>
+      <div class="card-body">
+        <div class="router-card-pair" style="margin-bottom:1rem">
+          <div style="border-radius:.625rem;padding:1rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15)">
+            <p style="font-size:.6875rem;font-weight:700;color:#f87171;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem">Old Router (to replace)</p>
+            <div><label>Select Router</label>
+              <select id="old-router">
+                <option value="">— Choose a router —</option>
+                <option value="1">Router 01 — Nairobi HQ (192.168.1.1)</option>
+                <option value="2">Router 02 — Karen Branch (192.168.2.1)</option>
+                <option value="3">Router 03 — Westlands (10.0.3.1) — OFFLINE</option>
+                <option value="4">Router 04 — Mombasa Road (172.16.0.1)</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center;color:#22d3ee">
+            <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+          </div>
+          <div style="border-radius:.625rem;padding:1rem;background:rgba(74,222,128,.06);border:1px solid rgba(74,222,128,.15)">
+            <p style="font-size:.6875rem;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem">New Router (replacement)</p>
+            <div style="display:flex;flex-direction:column;gap:.625rem">
+              <div><label>New Router Name</label><input id="new-name" placeholder="Router 03 — Westlands (New)" /></div>
+              <div><label>New IP Address</label><input id="new-ip" placeholder="10.0.3.1" /></div>
+            </div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div><label>New Router Model</label><input id="new-model" placeholder="hEX S / RB4011 / CCR2004…" /></div>
+          <div><label>API Username</label><input id="new-user" value="admin" /></div>
+          <div><label>API Password</label><input id="new-pass" type="password" placeholder="••••••••" /></div>
+          <div><label>API Port</label><input id="new-port" value="8728" /></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Steps -->
+    <div class="card">
+      <div class="card-head"><span style="font-size:.875rem;font-weight:700;color:white">Replacement Checklist</span></div>
+      <div class="card-body">
+        <div class="step-row">
+          <div class="step-num step-done"><svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">1. Export Old Router Configuration</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0 .5rem">Run in MikroTik terminal on the old router:</p>
+            <div class="code-block"><pre>/export file=backup-old-router
+# Then download backup-old-router.rsc from Files</pre></div>
+          </div>
+        </div>
+        <div class="step-row">
+          <div class="step-num step-done"><svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">2. Note Customer IP Assignments &amp; Queue Names</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0 .5rem">Verify all queue rules are synced in <a href="network-queues.html" style="color:#22d3ee">Queues</a> before shutting down the old router.</p>
+          </div>
+        </div>
+        <div class="step-row">
+          <div class="step-num step-active">3</div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">3. Flash / Reset New Router</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0 .5rem">Reset the new router to factory defaults and apply a basic config:</p>
+            <div class="code-block"><pre>/system reset-configuration no-defaults=yes
+# After reboot — set IP:
+/ip address add address=10.0.3.1/24 interface=ether1
+/ip route add gateway=10.0.3.254</pre></div>
+          </div>
+        </div>
+        <div class="step-row">
+          <div class="step-num step-active">4</div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">4. Import Config &amp; Apply Scripts</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0">Upload the backup .rsc and import it, then apply the hotspot or PPPoE self-install script from <a href="network-self-install.html" style="color:#22d3ee">Self Install</a>.</p>
+          </div>
+        </div>
+        <div class="step-row">
+          <div class="step-num step-active">5</div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">5. Update Router Record in System</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0">After the new router is connected, update the router record in <a href="network-routers.html" style="color:#22d3ee">Routers</a> with the new IP address and credentials, and verify it comes online.</p>
+          </div>
+        </div>
+        <div class="step-row">
+          <div class="step-num step-active">6</div>
+          <div>
+            <p style="font-size:.8125rem;font-weight:600;color:white">6. Re-push Customer Queues</p>
+            <p style="font-size:.75rem;color:#64748b;margin:.375rem 0">Go to <a href="network-queues.html" style="color:#22d3ee">Queues</a> and click "Sync to Router" to repush all queue rules to the new router.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card">
+      <div class="card-head"><span style="font-size:.875rem;font-weight:700;color:white">Execute Replacement</span></div>
+      <div class="card-body">
+        <div class="info-box" style="margin-bottom:1rem">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#22d3ee" stroke-width="2" style="flex-shrink:0;margin-top:.125rem"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"/></svg>
+          <p style="font-size:.8125rem;color:#64748b;line-height:1.6">This will update the router IP in all customer queue assignments, re-sync RADIUS settings, and mark the old router as decommissioned.</p>
+        </div>
+        <div style="display:flex;gap:.75rem">
+          <button class="btn btn-ghost" style="flex:1" onclick="dryRun()">
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/></svg>
+            Test Connection
+          </button>
+          <button class="btn btn-danger" style="flex:1" onclick="executeReplacement()">
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-4.566l3.181 3.182m0-4.991v4.99"/></svg>
+            Execute Replacement
+          </button>
+        </div>
+        <div id="result-box" style="display:none;margin-top:.875rem;border-radius:.625rem;padding:.875rem;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.2)">
+          <p style="font-size:.8125rem;color:#4ade80;font-weight:600">✓ Router replaced successfully</p>
+          <p style="font-size:.75rem;color:#475569;margin-top:.25rem">Router record updated. Queue sync in progress…</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+function startReplacement(){document.getElementById("old-router").focus();}
+function dryRun(){const ip=document.getElementById("new-ip").value;if(!ip){alert("Enter new router IP first.");return;}alert("Testing connection to "+ip+" on port "+document.getElementById("new-port").value+"…\n\nResult: Connected ✓");}
+function executeReplacement(){
+  const old=document.getElementById("old-router").value;
+  const ip=document.getElementById("new-ip").value;
+  if(!old){alert("Select old router to replace.");return;}
+  if(!ip){alert("Enter new router IP.");return;}
+  if(!confirm("Are you sure you want to replace the selected router?\n\nThis will cause a brief downtime for customers connected to it."))return;
+  const btn=event.target.closest("button");btn.textContent="Working…";btn.disabled=true;
+  setTimeout(()=>{btn.textContent="Execute Replacement";btn.disabled=false;document.getElementById("result-box").style.display="block";},2000);
+}
+</script>
+</body>
+</html>

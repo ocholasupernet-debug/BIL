@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PPPoE Login — OcholaSupernet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --accent:#0ea5e9; --accent2:#0891b2;
+      --bg:#020c1b; --surface:rgba(255,255,255,.035);
+      --border:rgba(255,255,255,.07);
+    }
+    html{scroll-behavior:smooth}
+    body{font-family:'Inter',ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 130% 70% at 50% -5%,#0c2040 0%,#020c1b 55%);min-height:100vh;color:white}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#020c1b}::-webkit-scrollbar-thumb{background:rgba(14,165,233,.35);border-radius:3px}
+
+    @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .anim-ping{animation:ping 1.6s cubic-bezier(0,0,.2,1) infinite}
+    .anim-pulse{animation:pulse 3.5s ease-in-out infinite}
+    .anim-spin{animation:spin 1s linear infinite}
+    .anim-float{animation:float 4.5s ease-in-out infinite}
+    .fade-up{animation:fadeUp .6s ease both}
+
+    .glass{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+
+    .inp{width:100%;padding:.75rem 1rem;border-radius:.625rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:white;font-size:.875rem;font-family:inherit;outline:none;transition:border-color .2s,box-shadow .2s}
+    .inp::placeholder{color:rgba(255,255,255,.25)}
+    .inp:focus{border-color:rgba(14,165,233,.5);box-shadow:0 0 0 3px rgba(14,165,233,.1)}
+    .inp-green:focus{border-color:rgba(16,185,129,.5);box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+    textarea.inp{resize:none}
+
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;padding:.75rem 1.25rem;border-radius:.625rem;font-weight:700;font-size:.875rem;font-family:inherit;border:none;cursor:pointer;transition:transform .15s,box-shadow .15s;letter-spacing:.01em}
+    .btn:hover{transform:translateY(-1px)}
+    .btn:active{transform:translateY(0)}
+    .btn-blue{background:linear-gradient(135deg,#0369a1,#0891b2);color:white;box-shadow:0 4px 16px rgba(3,105,161,.4)}
+    .btn-blue:hover{box-shadow:0 6px 22px rgba(3,105,161,.55)}
+    .btn-teal{background:linear-gradient(135deg,#059669,#0891b2);color:white;box-shadow:0 4px 16px rgba(5,150,105,.35)}
+    .btn-teal:hover{box-shadow:0 6px 22px rgba(5,150,105,.5)}
+    .btn-ghost{background:none;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.5);font-family:inherit}
+    .btn-ghost:hover{border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.75)}
+    .btn-full{width:100%}
+
+    .lbl{display:block;font-size:.7rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem}
+
+    .sec-card{max-width:30rem;margin:0 auto;border-radius:1.25rem;overflow:hidden;background:rgba(255,255,255,.035);box-shadow:0 32px 64px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07)}
+    .sec-head{padding:1.5rem 2rem;border-bottom:1px solid rgba(255,255,255,.07);text-align:center}
+    .sec-body{padding:2rem}
+
+    .plan-card{display:flex;flex-direction:column;border-radius:1.125rem;overflow:hidden;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s,border-color .25s;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+    .plan-card:hover{transform:translateY(-7px)}
+
+    .stat-cell{border-radius:.75rem;padding:.875rem 1rem;background:rgba(14,165,233,.05);border:1px solid rgba(14,165,233,.1)}
+
+    .wa-btn{position:fixed;bottom:1.5rem;right:1.5rem;z-index:60;width:54px;height:54px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(37,211,102,.4);transition:transform .2s,box-shadow .2s}
+    .wa-btn:hover{transform:scale(1.12);box-shadow:0 10px 30px rgba(37,211,102,.6)}
+
+    .hdr{position:fixed;top:0;left:0;right:0;z-index:50;height:64px;background:rgba(2,12,27,.82);border-bottom:1px solid rgba(255,255,255,.06);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+    .hdr-inner{max-width:1280px;margin:0 auto;padding:0 1.5rem;height:100%;display:flex;align-items:center;justify-content:space-between}
+
+    .grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:44px 44px;pointer-events:none;mask-image:radial-gradient(ellipse 80% 55% at 50% 0%,black,transparent)}
+
+    .dot-live{width:7px;height:7px;border-radius:50%;background:#22d3ee;box-shadow:0 0 0 3px rgba(34,211,238,.2)}
+    .dot-live-anim{animation:pulse 2s ease-in-out infinite}
+
+    .check-icon{width:16px;height:16px;border-radius:50%;background:rgba(14,165,233,.2);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+    @media(min-width:768px){
+      .hero-grid{grid-template-columns:1fr 1fr!important}
+      .hero-right{display:flex!important}
+    }
+  </style>
+</head>
+<body>
+
+<!-- WhatsApp -->
+<a href="https://wa.me/254791941974" target="_blank" class="wa-btn" title="WhatsApp Support">
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M11.999 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.978-1.301A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.522 2 12 2zm.001 18a8 8 0 01-4.084-1.122l-.292-.174-3.038.795.811-2.965-.191-.304A8 8 0 1112 20z"/></svg>
+</a>
+
+<!-- Header -->
+<header class="hdr">
+  <div class="hdr-inner">
+    <div style="display:flex;align-items:center;gap:.875rem">
+      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#38bdf8,#0369a1);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(56,189,248,.35)">
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>
+      </div>
+      <div>
+        <p id="headerBrand" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">OCHOLASUPERNET</p>
+        <p style="font-size:.6875rem;color:rgba(56,189,248,.5);font-weight:500;letter-spacing:.04em">PPPoE Broadband</p>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:1rem">
+      <button onclick="scrollToPlans()" id="viewPlansBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(186,230,253,.65);background:none;border:none;cursor:pointer;letter-spacing:.01em;font-family:inherit">View Plans →</button>
+      <button onclick="scrollToLogin()" id="memberBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(186,230,253,.65);background:none;border:none;cursor:pointer;letter-spacing:.01em;font-family:inherit">Already a Member? →</button>
+      <a id="headerPhone" href="tel:0791941974" style="display:flex;align-items:center;gap:.375rem;background:rgba(14,165,233,.14);border:1px solid rgba(14,165,233,.28);color:rgba(186,230,253,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>
+        0791941974
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- Hero -->
+<section style="padding-top:6.5rem;padding-bottom:3.5rem;padding-inline:1.25rem;position:relative;overflow:hidden">
+  <div class="grid-bg"></div>
+  <div class="anim-pulse" style="position:absolute;top:-6rem;right:10%;width:28rem;height:20rem;border-radius:50%;background:radial-gradient(ellipse,rgba(14,165,233,.2),transparent);filter:blur(56px);pointer-events:none"></div>
+  <div class="anim-pulse" style="position:absolute;bottom:0;left:10%;width:20rem;height:16rem;border-radius:50%;background:radial-gradient(ellipse,rgba(16,185,129,.12),transparent);filter:blur(48px);pointer-events:none;animation-delay:2s"></div>
+
+  <div style="max-width:56rem;margin:0 auto;position:relative">
+    <div class="hero-grid" style="display:grid;grid-template-columns:1fr;gap:3rem;align-items:center">
+      <!-- Left -->
+      <div class="fade-up">
+        <div style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(125,211,252,.8);margin-bottom:1.75rem;background:rgba(14,165,233,.1);border:1px solid rgba(14,165,233,.22)">
+          <span class="dot-live dot-live-anim"></span>
+          Dedicated Fibre Broadband — Always On
+        </div>
+        <h1 style="font-size:clamp(2.125rem,5vw,3.25rem);font-weight:900;line-height:1.08;letter-spacing:-.03em;margin-bottom:1rem">
+          Always-On<br>
+          <span style="background:linear-gradient(90deg,#38bdf8 15%,#34d399 75%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
+            Home Internet
+          </span>
+        </h1>
+        <p style="color:rgba(186,230,253,.55);font-size:1rem;line-height:1.65;margin-bottom:2rem;max-width:28rem">
+          High-speed PPPoE broadband for homes &amp; businesses. Fixed monthly plans — <strong style="color:rgba(186,230,253,.8);font-weight:600">no data caps</strong>, always connected.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem;margin-bottom:2rem">
+          <div style="display:flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:9999px;padding:.4rem .875rem;font-size:.8125rem;color:rgba(255,255,255,.65)">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#fbbf24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+            Unlimited Speed
+          </div>
+          <div style="display:flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:9999px;padding:.4rem .875rem;font-size:.8125rem;color:rgba(255,255,255,.65)">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            No Data Cap
+          </div>
+          <div style="display:flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:9999px;padding:.4rem .875rem;font-size:.8125rem;color:rgba(255,255,255,.65)">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#38bdf8" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            24/7 Support
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:.75rem">
+          <button onclick="scrollToPlans()" class="btn btn-blue">
+            View Plans
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+          </button>
+          <button onclick="scrollToLogin()" class="btn btn-ghost">
+            Member Login
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Right — router graphic -->
+      <div class="hero-right" style="display:none;align-items:center;justify-content:center">
+        <div style="position:relative" class="anim-float">
+          <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;border:1px solid rgba(56,189,248,.3);transform:scale(1.9);animation-duration:2.5s"></div>
+          <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;border:1px solid rgba(56,189,248,.2);transform:scale(2.5);animation-delay:.5s;animation-duration:2.5s"></div>
+          <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;border:1px solid rgba(56,189,248,.1);transform:scale(3.1);animation-delay:1s;animation-duration:2.5s"></div>
+          <div style="position:relative;width:164px;height:164px;border-radius:1.75rem;background:linear-gradient(135deg,rgba(3,105,161,.35),rgba(4,120,87,.3));border:1.5px solid rgba(56,189,248,.25);display:flex;align-items:center;justify-content:center;box-shadow:0 16px 48px rgba(3,105,161,.3),0 0 0 1px rgba(255,255,255,.06)">
+            <div style="text-align:center">
+              <!-- Signal bars -->
+              <div style="display:flex;gap:4px;align-items:flex-end;justify-content:center;margin-bottom:12px;height:36px">
+                <div class="anim-pulse" style="width:4px;border-radius:2px;height:36%;background:linear-gradient(to top,#38bdf8,#60a5fa)"></div>
+                <div class="anim-pulse" style="width:4px;border-radius:2px;height:52%;background:linear-gradient(to top,#38bdf8,#60a5fa);animation-delay:.25s"></div>
+                <div class="anim-pulse" style="width:4px;border-radius:2px;height:70%;background:linear-gradient(to top,#38bdf8,#60a5fa);animation-delay:.5s"></div>
+                <div class="anim-pulse" style="width:4px;border-radius:2px;height:88%;background:linear-gradient(to top,#38bdf8,#60a5fa);animation-delay:.75s"></div>
+                <div class="anim-pulse" style="width:4px;border-radius:2px;height:100%;background:linear-gradient(to top,#38bdf8,#60a5fa);animation-delay:1s"></div>
+              </div>
+              <!-- Router body -->
+              <div style="width:100px;height:20px;border-radius:4px;background:linear-gradient(135deg,#0c2a40,#0a1e30);border:1px solid rgba(56,189,248,.2);margin:0 auto 10px"></div>
+              <!-- LED dots -->
+              <div style="display:flex;justify-content:center;gap:7px">
+                <div class="anim-pulse" style="width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.6)"></div>
+                <div class="anim-pulse" style="width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.6);animation-delay:.2s"></div>
+                <div class="anim-pulse" style="width:7px;height:7px;border-radius:50%;background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,.6);animation-delay:.5s"></div>
+                <div style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.12)"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- M-Pesa Banner -->
+<div style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
+  <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:rgba(14,165,233,.09);border:1px solid rgba(14,165,233,.2)">
+    <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(56,189,248,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#38bdf8" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    </div>
+    <span style="color:rgba(125,211,252,.85);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — select a plan below to subscribe or renew instantly</span>
+  </div>
+</div>
+
+<!-- Plans -->
+<section id="plansSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
+  <div style="text-align:center;margin-bottom:2.5rem">
+    <p style="font-size:.6875rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(14,165,233,.65);margin-bottom:.625rem">Monthly Packages</p>
+    <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">PPPoE Broadband Plans</h2>
+    <p style="color:rgba(255,255,255,.38);font-size:.9375rem">Fixed-line. Unlimited. Pay monthly via M-Pesa.</p>
+  </div>
+  <div id="plansGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1.125rem"></div>
+</section>
+
+<!-- Login Section -->
+<section id="loginSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
+  <div class="sec-card">
+    <div class="sec-head" style="background:linear-gradient(135deg,rgba(3,105,161,.28),rgba(4,120,87,.22))">
+      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(125,211,252,.6);margin-bottom:.625rem">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9"/></svg>
+        Member Login
+      </div>
+      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Already a Member?</h3>
+      <p style="color:rgba(125,211,252,.45);font-size:.875rem;margin-top:.375rem">Enter your PPPoE credentials to check your status or reconnect</p>
+    </div>
+    <div class="sec-body" id="loginFormWrap">
+      <div style="display:flex;flex-direction:column;gap:1.125rem">
+        <div>
+          <label class="lbl" style="color:rgba(14,165,233,.8)">PPPoE Username</label>
+          <input id="pppUser" type="text" placeholder="username@ocholasupernet" autocomplete="username" class="inp" />
+        </div>
+        <div>
+          <label class="lbl" style="color:rgba(14,165,233,.8)">Password</label>
+          <div style="position:relative">
+            <input id="pppPass" type="password" placeholder="••••••••" autocomplete="current-password" class="inp" style="padding-right:2.75rem" />
+            <button onclick="togglePass()" style="position:absolute;right:.875rem;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.65)'" onmouseout="this.style.color='rgba(255,255,255,.3)'">
+              <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+          </div>
+        </div>
+        <button onclick="doLogin()" id="loginBtn" class="btn btn-blue btn-full" style="margin-top:.25rem">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3"/></svg>
+          Connect to Internet
+        </button>
+        <p style="text-align:center;font-size:.8125rem;color:rgba(255,255,255,.25)">
+          No account? <button onclick="scrollToPlans()" style="color:rgba(56,189,248,.7);background:none;border:none;cursor:pointer;font-family:inherit;font-size:.8125rem;transition:color .2s" onmouseover="this.style.color='rgba(56,189,248,1)'" onmouseout="this.style.color='rgba(56,189,248,.7)'">View plans →</button>
+        </p>
+      </div>
+    </div>
+    <!-- Connected state -->
+    <div id="connectedWrap" style="display:none" class="sec-body">
+      <div style="text-align:center;margin-bottom:1.75rem">
+        <div style="width:68px;height:68px;border-radius:50%;background:rgba(74,222,128,.1);border:2px solid rgba(74,222,128,.22);display:flex;align-items:center;justify-content:center;margin:0 auto 1rem">
+          <svg width="30" height="30" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <p style="font-size:1.0625rem;font-weight:700;color:#4ade80;margin-bottom:.25rem">Session Active</p>
+        <p style="color:rgba(255,255,255,.45);font-size:.875rem" id="welcomeMsg">Welcome back</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:1.5rem">
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">IP Address</p><p style="font-size:.875rem;color:white;font-weight:600">10.16.0.42</p></div>
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">DNS</p><p style="font-size:.875rem;color:white;font-weight:600">8.8.8.8 / 8.8.4.4</p></div>
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">Speed</p><p style="font-size:.875rem;color:white;font-weight:600">Unlimited ↑↓</p></div>
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">Uptime</p><p style="font-size:.875rem;color:white;font-weight:600" id="uptimeTxt">00h 00m 00s</p></div>
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">Session ID</p><p style="font-size:.875rem;color:white;font-weight:600;font-family:monospace" id="sessionId">ppp-0000</p></div>
+        <div class="stat-cell"><p style="font-size:.6875rem;color:rgba(125,211,252,.55);font-weight:500;margin-bottom:.25rem;letter-spacing:.04em;text-transform:uppercase">Expires</p><p style="font-size:.875rem;color:white;font-weight:600">Apr 23, 2026</p></div>
+      </div>
+      <div style="display:flex;gap:.75rem">
+        <button onclick="disconnect()" class="btn btn-ghost" style="flex:1;font-family:inherit">Disconnect</button>
+        <button onclick="scrollToMpesa()" class="btn btn-teal" style="flex:1">Renew Plan →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- M-Pesa Message -->
+<section id="mpesaSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
+  <div class="sec-card">
+    <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.28),rgba(7,89,133,.22))">
+      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.6);margin-bottom:.625rem">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
+        M-Pesa Verification
+      </div>
+      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Enter Your M-Pesa Message</h3>
+      <p style="color:rgba(110,231,183,.45);font-size:.875rem;margin-top:.375rem">Paid manually? Paste your confirmation SMS to activate your plan</p>
+    </div>
+    <div class="sec-body" id="mpesaMsgWrap">
+      <div style="display:flex;flex-direction:column;gap:1.125rem">
+        <div>
+          <label class="lbl" style="color:rgba(52,211,153,.75)">M-Pesa Confirmation SMS</label>
+          <textarea id="mpesaMsg" rows="4" placeholder="Paste your full M-Pesa SMS — e.g. QHJ3X1Y3ZA Confirmed. Ksh1000.00 paid to OCHOLASUPERNET…" class="inp inp-green"></textarea>
+        </div>
+        <button onclick="submitMpesa()" class="btn btn-teal btn-full" style="margin-top:.25rem">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
+          Submit M-Pesa Message
+        </button>
+      </div>
+    </div>
+    <div id="mpesaSuccess" style="display:none" class="sec-body">
+      <div style="text-align:center;padding:1.5rem 0">
+        <div style="width:68px;height:68px;border-radius:50%;background:rgba(52,211,153,.1);border:2px solid rgba(52,211,153,.22);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">
+          <svg width="30" height="30" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <p style="font-size:1.0625rem;font-weight:700;color:#34d399;margin-bottom:.375rem">Transaction Verified!</p>
+        <p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.25rem">Your plan has been activated.</p>
+        <button onclick="scrollToLogin()" class="btn btn-teal" style="font-size:.875rem">Go to Login →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.2)">
+  <div style="display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:.875rem">
+    <div style="width:28px;height:28px;border-radius:.5rem;background:linear-gradient(135deg,#0369a1,#047857);display:flex;align-items:center;justify-content:center">
+      <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3"/></svg>
+    </div>
+    <span style="color:rgba(255,255,255,.55);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">OcholaSupernet</span>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:center;gap:1.25rem;flex-wrap:wrap;margin-bottom:.625rem">
+    <a href="tel:0791941974" style="color:rgba(255,255,255,.3);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.65)'" onmouseout="this.style.color='rgba(255,255,255,.3)'">0791941974</a>
+    <span style="color:rgba(255,255,255,.12)">·</span>
+    <a href="mailto:support@isplatty.org" style="color:rgba(255,255,255,.3);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.65)'" onmouseout="this.style.color='rgba(255,255,255,.3)'">support@isplatty.org</a>
+    <span style="color:rgba(255,255,255,.12)">·</span>
+    <span style="color:rgba(255,255,255,.25);font-size:.8125rem">isplatty.org</span>
+  </div>
+  <p style="color:rgba(255,255,255,.18);font-size:.75rem">© 2026 OcholaSupernet. Reliable Internet, Always.</p>
+</footer>
+
+<!-- STK Modal -->
+<div id="stkModal" style="display:none;position:fixed;inset:0;z-index:100;align-items:center;justify-content:center;padding:1rem;background:rgba(0,0,0,.88);backdrop-filter:blur(18px)">
+  <div style="width:100%;max-width:22rem;border-radius:1.375rem;overflow:hidden;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.06);background:linear-gradient(160deg,#020f1f,#030d18)">
+    <div style="height:3px;background:linear-gradient(90deg,#38bdf8,#34d399,#0891b2)"></div>
+    <div style="padding:1.5rem 1.5rem 1.125rem;display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(14,165,233,.8);margin-bottom:.375rem">Subscribe — M-Pesa</p>
+        <h3 id="modalPlanName" style="font-size:1.25rem;font-weight:800;letter-spacing:-.02em;color:white"></h3>
+        <div style="display:flex;align-items:baseline;gap:.5rem;margin-top:.25rem">
+          <span id="modalPlanPrice" style="font-size:1.5rem;font-weight:900;color:#7dd3fc;letter-spacing:-.02em"></span>
+          <span style="font-size:.8125rem;color:rgba(255,255,255,.35);font-weight:400">/month</span>
+        </div>
+        <p style="font-size:.75rem;color:rgba(255,255,255,.3);margin-top:.2rem">Unlimited · No data cap</p>
+      </div>
+      <button onclick="closeModal()" style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.45);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .2s" onmouseover="this.style.background='rgba(255,255,255,.14)'" onmouseout="this.style.background='rgba(255,255,255,.07)'">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div style="padding:0 1.5rem 1.75rem" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+const PLANS=[
+  {id:1,name:"HOME BASIC",  price:500, validity:1,unit:"Month"},
+  {id:2,name:"HOME PLUS",   price:800, validity:1,unit:"Month"},
+  {id:3,name:"HOME PRO",    price:1200,validity:1,unit:"Month"},
+  {id:4,name:"OFFICE BASIC",price:2000,validity:1,unit:"Month"},
+  {id:5,name:"OFFICE PRO",  price:3500,validity:1,unit:"Month"},
+  {id:6,name:"BUSINESS",    price:6000,validity:1,unit:"Month"},
+];
+const PALETTES=[
+  {accent:"#38bdf8",dark:"#0369a1",badge:"#0c4a6e",glow:"rgba(56,189,248,.25)",popular:false},
+  {accent:"#34d399",dark:"#047857",badge:"#064e3b",glow:"rgba(52,211,153,.22)",popular:false},
+  {accent:"#818cf8",dark:"#4338ca",badge:"#1e1b4b",glow:"rgba(129,140,248,.22)",popular:true},
+  {accent:"#fb923c",dark:"#c2410c",badge:"#431407",glow:"rgba(251,146,60,.22)",popular:false},
+  {accent:"#f472b6",dark:"#be185d",badge:"#500724",glow:"rgba(244,114,182,.22)",popular:false},
+  {accent:"#a3e635",dark:"#4d7c0f",badge:"#1a2e05",glow:"rgba(163,230,53,.2)",popular:false},
+];
+const FEATURES=["Unlimited Speed","No data cap","24/7 technical support","Static or dynamic IP"];
+
+let selectedPlan=null,stkState="idle",stkPhone="",pollTimer=null,pollCount=0;
+let uptimeSeconds=0,uptimeTimer=null;
+
+function renderPlans(){
+  document.getElementById("plansGrid").innerHTML=PLANS.map((p,i)=>{
+    const pal=PALETTES[i%PALETTES.length];
+    return `<div class="plan-card" style="border-color:${pal.popular?"rgba(129,140,248,.3)":"rgba(255,255,255,.07)"}"
+      onmouseover="this.style.boxShadow='0 20px 56px ${pal.glow},0 0 0 1px ${pal.accent}33';this.style.borderColor='${pal.accent}55'"
+      onmouseout="this.style.boxShadow='0 8px 32px rgba(0,0,0,.4)';this.style.borderColor='${pal.popular?"rgba(129,140,248,.3)":"rgba(255,255,255,.07)"}'">
+      <div style="height:3px;background:linear-gradient(90deg,${pal.accent},${pal.dark})"></div>
+      <div style="padding:1.625rem 1.5rem;flex:1;position:relative">
+        ${pal.popular?`<div style="position:absolute;top:.875rem;right:.875rem;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;padding:.25rem .625rem;border-radius:9999px;color:white;background:${pal.badge}">Most Popular</div>`:""}
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem">
+          <div style="width:38px;height:38px;border-radius:.75rem;background:${pal.accent}18;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="${pal.accent}" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3"/></svg>
+          </div>
+          <div>
+            <span style="display:inline-block;padding:.2rem .625rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;background:${pal.badge}">${p.name}</span>
+            <p style="font-size:.6875rem;color:rgba(255,255,255,.35);margin-top:.2rem;font-weight:400">Per ${p.unit}</p>
+          </div>
+        </div>
+        <div style="margin-bottom:1.375rem">
+          <div style="display:flex;align-items:baseline;gap:.25rem">
+            <span style="font-size:.875rem;font-weight:500;color:${pal.accent}">Ksh</span>
+            <span style="font-size:2.25rem;font-weight:900;color:white;letter-spacing:-.03em">${p.price.toLocaleString()}</span>
+            <span style="font-size:.875rem;color:rgba(255,255,255,.35)">/mo</span>
+          </div>
+          <p style="font-size:.75rem;color:rgba(255,255,255,.3);margin-top:.25rem">Inclusive of VAT</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          ${FEATURES.map(f=>`<div style="display:flex;align-items:center;gap:.625rem;font-size:.8375rem;color:rgba(255,255,255,.6)">
+            <div class="check-icon"><svg width="9" height="9" fill="none" viewBox="0 0 24 24" stroke="${pal.accent}" stroke-width="3.5"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div>${f}</div>`).join("")}
+        </div>
+      </div>
+      <div style="padding:0 1.5rem 1.5rem">
+        <button onclick="openModal(${i})" style="width:100%;padding:.8125rem 1rem;border-radius:.625rem;font-weight:700;color:white;font-size:.875rem;font-family:inherit;letter-spacing:.01em;background:linear-gradient(135deg,${pal.accent},${pal.dark});border:none;cursor:pointer;transition:opacity .15s,transform .15s;box-shadow:0 4px 16px ${pal.glow}" onmouseover="this.style.opacity='.9';this.style.transform='translateY(-1px)'" onmouseout="this.style.opacity='1';this.style.transform=''">
+          Subscribe via M-Pesa
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function openModal(i){
+  selectedPlan=PLANS[i];stkState="idle";stkPhone="";
+  document.getElementById("modalPlanName").textContent=selectedPlan.name;
+  document.getElementById("modalPlanPrice").textContent="Ksh "+selectedPlan.price.toLocaleString();
+  renderModal();
+  document.getElementById("stkModal").style.display="flex";
+}
+function closeModal(){clearInterval(pollTimer);document.getElementById("stkModal").style.display="none";selectedPlan=null;stkState="idle";}
+
+const PHONE_SVG=`<svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>`;
+
+function pingRings(color){return [1,2,3].map(i=>`<div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;border:1.5px solid ${color};opacity:${.7-i*.2};transform:scale(${1+i*.3});animation-delay:${i*.28}s"></div>`).join("");}
+
+function renderModal(){
+  const b=document.getElementById("modalBody");
+  if(stkState==="idle"){
+    b.innerHTML=`
+      <div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(14,165,233,.08);border:1px solid rgba(14,165,233,.2)">
+        <p style="font-size:.8375rem;color:rgba(255,255,255,.6);line-height:1.65">Enter your <span style="color:#7dd3fc;font-weight:600">Safaricom number</span>. We'll send an M-Pesa payment prompt — enter your PIN to pay and your plan activates instantly.</p>
+      </div>
+      <label class="lbl" style="color:rgba(14,165,233,.8)">M-Pesa Phone Number</label>
+      <input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="${stkPhone}" />
+      <div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
+      <button onclick="sendStk()" class="btn btn-blue btn-full" style="padding:.875rem">
+        Send STK Push &mdash; Ksh ${selectedPlan.price.toLocaleString()}
+      </button>`;
+  }else if(stkState==="loading"){
+    b.innerHTML=`<div style="text-align:center;padding:2.5rem 0">
+      <div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">${pingRings("#38bdf8")}
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+          <div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#0369a1,#047857);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(3,105,161,.45)">${PHONE_SVG}</div>
+        </div>
+      </div>
+      <p style="font-size:1rem;font-weight:700;color:#7dd3fc;margin-bottom:.5rem">Sending STK Push…</p>
+      <p style="color:rgba(255,255,255,.4);font-size:.875rem">Contacting M-Pesa, please wait</p>
+    </div>`;
+  }else if(stkState==="sent"){
+    b.innerHTML=`<div style="text-align:center;padding:2.5rem 0">
+      <div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">${pingRings("#f59e0b")}
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+          <div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(245,158,11,.4)">${PHONE_SVG}</div>
+        </div>
+      </div>
+      <p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">STK Push Sent!</p>
+      <p style="color:rgba(255,255,255,.45);font-size:.8375rem;margin-bottom:.75rem">Check your phone and enter your M-Pesa PIN to complete payment</p>
+      <p style="color:rgba(255,255,255,.28);font-size:.75rem" id="pollCounter">Verifying payment… (0/12)</p>
+    </div>`;
+  }else if(stkState==="error"){
+    b.innerHTML=`<div style="text-align:center;padding:2.25rem 0">
+      <div style="width:72px;height:72px;border-radius:50%;background:rgba(239,68,68,.1);border:2px solid rgba(239,68,68,.22);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">
+        <svg width="30" height="30" fill="none" viewBox="0 0 24 24" stroke="#f87171" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </div>
+      <p style="font-size:1.0625rem;font-weight:800;color:#f87171;margin-bottom:.5rem">Payment Failed</p>
+      <p style="color:rgba(255,255,255,.4);font-size:.875rem;margin-bottom:1.5rem">Something went wrong. Please try again.</p>
+      <button onclick="stkState='idle';renderModal()" class="btn btn-blue btn-full">Try Again</button>
+    </div>`;
+  }else if(stkState==="confirmed"){
+    b.innerHTML=`<div style="text-align:center;padding:2.25rem 0">
+      <div style="width:72px;height:72px;border-radius:50%;background:rgba(74,222,128,.1);border:2px solid rgba(74,222,128,.22);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">
+        <svg width="30" height="30" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Confirmed!</p>
+      <p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.5rem">Your <span style="color:white;font-weight:600">${selectedPlan?.name||""}</span> plan is active. Use your PPPoE credentials to connect.</p>
+      <button onclick="closeModal();scrollToLogin()" class="btn btn-teal btn-full">Go to Login →</button>
+    </div>`;
+  }
+}
+
+function sendStk(){
+  const phone=document.getElementById("stkPhoneInput")?.value||"";
+  if(!phone.trim())return;
+  stkPhone=phone;stkState="loading";renderModal();
+  setTimeout(()=>{stkState="sent";renderModal();pollCount=0;
+    pollTimer=setInterval(()=>{pollCount++;
+      const el=document.getElementById("pollCounter");
+      if(el)el.textContent=`Verifying payment… (${pollCount}/12)`;
+      if(pollCount>=12){clearInterval(pollTimer);stkState="error";renderModal();}
+    },5000);
+  },2200);
+}
+
+function togglePass(){const i=document.getElementById("pppPass");i.type=i.type==="password"?"text":"password";}
+
+const SPINNER=`<svg class="anim-spin" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity=".2"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>`;
+
+function doLogin(){
+  const user=document.getElementById("pppUser").value||"User";
+  const btn=document.getElementById("loginBtn");
+  btn.innerHTML=SPINNER+" Authenticating…";btn.style.opacity=".65";
+  setTimeout(()=>{
+    document.getElementById("loginFormWrap").style.display="none";
+    document.getElementById("connectedWrap").style.display="block";
+    document.getElementById("welcomeMsg").textContent="Welcome back, "+user;
+    document.getElementById("sessionId").textContent="ppp-"+Math.floor(Math.random()*9000+1000);
+    startUptime();
+  },1800);
+}
+function disconnect(){
+  clearInterval(uptimeTimer);uptimeSeconds=0;
+  document.getElementById("connectedWrap").style.display="none";
+  document.getElementById("loginFormWrap").style.display="block";
+  const btn=document.getElementById("loginBtn");
+  btn.innerHTML='<svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3"/></svg> Connect to Internet';
+  btn.style.opacity="1";
+  document.getElementById("pppUser").value="";document.getElementById("pppPass").value="";
+}
+function startUptime(){
+  clearInterval(uptimeTimer);uptimeSeconds=0;
+  uptimeTimer=setInterval(()=>{uptimeSeconds++;
+    const h=String(Math.floor(uptimeSeconds/3600)).padStart(2,"0");
+    const m=String(Math.floor((uptimeSeconds%3600)/60)).padStart(2,"0");
+    const s=String(uptimeSeconds%60).padStart(2,"0");
+    const el=document.getElementById("uptimeTxt");
+    if(el)el.textContent=`${h}h ${m}m ${s}s`;
+  },1000);
+}
+
+function submitMpesa(){
+  const msg=document.getElementById("mpesaMsg").value.trim();
+  if(!msg)return;
+  setTimeout(()=>{document.getElementById("mpesaMsgWrap").style.display="none";document.getElementById("mpesaSuccess").style.display="block";},1500);
+}
+
+function scrollToPlans(){document.getElementById("plansSection").scrollIntoView({behavior:"smooth"});}
+function scrollToLogin(){document.getElementById("loginSection").scrollIntoView({behavior:"smooth"});}
+function scrollToMpesa(){document.getElementById("mpesaSection").scrollIntoView({behavior:"smooth"});}
+
+function applyResponsive(){
+  const w=window.innerWidth;
+  document.getElementById("viewPlansBtn").style.display=w>=640?"block":"none";
+  document.getElementById("memberBtn").style.display=w>=640?"block":"none";
+}
+window.addEventListener("resize",applyResponsive);applyResponsive();
+renderPlans();
+</script>
+</body>
+</html>

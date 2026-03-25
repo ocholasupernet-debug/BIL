@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ISP Admin — FreeRADIUS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',sans-serif;background:#080c10;color:white;min-height:100vh;display:flex}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+    .sidebar{width:228px;flex-shrink:0;background:#0c1218;border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column}
+    .sb-brand{padding:1.125rem 1rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.75rem}
+    .sb-logo{width:32px;height:32px;border-radius:.625rem;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 16px rgba(6,182,212,.3)}
+    .sb-nav{flex:1;overflow-y:auto;padding:.625rem}
+    .sb-item{display:flex;align-items:center;gap:.625rem;padding:.4375rem .75rem;border-radius:.5rem;font-size:.8125rem;font-weight:500;color:#475569;text-decoration:none;transition:all .15s;border:none;background:none;width:100%;text-align:left;font-family:'Inter',sans-serif;cursor:pointer}
+    .sb-item:hover{background:rgba(255,255,255,.04);color:#94a3b8}
+    .sb-item.active{background:rgba(6,182,212,.1);color:#22d3ee;font-weight:600}
+    .sb-section{font-size:.625rem;font-weight:700;color:#1e293b;text-transform:uppercase;letter-spacing:.1em;padding:.75rem .75rem .25rem}
+    .sb-sub{border-left:1px solid rgba(255,255,255,.06);margin-left:1.25rem;padding-left:.5rem}
+    .sb-sub-item{display:flex;align-items:center;padding:.3125rem .5rem;border-radius:.375rem;font-size:.75rem;font-weight:500;color:#334155;text-decoration:none;transition:all .15s}
+    .sb-sub-item:hover{color:#94a3b8}
+    .sb-user{padding:.75rem .625rem;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:.625rem}
+    .sb-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:800;flex-shrink:0}
+    main{flex:1;display:flex;flex-direction:column;min-width:0}
+    .topbar{display:flex;align-items:center;gap:.75rem;padding:.875rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.06);background:#0c1218}
+    .content{flex:1;overflow-y:auto;padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem}
+    .card{border-radius:.875rem;border:1px solid rgba(255,255,255,.07);background:#111820;overflow:hidden}
+    .card-head{padding:1rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .stat-card{border-radius:.875rem;border:1px solid rgba(255,255,255,.07);background:#111820;padding:1.125rem 1.25rem;position:relative;overflow:hidden;transition:border-color .2s,transform .2s}
+    .stat-card:hover{border-color:rgba(255,255,255,.12);transform:translateY(-1px)}
+    .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+    .stat-cyan::before{background:linear-gradient(90deg,#06b6d4,#0891b2)}
+    .stat-green::before{background:linear-gradient(90deg,#10b981,#059669)}
+    .stat-amber::before{background:linear-gradient(90deg,#f59e0b,#d97706)}
+    .stat-red::before{background:linear-gradient(90deg,#ef4444,#dc2626)}
+    .stat-violet::before{background:linear-gradient(90deg,#8b5cf6,#6d28d9)}
+    .stat-label{font-size:.6875rem;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.5rem}
+    .stat-value{font-size:1.875rem;font-weight:800;color:white;letter-spacing:-.02em;line-height:1}
+    .stat-sub{font-size:.75rem;color:#334155;margin-top:.375rem}
+    .badge{display:inline-flex;align-items:center;padding:.1875rem .5rem;border-radius:9999px;font-size:.6875rem;font-weight:600;border:1px solid}
+    .badge-green{background:rgba(74,222,128,.12);color:#4ade80;border-color:rgba(74,222,128,.25)}
+    .badge-red{background:rgba(248,113,113,.12);color:#f87171;border-color:rgba(248,113,113,.25)}
+    .badge-amber{background:rgba(251,191,36,.12);color:#fbbf24;border-color:rgba(251,191,36,.25)}
+    .badge-cyan{background:rgba(34,211,238,.12);color:#22d3ee;border-color:rgba(34,211,238,.25)}
+    .badge-slate{background:rgba(148,163,184,.12);color:#94a3b8;border-color:rgba(148,163,184,.25)}
+    .badge-violet{background:rgba(139,92,246,.12);color:#a78bfa;border-color:rgba(139,92,246,.25)}
+    table{width:100%;border-collapse:collapse;font-size:.8125rem}
+    th{text-align:left;padding:.75rem 1.25rem;color:#334155;font-weight:600;font-size:.6875rem;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid rgba(255,255,255,.06);white-space:nowrap}
+    td{padding:.75rem 1.25rem;border-bottom:1px solid rgba(255,255,255,.04);color:#94a3b8;vertical-align:middle}
+    tr:last-child td{border-bottom:none}
+    tbody tr:hover td{background:rgba(255,255,255,.02)}
+    .btn{display:inline-flex;align-items:center;gap:.375rem;padding:.4375rem .875rem;border-radius:.5rem;font-size:.8125rem;font-weight:600;cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .15s;text-decoration:none}
+    .btn-cyan{background:linear-gradient(135deg,#06b6d4,#0891b2);color:white;box-shadow:0 2px 8px rgba(6,182,212,.25)}
+    .btn-cyan:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(6,182,212,.35)}
+    .btn-ghost{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#64748b}
+    .btn-ghost:hover{background:rgba(255,255,255,.07);color:#94a3b8}
+    .fi{padding:.5rem .875rem;border-radius:.5rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:white;font-family:'Inter',sans-serif;font-size:.8125rem;outline:none;transition:border-color .2s,box-shadow .2s}
+    .fi:focus{border-color:rgba(6,182,212,.5);box-shadow:0 0 0 3px rgba(6,182,212,.1)}
+    .fi::placeholder{color:#334155}
+    select.fi,.fi option{background:#111820}
+    .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;backdrop-filter:blur(6px);align-items:center;justify-content:center}
+    .modal-backdrop.open{display:flex}
+    .modal{background:#111820;border:1px solid rgba(255,255,255,.1);border-radius:1rem;width:100%;max-width:520px;position:relative;animation:mIn .25s ease}
+    .modal::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#06b6d4,#0891b2,#6366f1);border-radius:1rem 1rem 0 0}
+    @keyframes mIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+    .modal-head{padding:1.25rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between}
+    .modal-body{padding:1.5rem}
+    label{display:block;font-size:.6875rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.375rem}
+    .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:.875rem;margin-bottom:.875rem}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .content>*:nth-child(1){animation:fadeUp .35s ease both}
+    .content>*:nth-child(2){animation:fadeUp .35s .07s ease both}
+    .content>*:nth-child(3){animation:fadeUp .35s .14s ease both}
+    .content>*:nth-child(4){animation:fadeUp .35s .21s ease both}
+    .code-block{background:#080c10;border:1px solid rgba(255,255,255,.08);border-radius:.625rem;padding:1rem;font-family:'Courier New',monospace;font-size:.75rem;color:#4ade80;line-height:1.6;position:relative;overflow:auto;max-height:300px}
+    .copy-btn{position:absolute;top:.5rem;right:.5rem;padding:.3125rem .625rem;border-radius:.375rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);color:#94a3b8;font-size:.6875rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif}
+    .copy-btn:hover{background:rgba(255,255,255,.12);color:white}
+    .pulse-dot{width:7px;height:7px;border-radius:50%;background:#4ade80;position:relative;display:inline-block;flex-shrink:0}
+    .pulse-dot::after{content:'';position:absolute;inset:-3px;border-radius:50%;background:rgba(74,222,128,.4);animation:pulse 2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(2);opacity:0}}
+
+    .tab-btns{display:flex;gap:.5rem;flex-wrap:wrap}
+    .tab-btn{padding:.4375rem 1rem;border-radius:.5rem;font-size:.8125rem;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.08);background:none;color:#475569;font-family:'Inter',sans-serif;transition:all .15s}
+    .tab-btn.active{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.25)}
+    .tab-panel{display:none}.tab-panel.active{display:flex;flex-direction:column;gap:1.25rem}
+  </style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-logo"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg></div>
+    <div><p style="font-size:.875rem;font-weight:800;color:white">ISP Admin</p><p style="font-size:.625rem;color:#22d3ee;font-weight:600;letter-spacing:.1em;text-transform:uppercase">OcholaSupernet</p></div>
+  </div>
+  <nav class="sb-nav">
+    <a href="admin-dashboard.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a>
+    <a href="admin-customers.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path stroke-linecap="round" stroke-linejoin="round" d="M23 21v-2a4 4 0 00-3-3.87m-4-12a4 4 0 010 7.75"/></svg>Customers</a>
+    <a href="admin-vouchers.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>Hotspot Vouchers</a>
+    <a href="admin-plans.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>Packages / Plans</a>
+    <a href="admin-transactions.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Transactions</a>
+    <p class="sb-section">Network</p>
+    <div class="sb-sub">
+      <a href="network-routers.html" class="sb-sub-item">Routers</a>
+      <a href="network-pppoe.html" class="sb-sub-item">PPPoE</a>
+      <a href="network-queues.html" class="sb-sub-item">Queues</a>
+      <a href="network-ippool.html" class="sb-sub-item">IP Pool</a>
+    </div>
+    <a href="admin-radius.html" class="sb-item active" style="margin-top:.5rem"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>FreeRADIUS</a>
+    <a href="admin-settings.html" class="sb-item"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Settings</a>
+  </nav>
+  <div class="sb-user">
+    <div class="sb-avatar">A</div>
+    <div><p style="font-size:.8125rem;font-weight:600;color:white">Admin</p><p style="font-size:.6875rem;color:#334155">admin@isplatty.org</p></div>
+  </div>
+</aside>
+<main>
+  <div class="topbar">
+    <h1 style="font-size:.9375rem;font-weight:700;color:white">FreeRADIUS Management</h1>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:.75rem">
+      <div style="display:flex;align-items:center;gap:.5rem;padding:.375rem .875rem;border-radius:9999px;background:rgba(74,222,128,.07);border:1px solid rgba(74,222,128,.15)">
+        <div class="pulse-dot"></div>
+        <span style="font-size:.75rem;color:#4ade80;font-weight:500">RADIUS Server Online</span>
+      </div>
+      <button onclick="location.href='admin-login.html'" style="color:#334155;border:none;background:none;cursor:pointer" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#334155'"><svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg></button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="tab-btns">
+      <button class="tab-btn active" onclick="showTab('overview',this)">Overview</button>
+      <button class="tab-btn" onclick="showTab('sessions',this)">Active Sessions</button>
+      <button class="tab-btn" onclick="showTab('config',this)">Server Config</button>
+      <button class="tab-btn" onclick="showTab('accounting',this)">Accounting</button>
+    </div>
+
+    <!-- Overview -->
+    <div class="tab-panel active" id="tp-overview">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+        <div class="stat-card stat-green"><div class="stat-label">Auth Requests</div><div class="stat-value">3,842</div><div class="stat-sub">Today · all time 184k</div></div>
+        <div class="stat-card stat-cyan"><div class="stat-label">Auth Accept</div><div class="stat-value">3,791</div><div class="stat-sub"><span style="color:#4ade80;font-weight:600">98.7%</span> success rate</div></div>
+        <div class="stat-card stat-red"><div class="stat-label">Auth Reject</div><div class="stat-value">51</div><div class="stat-sub">Failed attempts today</div></div>
+        <div class="stat-card stat-violet"><div class="stat-label">Active Sessions</div><div class="stat-value">47</div><div class="stat-sub">PPPoE + Hotspot</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
+        <div class="card">
+          <div class="card-head"><span style="font-size:.9375rem;font-weight:700;color:white">Server Status</span></div>
+          <div style="padding:1.25rem;display:flex;flex-direction:column;gap:.75rem">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">RADIUS Server</span><span style="font-size:.8125rem;font-weight:600;color:#4ade80">Running</span></div><div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">Accounting Server</span><span style="font-size:.8125rem;font-weight:600;color:#4ade80">Running</span></div><div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">MySQL Backend</span><span style="font-size:.8125rem;font-weight:600;color:#4ade80">Connected</span></div><div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">Secret Shared Key</span><span style="font-size:.8125rem;font-weight:600;color:#22d3ee">Configured</span></div><div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">Auth Port (1812)</span><span style="font-size:.8125rem;font-weight:600;color:#4ade80">Open</span></div><div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05)"><span style="font-size:.8125rem;color:#94a3b8">Acct Port (1813)</span><span style="font-size:.8125rem;font-weight:600;color:#4ade80">Open</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span style="font-size:.9375rem;font-weight:700;color:white">Recent Auth Log</span></div>
+          <div style="overflow:auto;max-height:280px">
+            <table>
+              <thead><tr><th>User</th><th>Type</th><th>Result</th><th>Time</th></tr></thead>
+              <tbody>
+                <tr><td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-jkamau</td><td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td><td><span class="badge badge-green" style="font-size:.625rem">Accept</span></td><td style="font-size:.75rem;color:#475569">10:23:14</td></tr><tr><td style="font-family:monospace;font-size:.75rem;color:#22d3ee">192.168.1.101</td><td><span class="badge badge-cyan" style="font-size:.625rem">Hotspot</span></td><td><span class="badge badge-green" style="font-size:.625rem">Accept</span></td><td style="font-size:.75rem;color:#475569">10:22:08</td></tr><tr><td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-mwanjiku</td><td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td><td><span class="badge badge-green" style="font-size:.625rem">Accept</span></td><td style="font-size:.75rem;color:#475569">10:18:33</td></tr><tr><td style="font-family:monospace;font-size:.75rem;color:#22d3ee">192.168.1.202</td><td><span class="badge badge-cyan" style="font-size:.625rem">Hotspot</span></td><td><span class="badge badge-red" style="font-size:.625rem">Reject</span></td><td style="font-size:.75rem;color:#475569">10:15:01</td></tr><tr><td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-dnjoroge</td><td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td><td><span class="badge badge-green" style="font-size:.625rem">Accept</span></td><td style="font-size:.75rem;color:#475569">10:12:44</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sessions -->
+    <div class="tab-panel" id="tp-sessions">
+      <div class="card">
+        <div class="card-head">
+          <span style="font-size:.9375rem;font-weight:700;color:white">Active Sessions</span>
+          <span class="badge badge-green">47 Online</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Username / IP</th><th>Type</th><th>NAS IP</th><th>Session Time</th><th>Data In/Out</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-jkamau</td>
+                <td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td>
+                <td style="font-family:monospace;font-size:.75rem">192.168.1.1</td>
+                <td style="color:white;font-weight:500">2h 14m</td>
+                <td style="font-size:.75rem;color:#475569">248MB / 1.2GB</td>
+                <td><button style="padding:.25rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;cursor:pointer;font-family:Inter,sans-serif">Disconnect</button></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">192.168.1.101</td>
+                <td><span class="badge badge-cyan" style="font-size:.625rem">Hotspot</span></td>
+                <td style="font-family:monospace;font-size:.75rem">192.168.1.1</td>
+                <td style="color:white;font-weight:500">45m</td>
+                <td style="font-size:.75rem;color:#475569">18MB / 94MB</td>
+                <td><button style="padding:.25rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;cursor:pointer;font-family:Inter,sans-serif">Disconnect</button></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-mwanjiku</td>
+                <td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td>
+                <td style="font-family:monospace;font-size:.75rem">192.168.1.1</td>
+                <td style="color:white;font-weight:500">3h 02m</td>
+                <td style="font-size:.75rem;color:#475569">512MB / 2.1GB</td>
+                <td><button style="padding:.25rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;cursor:pointer;font-family:Inter,sans-serif">Disconnect</button></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">192.168.1.103</td>
+                <td><span class="badge badge-cyan" style="font-size:.625rem">Hotspot</span></td>
+                <td style="font-family:monospace;font-size:.75rem">192.168.2.1</td>
+                <td style="color:white;font-weight:500">12m</td>
+                <td style="font-size:.75rem;color:#475569">4MB / 22MB</td>
+                <td><button style="padding:.25rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;cursor:pointer;font-family:Inter,sans-serif">Disconnect</button></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-sktari</td>
+                <td><span class="badge badge-violet" style="font-size:.625rem">PPPoE</span></td>
+                <td style="font-family:monospace;font-size:.75rem">192.168.2.1</td>
+                <td style="color:white;font-weight:500">5h 33m</td>
+                <td style="font-size:.75rem;color:#475569">1.2GB / 4.8GB</td>
+                <td><button style="padding:.25rem .625rem;border-radius:.375rem;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15);color:#f87171;font-size:.6875rem;cursor:pointer;font-family:Inter,sans-serif">Disconnect</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config -->
+    <div class="tab-panel" id="tp-config">
+      <div class="card">
+        <div class="card-head"><span style="font-size:.9375rem;font-weight:700;color:white">radiusd.conf — Key Settings</span></div>
+        <div style="padding:1.25rem">
+          <div class="code-block"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextSibling.textContent)">Copy</button><pre style="margin:0;white-space:pre-wrap">prefix = /usr/local
+localstatedir = /usr/local/var
+logdir = /usr/local/var/log/radius
+raddbdir = /usr/local/etc/raddb
+
+modules {
+  sql {
+    driver = "rlm_sql_mysql"
+    server = "localhost"
+    port = 3306
+    login = "radius"
+    password = "radius_pass"
+    radius_db = "radius"
+  }
+}
+
+listen {
+  type = auth
+  ipaddr = *
+  port = 0
+}
+
+listen {
+  type = acct
+  ipaddr = *
+  port = 0
+}
+
+client localhost {
+  ipaddr = 127.0.0.1
+  secret = testing123
+}
+
+client mikrotik_router {
+  ipaddr = 192.168.1.1
+  secret = your-shared-secret
+}</pre></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span style="font-size:.9375rem;font-weight:700;color:white">MikroTik RADIUS Client Setup</span></div>
+        <div style="padding:1.25rem">
+          <div class="code-block"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextSibling.textContent)">Copy</button><pre style="margin:0;white-space:pre-wrap">/radius add service=pppoe address=YOUR_RADIUS_IP secret=your-shared-secret
+/radius add service=hotspot address=YOUR_RADIUS_IP secret=your-shared-secret
+
+/ppp aaa set use-radius=yes accounting=yes interim-update=1m
+/ip hotspot user profile set default use-radius=yes</pre></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Accounting -->
+    <div class="tab-panel" id="tp-accounting">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+        <div class="stat-card stat-cyan"><div class="stat-label">Total Data In</div><div class="stat-value" style="font-size:1.5rem">2.8 TB</div><div class="stat-sub">All time download</div></div>
+        <div class="stat-card stat-green"><div class="stat-label">Total Data Out</div><div class="stat-value" style="font-size:1.5rem">18.4 TB</div><div class="stat-sub">All time upload</div></div>
+        <div class="stat-card stat-violet"><div class="stat-label">Session Count</div><div class="stat-value">14,822</div><div class="stat-sub">All time sessions</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span style="font-size:.9375rem;font-weight:700;color:white">Accounting Log (Recent)</span></div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Username</th><th>Session ID</th><th>Start</th><th>Duration</th><th>Data In</th><th>Data Out</th><th>Cause</th></tr></thead>
+            <tbody>
+              <tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-jkamau</td>
+                <td style="font-family:monospace;font-size:.6875rem;color:#334155">7f3a91b2</td>
+                <td style="font-size:.75rem">2026-03-24 07:10</td>
+                <td style="color:white;font-weight:500">1h 12m</td>
+                <td style="color:#4ade80;font-weight:500">148MB</td>
+                <td style="color:#22d3ee;font-weight:500">890MB</td>
+                <td><span class="badge badge-slate" style="font-size:.625rem">User-Request</span></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">192.168.1.102</td>
+                <td style="font-family:monospace;font-size:.6875rem;color:#334155">4e8b2c44</td>
+                <td style="font-size:.75rem">2026-03-24 06:45</td>
+                <td style="color:white;font-weight:500">3h 02m</td>
+                <td style="color:#4ade80;font-weight:500">512MB</td>
+                <td style="color:#22d3ee;font-weight:500">2.1GB</td>
+                <td><span class="badge badge-slate" style="font-size:.625rem">NAS-Reboot</span></td>
+              </tr><tr>
+                <td style="font-family:monospace;font-size:.75rem;color:#22d3ee">pppoe-dnjoroge</td>
+                <td style="font-family:monospace;font-size:.6875rem;color:#334155">1a5c3d78</td>
+                <td style="font-size:.75rem">2026-03-23 22:10</td>
+                <td style="color:white;font-weight:500">5h 33m</td>
+                <td style="color:#4ade80;font-weight:500">1.2GB</td>
+                <td style="color:#22d3ee;font-weight:500">4.8GB</td>
+                <td><span class="badge badge-slate" style="font-size:.625rem">User-Request</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+function showTab(name,btn){
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tp-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
