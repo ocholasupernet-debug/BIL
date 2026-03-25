@@ -1,0 +1,18 @@
+packages:
+  "framer-motion": "For smooth page transitions and micro-interactions"
+  "recharts": "For beautiful dashboard analytics charts"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility function to efficiently merge Tailwind CSS classes"
+  "date-fns": "For formatting dates in transaction and customer tables"
+
+images:
+  - path: "artifacts/ochola-supernet/public/images/hero-bg.png"
+    description: "Abstract dark network grid background with glowing cyan and indigo nodes representing internet connectivity and data flow"
+    aspect_ratio: "16:9"
+  - path: "artifacts/ochola-supernet/public/images/platform-bg.png"
+    description: "Deep space purple and dark violet abstract gradient mesh with soft floating light orbs, professional dark mode"
+    aspect_ratio: "16:9"
+
+notes:
+  - Using mocked data hooks to ensure the frontend is fully functional without a backend
+  - Implemented responsive sidebars, complex data tables, and fully animated UI

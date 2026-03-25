@@ -1,43 +1,26 @@
-import * as React from "react"
-import { cva, type VariantProps } from "class-variance-authority"
+import { cn } from "@/lib/utils";
+import React from "react";
 
-import { cn } from "@/lib/utils"
-
-const badgeVariants = cva(
-  // @replit
-  // Whitespace-nowrap: Badges should never wrap.
-  "whitespace-nowrap inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2" +
-  " hover-elevate ",
-  {
-    variants: {
-      variant: {
-        default:
-          // @replit shadow-xs instead of shadow, no hover because we use hover-elevate
-          "border-transparent bg-primary text-primary-foreground shadow-xs",
-        secondary:
-          // @replit no hover because we use hover-elevate
-          "border-transparent bg-secondary text-secondary-foreground",
-        destructive:
-          // @replit shadow-xs instead of shadow, no hover because we use hover-elevate
-          "border-transparent bg-destructive text-destructive-foreground shadow-xs",
-          // @replit shadow-xs" - use badge outline variable
-        outline: "text-foreground border [border-color:var(--badge-outline)]",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-)
-
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
-
-function Badge({ className, variant, ...props }: BadgeProps) {
-  return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
-  )
+interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+  variant?: "success" | "danger" | "warning" | "info" | "default" | "violet";
 }
 
-export { Badge, badgeVariants }
+export function Badge({ className, variant = "default", ...props }: BadgeProps) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border",
+        {
+          "bg-green-500/10 text-green-400 border-green-500/20": variant === "success",
+          "bg-red-500/10 text-red-400 border-red-500/20": variant === "danger",
+          "bg-amber-500/10 text-amber-400 border-amber-500/20": variant === "warning",
+          "bg-cyan-500/10 text-cyan-400 border-cyan-500/20": variant === "info",
+          "bg-slate-500/10 text-slate-300 border-slate-500/20": variant === "default",
+          "bg-indigo-500/10 text-indigo-400 border-indigo-500/20": variant === "violet",
+        },
+        className
+      )}
+      {...props}
+    />
+  );
+}
