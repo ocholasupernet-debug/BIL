@@ -1,0 +1,59 @@
+# ── Build output ──────────────────────────────────────────
+dist/
+tmp/
+out-tsc/
+*.tsbuildinfo
+.expo
+.expo-shared
+
+# ── Dependencies ───────────────────────────────────────────
+node_modules/
+.pnpm-store/
+
+# ── Secrets — NEVER commit these ──────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+
+# ── Logs ──────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# ── Replit-specific (not needed on VPS/GitHub) ────────────
+.cache/
+.local/
+.replit
+.replitignore
+.config/
+replit.md
+attached_assets/
+.agents/
+
+# ── IDEs ──────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.cursor/
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Misc ──────────────────────────────────────────────────
+.sass-cache/
+/connect.lock
+/coverage
+/libpeerconnection.log
+/typings
