@@ -89,3 +89,8 @@ pnpm --filter @workspace/api-spec run codegen
 - Backend API routes exist for real CRUD operations
 - MikroTik router management is UI-only (no actual RouterOS API calls)
 - M-Pesa integration is UI-only (no live Daraja API keys)
+
+## GitHub Repository
+- **Remote origin**: https://github.com/ocholasupernet-debug/BIL.git
+- All project commits are pushed to the `main` branch on GitHub
+- Secrets (Supabase keys, GitHub PAT) are stored in Replit Secrets — NOT in .replit or any tracked file
