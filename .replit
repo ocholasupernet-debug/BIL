@@ -24,3 +24,11 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+GITHUB_PERSONAL_ACCESS_TOKEN = "[REDACTED]"
+SUPABASE_ANON_KEY = "[REDACTED]"
+SUPABASE_SERVICE_ROLE_KEY = "[REDACTED]"
+SUPABASE_URL = "[REDACTED]"
