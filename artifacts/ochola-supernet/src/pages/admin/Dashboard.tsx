@@ -2,11 +2,15 @@ import React, { useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Link } from "wouter";
 
-/* ─── Router View Data ─── */
-const ROUTERS = [
-  { name: "latty1", online: 10, active: 14, expired: 487 },
-  { name: "latty2", online: 1,  active: 2,  expired: 164 },
+/* ─── Router Status Data ─── */
+const ROUTER_STATUS = [
+  { name: "latty1", online: true, uptime: "Up: 2d9h30m51s", model: "L009UiGS-2HaxD" },
+  { name: "latty2", online: true, uptime: "Up: 1d4h12m08s", model: "hAP lite" },
+  { name: "latty3", online: false, uptime: "Offline", model: "RB750Gr3" },
 ];
+
+const ROUTER_ONLINE_COUNT = ROUTER_STATUS.filter(r => r.online).length;
+const ROUTER_OFFLINE_COUNT = ROUTER_STATUS.filter(r => !r.online).length;
 
 /* ─── KPI Row 1 ─── */
 const KPI_ROW1 = [
@@ -134,13 +138,65 @@ const KPI_ROW2 = [
   },
 ];
 
+/* ─── Online User Stat Cards ─── */
+const ONLINE_STATS = [
+  {
+    label: "Hotspot Online Users",
+    value: "7",
+    gradient: "linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)",
+    href: "/admin/customers?status=online&type=hotspot",
+  },
+  {
+    label: "PPPoE Online Users",
+    value: "2",
+    gradient: "linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)",
+    href: "/admin/customers?status=online&type=pppoe",
+  },
+  {
+    label: "Static Online Users",
+    value: "1",
+    gradient: "linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)",
+    href: "/admin/customers?status=online&type=static",
+  },
+  {
+    label: "Total Online Users",
+    value: "10",
+    gradient: "linear-gradient(135deg,#d97706 0%,#f59e0b 100%)",
+    href: "/admin/customers?status=online",
+  },
+];
+
+/* ─── Monthly Registered Customers ─── */
+const MONTHLY_DATA = [
+  { month: "Jan", count: 12 },
+  { month: "Feb", count: 18 },
+  { month: "Mar", count: 9 },
+  { month: "Apr", count: 24 },
+  { month: "May", count: 31 },
+  { month: "Jun", count: 20 },
+  { month: "Jul", count: 15 },
+  { month: "Aug", count: 28 },
+  { month: "Sep", count: 22 },
+  { month: "Oct", count: 35 },
+  { month: "Nov", count: 19 },
+  { month: "Dec", count: 27 },
+];
+
+/* ─── All Users Insights ─── */
+const USER_INSIGHTS = [
+  { label: "Hotspot", count: 521, color: "#06b6d4" },
+  { label: "PPPoE", count: 214, color: "#8b5cf6" },
+  { label: "Static", count: 77, color: "#10b981" },
+];
+const INSIGHTS_TOTAL = USER_INSIGHTS.reduce((a, b) => a + b.count, 0);
+
 /* ─── Recent Transactions ─── */
 const RECENT_TXS = [
-  { name: "John Kamau",   plan: "Hotspot 10Mbps", amount: 500,   method: "MPESA",   status: "completed" },
-  { name: "Mary Wanjiku", plan: "PPPoE 20Mbps",   amount: 1200,  method: "MPESA",   status: "completed" },
-  { name: "Peter Otieno", plan: "Hotspot 5Mbps",  amount: 300,   method: "MPESA",   status: "pending"   },
-  { name: "Grace Muthoni",plan: "PPPoE 10Mbps",   amount: 800,   method: "CASH",    status: "completed" },
-  { name: "David Njoroge",plan: "Hotspot 10Mbps", amount: 500,   method: "MPESA",   status: "completed" },
+  { name: "John Kamau",    plan: "Hotspot 10Mbps", amount: 500,  method: "MPESA", status: "completed" },
+  { name: "Mary Wanjiku",  plan: "PPPoE 20Mbps",   amount: 1200, method: "MPESA", status: "completed" },
+  { name: "Peter Otieno",  plan: "Hotspot 5Mbps",  amount: 300,  method: "MPESA", status: "pending"   },
+  { name: "Grace Muthoni", plan: "PPPoE 10Mbps",   amount: 800,  method: "CASH",  status: "completed" },
+  { name: "David Njoroge", plan: "Hotspot 10Mbps", amount: 500,  method: "MPESA", status: "completed" },
 ];
 
 /* ─── Helpers ─── */
@@ -176,8 +232,72 @@ function KpiCard({ label, value, link, href, gradient, icon }: { label: string; 
   );
 }
 
+function OnlineStatCard({ label, value, gradient, href }: { label: string; value: string; gradient: string; href: string }) {
+  return (
+    <div style={{ borderRadius: 10, background: gradient, padding: "1rem 1.25rem 0", display: "flex", flexDirection: "column", minHeight: 110, overflow: "hidden" }}>
+      <div style={{ fontSize: "1.875rem", fontWeight: 800, color: "white", letterSpacing: "-0.02em" }}>{value}</div>
+      <div style={{ fontSize: "0.775rem", color: "rgba(255,255,255,0.85)", fontWeight: 600, marginTop: "0.2rem" }}>{label}</div>
+      <Link href={href}>
+        <div style={{
+          marginLeft: "-1.25rem",
+          marginRight: "-1.25rem",
+          padding: "0.45rem 1.25rem",
+          background: "rgba(0,0,0,0.18)",
+          fontSize: "0.72rem",
+          fontWeight: 600,
+          color: "rgba(255,255,255,0.9)",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          marginTop: "0.875rem",
+        }}>
+          View All <span style={{ marginLeft: "auto" }}>→</span>
+        </div>
+      </Link>
+    </div>
+  );
+}
+
+function DonutChart() {
+  const cx = 80, cy = 80, r = 56;
+  const circumference = 2 * Math.PI * r;
+  let offset = 0;
+  const segments = USER_INSIGHTS.map(s => {
+    const pct = s.count / INSIGHTS_TOTAL;
+    const dash = pct * circumference;
+    const seg = { ...s, dash, offset };
+    offset += dash;
+    return seg;
+  });
+
+  return (
+    <svg viewBox="0 0 160 160" width={160} height={160} style={{ display: "block" }}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={22} />
+      {segments.map((seg) => (
+        <circle
+          key={seg.label}
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke={seg.color}
+          strokeWidth={22}
+          strokeDasharray={`${seg.dash} ${circumference - seg.dash}`}
+          strokeDashoffset={-seg.offset + circumference * 0.25}
+          style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }}
+        />
+      ))}
+      <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="18" fontWeight="800">{INSIGHTS_TOTAL}</text>
+      <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="10">Total Users</text>
+    </svg>
+  );
+}
+
 export default function Dashboard() {
-  const [routerFilter, setRouterFilter] = useState("All Routers - System Wide");
+  const [chartCollapsed, setChartCollapsed] = useState(false);
+  const [chartMinimized, setChartMinimized] = useState(false);
+
+  const maxCount = Math.max(...MONTHLY_DATA.map(d => d.count));
 
   return (
     <AdminLayout>
@@ -186,48 +306,82 @@ export default function Dashboard() {
         {/* Page heading */}
         <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "white", margin: 0 }}>Dashboard</h1>
 
-        {/* Router View */}
+        {/* Online User Stat Cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
+          {ONLINE_STATS.map(s => (
+            <OnlineStatCard key={s.label} label={s.label} value={s.value} gradient={s.gradient} href={s.href} />
+          ))}
+        </div>
+
+        {/* M-Pesa STK Push Status Bar */}
+        <div style={{
+          borderRadius: 10,
+          background: "#1a2645",
+          border: "1px solid rgba(255,255,255,0.08)",
+          padding: "0.75rem 1.25rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+        }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: "50%", background: "#22c55e",
+            display: "inline-block", flexShrink: 0,
+            boxShadow: "0 0 6px #22c55e",
+          }} />
+          <span style={{ fontWeight: 700, color: "white", fontSize: "0.875rem" }}>M-Pesa STK Push Service</span>
+          <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.6rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Live</span>
+          <span style={{ fontSize: "0.8rem", color: "#94a3b8", marginLeft: "0.25rem" }}>Safaricom is working</span>
+        </div>
+
+        {/* Router Status */}
         <div style={{ borderRadius: 10, background: "#1a2645", border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden" }}>
-          {/* Router View Header */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-              <div style={{ width: 20, height: 20, background: "rgba(59,130,246,0.2)", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <svg viewBox="0 0 24 24" style={{ width: 12, height: 12 }} fill="none" stroke="#60a5fa" strokeWidth="2">
-                  <rect x="2" y="8" width="20" height="8" rx="2"/><line x1="6" y1="12" x2="6" y2="12" strokeWidth="3" strokeLinecap="round"/><line x1="10" y1="12" x2="10" y2="12" strokeWidth="3" strokeLinecap="round"/><line x1="18" y1="8" x2="18" y2="4"/><line x1="20" y1="8" x2="20" y2="4"/>
-                </svg>
-              </div>
-              <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "white" }}>Router View</span>
+              <svg viewBox="0 0 24 24" style={{ width: 16, height: 16 }} fill="none" stroke="#60a5fa" strokeWidth="2">
+                <rect x="2" y="8" width="20" height="8" rx="2"/>
+                <line x1="6" y1="12" x2="6" y2="12" strokeWidth="3" strokeLinecap="round"/>
+                <line x1="10" y1="12" x2="10" y2="12" strokeWidth="3" strokeLinecap="round"/>
+                <line x1="18" y1="8" x2="18" y2="4"/>
+                <line x1="20" y1="8" x2="20" y2="4"/>
+              </svg>
+              <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "white" }}>Router Status</span>
             </div>
-            <select
-              value={routerFilter}
-              onChange={e => setRouterFilter(e.target.value)}
-              style={{ fontSize: "0.8125rem", color: "#94a3b8", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, padding: "0.375rem 0.75rem", outline: "none", cursor: "pointer", fontFamily: "inherit" }}
-            >
-              <option>All Routers - System Wide</option>
-              {ROUTERS.map(r => <option key={r.name}>{r.name}</option>)}
-            </select>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <span style={{ fontSize: "0.72rem", padding: "0.2rem 0.65rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>
+                {ROUTER_ONLINE_COUNT} Online
+              </span>
+              <span style={{ fontSize: "0.72rem", padding: "0.2rem 0.65rem", borderRadius: 20, background: "rgba(248,113,113,0.15)", color: "#f87171", fontWeight: 700 }}>
+                {ROUTER_OFFLINE_COUNT} Offline
+              </span>
+            </div>
           </div>
-
-          {/* Router Cards */}
           <div style={{ padding: "1rem 1.25rem", display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-            {ROUTERS.map(router => (
+            {ROUTER_STATUS.map(router => (
               <div
                 key={router.name}
-                style={{ background: "#0f1923", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "0.75rem 1rem", minWidth: 160 }}
+                style={{
+                  background: "#0f1923",
+                  border: `1px solid ${router.online ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.2)"}`,
+                  borderRadius: 8,
+                  padding: "0.75rem 1rem",
+                  minWidth: 185,
+                }}
               >
-                <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "white", marginBottom: "0.5rem" }}>{router.name}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", fontSize: "0.75rem", fontWeight: 700 }}>
-                  <span style={{ color: "#4ade80", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80", display: "inline-block" }} />
-                    {router.online}
-                  </span>
-                  <span style={{ color: "#60a5fa", display: "flex", alignItems: "center", gap: "0.2rem" }}>
-                    ✓ {router.active}
-                  </span>
-                  <span style={{ color: "#f87171", display: "flex", alignItems: "center", gap: "0.2rem" }}>
-                    ✗ {router.expired}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+                  <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "white" }}>{router.name}</span>
+                  <span style={{
+                    fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: 20,
+                    background: router.online ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)",
+                    color: router.online ? "#22c55e" : "#f87171",
+                    fontWeight: 700,
+                  }}>
+                    {router.online ? "Online" : "Offline"}
                   </span>
                 </div>
+                <div style={{ fontSize: "0.72rem", color: router.online ? "#4ade80" : "#94a3b8", marginBottom: "0.25rem", fontFamily: "monospace" }}>
+                  {router.uptime}
+                </div>
+                <div style={{ fontSize: "0.7rem", color: "#64748b" }}>{router.model}</div>
               </div>
             ))}
           </div>
@@ -245,6 +399,120 @@ export default function Dashboard() {
           {KPI_ROW2.map((k) => (
             <KpiCard key={k.label} {...k} />
           ))}
+        </div>
+
+        {/* Two-column lower section */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", alignItems: "start" }}>
+
+          {/* Left: Monthly Registered Customers bar chart */}
+          <div style={{ borderRadius: 10, background: "#1a2645", border: "1px solid rgba(255,255,255,0.08)", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: chartMinimized ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
+              <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "white" }}>Monthly Registered Customers</span>
+              <div style={{ display: "flex", gap: "0.375rem" }}>
+                <button
+                  onClick={() => setChartCollapsed(c => !c)}
+                  style={{ width: 24, height: 24, borderRadius: 5, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", cursor: "pointer", fontSize: "0.9rem", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}
+                  title={chartCollapsed ? "Expand" : "Collapse"}
+                >
+                  {chartCollapsed ? "+" : "−"}
+                </button>
+                <button
+                  onClick={() => setChartMinimized(m => !m)}
+                  style={{ width: 24, height: 24, borderRadius: 5, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", cursor: "pointer", fontSize: "0.85rem", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}
+                  title={chartMinimized ? "Restore" : "Minimize"}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            {!chartMinimized && !chartCollapsed && (
+                <div style={{ padding: "1rem 1.25rem" }}>
+                  <svg viewBox={`0 0 ${MONTHLY_DATA.length * 36} 140`} width="100%" style={{ display: "block", overflow: "visible" }}>
+                    {MONTHLY_DATA.map((d, i) => {
+                      const barH = Math.round((d.count / maxCount) * 100);
+                      const x = i * 36 + 6;
+                      const barTop = 100 - barH;
+                      return (
+                        <g key={d.month}>
+                          <rect
+                            x={x}
+                            y={barTop}
+                            width={22}
+                            height={barH}
+                            rx={3}
+                            fill="url(#barGrad)"
+                          />
+                          <text
+                            x={x + 11}
+                            y={barTop - 4}
+                            textAnchor="middle"
+                            fill="#94a3b8"
+                            fontSize="7.5"
+                          >
+                            {d.count}
+                          </text>
+                          <text
+                            x={x + 11}
+                            y={118}
+                            textAnchor="middle"
+                            fill="#64748b"
+                            fontSize="7.5"
+                          >
+                            {d.month}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    <defs>
+                      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#06b6d4" />
+                        <stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                </div>
+              )}
+            </div>
+
+          {/* Right: Payment Gateway + All Users Insights */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+
+            {/* Payment Gateway */}
+            <div style={{ borderRadius: 10, background: "#1a2645", border: "1px solid rgba(255,255,255,0.08)", padding: "1rem 1.25rem" }}>
+              <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "white", marginBottom: "0.75rem" }}>Payment Gateway</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.65rem 0.875rem", borderRadius: 8, background: "#0f1923", border: "1px solid rgba(255,255,255,0.07)" }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg,#0ea5e9,#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" strokeWidth="2">
+                    <rect x="2" y="5" width="20" height="14" rx="2"/>
+                    <line x1="2" y1="10" x2="22" y2="10"/>
+                  </svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "white" }}>BankStkPush</div>
+                  <div style={{ fontSize: "0.7rem", color: "#64748b", marginTop: "0.1rem" }}>Active payment gateway</div>
+                </div>
+                <span style={{ marginLeft: "auto", fontSize: "0.65rem", padding: "0.2rem 0.55rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Active</span>
+              </div>
+            </div>
+
+            {/* All Users Insights */}
+            <div style={{ borderRadius: 10, background: "#1a2645", border: "1px solid rgba(255,255,255,0.08)", padding: "1rem 1.25rem" }}>
+              <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "white", marginBottom: "0.875rem" }}>All Users Insights</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
+                <DonutChart />
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem", flex: 1 }}>
+                  {USER_INSIGHTS.map(seg => (
+                    <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, display: "inline-block", flexShrink: 0 }} />
+                      <span style={{ fontSize: "0.775rem", color: "#94a3b8", flex: 1 }}>{seg.label}</span>
+                      <span style={{ fontSize: "0.775rem", fontWeight: 700, color: "white" }}>{seg.count}</span>
+                      <span style={{ fontSize: "0.7rem", color: "#64748b" }}>({Math.round(seg.count / INSIGHTS_TOTAL * 100)}%)</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Recent Transactions table */}

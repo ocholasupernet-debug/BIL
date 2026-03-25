@@ -4,7 +4,8 @@ import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
   Network, Server, Settings, Menu, Bell, LogOut, ChevronLeft,
   Zap, MessageSquare, CheckSquare, Wifi, Layers, Shield,
-  Search, Sun, ChevronDown, Flag
+  Search, Sun, ChevronDown, Flag, Globe, Radio, MonitorSmartphone,
+  Sliders, FileCode2, Star, MoreHorizontal, Activity, BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -90,6 +91,40 @@ const navItems: NavItem[] = [
       { name: "Send SMS", href: "/admin/bulk?action=sms" },
     ]
   },
+  { name: "Static Pages", href: "/admin/static-pages", icon: Globe },
+  { name: "TR069 ACS", href: "/admin/tr069", icon: Radio },
+  { name: "Device Access", href: "/admin/device-access", icon: MonitorSmartphone },
+  { name: "Access Points", href: "/admin/access-points", icon: Wifi, badge: "New" },
+  { name: "Settings", href: "/admin/settings", icon: Settings },
+  { name: "PPPoE Settings", href: "/admin/pppoe-settings", icon: Sliders },
+  { name: "Hotspot Settings", href: "/admin/hotspot-settings", icon: Sliders },
+  { name: "Page Builder", href: "/admin/page-builder", icon: FileCode2 },
+  {
+    name: "Bonga Points", icon: Star,
+    children: [
+      { name: "Overview", href: "/admin/bonga-points" },
+      { name: "Redemptions", href: "/admin/bonga-points?tab=redemptions" },
+    ]
+  },
+  {
+    name: "Extras", icon: MoreHorizontal,
+    children: [
+      { name: "Extras Overview", href: "/admin/extras" },
+    ]
+  },
+  {
+    name: "Uisp", icon: Activity,
+    children: [
+      { name: "UISP Overview", href: "/admin/uisp" },
+    ]
+  },
+  {
+    name: "Logs", icon: BookOpen,
+    children: [
+      { name: "All Logs", href: "/admin/logs" },
+      { name: "Auth Logs", href: "/admin/logs?type=auth" },
+    ]
+  },
 ];
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -164,6 +199,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                       <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
                         <item.icon style={{ width: 15, height: 15 }} />
                         <span style={{ whiteSpace: "nowrap" }}>{item.name}</span>
+                        {item.badge && (
+                          <span style={{ fontSize: "0.55rem", padding: "1px 5px", borderRadius: 4, background: "#10b981", color: "white", fontWeight: 700, letterSpacing: "0.03em" }}>
+                            {item.badge}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </Link>
@@ -233,12 +273,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", padding: "0.5rem 1rem", fontSize: "0.8125rem", color: "#7c8ea6", cursor: "pointer", borderLeft: "3px solid transparent" }}>
                 <Shield style={{ width: 15, height: 15 }} />
                 <span>FreeRADIUS</span>
-              </div>
-            </Link>
-            <Link href="/admin/settings">
-              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", padding: "0.5rem 1rem", fontSize: "0.8125rem", color: "#7c8ea6", cursor: "pointer", borderLeft: "3px solid transparent" }}>
-                <Settings style={{ width: 15, height: 15 }} />
-                <span>Settings</span>
               </div>
             </Link>
           </div>
