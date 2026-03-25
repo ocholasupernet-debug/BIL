@@ -9,73 +9,69 @@ const ROUTER_STATUS = [
   { name: "latty3", online: false, uptime: "Offline", model: "RB750Gr3" },
 ];
 
+/* ─── Per-Router Income & Stats ─── */
+type RouterKey = "all" | "latty1" | "latty2" | "latty3";
+
+const ROUTER_INCOME: Record<RouterKey, {
+  incomeToday: string;
+  incomeMonth: string;
+  active: number;
+  expired: number;
+  total: number;
+  online: number;
+  hotspotOnline: number;
+  pppoeOnline: number;
+  staticOnline: number;
+}> = {
+  all: {
+    incomeToday: "Ksh. 4",
+    incomeMonth: "Ksh. 20,988",
+    active: 16,
+    expired: 651,
+    total: 812,
+    online: 10,
+    hotspotOnline: 7,
+    pppoeOnline: 2,
+    staticOnline: 1,
+  },
+  latty1: {
+    incomeToday: "Ksh. 4",
+    incomeMonth: "Ksh. 12,500",
+    active: 14,
+    expired: 487,
+    total: 501,
+    online: 7,
+    hotspotOnline: 6,
+    pppoeOnline: 1,
+    staticOnline: 0,
+  },
+  latty2: {
+    incomeToday: "Ksh. 0",
+    incomeMonth: "Ksh. 8,488",
+    active: 2,
+    expired: 164,
+    total: 166,
+    online: 3,
+    hotspotOnline: 1,
+    pppoeOnline: 1,
+    staticOnline: 1,
+  },
+  latty3: {
+    incomeToday: "Ksh. 0",
+    incomeMonth: "Ksh. 0",
+    active: 0,
+    expired: 0,
+    total: 0,
+    online: 0,
+    hotspotOnline: 0,
+    pppoeOnline: 0,
+    staticOnline: 0,
+  },
+};
+
 const ROUTER_ONLINE_COUNT = ROUTER_STATUS.filter(r => r.online).length;
 const ROUTER_OFFLINE_COUNT = ROUTER_STATUS.filter(r => !r.online).length;
 
-/* ─── KPI Row 1 ─── */
-const KPI_ROW1 = [
-  {
-    label: "Income Today",
-    value: "Ksh. 4",
-    sub: "",
-    link: "View Reports",
-    href: "/admin/transactions",
-    gradient: "linear-gradient(135deg,#0fb8ad 0%,#1fc8db 51%,#2cb5e8 75%)",
-    icon: (
-      <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white">
-        <path d="M32 4C16.6 4 4 16.6 4 32s12.6 28 28 28 28-12.6 28-28S47.4 4 32 4zm4 42h-8V36h8v10zm0-18h-8V18h8v10z"/>
-        <rect x="18" y="36" width="8" height="12" rx="1"/>
-        <rect x="38" y="28" width="8" height="20" rx="1"/>
-      </svg>
-    ),
-  },
-  {
-    label: "Income This Month",
-    value: "Ksh. 20,988",
-    sub: "",
-    link: "View Reports",
-    href: "/admin/transactions",
-    gradient: "linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)",
-    icon: (
-      <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white">
-        <rect x="8" y="40" width="10" height="16" rx="2"/>
-        <rect x="22" y="28" width="10" height="28" rx="2"/>
-        <rect x="36" y="20" width="10" height="36" rx="2"/>
-        <rect x="50" y="12" width="10" height="44" rx="2"/>
-      </svg>
-    ),
-  },
-  {
-    label: "Active/Expired",
-    value: "16/651",
-    sub: "",
-    link: "View All",
-    href: "/admin/customers",
-    gradient: "linear-gradient(135deg,#f7971e 0%,#ffd200 100%)",
-    icon: (
-      <svg viewBox="0 0 64 64" style={{ width: 72, height: 72, opacity: 0.25 }} fill="white">
-        <circle cx="32" cy="20" r="12"/>
-        <path d="M8 56c0-13.3 10.7-24 24-24s24 10.7 24 24H8z"/>
-      </svg>
-    ),
-  },
-  {
-    label: "Total Users",
-    value: "812",
-    sub: "",
-    link: "View All",
-    href: "/admin/customers",
-    gradient: "linear-gradient(135deg,#f953c6 0%,#b91d73 100%)",
-    icon: (
-      <svg viewBox="0 0 80 64" style={{ width: 80, height: 64, opacity: 0.25 }} fill="white">
-        <circle cx="28" cy="20" r="10"/>
-        <path d="M4 52c0-11 10.7-20 24-20s24 9 24 20H4z"/>
-        <circle cx="56" cy="22" r="8" opacity="0.7"/>
-        <path d="M40 54c0-9 7-17 16-17s16 8 16 17H40z" opacity="0.7"/>
-      </svg>
-    ),
-  },
-];
 
 /* ─── KPI Row 2 ─── */
 const KPI_ROW2 = [
@@ -138,33 +134,6 @@ const KPI_ROW2 = [
   },
 ];
 
-/* ─── Online User Stat Cards ─── */
-const ONLINE_STATS = [
-  {
-    label: "Hotspot Online Users",
-    value: "7",
-    gradient: "linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)",
-    href: "/admin/customers?status=online&type=hotspot",
-  },
-  {
-    label: "PPPoE Online Users",
-    value: "2",
-    gradient: "linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)",
-    href: "/admin/customers?status=online&type=pppoe",
-  },
-  {
-    label: "Static Online Users",
-    value: "1",
-    gradient: "linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)",
-    href: "/admin/customers?status=online&type=static",
-  },
-  {
-    label: "Total Online Users",
-    value: "10",
-    gradient: "linear-gradient(135deg,#d97706 0%,#f59e0b 100%)",
-    href: "/admin/customers?status=online",
-  },
-];
 
 /* ─── Monthly Registered Customers ─── */
 const MONTHLY_DATA = [
@@ -296,8 +265,15 @@ function DonutChart() {
 export default function Dashboard() {
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartMinimized, setChartMinimized] = useState(false);
+  const [selectedRouter, setSelectedRouter] = useState<RouterKey>("all");
 
+  const stats = ROUTER_INCOME[selectedRouter];
   const maxCount = Math.max(...MONTHLY_DATA.map(d => d.count));
+
+  const routerOptions: { key: RouterKey; label: string; online: boolean | null }[] = [
+    { key: "all", label: "All Routers", online: null },
+    ...ROUTER_STATUS.map(r => ({ key: r.name as RouterKey, label: r.name, online: r.online })),
+  ];
 
   return (
     <AdminLayout>
@@ -306,11 +282,12 @@ export default function Dashboard() {
         {/* Page heading */}
         <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "white", margin: 0 }}>Dashboard</h1>
 
-        {/* Online User Stat Cards */}
+        {/* Online User Stat Cards — dynamic per router */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-          {ONLINE_STATS.map(s => (
-            <OnlineStatCard key={s.label} label={s.label} value={s.value} gradient={s.gradient} href={s.href} />
-          ))}
+          <OnlineStatCard label="Hotspot Online Users" value={String(stats.hotspotOnline)} gradient="linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)" href="/admin/customers?status=online&type=hotspot" />
+          <OnlineStatCard label="PPPoE Online Users"   value={String(stats.pppoeOnline)}   gradient="linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)" href="/admin/customers?status=online&type=pppoe" />
+          <OnlineStatCard label="Static Online Users"  value={String(stats.staticOnline)}  gradient="linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)" href="/admin/customers?status=online&type=static" />
+          <OnlineStatCard label="Total Online Users"   value={String(stats.online)}        gradient="linear-gradient(135deg,#d97706 0%,#f59e0b 100%)" href="/admin/customers?status=online" />
         </div>
 
         {/* M-Pesa STK Push Status Bar */}
@@ -387,11 +364,141 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* KPI Row 1 */}
+        {/* ── Router Income Filter ── */}
+        <div style={{
+          borderRadius: 10,
+          background: "#1a2645",
+          border: "1px solid rgba(255,255,255,0.08)",
+          padding: "0.875rem 1.25rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginRight: "0.5rem" }}>
+            <svg viewBox="0 0 24 24" style={{ width: 15, height: 15 }} fill="none" stroke="#60a5fa" strokeWidth="2">
+              <rect x="2" y="8" width="20" height="8" rx="2"/>
+              <line x1="6" y1="12" x2="6" y2="12" strokeWidth="3" strokeLinecap="round"/>
+              <line x1="10" y1="12" x2="10" y2="12" strokeWidth="3" strokeLinecap="round"/>
+              <line x1="18" y1="8" x2="18" y2="4"/>
+              <line x1="20" y1="8" x2="20" y2="4"/>
+            </svg>
+            <span style={{ fontSize: "0.8125rem", color: "#94a3b8", fontWeight: 600, whiteSpace: "nowrap" }}>
+              Filter by Router:
+            </span>
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {routerOptions.map(opt => {
+              const active = selectedRouter === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => setSelectedRouter(opt.key)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.375rem",
+                    padding: "0.35rem 0.875rem",
+                    borderRadius: 20,
+                    fontSize: "0.75rem",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    transition: "all 0.15s",
+                    border: active ? "1.5px solid #06b6d4" : "1.5px solid rgba(255,255,255,0.1)",
+                    background: active ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.04)",
+                    color: active ? "#22d3ee" : "#7c8ea6",
+                  }}
+                >
+                  {opt.online !== null && (
+                    <span style={{
+                      width: 7, height: 7, borderRadius: "50%",
+                      background: opt.online ? "#22c55e" : "#f87171",
+                      display: "inline-block", flexShrink: 0,
+                    }} />
+                  )}
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedRouter !== "all" && (
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "0.375rem", fontSize: "0.75rem", color: "#22d3ee" }}>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              Showing stats for <strong>{selectedRouter}</strong>
+              <button
+                onClick={() => setSelectedRouter("all")}
+                style={{ marginLeft: "0.25rem", background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "0.7rem", padding: 0, fontFamily: "inherit" }}
+              >
+                (clear)
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* KPI Row 1 — income & user stats (dynamic per router) */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-          {KPI_ROW1.map((k) => (
-            <KpiCard key={k.label} {...k} />
-          ))}
+          <KpiCard
+            label="Income Today"
+            value={stats.incomeToday}
+            link="View Reports"
+            href="/admin/transactions"
+            gradient="linear-gradient(135deg,#0fb8ad 0%,#1fc8db 51%,#2cb5e8 75%)"
+            icon={
+              <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white">
+                <path d="M32 4C16.6 4 4 16.6 4 32s12.6 28 28 28 28-12.6 28-28S47.4 4 32 4zm4 42h-8V36h8v10zm0-18h-8V18h8v10z"/>
+                <rect x="18" y="36" width="8" height="12" rx="1"/>
+                <rect x="38" y="28" width="8" height="20" rx="1"/>
+              </svg>
+            }
+          />
+          <KpiCard
+            label="Income This Month"
+            value={stats.incomeMonth}
+            link="View Reports"
+            href="/admin/transactions"
+            gradient="linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)"
+            icon={
+              <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white">
+                <rect x="8" y="40" width="10" height="16" rx="2"/>
+                <rect x="22" y="28" width="10" height="28" rx="2"/>
+                <rect x="36" y="20" width="10" height="36" rx="2"/>
+                <rect x="50" y="12" width="10" height="44" rx="2"/>
+              </svg>
+            }
+          />
+          <KpiCard
+            label="Active/Expired"
+            value={`${stats.active}/${stats.expired}`}
+            link="View All"
+            href="/admin/customers"
+            gradient="linear-gradient(135deg,#f7971e 0%,#ffd200 100%)"
+            icon={
+              <svg viewBox="0 0 64 64" style={{ width: 72, height: 72, opacity: 0.25 }} fill="white">
+                <circle cx="32" cy="20" r="12"/>
+                <path d="M8 56c0-13.3 10.7-24 24-24s24 10.7 24 24H8z"/>
+              </svg>
+            }
+          />
+          <KpiCard
+            label="Total Users"
+            value={String(stats.total)}
+            link="View All"
+            href="/admin/customers"
+            gradient="linear-gradient(135deg,#f953c6 0%,#b91d73 100%)"
+            icon={
+              <svg viewBox="0 0 80 64" style={{ width: 80, height: 64, opacity: 0.25 }} fill="white">
+                <circle cx="28" cy="20" r="10"/>
+                <path d="M4 52c0-11 10.7-20 24-20s24 9 24 20H4z"/>
+                <circle cx="56" cy="22" r="8" opacity="0.7"/>
+                <path d="M40 54c0-9 7-17 16-17s16 8 16 17H40z" opacity="0.7"/>
+              </svg>
+            }
+          />
         </div>
 
         {/* KPI Row 2 */}
