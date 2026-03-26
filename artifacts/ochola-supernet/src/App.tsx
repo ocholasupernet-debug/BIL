@@ -20,6 +20,10 @@ import AdminTransactions from "./pages/admin/Transactions";
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
+import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
+import VpnList from "./pages/vpn/VpnList";
+import VpnCreate from "./pages/vpn/CreateVpn";
+import VpnTutorials from "./pages/vpn/VideoTutorials";
 
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
@@ -57,6 +61,10 @@ function Router() {
       
       {/* VPN Portal — vpn.isplatty.org */}
       <Route path="/vpn" component={VpnDashboard} />
+      <Route path="/vpn/remote-access" component={VpnRemoteAccess} />
+      <Route path="/vpn/list" component={VpnList} />
+      <Route path="/vpn/create" component={VpnCreate} />
+      <Route path="/vpn/tutorials" component={VpnTutorials} />
 
       {/* Portals */}
       <Route path="/hotspot-login" component={HotspotLogin} />
