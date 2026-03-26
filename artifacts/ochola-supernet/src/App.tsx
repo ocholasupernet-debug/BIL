@@ -19,6 +19,7 @@ import AdminTransactions from "./pages/admin/Transactions";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
+import VpnDashboard from "./pages/vpn/VpnDashboard";
 
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
@@ -54,6 +55,9 @@ function Router() {
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions" component={AdminTransactions} />
       
+      {/* VPN Portal — vpn.isplatty.org */}
+      <Route path="/vpn" component={VpnDashboard} />
+
       {/* Portals */}
       <Route path="/hotspot-login" component={HotspotLogin} />
       <Route path="/isp-register" component={() => <StubPage title="ISP Registration Portal" />} />
