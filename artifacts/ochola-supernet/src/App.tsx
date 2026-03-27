@@ -24,6 +24,7 @@ import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
 import VpnCreate from "./pages/vpn/CreateVpn";
 import VpnTutorials from "./pages/vpn/VideoTutorials";
+import VpnSettings from "./pages/vpn/Settings";
 
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
@@ -65,6 +66,7 @@ function Router() {
       <Route path="/vpn/list" component={VpnList} />
       <Route path="/vpn/create" component={VpnCreate} />
       <Route path="/vpn/tutorials" component={VpnTutorials} />
+      <Route path="/vpn/settings" component={VpnSettings} />
 
       {/* Portals */}
       <Route path="/hotspot-login" component={HotspotLogin} />

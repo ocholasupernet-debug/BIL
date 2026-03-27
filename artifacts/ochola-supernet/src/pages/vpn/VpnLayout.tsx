@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   Bell, Mail, Moon, Globe, ChevronDown, Home, ChevronRight,
   MonitorPlay, Wifi, Send, Users, LayoutDashboard, Sun,
+  Settings, LogOut, User,
 } from "lucide-react";
 
 interface VpnLayoutProps {
@@ -20,7 +21,17 @@ const NAV = [
 
 export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
   const [dark, setDark] = useState(false);
+  const [dropOpen, setDropOpen] = useState(false);
   const [location] = useLocation();
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   return (
     <>
@@ -43,11 +54,37 @@ export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
             <Bell size={18} />
             <span className="absolute -top-1.5 -right-1.5 bg-orange-500 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">8</span>
           </button>
-          <button className="flex items-center gap-2 hover:bg-gray-50 rounded-lg px-2 py-1 transition-colors">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold">CO</div>
-            <span className="text-sm font-medium text-gray-700 hidden sm:block">Chrisphine Ochola</span>
-            <ChevronDown size={14} className="text-gray-400" />
-          </button>
+
+          {/* Avatar dropdown */}
+          <div className="relative" ref={dropRef}>
+            <button onClick={() => setDropOpen(v => !v)}
+              className="flex items-center gap-2 hover:bg-gray-50 rounded-lg px-2 py-1 transition-colors">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold">CO</div>
+              <span className="text-sm font-medium text-gray-700 hidden sm:block">Chrisphine Ochola</span>
+              <ChevronDown size={14} className={`text-gray-400 transition-transform ${dropOpen ? "rotate-180" : ""}`} />
+            </button>
+            {dropOpen && (
+              <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-xl border border-gray-200 shadow-lg py-2 z-50">
+                <div className="px-4 py-2 border-b border-gray-100 mb-1">
+                  <p className="text-xs font-bold text-gray-800">Chrisphine Ochola</p>
+                  <p className="text-[11px] text-gray-400">chrisphine@isplatty.org</p>
+                </div>
+                <Link href="/vpn/settings#profile" onClick={() => setDropOpen(false)}
+                  className="flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                  <User size={14} className="text-gray-400" /> My Profile
+                </Link>
+                <Link href="/vpn/settings" onClick={() => setDropOpen(false)}
+                  className="flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                  <Settings size={14} className="text-gray-400" /> Settings
+                </Link>
+                <div className="border-t border-gray-100 mt-1 pt-1">
+                  <button className="flex items-center gap-2.5 px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors w-full text-left">
+                    <LogOut size={14} /> Sign Out
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
