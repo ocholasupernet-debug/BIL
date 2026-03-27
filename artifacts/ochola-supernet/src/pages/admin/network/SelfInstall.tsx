@@ -88,8 +88,9 @@ export default function SelfInstall() {
     ? router.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + ".rsc"
     : "mainhotspot.rsc";
 
-  const domain = brand.domain || "isplatty.org";
-  const fetchCmd  = `/tool fetch url="https://${domain}/scripts/${scriptName}" dst-path=${scriptName} mode=https`;
+  /* Always point at THIS billing platform — works on local, Replit, or VPS */
+  const scriptBase = `${window.location.origin}/api/scripts`;
+  const fetchCmd  = `/tool fetch url="${scriptBase}/${scriptName}" dst-path=${scriptName} mode=https`;
   const importCmd = `/import ${scriptName}`;
 
   return (
@@ -217,7 +218,7 @@ export default function SelfInstall() {
           fontSize: "0.78rem", color: "#fbbf24", lineHeight: 1.6,
         }}>
           <strong>Note:</strong> The MikroTik router must have internet access to fetch the script.
-          Ensure the router is online and can reach <code style={{ fontFamily: "monospace" }}>https://{domain}</code> before running Step 1.
+          Ensure the router is online and can reach <code style={{ fontFamily: "monospace" }}>{window.location.host}</code> before running Step 1.
         </div>
 
       </div>

@@ -6,6 +6,7 @@ import vouchersRouter from "./vouchers";
 import transactionsRouter from "./transactions";
 import routersRouter from "./routers-route";
 import syncRouter from "./sync-route";
+import scriptsRouter from "./scripts-route";
 
 const router: IRouter = Router();
 
@@ -16,5 +17,6 @@ router.use(vouchersRouter);
 router.use(transactionsRouter);
 router.use(routersRouter);
 router.use(syncRouter);
+router.use(scriptsRouter);
 
 export default router;
