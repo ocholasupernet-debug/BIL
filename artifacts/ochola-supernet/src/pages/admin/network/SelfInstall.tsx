@@ -88,8 +88,17 @@ export default function SelfInstall() {
     ? router.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + ".rsc"
     : "mainhotspot.rsc";
 
-  /* Always point at THIS billing platform — works on local, Replit, or VPS */
-  const scriptBase = `${window.location.origin}/api/scripts`;
+  /* Build subdomain URL: {ispSlug}.{domain}/api/scripts/
+     e.g.  come.isplatty.org/api/scripts/come-1.rsc
+     Falls back to window.location.origin in dev (no brand loaded yet) */
+  const ispSlug    = brand.ispName
+    ? brand.ispName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
+    : "";
+  const baseDomain = brand.domain || window.location.hostname;
+  const scriptHost = ispSlug
+    ? `https://${ispSlug}.${baseDomain}`
+    : window.location.origin;
+  const scriptBase = `${scriptHost}/api/scripts`;
   const fetchCmd  = `/tool fetch url="${scriptBase}/${scriptName}" dst-path=${scriptName} mode=https`;
   const importCmd = `/import ${scriptName}`;
 
@@ -218,7 +227,7 @@ export default function SelfInstall() {
           fontSize: "0.78rem", color: "#fbbf24", lineHeight: 1.6,
         }}>
           <strong>Note:</strong> The MikroTik router must have internet access to fetch the script.
-          Ensure the router is online and can reach <code style={{ fontFamily: "monospace" }}>{window.location.host}</code> before running Step 1.
+          Ensure the router is online and can reach <code style={{ fontFamily: "monospace" }}>{ispSlug ? `${ispSlug}.${baseDomain}` : window.location.host}</code> before running Step 1.
         </div>
 
       </div>
