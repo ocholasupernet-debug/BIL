@@ -1,8 +1,22 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { MOCK_PLANS, MOCK_BANDWIDTH_PLANS } from "@/hooks/use-mock-api";
 import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X } from "lucide-react";
+
+/* ─── localStorage persistence ─── */
+const LS_PLANS = "ochola_service_plans";
+const LS_BW    = "ochola_bandwidth_plans";
+
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch { return fallback; }
+}
+function saveToStorage<T>(key: string, data: T) {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* ignore quota errors */ }
+}
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
@@ -467,10 +481,12 @@ function BandwidthCard({ plan, onEdit, onDelete }: { plan: BwPlan; onEdit: () =>
    BANDWIDTH PLANS TAB
 ═══════════════════════════════════════════════════════════ */
 function BandwidthPlansTab() {
-  const [plans, setPlans]       = useState<BwPlan[]>(MOCK_BANDWIDTH_PLANS);
+  const [plans, setPlans]       = useState<BwPlan[]>(() => loadFromStorage<BwPlan[]>(LS_BW, MOCK_BANDWIDTH_PLANS));
   const [showForm, setShowForm] = useState(false);
   const [editingBw, setEditingBw] = useState<BwPlan | null>(null);
   const [deletingBw, setDeletingBw] = useState<BwPlan | null>(null);
+
+  useEffect(() => { saveToStorage(LS_BW, plans); }, [plans]);
 
   function openAdd()           { setEditingBw(null); setShowForm(true); }
   function openEdit(p: BwPlan) { setEditingBw(p);    setShowForm(true); }
@@ -537,10 +553,12 @@ const TAB_LABELS: Record<string, string> = {
 export default function Plans() {
   const typeParam  = useTypeParam();
   const [activeTab, setActiveTab]   = useState(typeParam);
-  const [localPlans, setLocalPlans] = useState<ServicePlan[]>(MOCK_PLANS);
+  const [localPlans, setLocalPlans] = useState<ServicePlan[]>(() => loadFromStorage<ServicePlan[]>(LS_PLANS, MOCK_PLANS));
   const [editingPlan, setEditingPlan]   = useState<ServicePlan | null>(null);
   const [deletingPlan, setDeletingPlan] = useState<ServicePlan | null>(null);
   const [showAddForm, setShowAddForm]   = useState(false);
+
+  useEffect(() => { saveToStorage(LS_PLANS, localPlans); }, [localPlans]);
 
   const filteredPlans = localPlans.filter(p => p.type === activeTab);
 
