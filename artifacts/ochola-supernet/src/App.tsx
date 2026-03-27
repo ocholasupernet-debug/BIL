@@ -17,6 +17,7 @@ import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
 import AdminPlans from "./pages/admin/Plans";
 import AdminTransactions from "./pages/admin/Transactions";
 import AdminVouchers from "./pages/admin/Vouchers";
+import HotspotBinding from "./pages/admin/HotspotBinding";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
@@ -61,7 +62,8 @@ function Router() {
       <Route path="/admin/network/self-install" component={NetworkSelfInstall} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions" component={AdminTransactions} />
-      <Route path="/admin/vouchers"     component={AdminVouchers}     />
+      <Route path="/admin/vouchers"         component={AdminVouchers}    />
+      <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN Portal — vpn.isplatty.org */}
