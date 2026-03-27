@@ -1,114 +1,91 @@
-import React, { useState } from "react";
-import { Link, useLocation } from "wouter";
-import {
-  Wifi, User, Lock, Eye, EyeOff, ArrowRight,
-  Building2, Mail, Phone, Globe, CheckCircle2,
-  AlertTriangle, Loader2,
-} from "lucide-react";
-
+import React, { useState, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
+import { Wifi, Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-/* Extract a human-readable message from any thrown value */
 function extractMsg(err: unknown): string {
   if (!err) return "Registration failed. Please try again.";
   if (typeof err === "string") return err;
   if (err instanceof Error) return err.message;
   const e = err as Record<string, unknown>;
-  return (e.message as string) || (e.error_description as string) || (e.details as string) || JSON.stringify(err);
+  return (e.message as string) || (e.details as string) || JSON.stringify(err);
 }
 
-/* ══════════════════ Helpers ══════════════════ */
-const cls = (...parts: string[]) => parts.filter(Boolean).join(" ");
-
-function Field({
-  label, icon, error, children,
-}: { label: string; icon?: React.ReactNode; error?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">{label}</label>
-      <div className="relative">
-        {icon && (
-          <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">{icon}</div>
-        )}
-        {children}
-      </div>
-      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
-    </div>
-  );
+function slugify(str: string) {
+  return str.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
-/* ══════════════════ Main component ══════════════════ */
 export default function AdminRegister() {
   const [, setLocation] = useLocation();
 
-  /* form state */
-  const [ispName,   setIspName]   = useState("");
-  const [fullName,  setFullName]  = useState("");
-  const [email,     setEmail]     = useState("");
-  const [phone,     setPhone]     = useState("");
-  const [country,   setCountry]   = useState("Kenya");
-  const [username,  setUsername]  = useState("");
-  const [password,  setPassword]  = useState("");
-  const [confirm,   setConfirm]   = useState("");
-  const [showPw,    setShowPw]    = useState(false);
-  const [showCfm,   setShowCfm]   = useState(false);
+  const [company, setCompany] = useState("");
+  const [phone, setPhone] = useState("");
 
-  /* ui state */
-  const [loading,   setLoading]   = useState(false);
-  const [success,   setSuccess]   = useState(false);
+  /* availability */
+  const [checking, setChecking] = useState(false);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* submit */
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
   const [serverErr, setServerErr] = useState("");
-  const [errors,    setErrors]    = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  /* ── live availability check ── */
+  useEffect(() => {
+    setAvailable(null);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (company.trim().length < 2) return;
+
+    debounceRef.current = setTimeout(async () => {
+      setChecking(true);
+      const { data } = await supabase
+        .from("isp_admins")
+        .select("id")
+        .ilike("name", company.trim())
+        .limit(1);
+      setChecking(false);
+      setAvailable(!data || data.length === 0);
+    }, 600);
+
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [company]);
 
   /* ── validation ── */
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!ispName.trim())   e.ispName  = "ISP / company name is required";
-    if (!fullName.trim())  e.fullName = "Full name is required";
-    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-                           e.email    = "Valid email is required";
-    if (!phone.trim())     e.phone    = "Phone number is required";
-    if (!username.trim() || username.length < 3)
-                           e.username = "Username must be at least 3 characters";
-    if (password.length < 8)
-                           e.password = "Password must be at least 8 characters";
-    if (password !== confirm)
-                           e.confirm  = "Passwords do not match";
+    if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
+    if (available === false) e.company = "This company name is already taken";
+    if (!phone.trim()) e.phone = "Mobile number is required";
     return e;
   };
 
   /* ── submit ── */
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (ev: React.FormEvent) => {
+    ev.preventDefault();
     setServerErr("");
     const errs = validate();
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
+    const slug = slugify(company);
     setLoading(true);
     try {
-      /* Real isp_admins schema:
-         name, username, password, email, phone, area,
-         is_active, role, subdomain, created_at           */
       const { error } = await supabase.from("isp_admins").insert({
-        name:       ispName.trim(),
-        email:      email.trim().toLowerCase(),
-        phone:      phone.trim(),
-        area:       country.trim(),
-        username:   username.trim().toLowerCase(),
-        password:   password,
-        is_active:  false,          /* pending super-admin approval */
-        role:       "isp_admin",
+        name:      company.trim(),
+        phone:     phone.trim(),
+        username:  slug || "user",
+        password:  phone.trim(),
+        is_active: false,
+        role:      "isp_admin",
       });
-
       if (error) throw error;
-
       setSuccess(true);
-    } catch (err: unknown) {
+    } catch (err) {
       const msg = extractMsg(err);
       if (msg.includes("duplicate") || msg.includes("unique")) {
-        setServerErr("An account with that email or username already exists.");
-      } else if (msg.includes("does not exist") || msg.includes("relation")) {
-        setServerErr("Registration is not yet configured. Please contact the Super Admin.");
+        setServerErr("This company name or phone is already registered.");
       } else {
         setServerErr(msg || "Registration failed. Please try again.");
       }
@@ -117,29 +94,24 @@ export default function AdminRegister() {
     }
   };
 
-  /* ══════════════════ Success screen ══════════════════ */
+  /* ══════════ Success ══════════ */
   if (success) {
     return (
-      <div className="min-h-screen bg-[#080c10] flex items-center justify-center p-4 relative overflow-hidden">
-        <div className="absolute inset-0 bg-grid-pattern opacity-30" />
-        <div className="absolute -top-[20%] -left-[10%] w-[500px] h-[500px] bg-cyan-500/20 rounded-full blur-[100px]" />
-        <div className="absolute -bottom-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/10 rounded-full blur-[120px]" />
-
-        <div className="w-full max-w-md relative z-10 text-center">
-          <div className="bg-[#111820]/90 backdrop-blur-xl border border-emerald-500/20 rounded-2xl shadow-2xl p-10">
-            <div className="w-20 h-20 mx-auto mb-6 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)" }}>
+        <div className="w-full max-w-sm text-center">
+          <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl p-10 shadow-2xl">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-emerald-500/20 flex items-center justify-center">
               <CheckCircle2 className="w-10 h-10 text-emerald-400" />
             </div>
-            <h2 className="text-2xl font-extrabold text-white mb-2">Registration Submitted!</h2>
-            <p className="text-slate-400 text-sm leading-relaxed mb-2">
-              Your ISP admin account for <span className="text-cyan-400 font-bold">{ispName}</span> has been submitted and is pending approval.
+            <h2 className="text-2xl font-black text-white mb-2">You're on the list!</h2>
+            <p className="text-slate-300 text-sm mb-1">
+              <span className="text-violet-300 font-semibold">{company}</span> has been registered.
             </p>
-            <p className="text-slate-500 text-xs mb-8">
-              The Super Admin will review and activate your account. You'll receive confirmation at <span className="text-cyan-400">{email}</span>.
-            </p>
+            <p className="text-slate-500 text-xs mb-8">The Super Admin will review and activate your account shortly.</p>
             <button
               onClick={() => setLocation("/admin/login")}
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all flex items-center justify-center gap-2"
+              className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)" }}
             >
               Go to Sign In <ArrowRight className="w-4 h-4" />
             </button>
@@ -149,183 +121,94 @@ export default function AdminRegister() {
     );
   }
 
-  /* ══════════════════ Registration form ══════════════════ */
-  const iCls = (err?: string) =>
-    cls("w-full bg-white/5 border rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-slate-600 focus:outline-none transition-all text-sm",
-      err ? "border-red-500/50 focus:border-red-500 focus:ring-1 focus:ring-red-500"
-           : "border-white/10 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500");
-
+  /* ══════════ Form ══════════ */
   return (
-    <div className="min-h-screen bg-[#080c10] flex items-center justify-center p-4 relative overflow-hidden">
-      <div className="absolute inset-0 bg-grid-pattern opacity-30" />
-      <div className="absolute -top-[20%] -left-[10%] w-[500px] h-[500px] bg-cyan-500/20 rounded-full blur-[100px]" />
-      <div className="absolute -bottom-[20%] -right-[10%] w-[600px] h-[600px] bg-indigo-500/10 rounded-full blur-[120px]" />
+    <div
+      className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+      style={{ background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)" }}
+    >
+      {/* decorative blobs */}
+      <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full opacity-30 blur-3xl pointer-events-none"
+           style={{ background: "radial-gradient(circle,#7c3aed,transparent)" }} />
+      <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full opacity-20 blur-3xl pointer-events-none"
+           style={{ background: "radial-gradient(circle,#06b6d4,transparent)" }} />
 
-      <div className="w-full max-w-2xl relative z-10">
+      <div className="w-full max-w-sm relative z-10">
 
         {/* Logo */}
-        <div className="flex flex-col items-center mb-8">
-          <div className="relative w-16 h-16 mb-4">
-            <div className="absolute inset-0 border border-cyan-500/30 rounded-2xl animate-ping opacity-50" style={{ animationDuration: "2s" }} />
-            <div className="absolute inset-0 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.4)]">
-              <Wifi className="w-8 h-8 text-white" />
-            </div>
+        <div className="flex flex-col items-center mb-10">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl mb-4"
+               style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5,#06b6d4)" }}>
+            <Wifi className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight">ISP Management Platform</h1>
-          <p className="text-slate-400 text-sm mt-1">Create your ISP Admin Account</p>
+          <h1 className="text-2xl font-black text-white tracking-tight">Get Started</h1>
+          <p className="text-slate-400 text-sm mt-1">Register your ISP on the platform</p>
         </div>
 
-        <div className="bg-[#111820]/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-500" />
+        <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
+          {/* top accent bar */}
+          <div className="h-1 w-full" style={{ background: "linear-gradient(90deg,#7c3aed,#4f46e5,#06b6d4)" }} />
 
-          <form onSubmit={handleSubmit} className="p-8 space-y-6">
+          <form onSubmit={handleSubmit} className="p-8 space-y-5">
 
-            {/* ── Section: ISP Details ── */}
+            {/* ── Company Name ── */}
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 rounded-md bg-cyan-500/15 flex items-center justify-center">
-                  <Building2 className="w-3.5 h-3.5 text-cyan-400" />
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Company / ISP Name
+              </label>
+              <div className="relative">
+                <Building2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={company}
+                  onChange={e => setCompany(e.target.value)}
+                  placeholder="e.g. Ochola Networks"
+                  autoComplete="organization"
+                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
+                    errors.company ? "border-red-500/60 focus:ring-red-500" :
+                    available === true ? "border-emerald-500/60 focus:ring-emerald-500" :
+                    available === false ? "border-red-500/60 focus:ring-red-500" :
+                    "border-white/10 focus:border-violet-500 focus:ring-violet-500"
+                  }`}
+                />
+                {/* status icon */}
+                <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
+                  {checking && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
+                  {!checking && available === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                  {!checking && available === false && <XCircle className="w-4 h-4 text-red-400" />}
                 </div>
-                <span className="text-xs font-bold text-cyan-400 uppercase tracking-wider">ISP / Company Details</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="ISP / Company Name" icon={<Building2 className="w-4 h-4" />} error={errors.ispName}>
-                  <input
-                    type="text"
-                    value={ispName}
-                    onChange={e => setIspName(e.target.value)}
-                    placeholder="e.g. Ochola Networks Ltd"
-                    className={cls(iCls(errors.ispName))}
-                  />
-                </Field>
-                <Field label="Country / Region" icon={<Globe className="w-4 h-4" />}>
-                  <select
-                    value={country}
-                    onChange={e => setCountry(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all appearance-none"
-                  >
-                    {["Kenya","Uganda","Tanzania","Ethiopia","Nigeria","Ghana","South Africa","Rwanda","Zambia","Zimbabwe","Other"].map(c => (
-                      <option key={c} value={c} className="bg-[#111820]">{c}</option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
+              {/* availability badge */}
+              {!errors.company && company.trim().length >= 2 && !checking && available !== null && (
+                <p className={`text-xs mt-1.5 font-medium ${available ? "text-emerald-400" : "text-red-400"}`}>
+                  {available ? "✓ Available" : "✗ Already taken"}
+                </p>
+              )}
+              {errors.company && <p className="text-xs text-red-400 mt-1">{errors.company}</p>}
             </div>
 
-            <div className="border-t border-white/5" />
-
-            {/* ── Section: Personal Details ── */}
+            {/* ── Phone ── */}
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 rounded-md bg-indigo-500/15 flex items-center justify-center">
-                  <User className="w-3.5 h-3.5 text-indigo-400" />
-                </div>
-                <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Admin Contact Details</span>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Mobile Number
+              </label>
+              <div className="relative">
+                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  placeholder="+254 700 000 000"
+                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all text-sm ${errors.phone ? "border-red-500/60" : "border-white/10"}`}
+                />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Full Name" icon={<User className="w-4 h-4" />} error={errors.fullName}>
-                  <input
-                    type="text"
-                    value={fullName}
-                    onChange={e => setFullName(e.target.value)}
-                    placeholder="e.g. John Ochola"
-                    className={iCls(errors.fullName)}
-                  />
-                </Field>
-                <Field label="Email Address" icon={<Mail className="w-4 h-4" />} error={errors.email}>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="admin@myisp.com"
-                    className={iCls(errors.email)}
-                  />
-                </Field>
-                <Field label="Phone Number" icon={<Phone className="w-4 h-4" />} error={errors.phone}>
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={e => setPhone(e.target.value)}
-                    placeholder="+254 700 000 000"
-                    className={iCls(errors.phone)}
-                  />
-                </Field>
-              </div>
-            </div>
-
-            <div className="border-t border-white/5" />
-
-            {/* ── Section: Login Credentials ── */}
-            <div>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 rounded-md bg-emerald-500/15 flex items-center justify-center">
-                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                </div>
-                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Login Credentials</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Username" icon={<User className="w-4 h-4" />} error={errors.username}>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    placeholder="admin_username"
-                    className={iCls(errors.username)}
-                    autoComplete="username"
-                  />
-                </Field>
-                <div className="hidden sm:block" />
-
-                <Field label="Password" icon={<Lock className="w-4 h-4" />} error={errors.password}>
-                  <input
-                    type={showPw ? "text" : "password"}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Min. 8 characters"
-                    className={cls(iCls(errors.password), "pr-12")}
-                    autoComplete="new-password"
-                  />
-                  <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </Field>
-
-                <Field label="Confirm Password" icon={<Lock className="w-4 h-4" />} error={errors.confirm}>
-                  <input
-                    type={showCfm ? "text" : "password"}
-                    value={confirm}
-                    onChange={e => setConfirm(e.target.value)}
-                    placeholder="Repeat password"
-                    className={cls(iCls(errors.confirm), "pr-12")}
-                    autoComplete="new-password"
-                  />
-                  <button type="button" onClick={() => setShowCfm(v => !v)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
-                    {showCfm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </Field>
-
-                {/* Password strength */}
-                {password.length > 0 && (
-                  <div className="sm:col-span-2">
-                    <div className="flex gap-1 mb-1">
-                      {[1,2,3,4].map(i => {
-                        const strength = Math.min(Math.floor(password.length / 3), 4);
-                        const col = strength >= 4 ? "bg-emerald-500" : strength >= 3 ? "bg-yellow-500" : strength >= 2 ? "bg-orange-500" : "bg-red-500";
-                        return <div key={i} className={cls("h-1 flex-1 rounded-full transition-all", i <= strength ? col : "bg-white/10")} />;
-                      })}
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      {password.length < 6 ? "Weak" : password.length < 10 ? "Fair" : password.length < 14 ? "Strong" : "Very strong"}
-                    </p>
-                  </div>
-                )}
-              </div>
+              {errors.phone && <p className="text-xs text-red-400 mt-1">{errors.phone}</p>}
             </div>
 
             {/* ── Server error ── */}
             {serverErr && (
-              <div className="flex items-start gap-3 p-3.5 bg-red-500/8 border border-red-500/20 rounded-xl">
-                <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+              <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/20">
+                <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
                 <p className="text-sm text-red-300">{serverErr}</p>
               </div>
             )}
@@ -333,32 +216,31 @@ export default function AdminRegister() {
             {/* ── Submit ── */}
             <button
               type="submit"
-              disabled={loading}
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all flex items-center justify-center gap-2 group disabled:opacity-70"
+              disabled={loading || available === false || checking}
+              className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-60 group mt-2"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)" }}
             >
               {loading
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating Account…</>
-                : <>Create ISP Admin Account <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
+                : <>Register <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
             </button>
 
-            {/* ── Sign in link ── */}
-            <p className="text-center text-sm text-slate-500">
-              Already have an account?{" "}
-              <Link href="/admin/login">
-                <span className="text-cyan-400 font-semibold hover:text-cyan-300 cursor-pointer transition-colors">Sign In</span>
-              </Link>
+            <p className="text-center text-xs text-slate-500">
+              Already registered?{" "}
+              <span
+                onClick={() => setLocation("/admin/login")}
+                className="text-violet-400 font-semibold cursor-pointer hover:text-violet-300 transition-colors"
+              >
+                Sign In
+              </span>
             </p>
 
           </form>
         </div>
 
-        <div className="mt-8 flex justify-center items-center gap-2">
-          <div className="flex h-2 w-2 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-          </div>
-          <span className="text-xs font-medium text-slate-500">All systems operational · isplatty.org</span>
-        </div>
+        <p className="text-center text-xs text-slate-600 mt-6">
+          © {new Date().getFullYear()} OcholaSupernet · ISP Management Platform
+        </p>
       </div>
     </div>
   );
