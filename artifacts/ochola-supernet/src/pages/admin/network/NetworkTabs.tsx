@@ -1,13 +1,14 @@
 import React from "react";
 import { Link } from "wouter";
-import { Server, Shield, Terminal, Activity } from "lucide-react";
+import { Server, Shield, Terminal, Activity, RefreshCw } from "lucide-react";
 
 const TABS = [
-  { id: "routers",      label: "Routers",      href: "/admin/network/routers",      icon: Server   },
-  { id: "pppoe",        label: "PPPoE Sign In", href: "/admin/network/pppoe",        icon: Shield   },
-  { id: "self-install", label: "Self Install",  href: "/admin/network/self-install", icon: Terminal },
-  { id: "queues",       label: "Queues",        href: "/admin/network/queues",       icon: Activity },
-  { id: "ippool",       label: "IP Pool",       href: "/admin/network/ippool",       icon: Server   },
+  { id: "routers",        label: "Routers",        href: "/admin/network/routers",        icon: Server    },
+  { id: "pppoe",          label: "PPPoE Sign In",   href: "/admin/network/pppoe",          icon: Shield    },
+  { id: "self-install",   label: "Self Install",    href: "/admin/network/self-install",   icon: Terminal  },
+  { id: "replace-router", label: "Replace Router",  href: "/admin/network/replace-router", icon: RefreshCw },
+  { id: "queues",         label: "Queues",          href: "/admin/network/queues",         icon: Activity  },
+  { id: "ippool",         label: "IP Pool",         href: "/admin/network/ippool",         icon: Server    },
 ];
 
 export function NetworkTabs({ active }: { active: string }) {

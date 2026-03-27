@@ -86,7 +86,8 @@ const navItems: NavItem[] = [
       { name: "PPPoE Sign In",href: "/admin/network/pppoe"         },
       { name: "Queues",       href: "/admin/network/queues"        },
       { name: "IP Pool",      href: "/admin/network/ippool"        },
-      { name: "Self Install", href: "/admin/network/self-install"  },
+      { name: "Self Install",    href: "/admin/network/self-install"   },
+      { name: "Replace Router",  href: "/admin/network/replace-router" },
     ]
   },
   {

@@ -14,6 +14,7 @@ import NetworkPPPoE from "./pages/admin/network/PPPoE";
 import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
+import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
 import AdminPlans from "./pages/admin/Plans";
 import AdminTransactions from "./pages/admin/Transactions";
 import AdminVouchers from "./pages/admin/Vouchers";
@@ -59,7 +60,8 @@ function Router() {
       <Route path="/admin/network/pppoe"        component={NetworkPPPoE}       />
       <Route path="/admin/network/queues"       component={NetworkQueues}      />
       <Route path="/admin/network/ippool"       component={NetworkIPPool}      />
-      <Route path="/admin/network/self-install" component={NetworkSelfInstall} />
+      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
+      <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />

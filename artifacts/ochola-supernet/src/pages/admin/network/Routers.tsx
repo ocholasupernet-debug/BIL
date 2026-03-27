@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
-import { Plus, Loader2, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Plus, Loader2, RefreshCw, Wifi, WifiOff, ArrowRight } from "lucide-react";
+import { useLocation } from "wouter";
 
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data, error } = await supabase
@@ -28,6 +29,7 @@ function timeSince(dateStr: string | null): string {
 }
 
 export default function Routers() {
+  const [, navigate] = useLocation();
   const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["isp_routers"],
     queryFn: fetchRouters,
@@ -127,9 +129,17 @@ export default function Routers() {
                           {timeSince(r.last_seen)}
                         </td>
                         <td style={{ padding: "0.75rem 1.25rem" }}>
-                          <button style={{ fontSize: "0.75rem", color: isOnline ? "#06b6d4" : "var(--isp-text-sub)", background: "none", border: "none", cursor: isOnline ? "pointer" : "not-allowed", fontWeight: 600, fontFamily: "inherit" }}>
-                            {isOnline ? "Connect" : "Offline"}
-                          </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                            <button style={{ fontSize: "0.75rem", color: isOnline ? "#06b6d4" : "var(--isp-text-sub)", background: "none", border: "none", cursor: isOnline ? "pointer" : "not-allowed", fontWeight: 600, fontFamily: "inherit" }}>
+                              {isOnline ? "Connect" : "Offline"}
+                            </button>
+                            <button
+                              onClick={() => navigate(`/admin/network/replace-router?router=${r.id}`)}
+                              title="Replace this router with a new one"
+                              style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", color: "#f87171", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 6, padding: "0.2rem 0.6rem", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+                              <ArrowRight size={11} /> Replace
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
