@@ -35,27 +35,27 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       try {
         const { data, error } = await supabase
           .from("isp_admins")
-          .select("name, email, admin_name, phone, country")
+          .select("name, email, phone, area, username, subdomain")
           .eq("id", ADMIN_ID)
           .single();
 
         if (error || !data) throw error ?? new Error("no row");
 
-        /* derive domain from email */
+        /* derive domain from subdomain field or email */
         const row = data as Record<string, string>;
-        let domain = "";
-        if (row.email) {
+        let domain = row.subdomain || "";
+        if (!domain && row.email) {
           domain = row.email.split("@")[1] || "";
         }
         if (!domain) domain = DEFAULT.domain;
 
         setBrand({
-          ispName:      row.name       || DEFAULT.ispName,
+          ispName:      DEFAULT.ispName,              /* platform name stays hardcoded */
           domain,
-          supportEmail: row.email      || `support@${domain}`,
-          adminName:    row.admin_name || DEFAULT.adminName,
-          phone:        row.phone      || "",
-          country:      row.country    || DEFAULT.country,
+          supportEmail: row.email    || `support@${domain}`,
+          adminName:    row.name     || row.username  || DEFAULT.adminName,
+          phone:        row.phone    || "",
+          country:      row.area     || DEFAULT.country,
           loading:      false,
         });
       } catch {

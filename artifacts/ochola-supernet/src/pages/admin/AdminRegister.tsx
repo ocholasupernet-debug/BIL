@@ -78,34 +78,21 @@ export default function AdminRegister() {
 
     setLoading(true);
     try {
+      /* Real isp_admins schema:
+         name, username, password, email, phone, area,
+         is_active, role, subdomain, created_at           */
       const { error } = await supabase.from("isp_admins").insert({
         name:       ispName.trim(),
-        admin_name: fullName.trim(),
         email:      email.trim().toLowerCase(),
         phone:      phone.trim(),
-        country:    country.trim(),
+        area:       country.trim(),
         username:   username.trim().toLowerCase(),
         password:   password,
-        status:     "pending",
-        created_at: new Date().toISOString(),
+        is_active:  false,          /* pending super-admin approval */
+        role:       "isp_admin",
       });
 
-      if (error) {
-        /* If the column names are slightly different, try a minimal insert */
-        if (error.code === "42703" || error.message?.includes("column")) {
-          const { error: e2 } = await supabase.from("isp_admins").insert({
-            name:       ispName.trim(),
-            email:      email.trim().toLowerCase(),
-            phone:      phone.trim(),
-            username:   username.trim().toLowerCase(),
-            password:   password,
-            status:     "pending",
-          });
-          if (e2) throw e2;
-        } else {
-          throw error;
-        }
-      }
+      if (error) throw error;
 
       setSuccess(true);
     } catch (err: unknown) {
