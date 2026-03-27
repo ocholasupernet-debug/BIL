@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/ThemeContext";
+import { useBrand } from "@/context/BrandContext";
 
 interface NavItem {
   name: string;
@@ -158,6 +159,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedItems, setExpandedItems] = useState<string[]>(["Network", "Customers"]);
   const { theme, toggle, isDark } = useTheme();
+  const brand = useBrand();
 
   const toggleExpand = (name: string) => {
     setExpandedItems(prev =>
@@ -198,7 +200,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </div>
             <div>
               <p style={{ fontSize: "0.8rem", fontWeight: 800, color: "white", lineHeight: 1 }}>ISP Admin</p>
-              <p style={{ fontSize: "0.55rem", color: "#06b6d4", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>OcholaSupernet</p>
+              <p style={{ fontSize: "0.55rem", color: "#06b6d4", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>{brand.ispName}</p>
             </div>
           </div>
         </div>
@@ -296,7 +298,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <Menu style={{ width: 18, height: 18 }} />
             </button>
             <span style={{ fontSize: "0.9rem", fontWeight: 900, color: "var(--isp-text)", letterSpacing: "0.05em", textTransform: "uppercase", transition: "color 0.25s" }}>
-              OCHOLASUPERNET
+              {brand.ispName.toUpperCase()}
             </span>
           </div>
 
@@ -350,7 +352,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 800, color: "white" }}>
                 A
               </div>
-              <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", fontWeight: 500 }}>Administrator</span>
+              <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", fontWeight: 500 }}>{brand.adminName || "Administrator"}</span>
             </div>
           </div>
         </header>

@@ -2,11 +2,13 @@ import React, { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Wifi, User, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBrand } from "@/context/BrandContext";
 
 export default function AdminLogin() {
   const [, setLocation] = useLocation();
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const brand = useBrand();
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,8 +33,8 @@ export default function AdminLogin() {
               <Wifi className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight">OcholaSupernet</h1>
-          <p className="text-slate-400 text-sm mt-1">ISP Admin Portal</p>
+          <h1 className="text-2xl font-extrabold text-white tracking-tight">{brand.ispName}</h1>
+          <p className="text-slate-400 text-sm mt-1">ISP Admin Portal · {brand.domain}</p>
         </div>
 
         <div className="bg-[#111820]/90 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl relative overflow-hidden">
@@ -109,7 +111,7 @@ export default function AdminLogin() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
           </div>
-          <span className="text-xs font-medium text-slate-500">All systems operational · isplatty.org</span>
+          <span className="text-xs font-medium text-slate-500">All systems operational · {brand.domain}</span>
         </div>
       </div>
     </div>

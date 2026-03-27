@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { Link } from "wouter";
 import { Wifi, Phone, Lock, ArrowRight, Zap, CheckCircle2 } from "lucide-react";
+import { useBrand } from "@/context/BrandContext";
 
 export default function HotspotLogin() {
+  const brand = useBrand();
   const [activeTab, setActiveTab] = useState<'plans' | 'login' | 'voucher'>('plans');
   const [phoneNumber, setPhoneNumber] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -37,8 +39,8 @@ export default function HotspotLogin() {
               <Wifi className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="font-extrabold tracking-tight text-lg leading-tight">OCHOLASUPERNET</h1>
-              <p className="text-xs text-purple-300 font-medium">Hotspot Portal</p>
+              <h1 className="font-extrabold tracking-tight text-lg leading-tight">{brand.ispName.toUpperCase()}</h1>
+              <p className="text-xs text-purple-300 font-medium">Hotspot Portal · {brand.domain}</p>
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20">

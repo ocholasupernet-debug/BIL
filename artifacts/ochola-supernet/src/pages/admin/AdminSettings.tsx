@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
@@ -114,25 +115,28 @@ function Row({ children, style }: { children: React.ReactNode; style?: React.CSS
 // ─── tab content ─────────────────────────────────────────────────────────────
 
 function IspProfileTab() {
+  const brand = useBrand();
+  const year = new Date().getFullYear();
   return (
     <>
       <Card title="ISP Identity" desc="Branding and contact info shown to customers and on invoices">
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
-          <div style={{ width: 64, height: 64, borderRadius: 12, background: `linear-gradient(135deg,${C.cyan},${C.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem", fontWeight: 900, color: "white", flexShrink: 0 }}>O</div>
+          <div style={{ width: 64, height: 64, borderRadius: 12, background: `linear-gradient(135deg,${C.cyan},${C.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem", fontWeight: 900, color: "white", flexShrink: 0 }}>{brand.ispName.charAt(0)}</div>
           <div>
-            <p style={{ fontSize: "0.9rem", fontWeight: 800, color: C.text, margin: 0 }}>OcholaSupernet</p>
-            <p style={{ fontSize: "0.72rem", color: C.muted, margin: "2px 0 4px" }}>isplatty.org</p>
+            <p style={{ fontSize: "0.9rem", fontWeight: 800, color: C.text, margin: 0 }}>{brand.ispName}</p>
+            <p style={{ fontSize: "0.72rem", color: C.muted, margin: "2px 0 4px" }}>{brand.domain}</p>
             <button style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 10px", color: C.cyan, fontSize: "0.72rem", fontWeight: 600, cursor: "pointer" }}>
               <Upload size={11} /> Upload Logo
             </button>
           </div>
         </div>
-        <Grid2>
-          <Field label="ISP Name"><Input defaultValue="OcholaSupernet" /></Field>
-          <Field label="Website"><Input defaultValue="https://isplatty.org" /></Field>
-          <Field label="Support Email"><Input defaultValue="support@isplatty.org" type="email" /></Field>
-          <Field label="Support Phone"><Input defaultValue="+254 700 000 000" /></Field>
-          <Field label="WhatsApp Number" hint="Used for customer support links"><Input defaultValue="+254 700 000 000" /></Field>
+        {/* key forces inputs to reset defaultValue once brand data arrives */}
+        <Grid2 key={brand.ispName + brand.domain}>
+          <Field label="ISP Name"><Input defaultValue={brand.ispName} /></Field>
+          <Field label="Website"><Input defaultValue={`https://${brand.domain}`} /></Field>
+          <Field label="Support Email"><Input defaultValue={brand.supportEmail} type="email" /></Field>
+          <Field label="Support Phone"><Input defaultValue={brand.phone || "+254 700 000 000"} /></Field>
+          <Field label="WhatsApp Number" hint="Used for customer support links"><Input defaultValue={brand.phone || "+254 700 000 000"} /></Field>
           <Field label="Country">
             <Select defaultValue="KE">
               <option value="KE">Kenya 🇰🇪</option>
@@ -152,14 +156,14 @@ function IspProfileTab() {
       </Card>
 
       <Card title="Customer Portal" desc="Settings for the customer-facing hotspot and PPPoE portal">
-        <Grid2>
-          <Field label="Portal Title"><Input defaultValue="OcholaSupernet Customer Portal" /></Field>
-          <Field label="Portal URL"><Input defaultValue="https://portal.isplatty.org" /></Field>
-          <Field label="Terms of Service URL"><Input placeholder="https://isplatty.org/terms" /></Field>
-          <Field label="Privacy Policy URL"><Input placeholder="https://isplatty.org/privacy" /></Field>
+        <Grid2 key={brand.domain + "-portal"}>
+          <Field label="Portal Title"><Input defaultValue={`${brand.ispName} Customer Portal`} /></Field>
+          <Field label="Portal URL"><Input defaultValue={`https://portal.${brand.domain}`} /></Field>
+          <Field label="Terms of Service URL"><Input placeholder={`https://${brand.domain}/terms`} /></Field>
+          <Field label="Privacy Policy URL"><Input placeholder={`https://${brand.domain}/privacy`} /></Field>
         </Grid2>
         <Field label="Footer Text on Login Pages" hint="Shown at the bottom of hotspot login pages">
-          <Input defaultValue="© 2026 OcholaSupernet. All rights reserved." />
+          <Input defaultValue={`© ${year} ${brand.ispName}. All rights reserved.`} />
         </Field>
         <Row><SaveBtn label="Save Portal Settings" /></Row>
       </Card>
@@ -231,6 +235,7 @@ function BillingTab() {
 }
 
 function SmsEmailTab() {
+  const brand = useBrand();
   const [smsGateway, setSmsGateway] = useState("africastalking");
   const [smtpAuth, setSmtpAuth] = useState(true);
 
@@ -281,9 +286,9 @@ function SmsEmailTab() {
         <Grid2>
           <Field label="SMTP Host"><Input defaultValue="smtp.zoho.com" /></Field>
           <Field label="SMTP Port"><Input defaultValue="587" type="number" /></Field>
-          <Field label="From Name"><Input defaultValue="OcholaSupernet" /></Field>
-          <Field label="From Email"><Input defaultValue="noreply@isplatty.org" type="email" /></Field>
-          <Field label="SMTP Username"><Input defaultValue="noreply@isplatty.org" /></Field>
+          <Field label="From Name"><Input defaultValue={brand.ispName} /></Field>
+          <Field label="From Email"><Input defaultValue={`noreply@${brand.domain}`} type="email" /></Field>
+          <Field label="SMTP Username"><Input defaultValue={`noreply@${brand.domain}`} /></Field>
           <Field label="SMTP Password"><Input type="password" placeholder="••••••••••" /></Field>
           <Field label="Encryption">
             <Select defaultValue="tls">
@@ -406,6 +411,7 @@ function NetworkTab() {
 }
 
 function HotspotTab() {
+  const brand = useBrand();
   const [macAuth, setMacAuth]         = useState(false);
   const [trialEnabled, setTrial]      = useState(true);
   const [uamEnabled, setUam]          = useState(false);
@@ -416,21 +422,21 @@ function HotspotTab() {
         <Grid2>
           <Field label="Login Page Template">
             <Select defaultValue="default">
-              <option value="default">Default (OcholaSupernet)</option>
+              <option value="default">Default ({brand.ispName})</option>
               <option value="minimal">Minimal</option>
               <option value="branded">Branded with Logo</option>
               <option value="custom">Custom HTML</option>
             </Select>
           </Field>
           <Field label="Redirect After Login" hint="Where to send users after successful login">
-            <Input defaultValue="https://isplatty.org" />
+            <Input defaultValue={`https://${brand.domain}`} />
           </Field>
           <Field label="Session Timeout (hours)" hint="Max time a session stays active"><Input defaultValue="24" type="number" /></Field>
           <Field label="Idle Timeout (minutes)" hint="Disconnect after this many idle minutes"><Input defaultValue="10" type="number" /></Field>
           <Field label="WALLED Garden URLs" hint="Comma-separated — accessible without login">
             <Input placeholder="isplatty.org, safaricom.com" />
           </Field>
-          <Field label="DNS Domain"><Input defaultValue="hotspot.isplatty.org" /></Field>
+          <Field label="DNS Domain"><Input defaultValue={`hotspot.${brand.domain}`} /></Field>
         </Grid2>
 
         {[
@@ -601,6 +607,7 @@ function SecurityTab() {
 }
 
 function NotificationsTab() {
+  const brand = useBrand();
   const [email, setEmail]     = useState(true);
   const [sms, setSms]         = useState(false);
   const [newCust, setNewCust] = useState(true);
@@ -615,7 +622,7 @@ function NotificationsTab() {
     <>
       <Card title="Admin Alert Channels" desc="How you want to receive system and customer alerts">
         {[
-          { label: "Email Alerts",   desc: "Send alerts to admin@isplatty.org",  val: email,  fn: setEmail,  icon: Mail },
+          { label: "Email Alerts",   desc: `Send alerts to ${brand.supportEmail}`,  val: email,  fn: setEmail,  icon: Mail },
           { label: "SMS Alerts",     desc: "Send alerts to +254 700 000 000",    val: sms,    fn: setSms,    icon: Smartphone },
           { label: "Slack Webhook",  desc: "Post alerts to a Slack channel",     val: slack,  fn: setSlack,  icon: MessageSquare },
         ].map((item, i) => {

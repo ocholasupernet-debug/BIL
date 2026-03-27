@@ -176,7 +176,7 @@ export default function AdminRegister() {
               <Wifi className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight">OcholaSupernet</h1>
+          <h1 className="text-2xl font-extrabold text-white tracking-tight">ISP Management Platform</h1>
           <p className="text-slate-400 text-sm mt-1">Create your ISP Admin Account</p>
         </div>
 
