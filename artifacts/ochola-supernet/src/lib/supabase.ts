@@ -36,6 +36,51 @@ export interface DbPlan {
   updated_at: string;
 }
 
+/* ─── isp_routers row shape ─── */
+export interface DbRouter {
+  id: number;
+  admin_id: number;
+  name: string;
+  host: string;
+  ip_address: string | null;
+  model: string | null;
+  ros_version: string | null;
+  status: string;
+  last_seen: string | null;
+  router_username: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/* ─── isp_transactions row shape ─── */
+export interface DbTransaction {
+  id: number;
+  customer_id: number | null;
+  plan_id: number | null;
+  amount: number;
+  payment_method: string;
+  reference: string;
+  status: string;
+  notes: string | null;
+  created_at: string;
+}
+
+/* ─── isp_customers row shape ─── */
+export interface DbCustomer {
+  id: number;
+  admin_id?: number;
+  name?: string;
+  username?: string;
+  phone?: string;
+  email?: string;
+  plan_id?: number | null;
+  status?: string;
+  ip_address?: string | null;
+  expiry_date?: string | null;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
 /* ─── isp_bandwidth row shape ─── */
 export interface DbBandwidth {
   id: number;
