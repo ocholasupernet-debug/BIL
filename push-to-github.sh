@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
-# Manual push to GitHub
-# Usage: bash push-to-github.sh [commit message]
+# Manual / auto push to GitHub
+# Usage: bash push-to-github.sh ["optional commit message"]
 set -e
 
 REMOTE="github"
 LOCAL_BRANCH="clean-main"
 REMOTE_BRANCH="main"
 
+# Ensure git identity is set (needed in fresh shells)
+git config --local user.email "admin@ocholasupernet.com" 2>/dev/null || true
+git config --local user.name  "OcholaSupernet"           2>/dev/null || true
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " OcholaSupernet → GitHub Push"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Stage and commit any uncommitted changes
-if ! git diff --quiet || ! git diff --cached --quiet || git ls-files --others --exclude-standard | grep -q .; then
+STAGED=$(git status --porcelain 2>/dev/null)
+if [ -n "$STAGED" ]; then
   MSG="${1:-"chore: auto-push $(date +'%Y-%m-%d %H:%M')"}"
   echo "[1/3] Staging all changes..."
   git add -A
   echo "[2/3] Committing: $MSG"
-  git commit -m "$MSG" || true
+  git commit -m "$MSG"
 else
   echo "[1/3] Working tree clean — nothing to commit"
   echo "[2/3] Skipped commit"
