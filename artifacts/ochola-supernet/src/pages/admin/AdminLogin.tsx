@@ -97,7 +97,14 @@ export default function AdminLogin() {
           </form>
         </div>
 
-        <div className="mt-8 flex justify-center items-center gap-2">
+        <p className="mt-6 text-center text-sm text-slate-500">
+          Don't have an account?{" "}
+          <Link href="/admin/register">
+            <span className="text-cyan-400 font-semibold hover:text-cyan-300 cursor-pointer transition-colors">Register your ISP</span>
+          </Link>
+        </p>
+
+        <div className="mt-4 flex justify-center items-center gap-2">
           <div className="flex h-2 w-2 relative">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

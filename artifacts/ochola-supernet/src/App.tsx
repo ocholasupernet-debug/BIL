@@ -29,6 +29,7 @@ import VpnCreate from "./pages/vpn/CreateVpn";
 import VpnTutorials from "./pages/vpn/VideoTutorials";
 import VpnSettings from "./pages/vpn/Settings";
 import AdminSettings from "./pages/admin/AdminSettings";
+import AdminRegister from "./pages/admin/AdminRegister";
 
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
@@ -78,7 +79,8 @@ function Router() {
 
       {/* Portals */}
       <Route path="/hotspot-login" component={HotspotLogin} />
-      <Route path="/isp-register" component={() => <StubPage title="ISP Registration Portal" />} />
+      <Route path="/admin/register" component={AdminRegister} />
+      <Route path="/isp-register"    component={AdminRegister} />
       <Route path="/pppoe-login" component={() => <StubPage title="PPPoE Client Portal" />} />
       
       {/* Super Admin */}
