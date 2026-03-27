@@ -7,8 +7,9 @@ import { supabase, ADMIN_ID, type DbCustomer } from "@/lib/supabase";
 import {
   Search, Plus, Edit, Trash, Download, Loader2, Users,
   Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
-  CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw,
+  CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw, UploadCloud,
 } from "lucide-react";
+import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 
 /* ══════════════════════════ Types ══════════════════════════ */
 interface PlanLite { id: number; name: string; type: string; price: number; speed_down: number; speed_up: number; }
@@ -675,6 +676,27 @@ export default function Customers() {
             </div>
           </div>
         </div>
+
+        {/* ─── Sync to Router ─── */}
+        <RouterSyncBar
+          label="Sync Customers to Router"
+          description="Push all hotspot customers as MikroTik hotspot users, and PPPoE customers as PPPoE secrets — direct via API, no terminal needed."
+          icon={<UploadCloud size={18} />}
+          endpoint="/api/admin/sync/users"
+          color="#06b6d4"
+          buildPayload={() => ({
+            users: customers.map(c => ({
+              username:      c.username ?? "",
+              password:      c.password ?? "",
+              type:          c.type ?? "hotspot",
+              plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
+              pppoe_username: c.pppoe_username ?? undefined,
+              mac_address:   c.mac_address ?? undefined,
+              ip_address:    c.ip_address ?? undefined,
+              comment:       `OcholaNet customer #${c.id}`,
+            })),
+          })}
+        />
 
         {/* ─── Table ─── */}
         <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, overflow: "hidden" }}>

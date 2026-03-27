@@ -4,7 +4,8 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { MOCK_BANDWIDTH_PLANS } from "@/hooks/use-mock-api";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth } from "@/lib/supabase";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2 } from "lucide-react";
+import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud } from "lucide-react";
+import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
@@ -589,6 +590,31 @@ export default function Plans() {
             </button>
           ))}
         </div>
+
+        {/* ── Sync to Router bar (service plans only, not bandwidth) ── */}
+        {isServicePlan && !showingForm && (
+          <RouterSyncBar
+            label={`Sync ${TAB_LABELS[activeTab] ?? "Plans"} to Router`}
+            description="Push all visible plans as MikroTik hotspot user profiles or PPPoE profiles with rate-limits — no terminal copy-paste needed."
+            icon={<UploadCloud size={18} />}
+            endpoint="/api/admin/sync/plans"
+            color={activeTab === "pppoe" ? "#8b5cf6" : "#06b6d4"}
+            buildPayload={() => ({
+              plans: plans.map(p => ({
+                id:            p.id,
+                name:          p.name,
+                type:          p.type,
+                speed_down:    p.speed_down,
+                speed_up:      p.speed_up,
+                speed_down_unit: "Mbps",
+                speed_up_unit:   "Mbps",
+                validity:      p.validity,
+                validity_unit: p.validity_unit,
+                shared_users:  p.shared_users,
+              })),
+            })}
+          />
+        )}
 
         {/* Add / Edit form */}
         {isServicePlan && showingForm && (

@@ -5,8 +5,9 @@ import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Plus, Search, Printer, Copy, Trash2, Loader2, CheckCircle2,
   Ticket, Wifi, X, Download, RefreshCw, Filter, Eye, EyeOff,
-  AlertTriangle, ChevronDown,
+  AlertTriangle, ChevronDown, UploadCloud,
 } from "lucide-react";
+import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 
 /* ─────────────────────────── Types ─────────────────────────── */
 interface VoucherRow {
@@ -556,6 +557,24 @@ export default function Vouchers() {
             </div>
           </div>
         )}
+
+        {/* ── Sync to Router ── */}
+        <RouterSyncBar
+          label="Sync Vouchers to Router"
+          description="Push all unused voucher codes as MikroTik hotspot users so they can be authenticated locally on the router (useful as a RADIUS fallback)."
+          icon={<UploadCloud size={18} />}
+          endpoint="/api/admin/sync/users"
+          color="#06b6d4"
+          buildPayload={() => ({
+            users: vouchers.filter(v => !v.used).map(v => ({
+              username:  v.code,
+              password:  v.code,
+              type:      "voucher",
+              plan_name: v.plan_name,
+              comment:   `OcholaNet voucher · ${v.plan_name}`,
+            })),
+          })}
+        />
 
         {/* ── Table Container ── */}
         <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
