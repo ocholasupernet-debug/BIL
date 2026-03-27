@@ -25,6 +25,7 @@ import VpnList from "./pages/vpn/VpnList";
 import VpnCreate from "./pages/vpn/CreateVpn";
 import VpnTutorials from "./pages/vpn/VideoTutorials";
 import VpnSettings from "./pages/vpn/Settings";
+import AdminSettings from "./pages/admin/AdminSettings";
 
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
@@ -59,6 +60,7 @@ function Router() {
       <Route path="/admin/network/self-install" component={NetworkSelfInstall} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions" component={AdminTransactions} />
+      <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN Portal — vpn.isplatty.org */}
       <Route path="/vpn" component={VpnDashboard} />
