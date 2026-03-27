@@ -346,4 +346,147 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
   }
 });
 
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/probe
+   Connects to a MikroTik router and reads:
+     - /system/resource  (version, board-name, uptime, cpu-load, memory)
+     - /system/routerboard (model, serial-number, current-firmware)
+     - /system/identity  (name)
+     - /ip/address/print (first WAN/LAN IP)
+   Returns the parsed info as JSON so the frontend can display + save it.
+   Body: { host, username, password, routerId? }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/probe", async (req, res): Promise<void> => {
+  const { host, username, password } = req.body as {
+    host: string; username: string; password: string; routerId?: number;
+  };
+
+  if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
+
+  const logs: string[] = [];
+  const log = (msg: string) => logs.push(msg);
+  log(`▶ Probing ${host}:8728 as '${username || "admin"}'…`);
+
+  const conn = makeConn(host, username, password);
+  try {
+    await withTimeout(conn.connect(), 12000);
+    log(`✓ Connected`);
+
+    /* ── /system/resource ── */
+    log(`Reading /system/resource…`);
+    const resArr = await conn.write(["/system/resource/print"]);
+    const sysRes = (Array.isArray(resArr) && resArr[0]) ? resArr[0] as Record<string, string> : {};
+    log(`✓ resource OK`);
+
+    /* ── /system/routerboard ── */
+    log(`Reading /system/routerboard…`);
+    let routerboard: Record<string, string> = {};
+    try {
+      const rbArr = await conn.write(["/system/routerboard/print"]);
+      routerboard = (Array.isArray(rbArr) && rbArr[0]) ? rbArr[0] as Record<string, string> : {};
+      log(`✓ routerboard OK`);
+    } catch {
+      log(`  (routerboard not available — CHR/VM?)`);
+    }
+
+    /* ── /system/identity ── */
+    log(`Reading /system/identity…`);
+    let identity = "";
+    try {
+      const idArr = await conn.write(["/system/identity/print"]);
+      identity = (Array.isArray(idArr) && idArr[0]) ? (idArr[0] as Record<string, string>).name || "" : "";
+      log(`✓ identity: ${identity}`);
+    } catch {
+      log(`  (identity not available)`);
+    }
+
+    /* ── /ip/address ── */
+    log(`Reading /ip/address…`);
+    let ipAddresses: Array<{ address: string; interface: string }> = [];
+    try {
+      const ipArr = await conn.write(["/ip/address/print"]);
+      if (Array.isArray(ipArr)) {
+        ipAddresses = (ipArr as Record<string, string>[]).map(a => ({
+          address:   a.address || "",
+          interface: a.interface || "",
+        }));
+      }
+      log(`✓ ${ipAddresses.length} IP address(es)`);
+    } catch {
+      log(`  (IP address read failed)`);
+    }
+
+    /* ── /interface/print brief ── */
+    log(`Reading /interface…`);
+    let interfaces: Array<{ name: string; type: string; running: boolean }> = [];
+    try {
+      const ifArr = await conn.write(["/interface/print"]);
+      if (Array.isArray(ifArr)) {
+        interfaces = (ifArr as Record<string, string>[]).slice(0, 12).map(i => ({
+          name:    i.name || "",
+          type:    i.type || "",
+          running: i.running === "true",
+        }));
+      }
+      log(`✓ ${interfaces.length} interface(s)`);
+    } catch {
+      log(`  (interface read failed)`);
+    }
+
+    conn.close();
+
+    /* ── Parse useful fields ── */
+    const version   = sysRes.version        || "";
+    const boardName = routerboard["board-name"] || sysRes["board-name"] || "";
+    const model     = routerboard.model     || boardName;
+    const serial    = routerboard["serial-number"]    || "";
+    const firmware  = routerboard["current-firmware"] || "";
+    const uptime    = sysRes.uptime         || "";
+    const cpuLoad   = sysRes["cpu-load"]    || "0";
+    const freeMem   = parseInt(sysRes["free-memory"]  || "0", 10);
+    const totalMem  = parseInt(sysRes["total-memory"] || "0", 10);
+    const cpuCount  = sysRes["cpu-count"]   || "1";
+    const platform  = sysRes.platform       || "MikroTik";
+    const arch      = sysRes["architecture-name"] || "";
+
+    const fmtMB = (b: number) => b > 0 ? `${(b / 1024 / 1024).toFixed(0)} MB` : "—";
+
+    log(`\n✅ Probe complete`);
+    log(`  Model:      ${model || "—"}`);
+    log(`  ROS:        ${version || "—"}`);
+    log(`  Uptime:     ${uptime || "—"}`);
+    log(`  CPU load:   ${cpuLoad}%`);
+    log(`  Memory:     ${fmtMB(freeMem)} free / ${fmtMB(totalMem)} total`);
+    log(`  Serial:     ${serial || "—"}`);
+    log(`  Firmware:   ${firmware || "—"}`);
+
+    res.json({
+      ok: true,
+      logs,
+      data: {
+        version,
+        model: model || "MikroTik",
+        boardName,
+        serial,
+        firmware,
+        uptime,
+        cpuLoad:   parseInt(cpuLoad, 10),
+        freeMem,
+        totalMem,
+        cpuCount:  parseInt(cpuCount, 10),
+        platform,
+        arch,
+        identity,
+        ipAddresses,
+        interfaces,
+      },
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`❌ ${msg}`);
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: false, error: connErr(host, msg), logs });
+  }
+});
+
 export default router;
