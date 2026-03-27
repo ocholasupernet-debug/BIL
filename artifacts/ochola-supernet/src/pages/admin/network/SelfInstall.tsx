@@ -191,7 +191,12 @@ export default function SelfInstall() {
               After running the commands above, click <strong style={{ color: "var(--isp-text)" }}>Next</strong> to register this router in the billing system and assign plans to customers.
             </p>
             <button
-              onClick={() => window.location.href = "/admin/network/routers"}
+              onClick={() => {
+                const dest = selectedId
+                  ? `/admin/network/bridge-ports?routerId=${selectedId}`
+                  : "/admin/network/bridge-ports";
+                window.location.href = dest;
+              }}
               style={{
                 padding: "0.625rem 1.75rem", borderRadius: 8,
                 background: "linear-gradient(135deg,#06b6d4,#0284c7)",

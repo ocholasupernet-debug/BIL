@@ -489,4 +489,137 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
   }
 });
 
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/ports
+   Reads all interfaces and current bridge-port memberships.
+   Body: { host, username, password }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/ports", async (req, res): Promise<void> => {
+  const { host, username, password } = req.body as {
+    host: string; username: string; password: string;
+  };
+  if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
+
+  const conn = makeConn(host, username, password);
+  try {
+    await withTimeout(conn.connect(), 12000);
+
+    /* All interfaces */
+    const ifArr = await conn.write(["/interface/print"]);
+    const interfaces = (Array.isArray(ifArr) ? ifArr : []) as Record<string, string>[];
+
+    /* All bridges */
+    let bridges: Record<string, string>[] = [];
+    try {
+      const brArr = await conn.write(["/interface/bridge/print"]);
+      bridges = (Array.isArray(brArr) ? brArr : []) as Record<string, string>[];
+    } catch { /* old ROS / no bridge package */ }
+
+    /* Current bridge-port memberships */
+    let bridgePorts: Record<string, string>[] = [];
+    try {
+      const bpArr = await conn.write(["/interface/bridge/port/print"]);
+      bridgePorts = (Array.isArray(bpArr) ? bpArr : []) as Record<string, string>[];
+    } catch { /* ignore */ }
+
+    conn.close();
+
+    res.json({
+      ok: true,
+      interfaces: interfaces.map(i => ({
+        name:    i.name    || "",
+        type:    i.type    || "ether",
+        running: i.running === "true",
+        disabled: i.disabled === "true",
+        macAddress: i["mac-address"] || "",
+        comment:  i.comment || "",
+      })),
+      bridges: bridges.map(b => ({
+        name:    b.name || "",
+        running: b.running === "true",
+      })),
+      bridgePorts: bridgePorts.map(bp => ({
+        bridge:    bp.bridge    || "",
+        interface: bp.interface || "",
+        id:        bp[".id"]   || "",
+      })),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: false, error: connErr(host, msg) });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/bridge-assign
+   Adds/removes ports from a bridge.
+   Body: { host, username, password, bridge, addPorts[], removePorts[] }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
+  const { host, username, password, bridge, addPorts = [], removePorts = [] } = req.body as {
+    host: string; username: string; password: string;
+    bridge: string; addPorts: string[]; removePorts: string[];
+  };
+  if (!host || !bridge) { res.status(400).json({ ok: false, error: "host and bridge are required" }); return; }
+
+  const logs: string[] = [];
+  const log = (m: string) => logs.push(m);
+  const conn = makeConn(host, username, password);
+
+  try {
+    await withTimeout(conn.connect(), 12000);
+    log(`✓ Connected to ${host}`);
+
+    /* Remove ports */
+    for (const iface of removePorts) {
+      try {
+        const existing = await conn.write([
+          "/interface/bridge/port/print",
+          `?bridge=${bridge}`,
+          `?interface=${iface}`,
+        ]);
+        if (Array.isArray(existing) && existing.length > 0) {
+          const id = (existing[0] as Record<string, string>)[".id"];
+          if (id) {
+            await conn.write(["/interface/bridge/port/remove", `=.id=${id}`]);
+            log(`✓ Removed ${iface} from ${bridge}`);
+          }
+        }
+      } catch (e) { log(`  (skip remove ${iface}: ${e})`); }
+    }
+
+    /* Add ports */
+    for (const iface of addPorts) {
+      try {
+        /* Check not already a member */
+        const existing = await conn.write([
+          "/interface/bridge/port/print",
+          `?bridge=${bridge}`,
+          `?interface=${iface}`,
+        ]);
+        if (Array.isArray(existing) && existing.length > 0) {
+          log(`  ${iface} already in ${bridge} — skipped`);
+          continue;
+        }
+        await conn.write([
+          "/interface/bridge/port/add",
+          `=bridge=${bridge}`,
+          `=interface=${iface}`,
+        ]);
+        log(`✓ Added ${iface} → ${bridge}`);
+      } catch (e) { log(`❌ Add ${iface}: ${e}`); }
+    }
+
+    conn.close();
+    log(`\n✅ Bridge port assignment complete`);
+    res.json({ ok: true, logs });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`❌ ${msg}`);
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: false, error: connErr(host, msg), logs });
+  }
+});
+
 export default router;
