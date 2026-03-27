@@ -138,11 +138,11 @@ function SecurityTab() {
   const [loginAlerts, setLoginAlerts] = useState(true);
   const [showApiKey, setShowApiKey] = useState(false);
   const [copied, setCopied] = useState(false);
-  const API_KEY = "sk_live_ochola_abc123def456ghi789jkl012mno";
+  const API_KEY = "demo_key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
   const SESSIONS = [
-    { id: 1, device: "Chrome — Windows 11",    ip: "197.232.14.5",   location: "Nairobi, KE",  time: "Now",           current: true  },
-    { id: 2, device: "Safari — iPhone 14 Pro", ip: "197.232.14.6",   location: "Nairobi, KE",  time: "2h ago",        current: false },
-    { id: 3, device: "WireGuard App — Android",ip: "41.90.100.12",   location: "Mombasa, KE",  time: "Yesterday",     current: false },
+    { id: 1, device: "Chrome — Windows 11",    ip: "x.x.x.x",  location: "Nairobi, KE",  time: "Now",       current: true  },
+    { id: 2, device: "Safari — iPhone 14 Pro", ip: "x.x.x.x",  location: "Nairobi, KE",  time: "2h ago",    current: false },
+    { id: 3, device: "WireGuard App — Android",ip: "x.x.x.x",  location: "Mombasa, KE",  time: "Yesterday", current: false },
   ];
 
   function copyKey() {
@@ -239,7 +239,7 @@ function SecurityTab() {
         <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-4 py-3">
           <Key size={14} className="text-gray-400 shrink-0" />
           <span className="flex-1 font-mono text-xs text-gray-600 truncate">
-            {showApiKey ? API_KEY : "sk_live_ochola_•••••••••••••••••••••••••••••"}
+            {showApiKey ? API_KEY : "demo_key_••••••••••••••••••••••••••••••••••"}
           </span>
           <button onClick={() => setShowApiKey(v => !v)} className="text-gray-400 hover:text-gray-600 p-1">
             {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}

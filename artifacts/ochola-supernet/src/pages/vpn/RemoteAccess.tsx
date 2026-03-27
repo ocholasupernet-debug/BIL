@@ -8,28 +8,28 @@ import {
 
 const ROUTERS = [
   {
-    id: 1, name: "Nairobi-HQ-RB4011", ip: "196.201.214.10", localIp: "192.168.1.1",
+    id: 1, name: "Nairobi-HQ-RB4011", ip: "10.0.1.10", localIp: "192.168.1.1",
     model: "RB4011iGS+", os: "RouterOS 7.14", status: "online",
     cpu: 12, ram: 34, uptime: "42d 7h 18m",
     winboxPort: 8291, webfigPort: 443, sshPort: 22, apiPort: 8728,
-    user: "admin", pass: "Ochola@2024#",
-    webfigUrl: "https://196.201.214.10",
+    user: "demo_user", pass: "demo_pass_xxxx",
+    webfigUrl: "https://10.0.1.10",
   },
   {
-    id: 2, name: "Kisumu-POP-hAP", ip: "196.201.220.55", localIp: "10.10.1.1",
+    id: 2, name: "Kisumu-POP-hAP", ip: "10.0.2.55", localIp: "10.10.1.1",
     model: "hAP ac³", os: "RouterOS 7.12", status: "online",
     cpu: 5, ram: 22, uptime: "18d 3h 42m",
     winboxPort: 8291, webfigPort: 80, sshPort: 2222, apiPort: 8728,
-    user: "admin", pass: "Kisumu@Pop#22",
-    webfigUrl: "http://196.201.220.55",
+    user: "demo_user", pass: "demo_pass_xxxx",
+    webfigUrl: "http://10.0.2.55",
   },
   {
-    id: 3, name: "Nakuru-BTS-CCR", ip: "196.201.230.12", localIp: "10.20.1.1",
+    id: 3, name: "Nakuru-BTS-CCR", ip: "10.0.3.12", localIp: "10.20.1.1",
     model: "CCR2004-1G-12S+2XS", os: "RouterOS 7.14", status: "offline",
     cpu: 0, ram: 0, uptime: "—",
     winboxPort: 8291, webfigPort: 443, sshPort: 22, apiPort: 8728,
-    user: "admin", pass: "Nakuru@CCR#23",
-    webfigUrl: "https://196.201.230.12",
+    user: "demo_user", pass: "demo_pass_xxxx",
+    webfigUrl: "https://10.0.3.12",
   },
 ];
 
