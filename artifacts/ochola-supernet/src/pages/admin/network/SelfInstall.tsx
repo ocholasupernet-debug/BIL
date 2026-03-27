@@ -29,68 +29,58 @@ const DEFAULTS: Cfg = {
   profileName: "hsprof1", portalTitle: "OcholaSupernet", hotspotSsid: "OcholaNet-WiFi",
 };
 
-/* ══════════════════════════ Script generators ══════════════════════════ */
+/* ══════════════════════════ Script generators ══════════════════════════
+   NOTE: MikroTik RouterOS does NOT support "\" line continuations.
+   Every command must be a single complete line.
+════════════════════════════════════════════════════════════════════════ */
 const makeScript1 = (c: Cfg) => `# ═══════════════════════════════════════════════════
-# SCRIPT 1 — Initial Hotspot Configuration
-# Run directly in MikroTik Terminal (Winbox / WebFig)
-# Target: ${c.routerName}
+# SCRIPT 1 — Hotspot Configuration
+# Paste line-by-line in MikroTik Terminal (Winbox / WebFig / SSH)
+# Target router: ${c.routerName}
 # ═══════════════════════════════════════════════════
 
 /system identity set name="OcholaNet-${c.routerName}"
+
 /ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes
 
-/ip hotspot profile
-add name=${c.profileName} \\
-    hotspot-address=${c.hotspotIp} \\
-    dns-name=${c.dnsName} \\
-    login-by=http-chap,http-pap \\
-    use-radius=yes \\
-    html-directory=flash/hotspot
+/ip hotspot profile add name="${c.profileName}" hotspot-address=${c.hotspotIp} dns-name="${c.dnsName}" login-by=http-chap,http-pap use-radius=yes html-directory=flash/hotspot
 
-/ip pool add name=hspool ranges=${c.poolStart}-${c.poolEnd}
+/ip pool add name=hs-pool-${c.routerName} ranges=${c.poolStart}-${c.poolEnd}
 
-/ip hotspot
-add name=hotspot1 interface=${c.bridgeInterface} \\
-    profile=${c.profileName} address-pool=hspool idle-timeout=none
+/ip hotspot add name=hotspot1 interface=${c.bridgeInterface} profile="${c.profileName}" address-pool=hs-pool-${c.routerName} idle-timeout=none
 
-/ip hotspot user profile
-add name=default shared-users=1 keepalive-timeout=2m idle-timeout=none
+/ip hotspot user profile add name=default shared-users=1 keepalive-timeout=2m idle-timeout=none
 
-/log info message="OcholaNet: Script 1 complete on ${c.routerName}"`.trim();
+/log info message="OcholaNet: Script 1 done on ${c.routerName}"`.trim();
 
 const makeScript2 = (c: Cfg) => `# ═══════════════════════════════════════════════════
 # SCRIPT 2 — RADIUS & Firewall
-# Save as: ochola-${c.routerName}-radius.rsc
-# Run:  /import file-name=ochola-${c.routerName}-radius.rsc
-# Target: ${c.routerName}
+# Upload via Winbox Files, then run:
+#   /import file-name=ochola-${c.routerName}-radius.rsc
+# Target router: ${c.routerName}
 # ═══════════════════════════════════════════════════
 
-/radius
-add service=hotspot address=${c.radiusIp} \\
-    secret=${c.radiusSecret} \\
-    authentication-port=1812 accounting-port=1813 timeout=3000ms
+/radius add service=hotspot address=${c.radiusIp} secret="${c.radiusSecret}" authentication-port=1812 accounting-port=1813 timeout=3000ms
 
-/ip firewall nat
-add chain=dstnat protocol=tcp dst-port=80 \\
-    action=redirect to-ports=64872 hotspot=!auth \\
-    comment="OcholaNet - Hotspot redirect"
+/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="OcholaNet - Hotspot redirect"
 
-/ip firewall filter
-add chain=input protocol=udp dst-port=1812,1813 action=accept \\
-    comment="OcholaNet - RADIUS auth + accounting"
-add chain=input protocol=tcp dst-port=8728,8729 action=accept \\
-    comment="OcholaNet - Winbox API"
+/ip firewall filter add chain=input protocol=udp dst-port=1812,1813 action=accept comment="OcholaNet - RADIUS"
 
-/log info message="OcholaNet: Script 2 (RADIUS) complete on ${c.routerName}"`.trim();
+/ip firewall filter add chain=input protocol=tcp dst-port=8728,8729 action=accept comment="OcholaNet - Winbox API"
+
+/log info message="OcholaNet: Script 2 (RADIUS) done on ${c.routerName}"`.trim();
 
 const makeAllInOne = (c: Cfg) => [makeScript1(c), "\n\n", makeScript2(c)].join("");
 
-/* ══ HTML/CSS/Asset generators (used by Create-All-Files script) ══ */
+/* ══ HTML/CSS/Asset generators (used by Create-All-Files script) ══
+   All paths are FLAT under flash/hotspot/ — no subdirectories needed.
+   RouterOS requires directories to exist; we avoid them entirely.
+════════════════════════════════════════════════════════════════════ */
 const makeLoginHtml = (c: Cfg) => `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>${c.portalTitle}</title>
-<link rel="stylesheet" href="/hotspot/css/style.css"/>
+<link rel="stylesheet" href="/hotspot/style.css"/>
 <script src="/hotspot/md5.js"></script>
 </head>
 <body class="hs-body">
@@ -173,21 +163,48 @@ const makeMd5Js = () => `/* md5.js */var MD5=function(d){var r=M(V(Y(X(d),8*d.le
 const makeApiJson = (c: Cfg) => JSON.stringify({ server: c.hotspotIp, dns_name: c.dnsName, profile: c.profileName }, null, 2);
 const makeErrorsText = () => `1=Wrong credentials.\n2=Already logged in.\n3=Access denied.\n6=Account expired.\n7=Session limit reached.`;
 
+/**
+ * Escape a string for use inside a RouterOS double-quoted string literal.
+ *
+ * Key rules:
+ *  - We flatten newlines/tabs to a single space FIRST.  This means no "\n"
+ *    escape sequences appear in the output, so chunk boundaries can never
+ *    land on a lone backslash (the only split-backslash bug in RouterOS).
+ *  - Backslash → \\   Quote → \"   Dollar → \$  (RouterOS escape rules)
+ *
+ * HTML/CSS/JS files still work fine in a single-line representation because
+ * browsers and RouterOS hotspot server both tolerate whitespace-collapsed
+ * content.
+ */
 function escapeRos(s: string): string {
-  return s.replace(/\\/g,"\\\\").replace(/"/g,'\\"').replace(/\$/g,"\\$").replace(/\r\n/g,"\\n").replace(/\n/g,"\\n").replace(/\t/g,"\\t");
+  return s
+    .replace(/\r\n/g, " ")   // CRLF  → space
+    .replace(/\r/g,   " ")   // CR    → space
+    .replace(/\n/g,   " ")   // LF    → space
+    .replace(/\t/g,   " ")   // tab   → space
+    .replace(/\\/g, "\\\\") // \  →  \\
+    .replace(/"/g,  '\\"')   // "  →  \"
+    .replace(/\$/g, "\\$");  // $  →  \$  (prevents RouterOS var expansion)
 }
-const TERM_CHUNK = 1400;
+
+/* Chunk size for :set f ($f . "...") lines.
+   Must be short enough that the whole RouterOS line stays within the
+   8191-char terminal limit.  500 chars is safe even with escaping overhead. */
+const TERM_CHUNK = 500;
 
 function makeCreateAllFilesScript(c: Cfg): string {
+  /* All files go directly in flash/hotspot/ — NO subdirectories.
+     RouterOS will fail silently if a parent directory doesn't exist,
+     so we keep everything flat.                                       */
   const files = [
     { path: "flash/hotspot/login.html",   content: makeLoginHtml(c)   },
     { path: "flash/hotspot/status.html",  content: makeStatusHtml(c)  },
     { path: "flash/hotspot/alogin.html",  content: makeAloginHtml()   },
     { path: "flash/hotspot/logout.html",  content: makeLogoutHtml(c)  },
     { path: "flash/hotspot/radvert.html", content: makeRadvertHtml(c) },
-    { path: "flash/hotspot/css/style.css",content: makeCssStyle(c)    },
-    { path: "flash/hotspot/img/user.svg", content: makeUserSvg()      },
-    { path: "flash/hotspot/img/password.svg", content: makePasswordSvg() },
+    { path: "flash/hotspot/style.css",    content: makeCssStyle(c)    },
+    { path: "flash/hotspot/user.svg",     content: makeUserSvg()      },
+    { path: "flash/hotspot/password.svg", content: makePasswordSvg()  },
     { path: "flash/hotspot/api.json",     content: makeApiJson(c)     },
     { path: "flash/hotspot/errors.txt",   content: makeErrorsText()   },
     { path: "flash/hotspot/md5.js",       content: makeMd5Js()        },
@@ -196,26 +213,37 @@ function makeCreateAllFilesScript(c: Cfg): string {
     `# ═══════════════════════════════════════════════════════`,
     `# OcholaNet — Create All Hotspot Files (${files.length} files)`,
     `# Router: ${c.routerName}`,
-    `# Upload to router via Winbox Files, then run:`,
-    `#   /import file-name=create-hotspot-files-${c.routerName}.rsc`,
+    `#`,
+    `# 1. Save this file as:  create-hotspot-files-${c.routerName}.rsc`,
+    `# 2. Upload via Winbox > Files`,
+    `# 3. Run in terminal:    /import file-name=create-hotspot-files-${c.routerName}.rsc`,
+    `#`,
+    `# NOTE: All portal files go to flash/hotspot/ (flat, no subdirectories).`,
+    `#       Update /ip hotspot profile html-directory=flash/hotspot if needed.`,
     `# ═══════════════════════════════════════════════════════`,
     ``,
-    `:log info message="OcholaNet: Creating ${files.length} hotspot files on ${c.routerName}..."`,
+    `:log info message="OcholaNet: Writing ${files.length} hotspot files on ${c.routerName}"`,
     `:local f ""`,
     ``,
   ];
+
   for (const file of files) {
     const esc = escapeRos(file.content);
-    L.push(`# ── ${file.path}`);
+    L.push(`# ── ${file.path} (${esc.length} chars after escape)`);
+    /* Reset accumulator */
     L.push(`:set f ""`);
+    /* Append in TERM_CHUNK-sized pieces — escapeRos guarantees no bare \ */
     for (let i = 0; i < esc.length; i += TERM_CHUNK) {
       L.push(`:set f ($f . "${esc.slice(i, i + TERM_CHUNK)}")`);
     }
+    /* Remove stale file then write */
     L.push(`:do { /file remove [find name="${file.path}"] } on-error={}`);
     L.push(`/file add name="${file.path}" contents=$f`);
+    L.push(`:log info message="OcholaNet: wrote ${file.path}"`);
     L.push(``);
   }
-  L.push(`:log info message="OcholaNet: Done — ${files.length} files on ${c.routerName}"`);
+
+  L.push(`:log info message="OcholaNet: All ${files.length} files written on ${c.routerName}"`);
   return L.join("\n");
 }
 
