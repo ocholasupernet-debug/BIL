@@ -1,47 +1,583 @@
-import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useState, useMemo, useCallback } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
 import { supabase, ADMIN_ID, type DbCustomer } from "@/lib/supabase";
-import { Search, Plus, Edit, Trash, Download, Loader2, Users } from "lucide-react";
+import {
+  Search, Plus, Edit, Trash, Download, Loader2, Users,
+  Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
+  CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw,
+} from "lucide-react";
 
+/* ══════════════════════════ Types ══════════════════════════ */
+interface PlanLite { id: number; name: string; type: string; price: number; speed_down: number; speed_up: number; }
+interface RouterLite { id: number; name: string; host: string; status: string; }
+
+type CustomerType = "hotspot" | "pppoe" | "static";
+
+interface NewCustomerForm {
+  type: CustomerType;
+  name: string;
+  username: string;
+  password: string;
+  email: string;
+  phone: string;
+  plan_id: number | "";
+  router_id: number | "";
+  // hotspot extras
+  mac_address: string;
+  // pppoe extras
+  pppoe_username: string;
+  ip_assign: "dynamic" | "pool" | "static";
+  ip_address: string;
+  pppoe_service: string;
+  // static extras
+  subnet_mask: string;
+  gateway_ip: string;
+  // common
+  expires_at: string;
+}
+
+/* ══════════════════════════ Helpers ══════════════════════════ */
+const TYPE_META: Record<CustomerType, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
+  hotspot: { label: "Hotspot", color: "#22d3ee", bg: "rgba(6,182,212,0.12)",   icon: <Wifi    size={11} /> },
+  pppoe:   { label: "PPPoE",   color: "#a78bfa", bg: "rgba(139,92,246,0.12)",  icon: <Network size={11} /> },
+  static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)",  icon: <Globe   size={11} /> },
+};
+
+const AVATAR_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
+function avatarColor(id: number) { return AVATAR_COLORS[id % AVATAR_COLORS.length]; }
+function initials(name?: string | null): string {
+  if (!name) return "?";
+  return name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+}
+function fmtDate(d?: string | null) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" });
+}
+function genPassword(len = 10): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!";
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+function genUsername(name: string): string {
+  const base = name.trim().split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+  const num  = Math.floor(1000 + Math.random() * 9000);
+  return `${base}${num}`;
+}
+function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
+  return {
+    type, name: "", username: "", password: genPassword(), email: "", phone: "",
+    plan_id: "", router_id: "", mac_address: "", pppoe_username: "", ip_assign: "dynamic",
+    ip_address: "", pppoe_service: "internet", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
+  };
+}
+
+/* ══════════════════════════ DB helpers ══════════════════════════ */
 async function fetchCustomers(): Promise<DbCustomer[]> {
-  const { data, error } = await supabase
-    .from("isp_customers")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("isp_customers").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+async function fetchPlans(): Promise<PlanLite[]> {
+  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,speed_down,speed_up").eq("admin_id", ADMIN_ID).order("type").order("price");
+  if (error) throw error;
+  return data ?? [];
+}
+async function fetchRouters(): Promise<RouterLite[]> {
+  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID);
   if (error) throw error;
   return data ?? [];
 }
 
-function initials(name?: string): string {
-  if (!name) return "?";
-  return name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise<void> {
+  const plan = plans.find(p => p.id === form.plan_id);
+  const radUsername = form.type === "pppoe" ? (form.pppoe_username || form.username) : form.username;
+
+  // 1. Insert to isp_customers
+  const { error: custErr } = await supabase.from("isp_customers").insert({
+    admin_id:      ADMIN_ID,
+    name:          form.name || null,
+    username:      form.username || null,
+    password:      form.password,
+    email:         form.email || null,
+    phone:         form.phone || null,
+    type:          form.type,
+    plan_id:       form.plan_id || null,
+    status:        "active",
+    ip_address:    form.ip_address || null,
+    mac_address:   form.mac_address || null,
+    pppoe_username: form.type === "pppoe" ? (form.pppoe_username || form.username) : null,
+    expires_at:    form.expires_at ? new Date(form.expires_at).toISOString() : null,
+  });
+  if (custErr) throw custErr;
+
+  // 2. RADIUS: core auth entry
+  const radRows: { username: string; attribute: string; op: string; value: string }[] = [
+    { username: radUsername, attribute: "Cleartext-Password", op: ":=", value: form.password },
+  ];
+
+  // Type-specific RADIUS attributes
+  if (form.type === "static" && form.ip_address) {
+    radRows.push({ username: radUsername, attribute: "Framed-IP-Address",  op: ":=", value: form.ip_address });
+    radRows.push({ username: radUsername, attribute: "Framed-IP-Netmask",  op: ":=", value: form.subnet_mask || "255.255.255.0" });
+    if (form.gateway_ip)
+      radRows.push({ username: radUsername, attribute: "Framed-Route", op: ":=", value: form.gateway_ip });
+  }
+  if (form.type === "pppoe" && form.ip_assign === "static" && form.ip_address) {
+    radRows.push({ username: radUsername, attribute: "Framed-IP-Address", op: ":=", value: form.ip_address });
+  }
+  if (form.type === "hotspot" && form.mac_address) {
+    radRows.push({ username: radUsername, attribute: "Calling-Station-Id", op: ":=", value: form.mac_address });
+  }
+  if (form.expires_at) {
+    radRows.push({ username: radUsername, attribute: "Expiration", op: ":=", value: new Date(form.expires_at).toDateString() });
+  }
+
+  const { error: radErr } = await supabase.from("radcheck").insert(radRows);
+  if (radErr) throw radErr;
+
+  // 3. RADIUS: plan group linkage
+  if (plan) {
+    await supabase.from("radusergroup").insert({ username: radUsername, groupname: plan.name, priority: 1 });
+  }
 }
 
-const AVATAR_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
-function avatarColor(id: number) { return AVATAR_COLORS[id % AVATAR_COLORS.length]; }
-
-function fmtExpiry(d?: string | null) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" });
+async function deleteCustomer(c: DbCustomer): Promise<void> {
+  const radUsername = c.pppoe_username || c.username;
+  await supabase.from("isp_customers").delete().eq("id", c.id);
+  if (radUsername) {
+    await supabase.from("radcheck").delete().eq("username", radUsername);
+    await supabase.from("radusergroup").delete().eq("username", radUsername);
+  }
 }
 
-export default function Customers() {
-  const { data: customers = [], isLoading } = useQuery({
-    queryKey: ["isp_customers"],
-    queryFn: fetchCustomers,
-    refetchInterval: 60_000,
+/* ══════════════════════════ Form Field ══════════════════════════ */
+function Field({ label, required, children, hint }: { label: string; required?: boolean; children: React.ReactNode; hint?: string }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
+      <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        {label}{required && <span style={{ color: "#f87171", marginLeft: 2 }}>*</span>}
+      </span>
+      {children}
+      {hint && <span style={{ fontSize: "0.68rem", color: "var(--isp-text-sub)" }}>{hint}</span>}
+    </label>
+  );
+}
+
+const inp: React.CSSProperties = {
+  background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8,
+  padding: "0.575rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%", boxSizing: "border-box",
+};
+const sel: React.CSSProperties = { ...inp };
+
+/* ══════════════════════════ Add / Edit Modal ══════════════════════════ */
+function CustomerModal({
+  plans, routers, editing, onClose, onSave,
+}: {
+  plans: PlanLite[];
+  routers: RouterLite[];
+  editing?: DbCustomer | null;
+  onClose: () => void;
+  onSave: (form: NewCustomerForm) => void;
+}) {
+  const isEdit = !!editing;
+  const [form, setForm] = useState<NewCustomerForm>(() => {
+    if (editing) {
+      const type = (editing.type ?? "hotspot") as CustomerType;
+      return {
+        ...emptyForm(type),
+        name:          editing.name ?? "",
+        username:      editing.username ?? "",
+        password:      editing.password ?? "",
+        email:         editing.email ?? "",
+        phone:         editing.phone ?? "",
+        plan_id:       editing.plan_id ?? "",
+        mac_address:   editing.mac_address ?? "",
+        pppoe_username:editing.pppoe_username ?? "",
+        ip_address:    editing.ip_address ?? "",
+        expires_at:    editing.expires_at ? editing.expires_at.slice(0, 10) : "",
+      };
+    }
+    return emptyForm("hotspot");
   });
 
-  const [searchTerm,    setSearchTerm]    = useState("");
-  const [filterStatus,  setFilterStatus]  = useState("all");
-  const [filterPlanType,setFilterPlanType]= useState("all");
+  const [showPw,    setShowPw]    = useState(false);
+  const [saving,    setSaving]    = useState(false);
 
-  const total   = customers.length;
-  const active  = customers.filter(c => (c.status ?? "active") === "active").length;
-  const expired = customers.filter(c => c.status === "expired").length;
+  const hotspotPlans = plans.filter(p => p.type === "hotspot");
+  const pppoePlans   = plans.filter(p => p.type === "pppoe");
+  const allPlans     = form.type === "pppoe" ? pppoePlans : form.type === "hotspot" ? hotspotPlans : plans;
+  const selectedPlan = plans.find(p => p.id === form.plan_id);
+
+  const set = (k: keyof NewCustomerForm, v: string | number) =>
+    setForm(f => ({ ...f, [k]: v }));
+
+  const setType = (t: CustomerType) => {
+    setForm(f => ({ ...emptyForm(t), password: f.password }));
+  };
+
+  const handleNameBlur = () => {
+    if (form.name && !form.username) set("username", genUsername(form.name));
+    if (form.name && !form.pppoe_username) set("pppoe_username", genUsername(form.name));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.name.trim()) return;
+    if (form.type !== "pppoe" && !form.username.trim()) return;
+    if (form.type === "pppoe" && !form.pppoe_username.trim() && !form.username.trim()) return;
+    setSaving(true);
+    onSave(form);
+  };
+
+  const tabs: CustomerType[] = ["hotspot", "pppoe", "static"];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+      <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 580, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 32px 80px rgba(0,0,0,0.6)", overflow: "hidden" }}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--isp-border-subtle)", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg,#06b6d4,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Users size={18} style={{ color: "white" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)" }}>{isEdit ? "Edit Customer" : "Add Customer"}</div>
+              <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+                {isEdit ? `Editing: ${editing?.name ?? editing?.username}` : "Register a new customer to the network"}
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.4rem", color: "var(--isp-text-muted)", cursor: "pointer", display: "flex", alignItems: "center" }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Type Tabs — only when adding */}
+        {!isEdit && (
+          <div style={{ display: "flex", gap: "0.5rem", padding: "1rem 1.5rem 0", flexShrink: 0 }}>
+            {tabs.map(t => {
+              const m = TYPE_META[t];
+              const active = form.type === t;
+              return (
+                <button key={t} onClick={() => setType(t)}
+                  style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "0.35rem", padding: "0.625rem 0.5rem", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", border: active ? `1.5px solid ${m.color}` : "1.5px solid var(--isp-border)", background: active ? m.bg : "rgba(255,255,255,0.02)", transition: "all 0.15s" }}>
+                  <span style={{ color: active ? m.color : "var(--isp-text-sub)", display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.8rem", fontWeight: 700 }}>
+                    {m.icon} {m.label}
+                  </span>
+                  <span style={{ fontSize: "0.65rem", color: active ? m.color : "var(--isp-text-sub)", opacity: 0.8 }}>
+                    {t === "hotspot" ? "Voucher / MAC" : t === "pppoe" ? "Dial-up / DSL" : "Fixed IP"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Scrollable body */}
+        <div style={{ overflowY: "auto", padding: "1.25rem 1.5rem", flex: 1 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+
+            {/* ─── IDENTITY ─── */}
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem" }}>
+              Identity
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+              <Field label="Full Name" required>
+                <input style={inp} value={form.name} placeholder="e.g. John Kamau"
+                  onChange={e => set("name", e.target.value)}
+                  onBlur={handleNameBlur} />
+              </Field>
+              <Field label="Phone Number">
+                <input style={inp} value={form.phone} placeholder="+254 7XX XXX XXX"
+                  onChange={e => set("phone", e.target.value)} />
+              </Field>
+            </div>
+
+            <Field label="Email Address">
+              <input style={inp} type="email" value={form.email} placeholder="customer@email.com"
+                onChange={e => set("email", e.target.value)} />
+            </Field>
+
+            {/* ─── CONNECTION ─── */}
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+              {form.type === "hotspot" ? "Hotspot Credentials" : form.type === "pppoe" ? "PPPoE Credentials" : "Static IP Credentials"}
+            </div>
+
+            {/* Hotspot fields */}
+            {form.type === "hotspot" && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="Username" required hint="Used to log in to the hotspot portal">
+                    <input style={inp} value={form.username} placeholder="e.g. john1234"
+                      onChange={e => set("username", e.target.value)} />
+                  </Field>
+                  <Field label="Password" required>
+                    <div style={{ position: "relative" }}>
+                      <input style={{ ...inp, paddingRight: "2.5rem" }} type={showPw ? "text" : "password"} value={form.password}
+                        onChange={e => set("password", e.target.value)} />
+                      <button type="button" onClick={() => setShowPw(s => !s)}
+                        style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--isp-text-sub)", cursor: "pointer" }}>
+                        {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+                <Field label="MAC Address (optional)" hint="Lock this account to a specific device MAC">
+                  <input style={inp} value={form.mac_address} placeholder="AA:BB:CC:DD:EE:FF"
+                    onChange={e => set("mac_address", e.target.value.toUpperCase())} />
+                </Field>
+              </>
+            )}
+
+            {/* PPPoE fields */}
+            {form.type === "pppoe" && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="PPPoE Username" required hint="Dial-up username (sent by client router)">
+                    <input style={inp} value={form.pppoe_username} placeholder="e.g. john1234"
+                      onChange={e => set("pppoe_username", e.target.value)} />
+                  </Field>
+                  <Field label="Password" required>
+                    <div style={{ position: "relative" }}>
+                      <input style={{ ...inp, paddingRight: "2.5rem" }} type={showPw ? "text" : "password"} value={form.password}
+                        onChange={e => set("password", e.target.value)} />
+                      <button type="button" onClick={() => setShowPw(s => !s)}
+                        style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--isp-text-sub)", cursor: "pointer" }}>
+                        {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="Service Name" hint="MikroTik ppp service-name">
+                    <input style={inp} value={form.pppoe_service} placeholder="internet"
+                      onChange={e => set("pppoe_service", e.target.value)} />
+                  </Field>
+                  <Field label="IP Assignment">
+                    <select style={sel} value={form.ip_assign} onChange={e => set("ip_assign", e.target.value as "dynamic" | "pool" | "static")}>
+                      <option value="dynamic">Dynamic (auto)</option>
+                      <option value="pool">IP Pool</option>
+                      <option value="static">Fixed IP</option>
+                    </select>
+                  </Field>
+                </div>
+                {form.ip_assign === "static" && (
+                  <Field label="Fixed Remote IP Address" required hint="IP to assign to the client WAN interface">
+                    <input style={inp} value={form.ip_address} placeholder="e.g. 10.10.1.50"
+                      onChange={e => set("ip_address", e.target.value)} />
+                  </Field>
+                )}
+              </>
+            )}
+
+            {/* Static fields */}
+            {form.type === "static" && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="Username" required>
+                    <input style={inp} value={form.username} placeholder="e.g. john_static"
+                      onChange={e => set("username", e.target.value)} />
+                  </Field>
+                  <Field label="Password" required>
+                    <div style={{ position: "relative" }}>
+                      <input style={{ ...inp, paddingRight: "2.5rem" }} type={showPw ? "text" : "password"} value={form.password}
+                        onChange={e => set("password", e.target.value)} />
+                      <button type="button" onClick={() => setShowPw(s => !s)}
+                        style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--isp-text-sub)", cursor: "pointer" }}>
+                        {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </Field>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="IP Address" required hint="Static IP to assign to this client">
+                    <input style={inp} value={form.ip_address} placeholder="e.g. 192.168.1.100"
+                      onChange={e => set("ip_address", e.target.value)} />
+                  </Field>
+                  <Field label="Subnet Mask">
+                    <input style={inp} value={form.subnet_mask} placeholder="255.255.255.0"
+                      onChange={e => set("subnet_mask", e.target.value)} />
+                  </Field>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                  <Field label="MAC Address (optional)" hint="Bind IP to this device">
+                    <input style={inp} value={form.mac_address} placeholder="AA:BB:CC:DD:EE:FF"
+                      onChange={e => set("mac_address", e.target.value.toUpperCase())} />
+                  </Field>
+                  <Field label="Gateway IP (optional)">
+                    <input style={inp} value={form.gateway_ip} placeholder="e.g. 192.168.1.1"
+                      onChange={e => set("gateway_ip", e.target.value)} />
+                  </Field>
+                </div>
+              </>
+            )}
+
+            {/* ─── PLAN & ROUTER ─── */}
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+              Plan & Router
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+              <Field label={`${form.type === "pppoe" ? "PPPoE" : form.type === "hotspot" ? "Hotspot" : ""} Plan`} required>
+                <select style={sel} value={form.plan_id} onChange={e => set("plan_id", Number(e.target.value))}>
+                  <option value="">— Select plan —</option>
+                  {allPlans.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} · Ksh {p.price}{p.speed_down ? ` · ${p.speed_down}/${p.speed_up}Mbps` : ""}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Router" required>
+                <select style={sel} value={form.router_id} onChange={e => set("router_id", Number(e.target.value))}>
+                  <option value="">— Select router —</option>
+                  {routers.map(r => (
+                    <option key={r.id} value={r.id}>{r.name} ({r.status === "online" ? "🟢" : "🔴"} {r.host})</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            {/* Plan preview */}
+            {selectedPlan && (
+              <div style={{ background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+                {[
+                  ["Plan",     selectedPlan.name],
+                  ["Price",    `Ksh ${selectedPlan.price}`],
+                  ...(selectedPlan.speed_down ? [["Speed", `${selectedPlan.speed_down}↓ / ${selectedPlan.speed_up}↑ Mbps`]] : []),
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <div style={{ fontSize: "0.62rem", color: "#22d3ee", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
+                    <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ─── OPTIONAL ─── */}
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+              Optional
+            </div>
+
+            <Field label="Account Expiry Date" hint="Leave blank for no expiry">
+              <input style={inp} type="date" value={form.expires_at}
+                onChange={e => set("expires_at", e.target.value)} />
+            </Field>
+
+            {/* Password regenerate */}
+            <button type="button"
+              onClick={() => set("password", genPassword())}
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", alignSelf: "flex-start" }}>
+              <RotateCcw size={12} /> Regenerate Password
+            </button>
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ display: "flex", gap: "0.75rem", padding: "1.125rem 1.5rem", borderTop: "1px solid var(--isp-border-subtle)", flexShrink: 0 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", borderRadius: 10, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit" }}>
+            Cancel
+          </button>
+          <button onClick={handleSubmit} disabled={saving || !form.name.trim()}
+            style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: saving || !form.name.trim() ? "rgba(6,182,212,0.35)" : "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !form.name.trim() ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+            {saving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={15} />}
+            {saving ? "Saving…" : isEdit ? "Save Changes" : `Add ${TYPE_META[form.type].label} Customer`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Delete Confirm ══════════════════════════ */
+function DeleteModal({ customer, onClose, onConfirm, loading }: { customer: DbCustomer; onClose: () => void; onConfirm: () => void; loading: boolean }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+      <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 420, padding: "1.75rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(248,113,113,0.12)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <AlertTriangle size={18} style={{ color: "#f87171" }} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, color: "var(--isp-text)" }}>Delete Customer</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>This action cannot be undone</div>
+          </div>
+        </div>
+        <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: "1.25rem", lineHeight: 1.5 }}>
+          Remove <strong style={{ color: "var(--isp-text)" }}>{customer.name ?? customer.username}</strong> from the system?
+          This will delete their account and all associated RADIUS data.
+        </p>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button onClick={onConfirm} disabled={loading}
+            style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: loading ? "rgba(248,113,113,0.4)" : "rgba(239,68,68,0.9)", border: "none", color: "white", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.375rem" }}>
+            {loading ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Trash size={14} />}
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════ Main Page ══════════════════════════ */
+export default function Customers() {
+  const qc = useQueryClient();
+  const [showAdd,      setShowAdd]      = useState(false);
+  const [editing,      setEditing]      = useState<DbCustomer | null>(null);
+  const [deleting,     setDeleting]     = useState<DbCustomer | null>(null);
+  const [searchTerm,   setSearchTerm]   = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterType,   setFilterType]   = useState("all");
+  const [toast,        setToast]        = useState<{ msg: string; ok: boolean } | null>(null);
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const { data: customers = [], isLoading, refetch } = useQuery({ queryKey: ["isp_customers"], queryFn: fetchCustomers, refetchInterval: 60_000 });
+  const { data: plans    = [] } = useQuery({ queryKey: ["isp_plans_all"],  queryFn: fetchPlans   });
+  const { data: routers  = [] } = useQuery({ queryKey: ["isp_routers"],    queryFn: fetchRouters });
+
+  /* ─── Mutations ─── */
+  const createMutation = useMutation({
+    mutationFn: (form: NewCustomerForm) => createCustomer(form, plans),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["isp_customers"] });
+      setShowAdd(false);
+      setEditing(null);
+      showToast("Customer created successfully");
+    },
+    onError: (e: Error) => showToast(`Error: ${e.message}`, false),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteCustomer,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["isp_customers"] });
+      setDeleting(null);
+      showToast("Customer deleted");
+    },
+    onError: (e: Error) => showToast(`Error: ${e.message}`, false),
+  });
+
+  /* ─── Stats ─── */
+  const total    = customers.length;
+  const active   = customers.filter(c => c.status === "active").length;
+  const expired  = customers.filter(c => c.status === "expired").length;
+  const hotspots = customers.filter(c => c.type === "hotspot").length;
+  const pppoes   = customers.filter(c => c.type === "pppoe").length;
+  const statics  = customers.filter(c => c.type === "static").length;
+
+  /* ─── Filter ─── */
+  const planMap = useMemo(() => {
+    const m: Record<number, string> = {};
+    plans.forEach(p => { m[p.id] = p.name; });
+    return m;
+  }, [plans]);
 
   const filtered = useMemo(() => {
     return customers.filter(c => {
@@ -49,135 +585,227 @@ export default function Customers() {
       const matchSearch = !searchTerm ||
         (c.name ?? "").toLowerCase().includes(term) ||
         (c.username ?? "").toLowerCase().includes(term) ||
+        (c.pppoe_username ?? "").toLowerCase().includes(term) ||
         (c.phone ?? "").includes(searchTerm) ||
-        (c.ip_address ?? "").includes(searchTerm);
-      const matchStatus = filterStatus === "all" || (c.status ?? "active") === filterStatus;
-      return matchSearch && matchStatus;
+        (c.ip_address ?? "").includes(searchTerm) ||
+        (c.email ?? "").toLowerCase().includes(term);
+      const matchStatus = filterStatus === "all" || c.status === filterStatus;
+      const matchType   = filterType   === "all" || c.type   === filterType;
+      return matchSearch && matchStatus && matchType;
     });
-  }, [customers, searchTerm, filterStatus]);
+  }, [customers, searchTerm, filterStatus, filterType]);
 
   return (
     <AdminLayout>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <div className="space-y-6">
+      <style>{`
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes slideIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+        .crow:hover { background: rgba(255,255,255,0.03) !important; }
+      `}</style>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: "fixed", top: 20, right: 24, zIndex: 2000, display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.75rem 1.25rem", borderRadius: 10, background: toast.ok ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)", border: `1px solid ${toast.ok ? "rgba(34,197,94,0.3)" : "rgba(248,113,113,0.3)"}`, color: toast.ok ? "#4ade80" : "#f87171", fontWeight: 600, fontSize: "0.875rem", boxShadow: "0 8px 32px rgba(0,0,0,0.3)", animation: "slideIn 0.2s ease" }}>
+          {toast.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Modals */}
+      {(showAdd || editing) && (
+        <CustomerModal
+          plans={plans} routers={routers}
+          editing={editing}
+          onClose={() => { setShowAdd(false); setEditing(null); }}
+          onSave={form => createMutation.mutate(form)}
+        />
+      )}
+      {deleting && (
+        <DeleteModal
+          customer={deleting}
+          loading={deleteMutation.isPending}
+          onClose={() => setDeleting(null)}
+          onConfirm={() => deleteMutation.mutate(deleting)}
+        />
+      )}
+
+      <div className="space-y-5">
+
+        {/* ─── Header ─── */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h1 className="text-2xl font-bold text-foreground">Customers</h1>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Customers</h1>
+            <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>
+              {isLoading ? "Loading…" : `${total} total · ${hotspots} hotspot · ${pppoes} PPPoE · ${statics} static`}
+            </p>
+          </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => refetch()} className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-sm font-semibold hover:bg-white/10 transition flex items-center gap-2 text-muted-foreground">
+              <RefreshCw className="w-3.5 h-3.5" style={{ animation: isLoading ? "spin 1s linear infinite" : "none" }} />
+            </button>
             <button className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm font-semibold hover:bg-white/10 transition flex items-center gap-2">
               <Download className="w-4 h-4" /> Export
             </button>
-            <button className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold shadow-lg shadow-primary/20 hover:shadow-primary/40 hover:-translate-y-0.5 transition flex items-center gap-2">
+            <button onClick={() => setShowAdd(true)}
+              className="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"
+              style={{ background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(6,182,212,0.3)", borderRadius: 12 }}>
               <Plus className="w-4 h-4" /> Add Customer
             </button>
           </div>
         </div>
 
-        {/* KPI cards */}
+        {/* ─── Stat Cards ─── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="Total Customers" value={String(total)}   color="cyan"  />
           <StatCard label="Active"          value={String(active)}  color="green" />
           <StatCard label="Expired"         value={String(expired)} color="red"   />
-          <StatCard label="Online Now"      value="—"               color="amber" />
-        </div>
-
-        {/* Table */}
-        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-sm">
-          <div className="p-4 border-b border-border flex flex-col sm:flex-row gap-4 justify-between items-center bg-background/50">
-            <div className="relative w-full sm:w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search customers…"
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="w-full bg-background border border-border rounded-xl py-2 pl-9 pr-4 text-sm text-foreground focus:outline-none focus:border-primary"
-              />
-            </div>
-            <div className="flex gap-2 w-full sm:w-auto">
-              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-                className="bg-background border border-border rounded-xl py-2 px-3 text-sm text-foreground focus:outline-none focus:border-primary w-full sm:w-auto">
-                <option value="all">All Status</option>
-                <option value="active">Active</option>
-                <option value="expired">Expired</option>
-                <option value="suspended">Suspended</option>
-              </select>
-              <select value={filterPlanType} onChange={e => setFilterPlanType(e.target.value)}
-                className="bg-background border border-border rounded-xl py-2 px-3 text-sm text-foreground focus:outline-none focus:border-primary w-full sm:w-auto">
-                <option value="all">All Plans</option>
-                <option value="hotspot">Hotspot</option>
-                <option value="pppoe">PPPoE</option>
-              </select>
+          <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
+            <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.5rem" }}>By Type</div>
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              {([["hotspot", hotspots], ["pppoe", pppoes], ["static", statics]] as [CustomerType, number][]).map(([t, n]) => {
+                const m = TYPE_META[t];
+                return (
+                  <div key={t} style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                    <span style={{ fontSize: "0.7rem", color: m.color }}>{m.icon}</span>
+                    <span style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--isp-text)" }}>{n}</span>
+                    <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>{m.label}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
+        </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-background/80 text-muted-foreground text-xs uppercase font-semibold border-b border-border">
-                <tr>
-                  <th className="px-6 py-4">Customer</th>
-                  <th className="px-6 py-4">Contact</th>
-                  <th className="px-6 py-4">IP Address</th>
-                  <th className="px-6 py-4">Expiry</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+        {/* ─── Table ─── */}
+        <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, overflow: "hidden" }}>
+
+          {/* Filter bar */}
+          <div style={{ display: "flex", gap: "0.75rem", padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)", flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ position: "relative", flex: "1 1 220px", minWidth: 200 }}>
+              <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-muted)" }} />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Search name, username, phone, IP…"
+                style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem 0.5rem 2rem", color: "var(--isp-text)", fontSize: "0.8125rem", fontFamily: "inherit" }} />
+            </div>
+            <select value={filterType} onChange={e => setFilterType(e.target.value)}
+              style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem", color: "var(--isp-text)", fontSize: "0.8125rem", fontFamily: "inherit" }}>
+              <option value="all">All Types</option>
+              <option value="hotspot">Hotspot</option>
+              <option value="pppoe">PPPoE</option>
+              <option value="static">Static</option>
+            </select>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+              style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem", color: "var(--isp-text)", fontSize: "0.8125rem", fontFamily: "inherit" }}>
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="expired">Expired</option>
+              <option value="suspended">Suspended</option>
+            </select>
+          </div>
+
+          {/* Table */}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8125rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
+                  {["Customer", "Type", "Contact", "Plan", "IP / MAC", "Expires", "Status", "Actions"].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "0.75rem 1.25rem", color: "var(--isp-text-sub)", fontWeight: 600, fontSize: "0.6875rem", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody>
                 {isLoading ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-12 text-muted-foreground">
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                        <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Loading customers…
-                      </div>
-                    </td>
-                  </tr>
+                  <tr><td colSpan={8} style={{ textAlign: "center", padding: "3.5rem", color: "var(--isp-text-muted)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Loading customers…
+                    </div>
+                  </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center py-16 text-muted-foreground">
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
-                        <Users size={40} style={{ opacity: 0.2 }} />
-                        <div>
-                          <p style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
-                            {customers.length === 0 ? "No customers yet" : "No customers match your search"}
-                          </p>
-                          <p style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-                            {customers.length === 0 ? "Customers will appear here once they connect through your hotspot or PPPoE." : "Try adjusting your search or filters."}
-                          </p>
-                        </div>
+                  <tr><td colSpan={8} style={{ textAlign: "center", padding: "4rem" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
+                      <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(6,182,212,0.07)", border: "1.5px dashed rgba(6,182,212,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Users size={24} style={{ color: "#06b6d4", opacity: 0.5 }} />
                       </div>
-                    </td>
-                  </tr>
-                ) : filtered.map((c) => {
+                      <div>
+                        <p style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.25rem" }}>
+                          {customers.length === 0 ? "No customers yet" : "No customers match your search"}
+                        </p>
+                        <p style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>
+                          {customers.length === 0 ? "Click Add Customer to register your first client." : "Try changing your search or filters."}
+                        </p>
+                      </div>
+                      {customers.length === 0 && (
+                        <button onClick={() => setShowAdd(true)}
+                          style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                          <Plus size={14} /> Add Customer
+                        </button>
+                      )}
+                    </div>
+                  </td></tr>
+                ) : filtered.map(c => {
                   const color = avatarColor(c.id);
-                  const displayName  = (c.name ?? c.username ?? `User #${c.id}`);
-                  const statusVal    = (c.status ?? "active") as string;
+                  const name  = c.name ?? c.username ?? c.pppoe_username ?? `#${c.id}`;
+                  const typeM = TYPE_META[(c.type ?? "hotspot") as CustomerType] ?? TYPE_META.hotspot;
+                  const statusVal = c.status ?? "active";
+                  const loginId   = c.type === "pppoe" ? (c.pppoe_username ?? c.username) : c.username;
                   return (
-                    <tr key={c.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0"
-                            style={{ backgroundColor: `${color}22`, color }}>
-                            {initials(displayName)}
+                    <tr key={c.id} className="crow" style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
+                      {/* Customer */}
+                      <td style={{ padding: "0.75rem 1.25rem" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                          <div style={{ width: 32, height: 32, borderRadius: "50%", background: `${color}22`, color, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.7rem", flexShrink: 0 }}>
+                            {initials(name)}
                           </div>
-                          <span className="font-semibold text-foreground">{displayName}</span>
+                          <div>
+                            <div style={{ fontWeight: 600, color: "var(--isp-text)" }}>{name}</div>
+                            {loginId && loginId !== name && (
+                              <div style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", fontFamily: "monospace" }}>{loginId}</div>
+                            )}
+                          </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 font-mono text-muted-foreground text-xs">
-                        {c.phone ?? c.email ?? "—"}
+                      {/* Type */}
+                      <td style={{ padding: "0.75rem 1.25rem" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", padding: "0.2rem 0.6rem", borderRadius: 20, fontWeight: 700, background: typeM.bg, color: typeM.color }}>
+                          {typeM.icon} {typeM.label}
+                        </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <p className="text-xs font-mono text-primary">{(c.ip_address as string) ?? "—"}</p>
+                      {/* Contact */}
+                      <td style={{ padding: "0.75rem 1.25rem", color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
+                        <div>{c.phone ?? "—"}</div>
+                        {c.email && <div style={{ fontSize: "0.68rem", opacity: 0.7 }}>{c.email}</div>}
                       </td>
-                      <td className="px-6 py-4 text-muted-foreground text-xs">{fmtExpiry(c.expiry_date as string | null)}</td>
-                      <td className="px-6 py-4">
+                      {/* Plan */}
+                      <td style={{ padding: "0.75rem 1.25rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
+                        {c.plan_id ? planMap[c.plan_id] ?? `#${c.plan_id}` : "—"}
+                      </td>
+                      {/* IP / MAC */}
+                      <td style={{ padding: "0.75rem 1.25rem" }}>
+                        {c.ip_address && <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "#22d3ee" }}>{c.ip_address}</div>}
+                        {c.mac_address && <div style={{ fontFamily: "monospace", fontSize: "0.68rem", color: "var(--isp-text-muted)" }}>{c.mac_address}</div>}
+                        {!c.ip_address && !c.mac_address && <span style={{ color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>—</span>}
+                      </td>
+                      {/* Expires */}
+                      <td style={{ padding: "0.75rem 1.25rem", color: "var(--isp-text-muted)", fontSize: "0.75rem" }}>
+                        {fmtDate(c.expires_at)}
+                      </td>
+                      {/* Status */}
+                      <td style={{ padding: "0.75rem 1.25rem" }}>
                         <Badge variant={statusVal === "active" ? "success" : statusVal === "expired" ? "danger" : "warning"}>
                           {statusVal}
                         </Badge>
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button className="p-1.5 text-slate-400 hover:text-cyan-400 rounded-lg hover:bg-cyan-400/10 transition"><Edit className="w-4 h-4" /></button>
-                          <button className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-red-400/10 transition"><Trash className="w-4 h-4" /></button>
+                      {/* Actions */}
+                      <td style={{ padding: "0.75rem 1.25rem" }}>
+                        <div style={{ display: "flex", gap: "0.25rem" }}>
+                          <button title="Edit" onClick={() => setEditing(c)}
+                            style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--isp-text-muted)", cursor: "pointer" }}>
+                            <Edit size={13} />
+                          </button>
+                          <button title="Delete" onClick={() => setDeleting(c)}
+                            style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--isp-text-muted)", cursor: "pointer" }}>
+                            <Trash size={13} />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -187,9 +815,9 @@ export default function Customers() {
             </table>
           </div>
 
-          {!isLoading && (
-            <div className="px-6 py-3 border-t border-border text-xs text-muted-foreground">
-              {filtered.length} of {customers.length} customer{customers.length !== 1 ? "s" : ""}
+          {!isLoading && customers.length > 0 && (
+            <div style={{ padding: "0.625rem 1.25rem", borderTop: "1px solid var(--isp-border-subtle)", fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>
+              Showing {filtered.length} of {customers.length} customer{customers.length !== 1 ? "s" : ""}
             </div>
           )}
         </div>

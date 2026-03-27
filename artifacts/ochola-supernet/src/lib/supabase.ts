@@ -68,17 +68,22 @@ export interface DbTransaction {
 /* ─── isp_customers row shape ─── */
 export interface DbCustomer {
   id: number;
-  admin_id?: number;
-  name?: string;
-  username?: string;
-  phone?: string;
-  email?: string;
-  plan_id?: number | null;
-  status?: string;
-  ip_address?: string | null;
-  expiry_date?: string | null;
-  created_at?: string;
-  [key: string]: unknown;
+  admin_id: number;
+  name: string | null;
+  username: string | null;
+  password: string | null;
+  email: string | null;
+  phone: string | null;
+  type: string | null;           // 'hotspot' | 'pppoe' | 'static'
+  plan_id: number | null;
+  status: string;                // 'active' | 'expired' | 'suspended'
+  ip_address: string | null;
+  mac_address: string | null;
+  pppoe_username: string | null;
+  data_used_mb: number;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /* ─── isp_bandwidth row shape ─── */
