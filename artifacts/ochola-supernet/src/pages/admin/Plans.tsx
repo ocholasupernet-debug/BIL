@@ -1,91 +1,123 @@
 import React, { useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
-import { usePlans, MOCK_PLANS, MOCK_BANDWIDTH_PLANS } from "@/hooks/use-mock-api";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users } from "lucide-react";
+import { MOCK_PLANS, MOCK_BANDWIDTH_PLANS } from "@/hooks/use-mock-api";
+import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X } from "lucide-react";
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
   return raw ?? "hotspot";
 }
 
+/* ─── Plan types ─── */
+type ServicePlan = typeof MOCK_PLANS[0];
+type BwPlan      = typeof MOCK_BANDWIDTH_PLANS[0];
+
 /* ─── shared styles ─── */
-const ROW: React.CSSProperties = {
-  display: "flex", alignItems: "flex-start", gap: "1rem",
-};
-const LBL: React.CSSProperties = {
-  fontWeight: 700, fontSize: "0.875rem", color: "var(--isp-text)",
-  minWidth: 170, flexShrink: 0, paddingTop: "0.45rem", textAlign: "right",
-};
+const ROW: React.CSSProperties    = { display: "flex", alignItems: "flex-start", gap: "1rem" };
+const LBL: React.CSSProperties    = { fontWeight: 700, fontSize: "0.875rem", color: "var(--isp-text)", minWidth: 170, flexShrink: 0, paddingTop: "0.45rem", textAlign: "right" };
 const LBL_CYAN: React.CSSProperties = { ...LBL, color: "#06b6d4" };
-const INPUT: React.CSSProperties = {
-  flex: 1, padding: "0.5rem 0.75rem", borderRadius: 6,
-  background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)",
-  color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", width: "100%",
-};
-const SELECT: React.CSSProperties = {
-  padding: "0.5rem 0.75rem", borderRadius: 6,
-  background: "var(--isp-bg)", border: "1px solid var(--isp-border)",
-  color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit",
-  cursor: "pointer",
-};
-const HINT: React.CSSProperties = {
-  fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.3rem",
-};
+const INPUT: React.CSSProperties  = { flex: 1, padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", width: "100%" };
+const SELECT: React.CSSProperties = { padding: "0.5rem 0.75rem", borderRadius: 6, background: "var(--isp-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", cursor: "pointer" };
+const HINT: React.CSSProperties   = { fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.3rem" };
+
 function Radio({ name, value, checked, onChange, label }: { name: string; value: string; checked: boolean; onChange: () => void; label: string }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: "0.375rem", cursor: "pointer", fontSize: "0.875rem", color: "var(--isp-text)" }}>
-      <input type="radio" name={name} value={value} checked={checked} onChange={onChange}
-        style={{ accentColor: "#06b6d4", width: 15, height: 15, cursor: "pointer" }} />
+      <input type="radio" name={name} value={value} checked={checked} onChange={onChange} style={{ accentColor: "#06b6d4", width: 15, height: 15, cursor: "pointer" }} />
       {label}
     </label>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════
-   ADD SERVICE PLAN FORM  (Hotspot / PPPoE / Static / Trials)
-═══════════════════════════════════════════════════════════ */
-function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel: () => void }) {
-  const [status, setStatus]         = useState<"enable"|"disable">("enable");
-  const [canBuy, setCanBuy]         = useState<"yes"|"no">("yes");
-  const [name, setName]             = useState("");
-  const [type, setType]             = useState<"unlimited"|"limited">("unlimited");
-  const [bandwidth, setBandwidth]   = useState("");
-  const [price, setPrice]           = useState("");
-  const [shared, setShared]         = useState("1");
-  const [validity, setValidity]     = useState("");
-  const [valUnit, setValUnit]       = useState("Mins");
-  const [router, setRouter]         = useState("");
-  const [activePool, setActivePool] = useState("");
-  const [expiredPool, setExpiredPool] = useState("");
-  const [saving, setSaving]         = useState(false);
-  const [saved, setSaved]           = useState(false);
+/* ─── parse validity string ─── */
+function parseValidity(v: string): { num: string; unit: string } {
+  const m = v.match(/^(\d+)\s*(Min|Hour|Day|Week|Month)/i);
+  if (!m) return { num: "1", unit: "Days" };
+  const n = m[1];
+  const w = m[2].toLowerCase();
+  const unit =
+    w.startsWith("min") ? "Mins" :
+    w.startsWith("hour") ? "Hours" :
+    w.startsWith("day") ? "Days" :
+    w.startsWith("week") ? "Weeks" : "Months";
+  return { num: n, unit };
+}
 
-  const units = ["Mins", "Hours", "Days", "Weeks", "Months"];
+/* ═══════════════════════════════════════════════════════════
+   ADD / EDIT SERVICE PLAN FORM
+═══════════════════════════════════════════════════════════ */
+interface AddServicePlanFormProps {
+  planType: string;
+  onCancel: () => void;
+  onSave: (updated: Partial<ServicePlan> & { id?: number }) => void;
+  initialData?: ServicePlan | null;
+}
+
+function AddServicePlanForm({ planType, onCancel, onSave, initialData }: AddServicePlanFormProps) {
+  const isEdit = !!initialData;
+  const parsed = initialData ? parseValidity(initialData.validity) : { num: "", unit: "Days" };
+
+  const [status, setStatus]           = useState<"enable"|"disable">(initialData ? (initialData.active ? "enable" : "disable") : "enable");
+  const [canBuy, setCanBuy]           = useState<"yes"|"no">("yes");
+  const [name, setName]               = useState(initialData?.name ?? "");
+  const [type, setType]               = useState<"unlimited"|"limited">("unlimited");
+  const [bandwidth, setBandwidth]     = useState("");
+  const [price, setPrice]             = useState(initialData?.price?.toString() ?? "");
+  const [shared, setShared]           = useState("1");
+  const [validity, setValidity]       = useState(parsed.num);
+  const [valUnit, setValUnit]         = useState(parsed.unit);
+  const [router, setRouter]           = useState("");
+  const [activePool, setActivePool]   = useState("");
+  const [expiredPool, setExpiredPool] = useState("");
+  const [saving, setSaving]           = useState(false);
+  const [saved, setSaved]             = useState(false);
+
+  const units           = ["Mins", "Hours", "Days", "Weeks", "Months"];
   const bandwidthOptions = MOCK_BANDWIDTH_PLANS.map(b => b.name);
-  const routerOptions = ["latty1 — L009UiGS-2HaxD", "main-router — CCR1009", "backup-router — RB750Gr3"];
-  const poolOptions    = ["hs-pool-1 (192.168.2.2–192.168.2.254)", "pppoe-pool-1 (10.10.0.1–10.10.0.254)", "static-pool (10.20.0.1–10.20.0.50)"];
+  const routerOptions   = ["latty1 — L009UiGS-2HaxD", "main-router — CCR1009", "backup-router — RB750Gr3"];
+  const poolOptions     = ["hs-pool-1 (192.168.2.2–192.168.2.254)", "pppoe-pool-1 (10.10.0.1–10.10.0.254)", "static-pool (10.20.0.1–10.20.0.50)"];
   const expiredPoolOptions = ["expired-pool (192.168.178.5–192.168.178.254)", "blocked-pool (192.168.200.1–192.168.200.254)"];
 
   const isPppoe   = planType === "pppoe";
   const isHotspot = planType === "hotspot" || planType === "trials";
+  const typeLabel = planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setTimeout(() => { setSaving(false); setSaved(true); setTimeout(() => { setSaved(false); onCancel(); }, 1200); }, 900);
+    setTimeout(() => {
+      setSaving(false);
+      setSaved(true);
+      onSave({
+        id: initialData?.id,
+        name,
+        price: parseFloat(price) || 0,
+        validity: `${validity} ${valUnit.replace(/s$/, validity === "1" ? "" : "s")}`,
+        active: status === "enable",
+        type: planType,
+      });
+      setTimeout(() => { setSaved(false); onCancel(); }, 1000);
+    }, 700);
   };
-
-  const typeLabel = planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
 
   return (
     <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden", maxWidth: 780 }}>
       {/* Header */}
       <div style={{ padding: "0.875rem 1.5rem", background: "rgba(6,182,212,0.06)", borderBottom: "2px solid #06b6d4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontWeight: 700, fontSize: "1rem", color: "var(--isp-text)" }}>Add Service Plan</span>
-        <span style={{ fontSize: "0.7rem", color: "#06b6d4", background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700, textTransform: "capitalize" }}>
-          {typeLabel} Plan
+        <span style={{ fontWeight: 700, fontSize: "1rem", color: "var(--isp-text)" }}>
+          {isEdit ? "Edit Service Plan" : "Add Service Plan"}
         </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: "0.7rem", color: "#06b6d4", background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700, textTransform: "capitalize" }}>
+            {typeLabel} Plan
+          </span>
+          {isEdit && (
+            <span style={{ fontSize: "0.7rem", color: "#fbbf24", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700 }}>
+              Editing ID #{initialData?.id}
+            </span>
+          )}
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1.1rem" }}>
@@ -153,7 +185,7 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
             <span style={LBL}>Shared Users</span>
             <div style={{ flex: 1 }}>
               <input type="number" min="1" style={INPUT} value={shared} onChange={e => setShared(e.target.value)} />
-              <p style={HINT}>Set to 1 If you want 1 device per purchase.</p>
+              <p style={HINT}>Set to 1 if you want 1 device per purchase.</p>
             </div>
           </div>
         )}
@@ -162,7 +194,7 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
         <div style={ROW}>
           <span style={LBL}>Plan Validity</span>
           <div style={{ flex: 1, display: "flex", gap: "0.5rem" }}>
-            <input type="number" min="1" style={{ ...INPUT }} value={validity}
+            <input type="number" min="1" style={INPUT} value={validity}
               onChange={e => setValidity(e.target.value)} placeholder="e.g. 1" required />
             <select style={SELECT} value={valUnit} onChange={e => setValUnit(e.target.value)}>
               {units.map(u => <option key={u}>{u}</option>)}
@@ -178,7 +210,7 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
               <option value="">Select Routers</option>
               {routerOptions.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
-            <p style={HINT}>Cannot be changed after saved.</p>
+            {!isEdit && <p style={HINT}>Cannot be changed after saved.</p>}
           </div>
         </div>
 
@@ -204,9 +236,8 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
               </select>
               <p style={{ ...HINT, lineHeight: 1.65, marginTop: "0.5rem" }}>
                 Make sure your expired PPPoE pool is in the range{" "}
-                <code style={{ color: "#f87171", background: "rgba(248,113,113,0.1)", padding: "0 0.2rem", borderRadius: 3, fontSize: "0.75rem" }}>192.168.178.5–192.168.178.254</code>.
-                {" "}You can add the pool in <strong>Network → Pools</strong>. Choose this if you want customers to see an expiry page and payment portal once the account has expired or else leave it blank.
-                If you have chosen expired pool give it sometime to load — it will be adding a couple of firewalls to the router.
+                <code style={{ color: "#f87171", background: "rgba(248,113,113,0.1)", padding: "0 0.2rem", borderRadius: 3, fontSize: "0.75rem" }}>192.168.178.5–192.168.178.254</code>.{" "}
+                You can add the pool in <strong>Network → Pools</strong>. Choose this if you want customers to see an expiry page and payment portal once the account has expired or else leave it blank.
               </p>
             </div>
           </div>
@@ -216,7 +247,7 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
         <div style={{ display: "flex", alignItems: "center", gap: "1rem", paddingTop: "0.5rem" }}>
           <button type="submit"
             style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(6,182,212,0.6)" : "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", transition: "background 0.2s" }}>
-            {saving ? "Saving…" : saved ? "✓ Saved!" : "Save Changes"}
+            {saving ? "Saving…" : saved ? "✓ Saved!" : isEdit ? "Update Plan" : "Save Changes"}
           </button>
           <span style={{ fontSize: "0.85rem", color: "var(--isp-text-muted)" }}>Or</span>
           <button type="button" onClick={onCancel}
@@ -230,45 +261,78 @@ function AddServicePlanForm({ planType, onCancel }: { planType: string; onCancel
 }
 
 /* ═══════════════════════════════════════════════════════════
-   ADD NEW BANDWIDTH FORM
+   DELETE CONFIRM MODAL
 ═══════════════════════════════════════════════════════════ */
-const BW_INPUT: React.CSSProperties = {
-  flex: 1, padding: "0.5rem 0.75rem", borderRadius: 6,
-  background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)",
-  color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit",
-};
-const BW_LBL: React.CSSProperties = {
-  fontWeight: 700, fontSize: "0.85rem", color: "var(--isp-text)",
-  display: "flex", alignItems: "center", minWidth: 160, flexShrink: 0,
-};
-const BW_SELECT: React.CSSProperties = {
-  padding: "0.5rem 0.75rem", borderRadius: 6,
-  background: "var(--isp-bg)", border: "1px solid var(--isp-border)",
-  color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", cursor: "pointer",
-};
+function DeleteModal({ planName, onConfirm, onCancel }: { planName: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+      <div style={{ background: "var(--isp-card, #1a2440)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "2rem", maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Trash size={20} style={{ color: "#f87171" }} />
+          </div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}><X size={18} /></button>
+        </div>
+        <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: "0 0 8px" }}>Delete Plan?</h3>
+        <p style={{ color: "var(--isp-text-muted)", fontSize: "0.83rem", lineHeight: 1.6, margin: "0 0 20px" }}>
+          You are about to permanently delete <strong style={{ color: "var(--isp-text)" }}>{planName}</strong>. Any active subscribers on this plan will not be affected, but no new activations will be possible.
+        </p>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={onConfirm} style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "#ef4444", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
+            Yes, Delete
+          </button>
+          <button onClick={onCancel} style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-function AddBandwidthForm({ onCancel }: { onCancel?: () => void }) {
-  const [name, setName] = useState("");
-  const [dl, setDl] = useState("");
-  const [dlUnit, setDlUnit] = useState("Mbps");
-  const [ul, setUl] = useState("");
-  const [ulUnit, setUlUnit] = useState("Mbps");
-  const [burst, setBurst] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+/* ═══════════════════════════════════════════════════════════
+   ADD / EDIT BANDWIDTH FORM
+═══════════════════════════════════════════════════════════ */
+const BW_INPUT: React.CSSProperties  = { flex: 1, padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit" };
+const BW_LBL: React.CSSProperties   = { fontWeight: 700, fontSize: "0.85rem", color: "var(--isp-text)", display: "flex", alignItems: "center", minWidth: 160, flexShrink: 0 };
+const BW_SELECT: React.CSSProperties= { padding: "0.5rem 0.75rem", borderRadius: 6, background: "var(--isp-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", cursor: "pointer" };
+
+interface AddBandwidthFormProps {
+  onCancel?: () => void;
+  onSave?: (updated: Partial<BwPlan> & { id?: number }) => void;
+  initialData?: BwPlan | null;
+}
+
+function AddBandwidthForm({ onCancel, onSave, initialData }: AddBandwidthFormProps) {
+  const isEdit = !!initialData;
+  const [name,    setName]    = useState(initialData?.name    ?? "");
+  const [dl,      setDl]      = useState(initialData?.download?.toString() ?? "");
+  const [dlUnit,  setDlUnit]  = useState(initialData?.unit    ?? "Mbps");
+  const [ul,      setUl]      = useState(initialData?.upload?.toString()   ?? "");
+  const [ulUnit,  setUlUnit]  = useState(initialData?.unit    ?? "Mbps");
+  const [burst,   setBurst]   = useState(initialData?.burst   ?? false);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+
+  const units = ["Kbps", "Mbps", "Gbps"];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    setTimeout(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000); }, 900);
+    setTimeout(() => {
+      setSaving(false);
+      setSaved(true);
+      onSave?.({ id: initialData?.id, name, download: parseFloat(dl), upload: parseFloat(ul), unit: dlUnit, burst });
+      setTimeout(() => { setSaved(false); onCancel?.(); }, 1000);
+    }, 700);
   };
-
-  const units = ["Kbps", "Mbps", "Gbps"];
 
   return (
     <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
       <div style={{ padding: "0.875rem 1.25rem", background: "rgba(255,255,255,0.03)", borderBottom: "1px solid var(--isp-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--isp-text)" }}>Add New Bandwidth</span>
+        <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--isp-text)" }}>
+          {isEdit ? `Edit Bandwidth — ${initialData?.name}` : "Add New Bandwidth"}
+        </span>
         <button style={{ padding: "0.3rem 0.875rem", borderRadius: 6, background: "#06b6d4", color: "white", border: "none", fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
           onClick={() => alert("Bandwidth documentation coming soon!")}>
           Need Help?
@@ -343,7 +407,7 @@ function AddBandwidthForm({ onCancel }: { onCancel?: () => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: "1rem", paddingTop: "0.25rem" }}>
           <button type="submit"
             style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(6,182,212,0.6)" : "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-            {saving ? "Saving…" : saved ? "✓ Saved!" : "Submit"}
+            {saving ? "Saving…" : saved ? "✓ Saved!" : isEdit ? "Update Bandwidth" : "Submit"}
           </button>
           <span style={{ fontSize: "0.85rem", color: "var(--isp-text-muted)" }}>Or</span>
           <button type="button" onClick={onCancel}
@@ -359,7 +423,7 @@ function AddBandwidthForm({ onCancel }: { onCancel?: () => void }) {
 /* ═══════════════════════════════════════════════════════════
    BANDWIDTH PLAN CARD
 ═══════════════════════════════════════════════════════════ */
-function BandwidthCard({ plan, onEdit, onDelete }: { plan: typeof MOCK_BANDWIDTH_PLANS[0]; onEdit: () => void; onDelete: () => void }) {
+function BandwidthCard({ plan, onEdit, onDelete }: { plan: BwPlan; onEdit: () => void; onDelete: () => void }) {
   return (
     <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden", transition: "border-color 0.2s" }}
       onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(6,182,212,0.4)")}
@@ -387,7 +451,7 @@ function BandwidthCard({ plan, onEdit, onDelete }: { plan: typeof MOCK_BANDWIDTH
           <Users style={{ width: 12, height: 12 }} /> {plan.usedBy} plans using this profile
         </div>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-          <button onClick={onEdit} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text-sub)", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.35rem" }}>
+          <button onClick={onEdit} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.25)", color: "#06b6d4", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.35rem" }}>
             <Edit style={{ width: 11, height: 11 }} /> Edit
           </button>
           <button onClick={onDelete} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.35rem" }}>
@@ -403,25 +467,59 @@ function BandwidthCard({ plan, onEdit, onDelete }: { plan: typeof MOCK_BANDWIDTH
    BANDWIDTH PLANS TAB
 ═══════════════════════════════════════════════════════════ */
 function BandwidthPlansTab() {
-  const [plans, setPlans] = useState(MOCK_BANDWIDTH_PLANS);
-  const [showForm, setShowForm] = useState(true);
-  const handleDelete = (id: number) => setPlans(p => p.filter(x => x.id !== id));
+  const [plans, setPlans]       = useState<BwPlan[]>(MOCK_BANDWIDTH_PLANS);
+  const [showForm, setShowForm] = useState(false);
+  const [editingBw, setEditingBw] = useState<BwPlan | null>(null);
+  const [deletingBw, setDeletingBw] = useState<BwPlan | null>(null);
+
+  function openAdd()           { setEditingBw(null); setShowForm(true); }
+  function openEdit(p: BwPlan) { setEditingBw(p);    setShowForm(true); }
+  function closeForm()         { setShowForm(false);  setEditingBw(null); }
+
+  function handleSave(updated: Partial<BwPlan> & { id?: number }) {
+    if (updated.id) {
+      setPlans(ps => ps.map(p => p.id === updated.id ? { ...p, ...updated } as BwPlan : p));
+    } else {
+      setPlans(ps => [...ps, { ...updated, id: Date.now(), usedBy: 0 } as BwPlan]);
+    }
+    closeForm();
+  }
+
+  function handleDelete(id: number) {
+    setPlans(ps => ps.filter(p => p.id !== id));
+    setDeletingBw(null);
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      {deletingBw && (
+        <DeleteModal
+          planName={deletingBw.name}
+          onConfirm={() => handleDelete(deletingBw.id)}
+          onCancel={() => setDeletingBw(null)}
+        />
+      )}
+
       {!showForm ? (
-        <button onClick={() => setShowForm(true)}
+        <button onClick={openAdd}
           style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 1.125rem", borderRadius: 10, background: "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 14px rgba(6,182,212,0.3)" }}>
           <Plus style={{ width: 15, height: 15 }} /> Add Bandwidth Profile
         </button>
       ) : (
-        <AddBandwidthForm onCancel={() => setShowForm(false)} />
+        <AddBandwidthForm initialData={editingBw} onCancel={closeForm} onSave={handleSave} />
       )}
+
       <div>
         <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.875rem" }}>
           Existing Bandwidth Profiles — {plans.length}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "1rem" }}>
-          {plans.map(p => <BandwidthCard key={p.id} plan={p} onEdit={() => {}} onDelete={() => handleDelete(p.id)} />)}
+          {plans.map(p => (
+            <BandwidthCard key={p.id} plan={p}
+              onEdit={() => { openEdit(p); }}
+              onDelete={() => setDeletingBw(p)}
+            />
+          ))}
         </div>
       </div>
     </div>
@@ -437,12 +535,14 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 export default function Plans() {
-  const typeParam = useTypeParam();
-  const [activeTab, setActiveTab] = useState(typeParam);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const { data: plans = MOCK_PLANS } = usePlans(activeTab === "bandwidth" ? undefined : activeTab);
+  const typeParam  = useTypeParam();
+  const [activeTab, setActiveTab]   = useState(typeParam);
+  const [localPlans, setLocalPlans] = useState<ServicePlan[]>(MOCK_PLANS);
+  const [editingPlan, setEditingPlan]   = useState<ServicePlan | null>(null);
+  const [deletingPlan, setDeletingPlan] = useState<ServicePlan | null>(null);
+  const [showAddForm, setShowAddForm]   = useState(false);
 
-  const filteredPlans = plans.filter(p => p.type === activeTab);
+  const filteredPlans = localPlans.filter(p => p.type === activeTab);
 
   const TABS = [
     { id: "hotspot",   label: "Hotspot Plans" },
@@ -453,20 +553,54 @@ export default function Plans() {
     { id: "fup",       label: "FUP" },
   ];
 
-  const isBandwidth = activeTab === "bandwidth";
+  const isBandwidth   = activeTab === "bandwidth";
   const isServicePlan = !isBandwidth;
+  const showingForm   = showAddForm || !!editingPlan;
+
+  function openEdit(plan: ServicePlan) {
+    setEditingPlan(plan);
+    setShowAddForm(false);
+  }
+
+  function closeForm() {
+    setShowAddForm(false);
+    setEditingPlan(null);
+  }
+
+  function handleSave(updated: Partial<ServicePlan> & { id?: number }) {
+    if (updated.id) {
+      setLocalPlans(ps => ps.map(p => p.id === updated.id ? { ...p, ...updated } as ServicePlan : p));
+    } else {
+      setLocalPlans(ps => [...ps, { ...updated, id: Date.now(), users: 0, burst: false, data: "Unlimited", speed: "—" } as ServicePlan]);
+    }
+    closeForm();
+  }
+
+  function handleDelete(id: number) {
+    setLocalPlans(ps => ps.filter(p => p.id !== id));
+    setDeletingPlan(null);
+  }
 
   return (
     <AdminLayout>
+      {/* Delete confirmation modal */}
+      {deletingPlan && (
+        <DeleteModal
+          planName={deletingPlan.name}
+          onConfirm={() => handleDelete(deletingPlan.id)}
+          onCancel={() => setDeletingPlan(null)}
+        />
+      )}
+
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <h1 className="text-2xl font-bold text-foreground">
             {TAB_LABELS[activeTab] ?? "Plans"}
           </h1>
-          {isServicePlan && !showAddForm && (
+          {isServicePlan && !showingForm && (
             <button
-              onClick={() => setShowAddForm(true)}
+              onClick={() => { setEditingPlan(null); setShowAddForm(true); }}
               className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold shadow-lg shadow-primary/20 hover:-translate-y-0.5 transition flex items-center gap-2">
               <Plus className="w-4 h-4" /> Add Plan
             </button>
@@ -477,7 +611,7 @@ export default function Plans() {
         <div className="flex overflow-x-auto pb-2 gap-2 hide-scrollbar">
           {TABS.map(t => (
             <button key={t.id}
-              onClick={() => { setActiveTab(t.id); setShowAddForm(false); }}
+              onClick={() => { setActiveTab(t.id); closeForm(); }}
               className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap ${
                 activeTab === t.id
                   ? "bg-primary/10 text-primary border border-primary/20"
@@ -488,16 +622,21 @@ export default function Plans() {
           ))}
         </div>
 
-        {/* ── Add Service Plan form ── */}
-        {isServicePlan && showAddForm && (
-          <AddServicePlanForm planType={activeTab} onCancel={() => setShowAddForm(false)} />
+        {/* ── Add / Edit Service Plan form ── */}
+        {isServicePlan && showingForm && (
+          <AddServicePlanForm
+            planType={activeTab}
+            initialData={editingPlan}
+            onCancel={closeForm}
+            onSave={handleSave}
+          />
         )}
 
         {/* ── Bandwidth Plans ── */}
         {isBandwidth && <BandwidthPlansTab />}
 
         {/* ── Service plan cards ── */}
-        {isServicePlan && !showAddForm && (
+        {isServicePlan && !showingForm && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {filteredPlans.map((p) => (
               <div key={p.id} className="bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/50 transition-colors group">
@@ -524,8 +663,24 @@ export default function Plans() {
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <button className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-sm font-semibold text-foreground hover:bg-white/10 transition">Edit</button>
-                    <button className="flex-1 py-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-sm font-semibold text-destructive hover:bg-destructive/20 transition">Delete</button>
+                    <button
+                      onClick={() => openEdit(p)}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-1.5"
+                      style={{ background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4" }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(6,182,212,0.16)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(6,182,212,0.08)"; }}
+                    >
+                      <Edit size={13} /> Edit
+                    </button>
+                    <button
+                      onClick={() => setDeletingPlan(p)}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-1.5"
+                      style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171" }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.16)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.08)"; }}
+                    >
+                      <Trash size={13} /> Delete
+                    </button>
                   </div>
                 </div>
               </div>
