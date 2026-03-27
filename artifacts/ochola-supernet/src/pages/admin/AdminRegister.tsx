@@ -5,7 +5,17 @@ import {
   Building2, Mail, Phone, Globe, CheckCircle2,
   AlertTriangle, Loader2,
 } from "lucide-react";
+
 import { supabase } from "@/lib/supabase";
+
+/* Extract a human-readable message from any thrown value */
+function extractMsg(err: unknown): string {
+  if (!err) return "Registration failed. Please try again.";
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  const e = err as Record<string, unknown>;
+  return (e.message as string) || (e.error_description as string) || (e.details as string) || JSON.stringify(err);
+}
 
 /* ══════════════════ Helpers ══════════════════ */
 const cls = (...parts: string[]) => parts.filter(Boolean).join(" ");
@@ -42,7 +52,6 @@ export default function AdminRegister() {
   const [confirm,   setConfirm]   = useState("");
   const [showPw,    setShowPw]    = useState(false);
   const [showCfm,   setShowCfm]   = useState(false);
-  const [terms,     setTerms]     = useState(false);
 
   /* ui state */
   const [loading,   setLoading]   = useState(false);
@@ -64,7 +73,6 @@ export default function AdminRegister() {
                            e.password = "Password must be at least 8 characters";
     if (password !== confirm)
                            e.confirm  = "Passwords do not match";
-    if (!terms)            e.terms    = "You must accept the terms";
     return e;
   };
 
@@ -96,11 +104,11 @@ export default function AdminRegister() {
 
       setSuccess(true);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = extractMsg(err);
       if (msg.includes("duplicate") || msg.includes("unique")) {
         setServerErr("An account with that email or username already exists.");
       } else if (msg.includes("does not exist") || msg.includes("relation")) {
-        setServerErr("Registration database is not yet configured. Please contact the Super Admin to activate your account.");
+        setServerErr("Registration is not yet configured. Please contact the Super Admin.");
       } else {
         setServerErr(msg || "Registration failed. Please try again.");
       }
@@ -313,25 +321,6 @@ export default function AdminRegister() {
                 )}
               </div>
             </div>
-
-            {/* ── Terms ── */}
-            <label className={cls("flex items-start gap-3 cursor-pointer p-3 rounded-xl border transition-all", terms ? "bg-cyan-500/5 border-cyan-500/20" : "bg-white/2 border-white/8", errors.terms ? "border-red-500/40" : "")}>
-              <div
-                onClick={() => setTerms(v => !v)}
-                className={cls("w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5 border-2 transition-all", terms ? "bg-cyan-500 border-cyan-500" : "border-white/20 bg-transparent")}
-              >
-                {terms && <svg viewBox="0 0 10 8" className="w-3 h-2.5 text-white fill-current"><path d="M1 4l2.5 2.5L9 1" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-              </div>
-              <input type="checkbox" className="sr-only" checked={terms} onChange={e => setTerms(e.target.checked)} />
-              <span className="text-xs text-slate-400 leading-relaxed">
-                I agree to the{" "}
-                <span className="text-cyan-400 underline cursor-pointer">Terms of Service</span>{" "}
-                and{" "}
-                <span className="text-cyan-400 underline cursor-pointer">Privacy Policy</span>{" "}
-                for OcholaSupernet ISP Management Platform.
-              </span>
-            </label>
-            {errors.terms && <p className="text-xs text-red-400 -mt-4">{errors.terms}</p>}
 
             {/* ── Server error ── */}
             {serverErr && (
