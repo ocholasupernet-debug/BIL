@@ -3,53 +3,397 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>$(login-title)</title>
+<title>$(login-title) - Connect</title>
 <link rel="icon" href="/hotspot/favicon.ico">
-<link rel="stylesheet" href="/hotspot/css/style.css">
+<script src="/hotspot/tailwind.js"></script>
+<script src="/hotspot/sweetalert2.js"></script>
 <script src="/hotspot/md5.js"></script>
+<style>
+  :root {
+    --brand-primary: #f97316;
+    --brand-cyan: #22d3ee;
+    --brand-violet: #a78bfa;
+    --brand-green: #4ade80;
+    --brand-red: #f87171;
+  }
+  body {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .glass-card {
+    background: rgba(30, 41, 59, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 32px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .glow-orange { box-shadow: 0 0 30px rgba(249,115,22,0.3); }
+  .glow-cyan   { box-shadow: 0 0 30px rgba(34,211,238,0.25); }
+  .tab-btn { transition: all 0.2s ease; }
+  .tab-btn.active {
+    background: rgba(34,211,238,0.12);
+    border-color: rgba(34,211,238,0.5);
+    color: #22d3ee;
+  }
+  .tab-btn:not(.active) {
+    background: rgba(255,255,255,0.03);
+    border-color: rgba(255,255,255,0.08);
+    color: #94a3b8;
+  }
+  .inp {
+    background: rgba(15,23,42,0.7);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 0.75rem 1rem 0.75rem 2.75rem;
+    width: 100%;
+    font-size: 0.95rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+    font-family: inherit;
+  }
+  .inp:focus {
+    border-color: rgba(34,211,238,0.5);
+    box-shadow: 0 0 0 3px rgba(34,211,238,0.1);
+  }
+  .inp::placeholder { color: #475569; }
+  .inp-icon {
+    position: absolute;
+    left: 0.875rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    opacity: 0.45;
+    color: #94a3b8;
+    pointer-events: none;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, #f97316, #ea580c);
+    border: none;
+    color: white;
+    font-weight: 700;
+    font-size: 0.95rem;
+    border-radius: 10px;
+    padding: 0.85rem;
+    width: 100%;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    box-shadow: 0 4px 20px rgba(249,115,22,0.35);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 28px rgba(249,115,22,0.5); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .plan-card {
+    background: rgba(15,23,42,0.5);
+    border: 1.5px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: all 0.18s;
+    text-align: left;
+  }
+  .plan-card:hover { border-color: rgba(34,211,238,0.35); background: rgba(34,211,238,0.05); }
+  .plan-card.selected { border-color: rgba(34,211,238,0.6); background: rgba(34,211,238,0.08); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { animation: spin 0.8s linear infinite; display: inline-block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.35s ease forwards; }
+  .error-banner {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+  }
+  .swal2-popup {
+    background: #1e293b !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    color: #e2e8f0 !important;
+    border-radius: 16px !important;
+  }
+</style>
 </head>
-<body>
-<div class="login-container">
-  <div style="text-align:center;margin-bottom:1.5rem;">
-    <img src="/hotspot/img/user.svg" width="64" height="64" alt="User" style="opacity:0.7">
-    <h2 style="margin-top:0.75rem;">$(login-title)</h2>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+<!-- Background decorations -->
+<div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0;">
+  <div style="position:absolute;top:-20%;left:-10%;width:60%;height:60%;background:radial-gradient(circle,rgba(249,115,22,0.06) 0%,transparent 70%);border-radius:50%;"></div>
+  <div style="position:absolute;bottom:-20%;right:-10%;width:60%;height:60%;background:radial-gradient(circle,rgba(34,211,238,0.06) 0%,transparent 70%);border-radius:50%;"></div>
+</div>
+
+<div style="position:relative;z-index:1;width:100%;max-width:420px;" class="fade-in">
+
+  <!-- Logo / Brand Header -->
+  <div class="text-center mb-6">
+    <div style="display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;border-radius:18px;background:linear-gradient(135deg,#f97316,#ea580c);margin-bottom:1rem;box-shadow:0 8px 30px rgba(249,115,22,0.4);">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1.5 8.5s4.5-5 10.5-5 10.5 5 10.5 5"/>
+        <path d="M5.5 12.5s2.5-3 6.5-3 6.5 3 6.5 3"/>
+        <circle cx="12" cy="16.5" r="1.5" fill="white" stroke="none"/>
+        <path d="M8.5 16.5s1-2 3.5-2 3.5 2 3.5 2"/>
+      </svg>
+    </div>
+    <h1 style="color:#f1f5f9;font-size:1.45rem;font-weight:800;letter-spacing:-0.02em;margin-bottom:0.25rem;">$(login-title)</h1>
+    <p style="color:#64748b;font-size:0.82rem;">Connect to get started</p>
   </div>
 
-  $(if error)<div style="background:#fee2e2;color:#dc2626;padding:0.75rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">
-    $(error)
-  </div>$(endif error)
+  <!-- Main Card -->
+  <div class="glass-card" style="border-radius:20px;overflow:hidden;">
 
-  <form name="sendin" action="$(link-login-only)" method="post">
-    <input type="hidden" name="dst" value="$(link-orig)">
-    <input type="hidden" name="popup" value="true">
-
-    <div style="position:relative;margin-bottom:1rem;">
-      <img src="/hotspot/img/user.svg" width="18" height="18"
-           style="position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:0.5">
-      <input type="text" id="username" name="username"
-             placeholder="Username"
-             style="padding-left:40px;width:100%;"
-             value="$(username)" required>
+    <!-- Tabs -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;padding:1rem 1rem 0;">
+      <button class="tab-btn active" id="tab-login" onclick="switchTab('login')"
+        style="padding:0.55rem;border-radius:8px;border:1.5px solid;font-weight:600;font-size:0.82rem;cursor:pointer;font-family:inherit;">
+        Username / Password
+      </button>
+      <button class="tab-btn" id="tab-voucher" onclick="switchTab('voucher')"
+        style="padding:0.55rem;border-radius:8px;border:1.5px solid;font-weight:600;font-size:0.82rem;cursor:pointer;font-family:inherit;">
+        Voucher / Code
+      </button>
     </div>
 
-    <div style="position:relative;margin-bottom:1.5rem;">
-      <img src="/hotspot/img/password.svg" width="18" height="18"
-           style="position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:0.5">
-      <input type="password" id="password" name="password"
-             placeholder="Password"
-             style="padding-left:40px;width:100%;"
-             required>
+    <div style="padding:1.25rem 1rem 1rem;">
+
+      <!-- Error Banner -->
+      $(if error)
+      <div class="error-banner mb-4" id="error-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <div>
+          <div style="font-size:0.8rem;font-weight:700;color:#f87171;margin-bottom:0.15rem;">Login Failed</div>
+          <div style="font-size:0.78rem;color:#fca5a5;line-height:1.4;">$(error)</div>
+        </div>
+      </div>
+      $(endif error)
+
+      <!-- ── Username/Password Tab ── -->
+      <div id="panel-login">
+        <form name="sendin" id="form-login" action="$(link-login-only)" method="post" onsubmit="return handleLogin(this)">
+          <input type="hidden" name="dst"   value="$(link-orig)">
+          <input type="hidden" name="popup" value="true">
+
+          <div style="display:flex;flex-direction:column;gap:0.875rem;">
+            <!-- Username -->
+            <div style="position:relative;">
+              <svg class="inp-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
+              </svg>
+              <input class="inp" type="text" name="username" id="username"
+                     placeholder="Username" value="$(username)"
+                     autocomplete="username" required>
+            </div>
+
+            <!-- Password -->
+            <div style="position:relative;">
+              <svg class="inp-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18 8h-1V6c0-2.8-2.2-5-5-5S7 3.2 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.7 1.4-3.1 3.1-3.1 1.7 0 3.1 1.4 3.1 3.1v2z"/>
+              </svg>
+              <input class="inp" type="password" name="password" id="password"
+                     placeholder="Password"
+                     autocomplete="current-password" required>
+            </div>
+
+            <button class="btn-primary" type="submit" id="btn-login">
+              Connect Now
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- ── Voucher Tab ── -->
+      <div id="panel-voucher" style="display:none;">
+        <form name="sendin2" id="form-voucher" action="$(link-login-only)" method="post" onsubmit="return handleVoucher(this)">
+          <input type="hidden" name="dst"   value="$(link-orig)">
+          <input type="hidden" name="popup" value="true">
+
+          <div style="display:flex;flex-direction:column;gap:0.875rem;">
+            <div style="background:rgba(167,139,250,0.07);border:1px solid rgba(167,139,250,0.2);border-radius:10px;padding:0.875rem;display:flex;align-items:flex-start;gap:0.625rem;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;">
+                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
+              </svg>
+              <div style="font-size:0.78rem;color:#c4b5fd;line-height:1.5;">
+                Enter your scratch card or voucher code. The code is your username and password.
+              </div>
+            </div>
+
+            <div style="position:relative;">
+              <svg class="inp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>
+              </svg>
+              <input class="inp" type="text" name="username" id="voucher-code"
+                     placeholder="Enter voucher code"
+                     autocomplete="off"
+                     style="text-transform:uppercase;letter-spacing:0.08em;"
+                     oninput="this.value=this.value.toUpperCase()" required>
+            </div>
+            <input type="hidden" name="password" id="voucher-pass">
+
+            <button class="btn-primary" type="submit" id="btn-voucher"
+              style="background:linear-gradient(135deg,#a78bfa,#7c3aed);box-shadow:0 4px 20px rgba(167,139,250,0.35);">
+              Redeem Voucher
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Divider -->
+      <div style="display:flex;align-items:center;gap:0.75rem;margin:1.125rem 0 0.875rem;">
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.06);"></div>
+        <span style="font-size:0.72rem;color:#334155;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">or browse plans</span>
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.06);"></div>
+      </div>
+
+      <!-- Plans Quick-View -->
+      <div id="plans-section">
+        <div style="display:flex;flex-direction:column;gap:0.5rem;" id="plans-list">
+          <div style="text-align:center;padding:1rem;color:#334155;font-size:0.8rem;">
+            Loading plans…
+          </div>
+        </div>
+      </div>
     </div>
 
-    <button type="submit" onclick="
-      var p = document.getElementById('password');
-      p.value = MD5(p.value);
-    ">Connect</button>
-  </form>
+    <!-- Footer -->
+    <div style="padding:0.875rem 1rem;border-top:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-size:0.72rem;color:#334155;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" style="display:inline;vertical-align:middle;margin-right:3px;">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        Secured connection
+      </span>
+      <a href="$(link-status)" style="font-size:0.72rem;color:#22d3ee;text-decoration:none;font-weight:600;">My Session</a>
+    </div>
+  </div>
 
-  <p style="margin-top:1.5rem;font-size:0.8rem;color:#94a3b8;text-align:center;">
-    By connecting you agree to our terms of service.
+  <!-- Powered by -->
+  <p style="text-align:center;margin-top:1.25rem;font-size:0.7rem;color:#1e293b;">
+    Powered by <span style="color:#f97316;font-weight:700;">OcholaSupernet</span> Billing
   </p>
+
 </div>
+
+<script>
+/* ── Tab switching ── */
+function switchTab(name) {
+  ['login','voucher'].forEach(t => {
+    var btn   = document.getElementById('tab-' + t);
+    var panel = document.getElementById('panel-' + t);
+    if (t === name) {
+      btn.classList.add('active');
+      panel.style.display = 'block';
+    } else {
+      btn.classList.remove('active');
+      panel.style.display = 'none';
+    }
+  });
+}
+
+/* ── Login form handler ── */
+function handleLogin(form) {
+  var btn  = document.getElementById('btn-login');
+  var pass = document.getElementById('password');
+  if (!pass.value) return false;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;margin-right:8px;vertical-align:middle;"></span>Connecting…';
+  pass.value = MD5(pass.value);
+  return true;
+}
+
+/* ── Voucher form handler ── */
+function handleVoucher(form) {
+  var btn  = document.getElementById('btn-voucher');
+  var code = document.getElementById('voucher-code').value.trim();
+  var pass = document.getElementById('voucher-pass');
+  if (!code) return false;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;margin-right:8px;vertical-align:middle;"></span>Redeeming…';
+  // Voucher code is both username and password
+  document.querySelector('#form-voucher input[name="username"]').value = code;
+  pass.value = MD5(code);
+  return true;
+}
+
+/* ── Show SweetAlert error if MikroTik error exists ── */
+window.addEventListener('DOMContentLoaded', function() {
+  var banner = document.getElementById('error-banner');
+  // Only show if the error text is a real message (not raw MikroTik template variable)
+  if (banner) {
+    var errText = banner.innerText || '';
+    var isRealError = errText.length > 0 && !errText.includes('$(error)') && !errText.includes('$(if error)');
+    if (isRealError) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Connection Failed',
+        text: errText.replace('Login Failed','').trim() || 'Invalid username or password.',
+        background: '#1e293b',
+        color: '#e2e8f0',
+        iconColor: '#f87171',
+        confirmButtonColor: '#f97316',
+        confirmButtonText: 'Try Again',
+      });
+    }
+    // Hide the inline banner since Swal handles it
+    banner.style.display = 'none';
+  }
+
+  /* ── Load plans via API ── */
+  loadPlans();
+});
+
+/* ── Load hotspot plans ── */
+function loadPlans() {
+  var list = document.getElementById('plans-list');
+  fetch('/api/plans?type=hotspot')
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if (!data || !data.length) {
+        list.innerHTML = '<div style="text-align:center;padding:0.75rem;color:#334155;font-size:0.8rem;">No plans available</div>';
+        return;
+      }
+      list.innerHTML = '';
+      data.slice(0,4).forEach(function(plan){
+        var card = document.createElement('div');
+        card.className = 'plan-card';
+        var speed = plan.speed_down + ' Mbps';
+        var validity = plan.validity + ' ' + (plan.validity_unit || 'Days');
+        card.innerHTML =
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+          '<div><div style="font-size:0.82rem;font-weight:700;color:#e2e8f0;margin-bottom:0.15rem;">' + plan.name + '</div>' +
+          '<div style="font-size:0.72rem;color:#64748b;">' + speed + ' &nbsp;·&nbsp; ' + validity + '</div></div>' +
+          '<div style="text-align:right;"><div style="font-size:0.95rem;font-weight:800;color:#22d3ee;">KES ' + (plan.price || '—') + '</div>' +
+          '<div style="font-size:0.68rem;color:#475569;">per period</div></div>' +
+          '</div>';
+        card.onclick = function() {
+          Swal.fire({
+            icon: 'info',
+            title: plan.name,
+            html: '<div style="text-align:left;font-size:0.85rem;color:#94a3b8;line-height:1.8;">' +
+              '<b style="color:#22d3ee">Speed:</b> ' + speed + '<br>' +
+              '<b style="color:#22d3ee">Validity:</b> ' + validity + '<br>' +
+              '<b style="color:#22d3ee">Price:</b> KES ' + (plan.price || '—') + '<br><br>' +
+              '<span style="color:#64748b;font-size:0.78rem;">Login with your credentials or contact support to purchase this plan.</span>' +
+              '</div>',
+            background: '#1e293b',
+            color: '#e2e8f0',
+            iconColor: '#22d3ee',
+            confirmButtonColor: '#f97316',
+            confirmButtonText: 'Got it',
+          });
+        };
+        list.appendChild(card);
+      });
+    })
+    .catch(function(){
+      list.innerHTML = '';
+    });
+}
+</script>
 </body>
 </html>
