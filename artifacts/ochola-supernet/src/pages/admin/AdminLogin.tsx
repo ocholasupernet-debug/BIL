@@ -46,7 +46,11 @@ export default function AdminLogin() {
       }
 
       setAdminAuth(data.id, data.username, data.name || data.username);
-      setLocation("/admin/dashboard");
+      if (data.password === "admin") {
+        setLocation("/admin/set-password");
+      } else {
+        setLocation("/admin/dashboard");
+      }
     } catch {
       setError("Login failed. Please try again.");
     } finally {

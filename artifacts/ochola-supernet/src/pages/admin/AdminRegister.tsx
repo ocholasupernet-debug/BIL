@@ -29,6 +29,7 @@ export default function AdminRegister() {
   /* submit */
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [registeredUsername, setRegisteredUsername] = useState("");
   const [serverErr, setServerErr] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -72,15 +73,17 @@ export default function AdminRegister() {
     const slug = slugify(company);
     setLoading(true);
     try {
+      const finalUsername = slug || "user";
       const { error } = await supabase.from("isp_admins").insert({
         name:      company.trim(),
         phone:     phone.trim(),
-        username:  slug || "user",
-        password:  phone.trim(),
+        username:  finalUsername,
+        password:  "admin",
         is_active: true,
         role:      "isp_admin",
       });
       if (error) throw error;
+      setRegisteredUsername(finalUsername);
       setSuccess(true);
     } catch (err) {
       const msg = extractMsg(err);
@@ -104,10 +107,21 @@ export default function AdminRegister() {
               <CheckCircle2 className="w-10 h-10 text-emerald-400" />
             </div>
             <h2 className="text-2xl font-black text-white mb-2">Account Created!</h2>
-            <p className="text-slate-300 text-sm mb-1">
+            <p className="text-slate-300 text-sm mb-3">
               <span className="text-violet-300 font-semibold">{company}</span> is now registered.
             </p>
-            <p className="text-slate-500 text-xs mb-8">Your account is active. Sign in with your phone number as the password.</p>
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-6 text-left space-y-2">
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Your Login Credentials</p>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Username</span>
+                <span className="text-sm font-mono font-bold text-cyan-300">{registeredUsername}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">Default Password</span>
+                <span className="text-sm font-mono font-bold text-amber-300">admin</span>
+              </div>
+              <p className="text-xs text-slate-500 mt-2 pt-2 border-t border-white/10">You'll be asked to create a new password on first sign in.</p>
+            </div>
             <button
               onClick={() => setLocation("/admin/login")}
               className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all"
