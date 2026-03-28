@@ -19,6 +19,10 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
+          command_timeout: 15m
           script: |
+            set -e
+            echo "=== Starting deploy at $(date) ==="
             cd /var/www/ocholasupernet
             bash deploy/deploy.sh
+            echo "=== Deploy finished at $(date) ==="

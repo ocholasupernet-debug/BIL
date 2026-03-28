@@ -5,22 +5,24 @@
 ##############################################################
 set -e
 
-echo "──────────────────────────────────────────"
+echo "══════════════════════════════════════════"
 echo "  OcholaSupernet — Deploying to VPS"
-echo "──────────────────────────────────────────"
+echo "══════════════════════════════════════════"
 
-# 1. Pull latest code
+# 1. Force pull latest code (discard any local changes)
 echo "[1/6] Pulling latest from GitHub..."
-git pull origin main
+git fetch --all
+git reset --hard origin/main
+echo "      → Now on: $(git log -1 --format='%h %s')"
 
-# 2. Install dependencies
+# 2. Install dependencies (no frozen-lockfile so it never blocks)
 echo "[2/6] Installing dependencies..."
-pnpm install --frozen-lockfile
+pnpm install --no-frozen-lockfile
 
 # 3. Build the frontend (VPS config — no Replit plugins)
 echo "[3/6] Building frontend..."
 cd artifacts/ochola-supernet
-BASE_PATH="/" PORT=3000 pnpm run build:vps
+BASE_PATH="/" pnpm run build:vps
 cd ../..
 
 # 4. Build the API server
@@ -30,11 +32,11 @@ pnpm run build
 cd ../..
 
 # 5. Create logs directory
-echo "[5/6] Ensuring logs directory exists..."
+echo "[5/6] Ensuring logs directory..."
 mkdir -p logs
 
-# 6. Restart with PM2 (standalone mode — serves frontend + API on port 8080)
-echo "[6/6] Restarting with PM2..."
+# 6. Restart with PM2
+echo "[6/6] Restarting PM2..."
 if pm2 list | grep -q "ocholanet-api"; then
   pm2 reload ecosystem.config.cjs --env standalone
 else
@@ -44,6 +46,6 @@ fi
 
 echo ""
 echo "✓ Deployment complete!"
-echo "  App running on port 8080 (frontend + API served together)"
-echo "  Access at: http://YOUR_VPS_IP:8080"
+echo "  Commit: $(git log -1 --format='%h — %s')"
+echo "  App:    http://localhost:8080"
 echo ""
