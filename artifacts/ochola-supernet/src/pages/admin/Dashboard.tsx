@@ -39,7 +39,7 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 
 const KPI_ROW2 = [
   {
-    label: "Online Now", value: "—",
+    label: "Online Now", value: "0",
     link: "View All", href: "/admin/customers",
     gradient: "linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><circle cx="32" cy="32" r="10"/><path d="M12 32a20 20 0 1 0 40 0A20 20 0 0 0 12 32" fillOpacity="0" stroke="white" strokeWidth="4"/></svg>,
@@ -57,7 +57,7 @@ const KPI_ROW2 = [
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><path d="M8 8h48a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H16L4 60V12a4 4 0 0 1 4-4z"/></svg>,
   },
   {
-    label: "Routers Online", value: "—",
+    label: "Routers Online", value: "0",
     link: "View All", href: "/admin/network",
     gradient: "linear-gradient(135deg,#43e97b 0%,#52d9c4 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="8" y="24" width="48" height="16" rx="4"/><circle cx="16" cy="32" r="3" fill="#ffffff88"/><circle cx="26" cy="32" r="3" fill="#ffffff88"/><line x1="44" y1="24" x2="44" y2="12" stroke="white" strokeWidth="3"/><line x1="52" y1="24" x2="52" y2="12" stroke="white" strokeWidth="3"/></svg>,
