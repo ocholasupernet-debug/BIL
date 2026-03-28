@@ -1,9 +1,11 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
+import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { BrandProvider } from "@/context/BrandContext";
+import { getHostSubdomain } from "@/lib/subdomain";
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
@@ -34,6 +36,28 @@ import AdminSettings from "./pages/admin/AdminSettings";
 import AdminRegister from "./pages/admin/AdminRegister";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 
+/* ── SubdomainGuard ──────────────────────────────────────────────
+   When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
+   the root "/" path redirects straight to that company's login page.
+   On the bare domain (isplatty.org) the normal landing page is shown.
+──────────────────────────────────────────────────────────────── */
+function SubdomainGuard() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    const sub = getHostSubdomain();
+    if (sub) {
+      setLocation("/admin/login");
+    }
+  }, [setLocation]);
+
+  /* While redirect fires, show nothing (or show LandingPage as fallback) */
+  const sub = getHostSubdomain();
+  if (sub) return null;
+
+  return <LandingPage />;
+}
+
 // Minimal stub for non-critical pages requested to save space
 function StubPage({ title }: { title: string }) {
   return <div className="p-8 text-white"><h1 className="text-2xl font-bold">{title}</h1><p>Module wired and loading...</p></div>;
@@ -55,7 +79,7 @@ const queryClient = new QueryClient();
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={LandingPage} />
+      <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/dashboard" component={AdminDashboard} />
       <Route path="/admin/customers" component={AdminCustomers} />
