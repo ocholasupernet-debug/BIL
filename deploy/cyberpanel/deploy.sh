@@ -39,19 +39,12 @@ cd "$PROJECT_DIR"
 # We copy the React build output there so the domain loads the app.
 echo ""
 echo "[4/5] Syncing frontend to public_html/..."
-PUBLIC_HTML="$PROJECT_DIR/public_html"
+PUBLIC_HTML="/home/isplatty.org/public_html"
 
-if [ -d "$PUBLIC_HTML" ]; then
-  rsync -a --delete \
-    "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/" \
-    "$PUBLIC_HTML/"
-  echo "  ✓ Synced $(ls "$PUBLIC_HTML" | wc -l) files to $PUBLIC_HTML"
-else
-  echo "  ⚠  public_html/ not found at $PUBLIC_HTML"
-  echo "     Make sure you cloned the repo into the domain folder:"
-  echo "     /home/<cpuser>/isplatty.org/"
-  echo "     Then OLS will serve from public_html/ automatically."
-fi
+rsync -a --delete \
+  "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/" \
+  "$PUBLIC_HTML/"
+echo "  ✓ Synced to $PUBLIC_HTML"
 
 # ── 5. Restart the API process via PM2 ───────────────────
 echo ""
