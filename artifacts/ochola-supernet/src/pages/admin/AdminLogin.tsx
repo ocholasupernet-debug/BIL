@@ -30,7 +30,7 @@ export default function AdminLogin() {
     supabase
       .from("isp_admins")
       .select("id, name, subdomain")
-      .eq("subdomain", sub)
+      .ilike("subdomain", sub)
       .eq("is_active", true)
       .single()
       .then(({ data }) => {
