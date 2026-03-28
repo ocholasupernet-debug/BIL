@@ -2,8 +2,8 @@
 # Manual / auto push to GitHub
 # Usage: bash push-to-github.sh ["optional commit message"]
 
-REMOTE="github"
-LOCAL_BRANCH="clean-main"
+REMOTE="origin"
+LOCAL_BRANCH="main"
 REMOTE_BRANCH="main"
 
 # Ensure git identity is set (needed in fresh shells)
