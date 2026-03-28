@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "wouter";
-import { Wifi, Phone, Lock, ArrowRight, Zap, CheckCircle2 } from "lucide-react";
+import { Wifi, Phone, Lock, ArrowRight, Zap, CheckCircle2, Ticket } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 
 export default function HotspotLogin() {
