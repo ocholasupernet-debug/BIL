@@ -192,6 +192,26 @@ function ProbePanel({ d, logs, onClose }: { d: ProbeData; logs: string[]; onClos
 /* ══════════════════════════════════════════════════════════════
    Main page
 ══════════════════════════════════════════════════════════════ */
+const FIELD = (label: string, value: string, onChange: (v: string) => void, opts?: { placeholder?: string; type?: string; mono?: boolean; required?: boolean }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+    <label style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}{opts?.required && <span style={{ color: "#f87171" }}> *</span>}</label>
+    <input
+      type={opts?.type || "text"}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={opts?.placeholder || ""}
+      required={opts?.required}
+      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: "0.5rem 0.75rem", color: "var(--isp-text)", fontSize: "0.82rem", fontFamily: opts?.mono ? "monospace" : "inherit", outline: "none" }}
+    />
+  </div>
+);
+
+interface AddRouterForm {
+  name: string; host: string; router_username: string; router_secret: string;
+  bridge_interface: string; bridge_ip: string; hotspot_dns_name: string;
+}
+const EMPTY_FORM: AddRouterForm = { name: "", host: "", router_username: "admin", router_secret: "", bridge_interface: "bridge", bridge_ip: "", hotspot_dns_name: "" };
+
 export default function Routers() {
   const [, navigate]   = useLocation();
   const qc             = useQueryClient();
@@ -200,6 +220,37 @@ export default function Routers() {
   const [probeStates, setProbeStates] = useState<Record<number, ProbeState>>({});
   /* Which router's panel is expanded */
   const [expanded, setExpanded] = useState<number | null>(null);
+
+  /* Add Router modal */
+  const [showAdd, setShowAdd]   = useState(false);
+  const [addForm, setAddForm]   = useState<AddRouterForm>(EMPTY_FORM);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const setField = (k: keyof AddRouterForm) => (v: string) => setAddForm(f => ({ ...f, [k]: v }));
+
+  const handleAddRouter = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addForm.name.trim() || !addForm.host.trim()) return;
+    setAddSaving(true);
+    setAddError(null);
+    const { error } = await supabase.from("isp_routers").insert({
+      admin_id:         ADMIN_ID,
+      name:             addForm.name.trim(),
+      host:             addForm.host.trim(),
+      router_username:  addForm.router_username.trim() || "admin",
+      router_secret:    addForm.router_secret,
+      bridge_interface: addForm.bridge_interface.trim() || "bridge",
+      bridge_ip:        addForm.bridge_ip.trim() || null,
+      hotspot_dns_name: addForm.hotspot_dns_name.trim() || null,
+      status:           "offline",
+    });
+    setAddSaving(false);
+    if (error) { setAddError(error.message); return; }
+    setShowAdd(false);
+    setAddForm(EMPTY_FORM);
+    qc.invalidateQueries({ queryKey: ["isp_routers"] });
+  };
 
   const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["isp_routers"],
@@ -271,7 +322,7 @@ export default function Routers() {
               <RefreshCw style={{ width: 13, height: 13, animation: isFetching ? "spin 1s linear infinite" : "none" }} />
               Refresh
             </button>
-            <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#06b6d4", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <button onClick={() => { setShowAdd(true); setAddError(null); }} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#06b6d4", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <Plus style={{ width: 15, height: 15 }} /> Add Router
             </button>
           </div>
@@ -489,6 +540,50 @@ export default function Routers() {
         </div>
 
       </div>
+
+      {/* ── Add Router Modal ── */}
+      {showAdd && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 520, padding: "1.75rem", boxShadow: "0 24px 48px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Cpu size={16} style={{ color: "#06b6d4" }} />
+                <span style={{ fontWeight: 700, fontSize: "1rem", color: "var(--isp-text)" }}>Add Router</span>
+              </div>
+              <button onClick={() => setShowAdd(false)} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.25rem" }}>✕</button>
+            </div>
+
+            <form onSubmit={handleAddRouter} style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                {FIELD("Router Name", addForm.name, setField("name"), { placeholder: "e.g. OcholaNet-Chris", required: true })}
+                {FIELD("Host / IP Address", addForm.host, setField("host"), { placeholder: "e.g. 192.168.88.1", required: true, mono: true })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                {FIELD("RouterOS Username", addForm.router_username, setField("router_username"), { placeholder: "admin" })}
+                {FIELD("RouterOS Password", addForm.router_secret, setField("router_secret"), { type: "password", placeholder: "Leave blank if none" })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                {FIELD("Bridge Interface", addForm.bridge_interface, setField("bridge_interface"), { placeholder: "bridge", mono: true })}
+                {FIELD("Bridge IP", addForm.bridge_ip, setField("bridge_ip"), { placeholder: "e.g. 192.168.88.1", mono: true })}
+              </div>
+              {FIELD("Hotspot DNS Name", addForm.hotspot_dns_name, setField("hotspot_dns_name"), { placeholder: "e.g. hotspot.yourisp.com (optional)" })}
+
+              {addError && (
+                <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 7, padding: "0.6rem 0.875rem", color: "#f87171", fontSize: "0.78rem" }}>{addError}</div>
+              )}
+
+              <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "0.25rem" }}>
+                <button type="button" onClick={() => setShowAdd(false)} style={{ padding: "0.5rem 1.125rem", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit" }}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={addSaving || !addForm.name.trim() || !addForm.host.trim()} style={{ padding: "0.5rem 1.25rem", borderRadius: 8, background: addSaving ? "rgba(6,182,212,0.5)" : "#06b6d4", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: addSaving ? "wait" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  {addSaving ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Saving…</> : <><Plus size={13} /> Add Router</>}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }
