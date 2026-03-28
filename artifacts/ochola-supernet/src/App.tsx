@@ -26,6 +26,19 @@ import HotspotBinding from "./pages/admin/HotspotBinding";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
+import SuperAdminAdmins from "./pages/super-admin/Admins";
+import SuperAdminRoles from "./pages/super-admin/Roles";
+import SuperAdminSystemSettings from "./pages/super-admin/SystemSettings";
+import SuperAdminPaymentGateways from "./pages/super-admin/PaymentGateways";
+import SuperAdminRouters from "./pages/super-admin/Routers";
+import SuperAdminBillingEngine from "./pages/super-admin/BillingEngine";
+import SuperAdminReports from "./pages/super-admin/Reports";
+import SuperAdminSecurityLogs from "./pages/super-admin/SecurityLogs";
+import SuperAdminNotifications from "./pages/super-admin/Notifications";
+import SuperAdminAutomation from "./pages/super-admin/Automation";
+import SuperAdminBackups from "./pages/super-admin/Backups";
+import SuperAdminApiIntegrations from "./pages/super-admin/ApiIntegrations";
+import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -113,7 +126,21 @@ function Router() {
       <Route path="/pppoe-login" component={() => <StubPage title="PPPoE Client Portal" />} />
       
       {/* Super Admin */}
-      <Route path="/super-admin/dashboard" component={SuperAdminDashboard} />
+      <Route path="/super-admin" component={SuperAdminDashboard} />
+      <Route path="/super-admin/dashboard"      component={SuperAdminDashboard}        />
+      <Route path="/super-admin/admins"         component={SuperAdminAdmins}           />
+      <Route path="/super-admin/roles"          component={SuperAdminRoles}            />
+      <Route path="/super-admin/settings"       component={SuperAdminSystemSettings}   />
+      <Route path="/super-admin/payments"       component={SuperAdminPaymentGateways}  />
+      <Route path="/super-admin/routers"        component={SuperAdminRouters}          />
+      <Route path="/super-admin/billing"        component={SuperAdminBillingEngine}    />
+      <Route path="/super-admin/reports"        component={SuperAdminReports}          />
+      <Route path="/super-admin/security-logs"  component={SuperAdminSecurityLogs}     />
+      <Route path="/super-admin/notifications"  component={SuperAdminNotifications}    />
+      <Route path="/super-admin/automation"     component={SuperAdminAutomation}       />
+      <Route path="/super-admin/backups"        component={SuperAdminBackups}          />
+      <Route path="/super-admin/api"            component={SuperAdminApiIntegrations}  />
+      <Route path="/super-admin/limits"         component={SuperAdminSystemLimits}     />
       <Route path="/super-admin/login" component={() => <StubPage title="Super Admin Login" />} />
       
       <Route component={NotFound} />
