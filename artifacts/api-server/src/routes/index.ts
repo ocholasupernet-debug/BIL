@@ -7,6 +7,7 @@ import transactionsRouter from "./transactions";
 import routersRouter from "./routers-route";
 import syncRouter from "./sync-route";
 import scriptsRouter from "./scripts-route";
+import vpnRouter from "./vpn-route";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(transactionsRouter);
 router.use(routersRouter);
 router.use(syncRouter);
 router.use(scriptsRouter);
+router.use(vpnRouter);
 
 export default router;
