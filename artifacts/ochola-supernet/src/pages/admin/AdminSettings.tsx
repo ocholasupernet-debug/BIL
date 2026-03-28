@@ -176,9 +176,42 @@ function BillingTab() {
   const [vatEnabled, setVatEnabled] = useState(true);
   const [gracePeriod, setGracePeriod] = useState(true);
   const [autoRenew, setAutoRenew] = useState(false);
+  const [gateway, setGateway] = useState(() => {
+    try { return localStorage.getItem("ochola_payment_gateway") || "mpesa"; } catch { return "mpesa"; }
+  });
+  const [gatewaySaved, setGatewaySaved] = useState(false);
+
+  const saveGateway = () => {
+    try { localStorage.setItem("ochola_payment_gateway", gateway); } catch {}
+    setGatewaySaved(true);
+    setTimeout(() => setGatewaySaved(false), 2000);
+  };
+
+  const GATEWAY_OPTIONS = [
+    { id: "mpesa",       label: "M-Pesa STK Push (Safaricom Daraja)" },
+    { id: "airtel",      label: "Airtel Money" },
+    { id: "stripe",      label: "Stripe" },
+    { id: "flutterwave", label: "Flutterwave" },
+    { id: "paypal",      label: "PayPal" },
+    { id: "pesalink",    label: "PesaLink" },
+    { id: "manual",      label: "Cash / Manual Collection" },
+  ];
 
   return (
     <>
+      <Card title="Active Payment Gateway" desc="Select the payment gateway your ISP uses to collect payments">
+        <Field label="Payment Gateway">
+          <Select value={gateway} onChange={e => setGateway(e.target.value)}>
+            {GATEWAY_OPTIONS.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
+          </Select>
+        </Field>
+        <Row>
+          <button onClick={saveGateway} style={{ display: "flex", alignItems: "center", gap: 6, background: gatewaySaved ? "#10b981" : C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s" }}>
+            {gatewaySaved ? "✓ Saved!" : "Save Gateway"}
+          </button>
+        </Row>
+      </Card>
+
       <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments">
         <Grid2>
           <Field label="Paybill / Business Short Code"><Input defaultValue="174379" /></Field>

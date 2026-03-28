@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Link } from "wouter";
-import { supabase, ADMIN_ID, type DbRouter, type DbTransaction } from "@/lib/supabase";
+import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
 import { Loader2 } from "lucide-react";
 
 /* ─── Supabase fetchers ─── */
@@ -146,6 +146,9 @@ export default function Dashboard() {
   const [chartMinimized,  setChartMinimized]  = useState(false);
   const [selectedRouter,  setSelectedRouter]  = useState<number | "all">("all");
 
+  const gatewayId   = getPaymentGateway();
+  const gatewayInfo = GATEWAY_OPTIONS.find(g => g.id === gatewayId) ?? GATEWAY_OPTIONS[0];
+
   const { data: routers = [], isLoading: routersLoading } = useQuery({
     queryKey: ["isp_routers", ADMIN_ID],
     queryFn: fetchRouters,
@@ -234,12 +237,14 @@ export default function Dashboard() {
           <OnlineStatCard label="Total Online Users"   value="0" gradient="linear-gradient(135deg,#d97706 0%,#f59e0b 100%)" href="/admin/customers?status=online" />
         </div>
 
-        {/* M-Pesa Status Bar */}
+        {/* Payment Gateway Status Bar */}
         <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0, boxShadow: "0 0 6px #22c55e" }} />
-          <span style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.875rem" }}>M-Pesa STK Push Service</span>
-          <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.6rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Live</span>
-          <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", marginLeft: "0.25rem" }}>Safaricom is working</span>
+          <span style={{ fontSize: "1rem" }}>{gatewayInfo.emoji}</span>
+          <span style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.875rem" }}>{gatewayInfo.label}</span>
+          <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.6rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Active</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", marginLeft: "0.25rem" }}>Payment gateway configured</span>
+          <Link href="/admin/settings" style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--isp-text-muted)", textDecoration: "none" }}>Change →</Link>
         </div>
 
         {/* Router Status */}
@@ -380,11 +385,11 @@ export default function Dashboard() {
             <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)", marginBottom: "0.75rem" }}>Payment Gateway</div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.65rem 0.875rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: "linear-gradient(135deg,#0ea5e9,#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg,${gatewayInfo.color},${gatewayInfo.color}99)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "1.2rem" }}>
+                  {gatewayInfo.emoji}
                 </div>
                 <div>
-                  <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--isp-text)" }}>BankStkPush</div>
+                  <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--isp-text)" }}>{gatewayInfo.label}</div>
                   <div style={{ fontSize: "0.7rem", color: "var(--isp-text-sub)", marginTop: "0.1rem" }}>Active payment gateway</div>
                 </div>
                 <span style={{ marginLeft: "auto", fontSize: "0.65rem", padding: "0.2rem 0.55rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Active</span>

@@ -70,6 +70,25 @@ export function getImpersonatedName(): string {
   try { return localStorage.getItem("ochola_impersonate_name") || ""; } catch { return ""; }
 }
 
+/* ─── Payment gateway preference ─── */
+export const GATEWAY_OPTIONS: { id: string; label: string; emoji: string; color: string }[] = [
+  { id: "mpesa",       label: "M-Pesa STK Push",   emoji: "🟢", color: "#00a651" },
+  { id: "airtel",      label: "Airtel Money",       emoji: "🔴", color: "#ef4444" },
+  { id: "stripe",      label: "Stripe",             emoji: "💳", color: "#635bff" },
+  { id: "flutterwave", label: "Flutterwave",        emoji: "🦋", color: "#f5a623" },
+  { id: "paypal",      label: "PayPal",             emoji: "🔵", color: "#003087" },
+  { id: "pesalink",    label: "PesaLink",           emoji: "🏦", color: "#1d4ed8" },
+  { id: "manual",      label: "Cash / Manual",      emoji: "💵", color: "#64748b" },
+];
+
+export function getPaymentGateway(): string {
+  try { return localStorage.getItem("ochola_payment_gateway") || "mpesa"; } catch { return "mpesa"; }
+}
+
+export function setPaymentGateway(id: string): void {
+  try { localStorage.setItem("ochola_payment_gateway", id); } catch {}
+}
+
 /* ─── isp_plans row shape ─── */
 export interface DbPlan {
   id: number;
