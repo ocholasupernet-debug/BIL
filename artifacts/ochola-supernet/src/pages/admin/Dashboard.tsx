@@ -352,7 +352,7 @@ export default function Dashboard() {
             </div>
             {!chartMinimized && !chartCollapsed && (
               <div style={{ padding: "1rem 1.25rem" }}>
-                <svg viewBox={`0 0 ${MONTHLY_DATA.length * 36} 140`} width="100%" style={{ display: "block", overflow: "visible" }}>
+                <svg viewBox={`0 0 ${monthlyData.length * 36} 140`} width="100%" style={{ display: "block", overflow: "visible" }}>
                   <defs>
                     <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#06b6d4" /><stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
