@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
+import { supabase, ADMIN_ID, type DbRouter, getAdminName } from "@/lib/supabase";
 import {
   Plus, Loader2, RefreshCw, Wifi, WifiOff, ArrowRight,
   Cpu, Clock,
@@ -215,6 +215,7 @@ const EMPTY_FORM: AddRouterForm = { name: "", host: "", router_username: "admin"
 export default function Routers() {
   const [, navigate]   = useLocation();
   const qc             = useQueryClient();
+  const adminName      = getAdminName();
 
   /* Per-router probe state */
   const [probeStates, setProbeStates] = useState<Record<number, ProbeState>>({});
@@ -323,7 +324,7 @@ export default function Routers() {
               <RefreshCw style={{ width: 13, height: 13, animation: isFetching ? "spin 1s linear infinite" : "none" }} />
               Refresh
             </button>
-            <button onClick={() => { setShowAdd(true); setAddError(null); }} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#06b6d4", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <button onClick={() => { const autoName = `${adminName || "Router"} ${routers.length + 1}`; setAddForm({ ...EMPTY_FORM, name: autoName }); setShowAdd(true); setAddError(null); }} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#06b6d4", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <Plus style={{ width: 15, height: 15 }} /> Add Router
             </button>
           </div>
