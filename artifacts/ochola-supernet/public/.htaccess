@@ -1,0 +1,12 @@
+# OcholaSupernet — SPA fallback for OpenLiteSpeed / Apache
+# All non-file requests are rewritten to index.html so React Router works.
+
+Options -MultiViews
+RewriteEngine On
+
+# Don't rewrite real files or directories
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Rewrite everything else → index.html
+RewriteRule ^ /index.html [L]
