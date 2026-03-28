@@ -33,18 +33,17 @@ cd ../..
 echo "[5/6] Ensuring logs directory exists..."
 mkdir -p logs
 
-# 6. Restart with PM2
+# 6. Restart with PM2 (standalone mode — serves frontend + API on port 8080)
 echo "[6/6] Restarting with PM2..."
 if pm2 list | grep -q "ocholanet-api"; then
-  pm2 reload ecosystem.config.cjs --env production
+  pm2 reload ecosystem.config.cjs --env standalone
 else
-  pm2 start ecosystem.config.cjs --env production
+  pm2 start ecosystem.config.cjs --env standalone
   pm2 save
 fi
 
 echo ""
 echo "✓ Deployment complete!"
-echo "  API running on port 8080 (PM2)"
-echo "  Frontend built to artifacts/ochola-supernet/dist/public"
-echo "  Configure nginx with deploy/nginx.conf to serve the app"
+echo "  App running on port 8080 (frontend + API served together)"
+echo "  Access at: http://YOUR_VPS_IP:8080"
 echo ""
