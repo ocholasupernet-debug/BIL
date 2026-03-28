@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
+import { Logo } from "@/components/Logo";
 import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
   Network, Settings, Menu, Bell, ChevronLeft,
@@ -203,16 +204,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         }}
       >
         {/* Sidebar logo */}
-        <div style={{ padding: "1rem", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#06b6d4,#0891b2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Wifi style={{ width: 14, height: 14, color: "white" }} />
-            </div>
-            <div>
-              <p style={{ fontSize: "0.8rem", fontWeight: 800, color: "white", lineHeight: 1 }}>ISP Admin</p>
-              <p style={{ fontSize: "0.55rem", color: "#06b6d4", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>{brand.ispName}</p>
-            </div>
-          </div>
+        <div style={{ padding: "0.875rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+          <Logo size="sm" />
         </div>
 
         {/* Nav */}

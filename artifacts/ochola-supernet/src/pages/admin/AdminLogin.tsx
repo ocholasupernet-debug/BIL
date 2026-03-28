@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { Wifi, User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Building2 } from "lucide-react";
+import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Building2 } from "lucide-react";
+import { Logo } from "@/components/Logo";
 import { supabase, setAdminAuth } from "@/lib/supabase";
 import { getHostSubdomain } from "@/lib/subdomain";
 
@@ -110,24 +111,17 @@ export default function AdminLogin() {
       <div className="w-full max-w-md relative z-10">
         {/* Logo + company header */}
         <div className="flex flex-col items-center mb-8">
-          <div className="relative w-16 h-16 mb-4">
-            <div className="absolute inset-0 border border-cyan-500/30 rounded-2xl animate-ping opacity-50" style={{ animationDuration: "2s" }} />
-            <div className="absolute inset-0 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.4)]">
-              {company ? <Building2 className="w-8 h-8 text-white" /> : <Wifi className="w-8 h-8 text-white" />}
-            </div>
+          <div className="mb-4">
+            <Logo size="lg" />
           </div>
 
           {companyLoading ? (
-            <div className="h-7 w-40 bg-white/10 rounded-lg animate-pulse mb-1" />
+            <div className="h-5 w-40 bg-white/10 rounded-lg animate-pulse mb-1" />
           ) : (
-            <h1 className="text-2xl font-extrabold text-white tracking-tight text-center">
-              {displayName}
-            </h1>
+            <p className="text-slate-400 text-sm text-center">
+              {company ? `${displayName} · Admin Portal` : "ISP Admin Portal"} · {displayDomain}
+            </p>
           )}
-
-          <p className="text-slate-400 text-sm mt-1">
-            {company ? "Admin Portal" : "ISP Admin Portal"} · {displayDomain}
-          </p>
 
           {company && (
             <span className="mt-2 inline-flex items-center gap-1.5 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-semibold px-3 py-1 rounded-full">

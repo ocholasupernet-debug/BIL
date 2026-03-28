@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { Link, useLocation } from "wouter";
+import { Logo } from "@/components/Logo";
 import {
   LayoutDashboard, Users, ShieldCheck, Settings, CreditCard,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
   Plug, Gauge, LogOut, Menu, X, ChevronRight,
-  Server, Globe,
+  Globe,
 } from "lucide-react";
 
 const S = {
@@ -84,19 +85,14 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
         position: "sticky", top: 0, height: "100vh",
       }}>
         {/* Logo */}
-        <div style={{ padding: collapsed ? "20px 12px" : "20px 20px", borderBottom: `1px solid ${S.border}`, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Server size={18} color="white" />
-          </div>
-          {!collapsed && (
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <p style={{ fontWeight: 800, fontSize: "0.875rem", color: "white", margin: 0, whiteSpace: "nowrap" }}>Super Admin</p>
-              <p style={{ fontSize: "0.65rem", color: S.accent, margin: 0 }}>isplatty.org</p>
-            </div>
-          )}
+        <div style={{ padding: collapsed ? "14px 10px" : "14px 16px", borderBottom: `1px solid ${S.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+          {collapsed
+            ? <Logo size="xs" iconOnly />
+            : <Logo size="sm" />
+          }
           <button
             onClick={() => setCollapsed(v => !v)}
-            style={{ background: "none", border: "none", color: S.muted, cursor: "pointer", padding: 4, flexShrink: 0, marginLeft: "auto" }}
+            style={{ background: "none", border: "none", color: S.muted, cursor: "pointer", padding: 4, flexShrink: 0 }}
           >
             {collapsed ? <Menu size={16} /> : <X size={16} />}
           </button>

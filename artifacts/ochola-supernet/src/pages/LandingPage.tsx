@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "wouter";
-import { Shield, Zap, CreditCard, Activity, Wifi, Ticket, ArrowRight, CheckCircle2, Users, Server } from "lucide-react";
+import { Shield, Zap, CreditCard, Activity, Ticket, ArrowRight, CheckCircle2, Users, Server } from "lucide-react";
+import { Logo } from "@/components/Logo";
 
 export default function LandingPage() {
   return (
@@ -10,14 +11,8 @@ export default function LandingPage() {
       {/* Navbar */}
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#080c10]/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3 group">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-cyan-600 flex items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.3)] group-hover:shadow-[0_0_25px_rgba(6,182,212,0.5)] transition-shadow">
-              <Wifi className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <p className="text-lg font-bold text-white leading-none">OcholaSupernet</p>
-              <p className="text-[10px] text-cyan-400 font-bold tracking-widest uppercase">Platform</p>
-            </div>
+          <Link href="/">
+            <Logo size="md" />
           </Link>
           
           <div className="hidden md:flex items-center gap-8">
@@ -183,10 +178,7 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-white/10 py-12 px-6">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-2">
-            <Wifi className="w-6 h-6 text-cyan-500" />
-            <span className="font-bold text-white">OcholaSupernet</span>
-          </div>
+          <Logo size="sm" />
           <p className="text-slate-500 text-sm">© 2026 isplatty.org. All rights reserved.</p>
           <div className="flex gap-6">
             <Link href="/admin/login" className="text-slate-500 hover:text-white text-sm transition-colors">Admin Portal</Link>
