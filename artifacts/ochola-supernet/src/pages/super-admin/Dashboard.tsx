@@ -1,35 +1,57 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
+import { useTheme } from "@/hooks/use-theme";
 import { supabase } from "@/lib/supabase";
 import {
   Users, Router, BarChart3, Activity, CheckCircle2, XCircle,
   TrendingUp, Globe, Loader2,
 } from "lucide-react";
 
+/* ── Theme tokens for page content ──────────────────────────── */
+const DARK_C = {
+  card:   "rgba(255,255,255,0.04)",
+  border: "rgba(99,102,241,0.15)",
+  text:   "white",
+  muted:  "#64748b",
+  sub:    "#94a3b8",
+  accent: "#6366f1",
+  rowHover: "rgba(255,255,255,0.02)",
+  rowBorder: "rgba(255,255,255,0.04)",
+};
+const LIGHT_C = {
+  card:   "#ffffff",
+  border: "rgba(99,102,241,0.2)",
+  text:   "#0f172a",
+  muted:  "#64748b",
+  sub:    "#475569",
+  accent: "#6366f1",
+  rowHover: "rgba(0,0,0,0.02)",
+  rowBorder: "rgba(0,0,0,0.05)",
+};
+
 /* ── Stat Card ───────────────────────────────────────────────── */
-function StatCard({ label, value, sub, color, icon: Icon, loading }: {
+function StatCard({ label, value, sub, color, icon: Icon, loading, C }: {
   label: string; value: string | number; sub?: string;
   color: string; icon: React.ElementType; loading?: boolean;
+  C: typeof DARK_C;
 }) {
   return (
-    <div className="bg-white/[0.04] border border-indigo-500/15 rounded-2xl p-5">
-      <div className="flex items-start justify-between">
+    <div style={{
+      background: C.card,
+      border: `1px solid ${C.border}`,
+      borderRadius: 16, padding: "20px 24px",
+      boxShadow: C.card === "#ffffff" ? "0 1px 4px rgba(0,0,0,0.06)" : "none",
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
-          <p className="text-[0.68rem] font-bold text-slate-500 uppercase tracking-widest m-0">
-            {label}
+          <p style={{ fontSize: "0.68rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", margin: 0 }}>{label}</p>
+          <p style={{ fontSize: "1.75rem", fontWeight: 800, color: C.text, margin: "6px 0 0", lineHeight: 1 }}>
+            {loading ? <Loader2 size={22} className="animate-spin" style={{ color }} /> : value}
           </p>
-          <p className="text-[1.75rem] font-extrabold text-white mt-1.5 leading-none">
-            {loading
-              ? <Loader2 size={22} className="animate-spin" style={{ color }} />
-              : value}
-          </p>
-          {sub && <p className="text-[0.7rem] text-slate-400 mt-1">{sub}</p>}
+          {sub && <p style={{ fontSize: "0.7rem", color: C.sub, margin: "4px 0 0" }}>{sub}</p>}
         </div>
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-          style={{ background: `${color}18` }}
-        >
+        <div style={{ width: 40, height: 40, borderRadius: 10, background: `${color}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
           <Icon size={18} style={{ color }} />
         </div>
       </div>
@@ -40,11 +62,11 @@ function StatCard({ label, value, sub, color, icon: Icon, loading }: {
 /* ── Status Badge ────────────────────────────────────────────── */
 function StatusBadge({ active }: { active: boolean }) {
   return active ? (
-    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-green-400/10 text-green-400 border border-green-400/25">
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-green-400/10 text-green-500 border border-green-400/25">
       <CheckCircle2 size={10} /> Active
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-red-400/10 text-red-400 border border-red-400/25">
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-red-400/10 text-red-500 border border-red-400/25">
       <XCircle size={10} /> Inactive
     </span>
   );
@@ -52,13 +74,13 @@ function StatusBadge({ active }: { active: boolean }) {
 
 /* ── Main Page ───────────────────────────────────────────────── */
 export default function SuperAdminDashboard() {
+  const { isDark } = useTheme();
+  const C = isDark ? DARK_C : LIGHT_C;
+
   const { data: admins = [], isLoading: loadingAdmins } = useQuery({
     queryKey: ["sa_all_admins"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_admins")
-        .select("id,name,username,email,is_active,subdomain,role,created_at")
-        .order("id");
+      const { data } = await supabase.from("isp_admins").select("id,name,username,email,is_active,subdomain,role,created_at").order("id");
       return data ?? [];
     },
   });
@@ -66,10 +88,7 @@ export default function SuperAdminDashboard() {
   const { data: routers = [], isLoading: loadingRouters } = useQuery({
     queryKey: ["sa_all_routers"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,admin_id")
-        .order("id");
+      const { data } = await supabase.from("isp_routers").select("id,name,host,status,admin_id").order("id");
       return data ?? [];
     },
   });
@@ -77,10 +96,7 @@ export default function SuperAdminDashboard() {
   const { data: customers = [], isLoading: loadingCustomers } = useQuery({
     queryKey: ["sa_all_customers"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_customers")
-        .select("id,admin_id,is_active")
-        .order("id");
+      const { data } = await supabase.from("isp_customers").select("id,admin_id,is_active").order("id");
       return data ?? [];
     },
   });
@@ -88,114 +104,107 @@ export default function SuperAdminDashboard() {
   const { data: plans = [], isLoading: loadingPlans } = useQuery({
     queryKey: ["sa_all_plans"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_plans")
-        .select("id,admin_id,type")
-        .order("id");
+      const { data } = await supabase.from("isp_plans").select("id,admin_id,type").order("id");
       return data ?? [];
     },
   });
 
-  const topAdmins      = admins.slice(0, 8);
-  const onlineRouters  = routers.filter(r => r.status === "online" || r.status === "active").length;
-  const activeAdmins   = admins.filter(a => a.is_active).length;
+  const topAdmins       = admins.slice(0, 8);
+  const onlineRouters   = routers.filter(r => r.status === "online" || r.status === "active").length;
+  const activeAdmins    = admins.filter(a => a.is_active).length;
   const activeCustomers = customers.filter(c => c.is_active !== false).length;
 
   const healthItems = [
-    { label: "Database",   value: "Healthy"     },
-    { label: "API Server", value: "Running"     },
-    { label: "RADIUS",     value: "Active"      },
-    { label: "Backups",    value: "Up to date"  },
+    { label: "Database",   value: "Healthy"    },
+    { label: "API Server", value: "Running"    },
+    { label: "RADIUS",     value: "Active"     },
+    { label: "Backups",    value: "Up to date" },
   ];
+
+  const cardStyle = {
+    background: C.card,
+    border: `1px solid ${C.border}`,
+    borderRadius: 16,
+    boxShadow: !isDark ? "0 1px 4px rgba(0,0,0,0.06)" : "none",
+  };
 
   return (
     <SuperAdminLayout>
-      <div className="max-w-[1200px]">
+      <div style={{ maxWidth: 1200 }}>
 
         {/* ── Header ── */}
-        <div className="mb-7">
-          <h1 className="text-2xl font-extrabold text-white m-0">Platform Overview</h1>
-          <p className="text-slate-500 mt-1 text-sm">
+        <div style={{ marginBottom: 28 }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: C.text, margin: 0 }}>Platform Overview</h1>
+          <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.85rem" }}>
             Real-time view of all ISPs, routers, and customers on the platform.
           </p>
         </div>
 
         {/* ── Stat Cards ── */}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4 mb-7">
-          <StatCard label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="#6366f1" icon={Users}    loading={loadingAdmins}    />
-          <StatCard label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="#8b5cf6" icon={Router}   loading={loadingRouters}   />
-          <StatCard label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="#06b6d4" icon={Globe}    loading={loadingCustomers} />
-          <StatCard label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16, marginBottom: 28 }}>
+          <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="#6366f1" icon={Users}    loading={loadingAdmins}    />
+          <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="#8b5cf6" icon={Router}   loading={loadingRouters}   />
+          <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="#06b6d4" icon={Globe}    loading={loadingCustomers} />
+          <StatCard C={C} label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
         </div>
 
         {/* ── Two-column body ── */}
-        <div className="grid grid-cols-[2fr_1fr] gap-5">
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
 
           {/* ── Admins Table ── */}
-          <div className="bg-white/[0.04] border border-indigo-500/15 rounded-2xl overflow-hidden">
-            {/* Table header */}
-            <div className="px-6 py-[18px] border-b border-indigo-500/15 flex items-center gap-2">
-              <Users size={16} className="text-indigo-400" />
-              <span className="font-bold text-white text-[0.9rem]">Registered ISP Admins</span>
-              <span className="ml-auto bg-indigo-500/15 text-indigo-400 text-[0.7rem] font-bold px-2 py-0.5 rounded-xl">
+          <div style={{ ...cardStyle, overflow: "hidden" }}>
+            <div style={{ padding: "18px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
+              <Users size={16} color={C.accent} />
+              <span style={{ fontWeight: 700, color: C.text, fontSize: "0.9rem" }}>Registered ISP Admins</span>
+              <span style={{ marginLeft: "auto", background: "rgba(99,102,241,0.12)", color: C.accent, fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 12 }}>
                 {admins.length}
               </span>
             </div>
 
             {loadingAdmins ? (
-              <div className="p-10 text-center text-slate-500">
+              <div style={{ padding: 40, textAlign: "center", color: C.muted }}>
                 <Loader2 size={24} className="animate-spin mx-auto mb-2" />
-                <p className="m-0 text-sm">Loading admins…</p>
+                <p style={{ margin: 0, fontSize: "0.8rem" }}>Loading admins…</p>
               </div>
             ) : topAdmins.length === 0 ? (
-              <div className="p-10 text-center text-slate-500 text-sm">
-                No admins registered yet.
-              </div>
+              <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: "0.85rem" }}>No admins registered yet.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[0.8rem]">
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
                   <thead>
-                    <tr className="border-b border-indigo-500/15">
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                       {["Name", "Username", "Subdomain", "Role", "Status"].map(h => (
-                        <th key={h} className="text-left px-4 py-2.5 text-slate-500 font-semibold text-[0.65rem] uppercase tracking-wider">
-                          {h}
-                        </th>
+                        <th key={h} style={{ textAlign: "left", padding: "10px 16px", color: C.muted, fontWeight: 600, fontSize: "0.65rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {topAdmins.map(a => (
-                      <tr key={a.id} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
-                        {/* Name */}
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shrink-0">
-                              <span className="text-[0.62rem] font-extrabold text-white">
-                                {(a.name || a.username || "?")[0].toUpperCase()}
-                              </span>
+                      <tr key={a.id} style={{ borderBottom: `1px solid ${C.rowBorder}` }}
+                        onMouseEnter={e => (e.currentTarget.style.background = C.rowHover)}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                      >
+                        <td style={{ padding: "12px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "white" }}>{(a.name || a.username || "?")[0].toUpperCase()}</span>
                             </div>
-                            <span className="font-bold text-white">{a.name || a.username}</span>
+                            <span style={{ fontWeight: 700, color: C.text }}>{a.name || a.username}</span>
                           </div>
                         </td>
-                        {/* Username */}
-                        <td className="px-4 py-3 text-slate-400 font-mono">{a.username}</td>
-                        {/* Subdomain */}
-                        <td className="px-4 py-3">
+                        <td style={{ padding: "12px 16px", color: C.sub, fontFamily: "monospace" }}>{a.username}</td>
+                        <td style={{ padding: "12px 16px" }}>
                           {a.subdomain
-                            ? <span className="font-mono text-[0.72rem] text-indigo-400">{a.subdomain}.isplatty.org</span>
-                            : <span className="text-slate-600 text-[0.72rem]">—</span>
+                            ? <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: C.accent }}>{a.subdomain}.isplatty.org</span>
+                            : <span style={{ color: C.muted, fontSize: "0.72rem" }}>—</span>
                           }
                         </td>
-                        {/* Role */}
-                        <td className="px-4 py-3">
-                          <span className="bg-violet-500/10 text-violet-300 px-2 py-0.5 rounded-xl text-[0.68rem] font-bold">
+                        <td style={{ padding: "12px 16px" }}>
+                          <span style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
                             {a.role || "admin"}
                           </span>
                         </td>
-                        {/* Status */}
-                        <td className="px-4 py-3">
-                          <StatusBadge active={a.is_active !== false} />
-                        </td>
+                        <td style={{ padding: "12px 16px" }}><StatusBadge active={a.is_active !== false} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -205,31 +214,30 @@ export default function SuperAdminDashboard() {
           </div>
 
           {/* ── Right Column ── */}
-          <div className="flex flex-col gap-4">
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
             {/* Router Status */}
-            <div className="bg-white/[0.04] border border-indigo-500/15 rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Router size={15} className="text-indigo-400" />
-                <span className="font-bold text-white text-[0.85rem]">Router Status</span>
+            <div style={{ ...cardStyle, padding: "18px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                <Router size={15} color={C.accent} />
+                <span style={{ fontWeight: 700, color: C.text, fontSize: "0.85rem" }}>Router Status</span>
               </div>
-
               {loadingRouters ? (
-                <p className="text-slate-500 text-sm text-center">Loading…</p>
+                <p style={{ color: C.muted, fontSize: "0.8rem", textAlign: "center" }}>Loading…</p>
               ) : routers.length === 0 ? (
-                <p className="text-slate-500 text-sm text-center">No routers found.</p>
+                <p style={{ color: C.muted, fontSize: "0.8rem", textAlign: "center" }}>No routers found.</p>
               ) : (
-                <div className="flex flex-col gap-2">
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {routers.slice(0, 6).map(r => {
                     const isOnline = r.status === "online" || r.status === "active";
                     return (
-                      <div key={r.id} className="flex items-center justify-between">
-                        <span className="text-[0.78rem] text-slate-400 font-mono">{r.name}</span>
-                        <span className={`text-[0.65rem] font-bold px-2 py-0.5 rounded-full ${
-                          isOnline
-                            ? "bg-green-400/10 text-green-400"
-                            : "bg-indigo-500/10 text-indigo-400"
-                        }`}>
+                      <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: "0.78rem", color: C.sub, fontFamily: "monospace" }}>{r.name}</span>
+                        <span style={{
+                          fontSize: "0.65rem", fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                          background: isOnline ? "rgba(74,222,128,0.12)" : "rgba(99,102,241,0.12)",
+                          color: isOnline ? "#16a34a" : C.accent,
+                        }}>
                           {r.status || "unknown"}
                         </span>
                       </div>
@@ -240,24 +248,26 @@ export default function SuperAdminDashboard() {
             </div>
 
             {/* Platform Health */}
-            <div className="bg-white/[0.04] border border-indigo-500/15 rounded-2xl p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Activity size={15} className="text-indigo-400" />
-                <span className="font-bold text-white text-[0.85rem]">Platform Health</span>
+            <div style={{ ...cardStyle, padding: "18px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                <Activity size={15} color={C.accent} />
+                <span style={{ fontWeight: 700, color: C.text, fontSize: "0.85rem" }}>Platform Health</span>
               </div>
-
-              <div className="flex flex-col divide-y divide-white/[0.04]">
-                {healthItems.map(item => (
-                  <div key={item.label} className="flex items-center justify-between py-2.5">
-                    <span className="text-[0.78rem] text-slate-400">{item.label}</span>
-                    <span className="text-[0.72rem] font-bold text-green-400">{item.value}</span>
+              <div>
+                {healthItems.map((item, i) => (
+                  <div key={item.label} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    paddingBottom: 10, marginBottom: i < healthItems.length - 1 ? 10 : 0,
+                    borderBottom: i < healthItems.length - 1 ? `1px solid ${C.rowBorder}` : "none",
+                  }}>
+                    <span style={{ fontSize: "0.78rem", color: C.sub }}>{item.label}</span>
+                    <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#16a34a" }}>{item.value}</span>
                   </div>
                 ))}
               </div>
-
-              <div className="flex items-center gap-1.5 mt-3">
-                <TrendingUp size={13} className="text-green-400" />
-                <span className="text-[0.72rem] text-green-400 font-semibold">All systems operational</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12 }}>
+                <TrendingUp size={13} color="#16a34a" />
+                <span style={{ fontSize: "0.72rem", color: "#16a34a", fontWeight: 600 }}>All systems operational</span>
               </div>
             </div>
 
