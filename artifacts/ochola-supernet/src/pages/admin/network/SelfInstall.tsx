@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
-import { useBrand } from "@/context/BrandContext";
-import { Check, Copy, ChevronDown } from "lucide-react";
+import { Check, Copy, ChevronDown, RefreshCw, Wifi } from "lucide-react";
 
+/* ─── DB types ──────────────────────────────────────────────── */
 interface DbRouter {
   id: number;
   name: string;
@@ -16,7 +16,20 @@ interface DbRouter {
   ros_version: string | null;
 }
 
-/* ── small copy button ── */
+interface DbAdmin {
+  id: number;
+  name: string;
+  subdomain: string | null;
+}
+
+/* ─── Helpers ───────────────────────────────────────────────── */
+const BASE_DOMAIN = "isplatty.org";
+
+function slugify(str: string) {
+  return str.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+/* ─── Copy button ───────────────────────────────────────────── */
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handle = () => {
@@ -45,8 +58,10 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
-/* ── step block ── */
-function StepBlock({ number, title, command }: { number: number; title: string; command: string }) {
+/* ─── Step block ────────────────────────────────────────────── */
+function StepBlock({
+  number, title, command,
+}: { number: number; title: string; command: string }) {
   return (
     <div style={{ marginBottom: "1.5rem" }}>
       <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)", margin: "0 0 0.875rem" }}>
@@ -66,12 +81,28 @@ function StepBlock({ number, title, command }: { number: number; title: string; 
   );
 }
 
+/* ─── Main page ─────────────────────────────────────────────── */
 export default function SelfInstall() {
-  const brand = useBrand();
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const { data: routers = [] } = useQuery<DbRouter[]>({
-    queryKey: ["isp_routers_si"],
+  /* ── 1. Fetch current admin's subdomain (keyed on ADMIN_ID → live) ── */
+  const { data: adminData, isLoading: adminLoading } = useQuery<DbAdmin>({
+    queryKey: ["admin_subdomain", ADMIN_ID],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("isp_admins")
+        .select("id, name, subdomain")
+        .eq("id", ADMIN_ID)
+        .single();
+      if (error) throw error;
+      return data as DbAdmin;
+    },
+    staleTime: 60_000,
+  });
+
+  /* ── 2. Fetch routers for this admin (keyed on ADMIN_ID → live) ── */
+  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
+    queryKey: ["isp_routers_si", ADMIN_ID],
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
@@ -81,26 +112,28 @@ export default function SelfInstall() {
     },
   });
 
+  /* ── Derived values ── */
   const router = routers.find(r => r.id === selectedId) ?? null;
 
-  /* Derive a safe script filename from the router name */
+  /* Script filename: use selected router's slug or "mainhotspot" */
   const scriptName = router
-    ? router.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + ".rsc"
+    ? slugify(router.name) + ".rsc"
     : "mainhotspot.rsc";
 
-  /* Build subdomain URL: {ispSlug}.{domain}/api/scripts/
-     e.g.  come.isplatty.org/api/scripts/come-1.rsc
-     Falls back to window.location.origin in dev (no brand loaded yet) */
-  const ispSlug    = brand.ispName
-    ? brand.ispName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
-    : "";
-  const baseDomain = brand.domain || window.location.hostname;
-  const scriptHost = ispSlug
-    ? `https://${ispSlug}.${baseDomain}`
+  /* Admin's actual subdomain from DB → always correct per admin */
+  const adminSubdomain = adminData?.subdomain
+    ?? slugify(adminData?.name ?? "")
+    ?? "";
+
+  const scriptHost   = adminSubdomain
+    ? `https://${adminSubdomain}.${BASE_DOMAIN}`
     : window.location.origin;
-  const scriptBase = `${scriptHost}/api/scripts`;
-  const fetchCmd  = `/tool fetch url="${scriptBase}/${scriptName}" dst-path=${scriptName} mode=https`;
-  const importCmd = `/import ${scriptName}`;
+
+  const scriptBase   = `${scriptHost}/api/scripts`;
+  const fetchCmd     = `/tool fetch url="${scriptBase}/${scriptName}" dst-path=${scriptName} mode=https`;
+  const importCmd    = `/import ${scriptName}`;
+
+  const isLoading    = adminLoading || routersLoading;
 
   return (
     <AdminLayout>
@@ -118,6 +151,27 @@ export default function SelfInstall() {
           }}>
             {scriptName}
           </span>
+
+          {/* Live subdomain badge */}
+          {adminLoading ? (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: "0.375rem",
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 20, padding: "0.2rem 0.75rem", fontSize: "0.75rem", color: "var(--isp-text-muted)",
+            }}>
+              <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> loading…
+            </span>
+          ) : adminSubdomain ? (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: "0.375rem",
+              background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.3)",
+              borderRadius: 20, padding: "0.2rem 0.75rem", fontSize: "0.75rem",
+              color: "#06b6d4", fontWeight: 600,
+            }}>
+              <Wifi size={11} />
+              {adminSubdomain}.{BASE_DOMAIN}
+            </span>
+          ) : null}
         </div>
 
         <NetworkTabs active="self-install" />
@@ -129,11 +183,13 @@ export default function SelfInstall() {
             <select
               value={selectedId ?? ""}
               onChange={e => setSelectedId(e.target.value ? Number(e.target.value) : null)}
+              disabled={routersLoading}
               style={{
                 background: "var(--isp-input-bg)", border: "1px solid var(--isp-input-border)",
                 borderRadius: 8, padding: "0.45rem 2.25rem 0.45rem 0.875rem",
-                color: "var(--isp-text)", fontSize: "0.8rem", cursor: "pointer",
+                color: "var(--isp-text)", fontSize: "0.8rem", cursor: routersLoading ? "wait" : "pointer",
                 fontFamily: "inherit", outline: "none", appearance: "none",
+                opacity: routersLoading ? 0.6 : 1,
               }}
             >
               <option value="">— select router —</option>
@@ -147,22 +203,36 @@ export default function SelfInstall() {
           </div>
         </div>
 
-        {/* ── Green "profile ready" banner ── */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: "0.625rem",
-          background: "rgba(20,184,166,0.12)", border: "1px solid rgba(20,184,166,0.35)",
-          borderRadius: 8, padding: "0.75rem 1.125rem",
-          color: "#2dd4bf", fontSize: "0.875rem", fontWeight: 600,
-        }}>
-          <span style={{
-            width: 22, height: 22, borderRadius: "50%",
-            background: "rgba(20,184,166,0.25)", display: "flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0,
+        {/* ── Status banner ── */}
+        {isLoading ? (
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.625rem",
+            background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 8, padding: "0.75rem 1.125rem",
+            color: "var(--isp-text-muted)", fontSize: "0.875rem", fontWeight: 600,
           }}>
-            <Check size={13} strokeWidth={3} />
-          </span>
-          Profile already generated on server
-        </div>
+            <RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} />
+            Fetching your configuration…
+          </div>
+        ) : (
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.625rem",
+            background: "rgba(20,184,166,0.12)", border: "1px solid rgba(20,184,166,0.35)",
+            borderRadius: 8, padding: "0.75rem 1.125rem",
+            color: "#2dd4bf", fontSize: "0.875rem", fontWeight: 600,
+          }}>
+            <span style={{
+              width: 22, height: 22, borderRadius: "50%",
+              background: "rgba(20,184,166,0.25)", display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0,
+            }}>
+              <Check size={13} strokeWidth={3} />
+            </span>
+            Profile ready — {adminSubdomain
+              ? `served from ${adminSubdomain}.${BASE_DOMAIN}`
+              : "profile generated on server"}
+          </div>
+        )}
 
         {/* ── Instructions ── */}
         <div style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
@@ -176,10 +246,11 @@ export default function SelfInstall() {
           </ol>
         </div>
 
-        {/* ── Steps ── */}
+        {/* ── Steps card ── */}
         <div style={{
           background: "var(--isp-card)", border: "1px solid var(--isp-border-subtle)",
           borderRadius: 12, padding: "1.5rem 1.75rem",
+          opacity: isLoading ? 0.5 : 1, transition: "opacity 0.2s",
         }}>
           <StepBlock
             number={1}
@@ -192,7 +263,7 @@ export default function SelfInstall() {
             command={importCmd}
           />
 
-          {/* Step 3 — Next button */}
+          {/* Step 3 */}
           <div>
             <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)", margin: "0 0 0.875rem" }}>
               Step 3: Add router to billing system
@@ -227,10 +298,17 @@ export default function SelfInstall() {
           fontSize: "0.78rem", color: "#fbbf24", lineHeight: 1.6,
         }}>
           <strong>Note:</strong> The MikroTik router must have internet access to fetch the script.
-          Ensure the router is online and can reach <code style={{ fontFamily: "monospace" }}>{ispSlug ? `${ispSlug}.${baseDomain}` : window.location.host}</code> before running Step 1.
+          Ensure the router is online and can reach{" "}
+          <code style={{ fontFamily: "monospace" }}>
+            {adminSubdomain ? `${adminSubdomain}.${BASE_DOMAIN}` : window.location.host}
+          </code>{" "}
+          before running Step 1.
         </div>
 
       </div>
+
+      {/* Spin keyframe */}
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </AdminLayout>
   );
 }
