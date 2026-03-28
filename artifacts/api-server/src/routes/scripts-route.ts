@@ -179,13 +179,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
-      `# ═══════════════════════════════════════════════════`,
-      `# ${companyName} — MikroTik Hotspot Configuration`,
+      `# ===================================================`,
+      `# ${companyName} - MikroTik Hotspot Configuration`,
       `# Router  : ${routerName}`,
       `# Admin   : ${adminSubdomain} (id=${adminId})`,
       `# Generated: ${now}`,
       `# Import  : /import ${routerSlug}.rsc`,
-      `# ═══════════════════════════════════════════════════`,
+      `# ===================================================`,
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
       ros(`/tool fetch url="${scriptBaseUrl}/${rawName}" dst-path=${routerSlug}.rsc mode=https`),
@@ -237,9 +237,9 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     lines.push(``);
     lines.push(ros(`/log info message="${companyName}: ${routerSlug}.rsc imported successfully"`));
     lines.push(``);
-    lines.push(`# ═══════════════════════════════════════════════════`);
-    lines.push(`# Done — ${plans.length} plan profile(s) installed`);
-    lines.push(`# ═══════════════════════════════════════════════════`);
+    lines.push(`# ===================================================`);
+    lines.push(`# Done - ${plans.length} plan profile(s) installed`);
+    lines.push(`# ===================================================`);
 
     const body = lines.join("\r\n");
 
