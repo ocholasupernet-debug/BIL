@@ -46,7 +46,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
           .from("isp_admins")
           .select("name, email, phone, area, username, subdomain")
           .eq("id", adminId)
-          .single();
+          .maybeSingle();
 
         if (error || !data) throw error ?? new Error("no row");
 

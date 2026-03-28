@@ -45,7 +45,7 @@ export default function AdminRegister() {
       const { data } = await supabase
         .from("isp_admins")
         .select("id")
-        .or(`subdomain.eq.${slug},name.ilike.${company.trim()}`)
+        .ilike("subdomain", slug)
         .limit(1);
       setChecking(false);
       setAvailable(!data || data.length === 0);
