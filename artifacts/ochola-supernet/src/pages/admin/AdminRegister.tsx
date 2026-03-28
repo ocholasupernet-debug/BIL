@@ -81,6 +81,7 @@ export default function AdminRegister() {
         password:  "admin",
         is_active: true,
         role:      "isp_admin",
+        subdomain: slug || finalUsername,
       });
       if (error) throw error;
       setRegisteredUsername(finalUsername);

@@ -4,7 +4,6 @@ const router: IRouter = Router();
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY ?? "";
-const ADMIN_ID = 5;
 
 /* ── Supabase REST helper ── */
 async function sbGet<T>(path: string): Promise<T[]> {
@@ -18,6 +17,17 @@ async function sbGet<T>(path: string): Promise<T[]> {
   });
   if (!res.ok) throw new Error(`Supabase error ${res.status}: ${await res.text()}`);
   return res.json() as Promise<T[]>;
+}
+
+/* ── Parse subdomain from Host header ──
+   "fastnet.isplatty.org"  →  "fastnet"
+   "ocholasupernet.isplatty.org" → "ocholasupernet"
+   "localhost"             →  ""
+── */
+function parseSubdomain(host: string): string {
+  const hostname = host.split(":")[0]; // strip port
+  const parts    = hostname.split(".");
+  return parts.length >= 3 ? parts[0] : "";
 }
 
 /* ── Slug ↔ name helpers ── */
@@ -49,14 +59,22 @@ function ros(cmd: string): string {
 
 /* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
-   Dynamically generates a RouterOS .rsc file for the named router.
-   The name is the router's name slugified (spaces → dashes).
-   Example: router "come 1"  →  GET /api/scripts/come-1.rsc
+   Dynamically generates a RouterOS .rsc file.
+
+   Admin identification (priority order):
+     1. Subdomain from Host header  → looks up isp_admins.subdomain
+     2. ?admin_id=N query param     → used directly
+     3. Falls back to admin_id=5
+
+   Example:
+     https://fastnet.isplatty.org/api/scripts/mainhotspot.rsc
+     ↑ subdomain "fastnet" resolves to that ISP's admin row
+     ↑ all plans/routers fetched belong to that admin only
+     ↑ self-update URL in the script uses "fastnet.isplatty.org"
 ═══════════════════════════════════════════════════════════════ */
 router.get("/scripts/:name", async (req, res): Promise<void> => {
-  const rawName  = req.params.name ?? "";
-  /* Strip .rsc extension if present */
-  const slug     = rawName.replace(/\.rsc$/, "");
+  const rawName = req.params.name ?? "";
+  const slug    = rawName.replace(/\.rsc$/, "");
 
   if (!slug) {
     res.status(400).send("# Error: script name is required");
@@ -64,7 +82,50 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
   }
 
   try {
-    /* ── Fetch all routers for this ISP ── */
+    /* ── Step 1: Resolve admin from subdomain or query param ── */
+    interface DbAdmin {
+      id: number;
+      name: string;
+      subdomain: string | null;
+    }
+
+    const hostHeader = (req.headers.host ?? "") as string;
+    const subdomain  = parseSubdomain(hostHeader);
+
+    let adminId        = 5;          // safe fallback
+    let adminSubdomain = subdomain || "ocholasupernet";
+    let companyName    = "OcholaSupernet";
+    let baseDomain     = "isplatty.org";
+
+    if (subdomain) {
+      /* Resolve by subdomain column */
+      const admins = await sbGet<DbAdmin>(
+        `isp_admins?subdomain=eq.${encodeURIComponent(subdomain)}&select=id,name,subdomain&limit=1`
+      );
+      if (admins.length > 0) {
+        adminId        = admins[0].id;
+        adminSubdomain = admins[0].subdomain ?? subdomain;
+        companyName    = admins[0].name;
+      }
+    } else if (req.query.admin_id) {
+      /* Fallback: explicit query param */
+      const qid = parseInt(req.query.admin_id as string, 10);
+      if (!isNaN(qid)) {
+        const admins = await sbGet<DbAdmin>(
+          `isp_admins?id=eq.${qid}&select=id,name,subdomain&limit=1`
+        );
+        if (admins.length > 0) {
+          adminId        = admins[0].id;
+          adminSubdomain = admins[0].subdomain ?? `admin${qid}`;
+          companyName    = admins[0].name;
+        }
+      }
+    }
+
+    /* Self-referencing script URL for auto-update inside the .rsc */
+    const scriptBaseUrl = `https://${adminSubdomain}.${baseDomain}/api/scripts`;
+
+    /* ── Step 2: Fetch routers for this admin ── */
     interface DbRouter {
       id: number; name: string; host: string;
       bridge_interface: string | null;
@@ -72,18 +133,26 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       bridge_ip: string | null;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${ADMIN_ID}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip`
     );
 
-    /* Match by slug */
-    const router_row = routers.find(r => slugify(r.name) === slug);
+    /* "mainhotspot" is a special keyword meaning "first/main hotspot router" */
+    let router_row: DbRouter | undefined;
+    if (slug === "mainhotspot" || slug === "main-hotspot") {
+      router_row = routers[0]; // use the first router for this admin
+    } else {
+      router_row = routers.find(r => slugify(r.name) === slug);
+    }
 
     if (!router_row) {
-      res.status(404).send(`# Error: no router found matching slug "${slug}"\n# Available: ${routers.map(r => slugify(r.name)).join(", ")}`);
+      res.status(404).send(
+        `# Error: no router found for admin "${adminSubdomain}" matching slug "${slug}"\n` +
+        `# Available slugs: ${routers.map(r => slugify(r.name)).join(", ") || "(none)"}\n`
+      );
       return;
     }
 
-    /* ── Fetch hotspot plans ── */
+    /* ── Step 3: Fetch hotspot plans for this admin ── */
     interface DbPlan {
       id: number; name: string; type: string;
       speed_down: number; speed_up: number;
@@ -91,34 +160,38 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       shared_users: number;
     }
     const plans = await sbGet<DbPlan>(
-      `isp_plans?admin_id=eq.${ADMIN_ID}&type=eq.hotspot&select=id,name,type,speed_down,speed_up,validity,validity_unit,shared_users`
+      `isp_plans?admin_id=eq.${adminId}&type=eq.hotspot&select=id,name,type,speed_down,speed_up,validity,validity_unit,shared_users`
     );
 
-    /* ── Derive config values ── */
-    const routerName   = router_row.name;
-    const bridgeIface  = router_row.bridge_interface  || "bridge";
-    const hotspotDns   = router_row.hotspot_dns_name  || `wifi.${slug}.local`;
-    const bridgeIp     = router_row.bridge_ip         || "192.168.88.1";
+    /* ── Step 4: Derive config values ── */
+    const routerName  = router_row.name;
+    const routerSlug  = slug === "mainhotspot" || slug === "main-hotspot" ? slugify(routerName) : slug;
+    const bridgeIface = router_row.bridge_interface  || "bridge";
+    const hotspotDns  = router_row.hotspot_dns_name  || `wifi.${routerSlug}.local`;
+    const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";
 
-    /* Derive pool range from bridge IP (use /24 of the bridge address) */
-    const ipBase    = bridgeIp.replace(/\.\d+$/, "");
-    const poolStart = `${ipBase}.2`;
-    const poolEnd   = `${ipBase}.254`;
+    const ipBase      = bridgeIp.replace(/\.\d+$/, "");
+    const poolStart   = `${ipBase}.2`;
+    const poolEnd     = `${ipBase}.254`;
 
-    const profileName = slug;
+    const profileName = routerSlug;
     const now         = new Date().toISOString();
 
-    /* ── Build the .rsc content ── */
+    /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
       `# ═══════════════════════════════════════════════════`,
-      `# OcholaSupernet — MikroTik Hotspot Configuration`,
+      `# ${companyName} — MikroTik Hotspot Configuration`,
       `# Router  : ${routerName}`,
+      `# Admin   : ${adminSubdomain} (id=${adminId})`,
       `# Generated: ${now}`,
-      `# Import  : /import ${slug}.rsc`,
+      `# Import  : /import ${routerSlug}.rsc`,
       `# ═══════════════════════════════════════════════════`,
       ``,
+      `# === Auto-Update: fetch latest config from ${companyName} ===`,
+      ros(`/tool fetch url="${scriptBaseUrl}/${rawName}" dst-path=${routerSlug}.rsc mode=https`),
+      ``,
       `# === System Identity ===`,
-      ros(`/system identity set name="OcholaNet-${routerName}"`),
+      ros(`/system identity set name="${companyName}-${routerName}"`),
       ``,
       `# === DNS ===`,
       ros(`/ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes`),
@@ -140,8 +213,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ros(`/radius add service=hotspot address=127.0.0.1 secret=radius123 authentication-port=1812 accounting-port=1813 timeout=3000ms`),
       ``,
       `# === NAT (Captive Portal Redirect) ===`,
-      ros(`/ip firewall nat remove [find comment="OcholaNet - Hotspot redirect"]`),
-      ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="OcholaNet - Hotspot redirect"`),
+      ros(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
+      ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile remove [find name=default]`),
@@ -157,12 +230,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
         const shared  = plan.shared_users || 1;
         lines.push(ros(`/ip hotspot user profile remove [find name="${pName}"]`));
-        lines.push(ros(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="OcholaNet plan #${plan.id}"`));
+        lines.push(ros(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan #${plan.id}"`));
       }
     }
 
     lines.push(``);
-    lines.push(ros(`/log info message="OcholaNet: ${slug}.rsc imported successfully"`));
+    lines.push(ros(`/log info message="${companyName}: ${routerSlug}.rsc imported successfully"`));
     lines.push(``);
     lines.push(`# ═══════════════════════════════════════════════════`);
     lines.push(`# Done — ${plans.length} plan profile(s) installed`);
@@ -172,7 +245,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
 
     res
       .set("Content-Type", "text/plain; charset=utf-8")
-      .set("Content-Disposition", `attachment; filename="${slug}.rsc"`)
+      .set("Content-Disposition", `attachment; filename="${routerSlug}.rsc"`)
       .set("Cache-Control", "no-cache")
       .send(body);
 
