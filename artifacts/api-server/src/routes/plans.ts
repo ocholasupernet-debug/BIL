@@ -10,8 +10,8 @@ router.get("/plans", async (req, res): Promise<void> => {
     const ispId = req.query.ispId ? parseInt(req.query.ispId as string, 10) : 1;
     const plans = await db.select().from(plansTable).where(eq(plansTable.ispId, ispId));
     res.json(plans);
-  } catch (err) {
-    res.status(503).json({ error: "Database unavailable", plans: [] });
+  } catch (err: any) {
+    res.status(503).json({ error: "Database unavailable", detail: err?.message, plans: [] });
   }
 });
 
