@@ -176,10 +176,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";
 
     const ipBase      = bridgeIp.replace(/\.\d+$/, "");
+    const ipMask      = `${bridgeIp}/24`;
     const poolStart   = `${ipBase}.2`;
     const poolEnd     = `${ipBase}.254`;
+    const gatewayIp   = `${ipBase}.1`;
 
     const profileName = routerSlug;
+    const portalBase  = `https://${adminSubdomain}.isplatty.org`;
     const now         = new Date().toISOString();
 
     /* ── Step 5: Build the .rsc content ── */
@@ -201,25 +204,51 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === DNS ===`,
       ros(`/ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes`),
       ``,
+      `# === Bridge Interface ===`,
+      ros(`/interface bridge add name="${bridgeIface}" comment="${companyName} Hotspot Bridge" ignore-errors=yes`),
+      ros(`/interface bridge port add bridge="${bridgeIface}" interface=wlan1 comment="WiFi 2.4GHz" ignore-errors=yes`),
+      ros(`/interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" ignore-errors=yes`),
+      ros(`/interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" ignore-errors=yes`),
+      ros(`/ip address remove [find interface="${bridgeIface}"]`),
+      ros(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`),
+      ``,
+      `# === Default Route / Gateway ===`,
+      ros(`/ip route remove [find comment="${companyName} default route"]`),
+      ros(`/ip route add dst-address=0.0.0.0/0 gateway=${gatewayIp} comment="${companyName} default route" ignore-errors=yes`),
+      ``,
       `# === IP Pool ===`,
       ros(`/ip pool remove [find name=hspool]`),
       ros(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd}`),
       ``,
       `# === Hotspot Profile ===`,
       ros(`/ip hotspot profile remove [find name="${profileName}"]`),
-      ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap use-radius=yes html-directory=flash/hotspot`),
+      ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`),
       ``,
       `# === Hotspot ===`,
       ros(`/ip hotspot remove [find name=hotspot1]`),
       ros(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`),
       ``,
-      `# === RADIUS ===`,
-      ros(`/radius remove [find service=hotspot]`),
-      ros(`/radius add service=hotspot address=127.0.0.1 secret=radius123 authentication-port=1812 accounting-port=1813 timeout=3000ms`),
+      `# === Hotspot Login Page Files ===`,
+      ros(`/tool fetch url="${portalBase}/hotspot/login" dst-path=flash/hotspot/login mode=https`),
+      ros(`/tool fetch url="${portalBase}/hotspot/alogin" dst-path=flash/hotspot/alogin mode=https`),
+      ros(`/tool fetch url="${portalBase}/hotspot/status" dst-path=flash/hotspot/status mode=https`),
+      ros(`/tool fetch url="${portalBase}/hotspot/logout" dst-path=flash/hotspot/logout mode=https`),
+      ros(`/tool fetch url="${portalBase}/hotspot/radvert" dst-path=flash/hotspot/radvert mode=https`),
       ``,
       `# === NAT (Captive Portal Redirect) ===`,
       ros(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
       ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
+      ``,
+      `# === Firewall (allow hotspot traffic) ===`,
+      ros(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
+      ros(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`),
+      ros(`/ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" ignore-errors=yes`),
+      ``,
+      `# === OVPN Client (Management Tunnel) ===`,
+      `# NOTE: Import your CA cert first: /certificate import file-name=ca.crt`,
+      ros(`/interface ovpn-client remove [find comment="${companyName} mgmt"]`),
+      ros(`/interface ovpn-client add name=ovpn-mgmt connect-to=${adminSubdomain}.isplatty.org port=1194 mode=ip protocol=tcp user="${routerSlug}" password="" certificate=none auth=sha1 cipher=aes256 add-default-route=no disabled=yes comment="${companyName} mgmt"`),
+      `# To enable OVPN: /interface ovpn-client enable [find name=ovpn-mgmt]`,
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
