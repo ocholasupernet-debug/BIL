@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>$(login-title)</title>
+<link rel="icon" href="/hotspot/favicon.ico">
+<link rel="stylesheet" href="/hotspot/css/style.css">
+<script src="/hotspot/md5.js"></script>
+</head>
+<body>
+<div class="login-container">
+  <div style="text-align:center;margin-bottom:1.5rem;">
+    <img src="/hotspot/img/user.svg" width="64" height="64" alt="User" style="opacity:0.7">
+    <h2 style="margin-top:0.75rem;">$(login-title)</h2>
+  </div>
+
+  $(if error)<div style="background:#fee2e2;color:#dc2626;padding:0.75rem;border-radius:8px;margin-bottom:1rem;font-size:0.9rem;">
+    $(error)
+  </div>$(endif error)
+
+  <form name="sendin" action="$(link-login-only)" method="post">
+    <input type="hidden" name="dst" value="$(link-orig)">
+    <input type="hidden" name="popup" value="true">
+
+    <div style="position:relative;margin-bottom:1rem;">
+      <img src="/hotspot/img/user.svg" width="18" height="18"
+           style="position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:0.5">
+      <input type="text" id="username" name="username"
+             placeholder="Username"
+             style="padding-left:40px;width:100%;"
+             value="$(username)" required>
+    </div>
+
+    <div style="position:relative;margin-bottom:1.5rem;">
+      <img src="/hotspot/img/password.svg" width="18" height="18"
+           style="position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:0.5">
+      <input type="password" id="password" name="password"
+             placeholder="Password"
+             style="padding-left:40px;width:100%;"
+             required>
+    </div>
+
+    <button type="submit" onclick="
+      var p = document.getElementById('password');
+      p.value = MD5(p.value);
+    ">Connect</button>
+  </form>
+
+  <p style="margin-top:1.5rem;font-size:0.8rem;color:#94a3b8;text-align:center;">
+    By connecting you agree to our terms of service.
+  </p>
+</div>
+</body>
+</html>

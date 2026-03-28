@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Hotspot Status</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/hotspot/css/style.css">
+</head>
+<body>
+<div class="status-container">
+  <h2>Session Status</h2>
+  <table>
+    <tr><td>Username</td><td>$(username)</td></tr>
+    <tr><td>IP Address</td><td>$(ip)</td></tr>
+    <tr><td>MAC Address</td><td>$(mac)</td></tr>
+    <tr><td>Time Logged In</td><td>$(uptime)</td></tr>
+    <tr><td>Session Time Left</td><td>$(session-time-left)</td></tr>
+    <tr><td>Bytes In</td><td>$(bytes-in)</td></tr>
+    <tr><td>Bytes Out</td><td>$(bytes-out)</td></tr>
+  </table>
+  <br>
+  <a href="$(link-logout)">Logout</a>
+</div>
+</body>
+</html>

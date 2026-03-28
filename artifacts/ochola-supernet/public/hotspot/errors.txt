@@ -1,0 +1,13 @@
+0
+1 = You are not logged in
+2 = You are already logged in
+3 = Username or password is wrong
+4 = Account is not activated yet
+5 = Account is expired
+6 = No more sessions are allowed
+7 = Usage limit is reached
+8 = You are logged in, but access is denied
+9 = Account is disabled
+10 = No radius response
+11 = You are not allowed here
+12 = Your account has expired
