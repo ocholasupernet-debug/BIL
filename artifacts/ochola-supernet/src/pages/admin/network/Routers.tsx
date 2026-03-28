@@ -244,6 +244,7 @@ export default function Routers() {
       bridge_ip:        addForm.bridge_ip.trim() || null,
       hotspot_dns_name: addForm.hotspot_dns_name.trim() || null,
       status:           "offline",
+      token:            crypto.randomUUID(),
     });
     setAddSaving(false);
     if (error) { setAddError(error.message); return; }
