@@ -2,8 +2,8 @@ import { Router, type IRouter } from "express";
 
 const router: IRouter = Router();
 
-const SUPABASE_URL = "https://lijposnfdhlrfwdmbpge.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpanBvc25mZGhscmZ3ZG1icGdlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDE0Njk3NiwiZXhwIjoyMDg5NzIyOTc2fQ.4P1-ePDpjbHTxxUfW0sMnyFHHYeK014SOl5QmpTKLUQ";
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY ?? "";
 const ADMIN_ID = 5;
 
 /* ── Supabase REST helper ── */
