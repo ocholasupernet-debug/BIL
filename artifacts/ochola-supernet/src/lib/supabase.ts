@@ -18,6 +18,7 @@ export function setAdminAuth(id: number, username: string, name: string) {
     localStorage.setItem("ochola_admin_id", String(id));
     localStorage.setItem("ochola_admin_username", username);
     localStorage.setItem("ochola_admin_name", name);
+    window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id } }));
   } catch {}
 }
 
@@ -27,6 +28,7 @@ export function clearAdminAuth() {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
+    window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
 }
 

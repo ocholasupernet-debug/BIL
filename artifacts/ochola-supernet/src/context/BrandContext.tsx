@@ -29,6 +29,15 @@ export function useBrand(): Brand {
 
 export function BrandProvider({ children }: { children: React.ReactNode }) {
   const [brand, setBrand] = useState<Brand>(DEFAULT);
+  const [adminId, setAdminId] = useState<number>(ADMIN_ID);
+
+  useEffect(() => {
+    const handler = () => {
+      try { setAdminId(parseInt(localStorage.getItem("ochola_admin_id") || "5")); } catch {}
+    };
+    window.addEventListener("ochola-auth-change", handler);
+    return () => window.removeEventListener("ochola-auth-change", handler);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -36,7 +45,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
         const { data, error } = await supabase
           .from("isp_admins")
           .select("name, email, phone, area, username, subdomain")
-          .eq("id", ADMIN_ID)
+          .eq("id", adminId)
           .single();
 
         if (error || !data) throw error ?? new Error("no row");
@@ -63,7 +72,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
         setBrand(prev => ({ ...prev, loading: false }));
       }
     })();
-  }, []);
+  }, [adminId]);
 
   return <BrandContext.Provider value={brand}>{children}</BrandContext.Provider>;
 }

@@ -11,26 +11,31 @@ async function fetchRouters(): Promise<DbRouter[]> {
   if (error) throw error;
   return data ?? [];
 }
-async function fetchTransactions(): Promise<DbTransaction[]> {
-  const { data, error } = await supabase.from("isp_transactions").select("*").order("created_at", { ascending: false }).limit(50);
+
+type CustomerBasic = { id: number; type: string | null; status: string; created_at: string };
+
+async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
+  const { data, error } = await supabase
+    .from("isp_customers")
+    .select("id, type, status, created_at")
+    .eq("admin_id", ADMIN_ID);
   if (error) throw error;
   return data ?? [];
 }
 
-/* ─── Static data kept as-is ─── */
-const MONTHLY_DATA = [
-  { month: "Jan", count: 12 }, { month: "Feb", count: 18 }, { month: "Mar", count: 9  },
-  { month: "Apr", count: 24 }, { month: "May", count: 31 }, { month: "Jun", count: 20 },
-  { month: "Jul", count: 15 }, { month: "Aug", count: 28 }, { month: "Sep", count: 22 },
-  { month: "Oct", count: 35 }, { month: "Nov", count: 19 }, { month: "Dec", count: 27 },
-];
+async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]> {
+  if (customerIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("isp_transactions")
+    .select("*")
+    .in("customer_id", customerIds)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return data ?? [];
+}
 
-const USER_INSIGHTS = [
-  { label: "Hotspot", count: 521, color: "#06b6d4" },
-  { label: "PPPoE",   count: 214, color: "#8b5cf6" },
-  { label: "Static",  count: 77,  color: "#10b981" },
-];
-const INSIGHTS_TOTAL = USER_INSIGHTS.reduce((a, b) => a + b.count, 0);
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const KPI_ROW2 = [
   {
@@ -93,12 +98,22 @@ function OnlineStatCard({ label, value, gradient, href }: { label: string; value
   );
 }
 
-function DonutChart() {
+function DonutChart({ insights }: { insights: { label: string; count: number; color: string }[] }) {
+  const total = insights.reduce((a, b) => a + b.count, 0);
   const cx = 80, cy = 80, r = 56;
   const circumference = 2 * Math.PI * r;
+  if (total === 0) {
+    return (
+      <svg viewBox="0 0 160 160" width={160} height={160} style={{ display: "block" }}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={22} />
+        <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="18" fontWeight="800">0</text>
+        <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="10">Total Users</text>
+      </svg>
+    );
+  }
   let offset = 0;
-  const segments = USER_INSIGHTS.map(s => {
-    const pct = s.count / INSIGHTS_TOTAL;
+  const segments = insights.map(s => {
+    const pct = s.count / total;
     const dash = pct * circumference;
     const seg = { ...s, dash, offset };
     offset += dash;
@@ -113,7 +128,7 @@ function DonutChart() {
           strokeDashoffset={-seg.offset + circumference * 0.25}
           style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }} />
       ))}
-      <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="18" fontWeight="800">{INSIGHTS_TOTAL}</text>
+      <text x={cx} y={cy - 8} textAnchor="middle" fill="white" fontSize="18" fontWeight="800">{total}</text>
       <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.55)" fontSize="10">Total Users</text>
     </svg>
   );
@@ -132,14 +147,23 @@ export default function Dashboard() {
   const [selectedRouter,  setSelectedRouter]  = useState<number | "all">("all");
 
   const { data: routers = [], isLoading: routersLoading } = useQuery({
-    queryKey: ["isp_routers"],
+    queryKey: ["isp_routers", ADMIN_ID],
     queryFn: fetchRouters,
     refetchInterval: 30_000,
   });
 
+  const { data: customers = [], isLoading: customersLoading } = useQuery({
+    queryKey: ["isp_customers_basic", ADMIN_ID],
+    queryFn: fetchCustomersBasic,
+    refetchInterval: 60_000,
+  });
+
+  const customerIds = useMemo(() => customers.map(c => c.id), [customers]);
+
   const { data: transactions = [], isLoading: txLoading } = useQuery({
-    queryKey: ["isp_transactions_dashboard"],
-    queryFn: fetchTransactions,
+    queryKey: ["isp_transactions_dashboard", customerIds.join(",")],
+    queryFn: () => fetchTransactions(customerIds),
+    enabled: !customersLoading,
     refetchInterval: 60_000,
   });
 
@@ -158,7 +182,26 @@ export default function Dashboard() {
   const onlineRouters  = routers.filter(r => r.status === "online").length;
   const offlineRouters = routers.filter(r => r.status !== "online").length;
 
-  const maxCount = Math.max(...MONTHLY_DATA.map(d => d.count));
+  /* ─── Real monthly customer signups (current year) ─── */
+  const monthlyData = useMemo(() => {
+    const year = now.getFullYear();
+    return MONTHS.map((month, i) => ({
+      month,
+      count: customers.filter(c => {
+        const d = new Date(c.created_at);
+        return d.getFullYear() === year && d.getMonth() === i;
+      }).length,
+    }));
+  }, [customers]);
+
+  const maxCount = Math.max(...monthlyData.map(d => d.count), 1);
+
+  /* ─── Real user type breakdown ─── */
+  const userInsights = useMemo(() => [
+    { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "#06b6d4" },
+    { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "#8b5cf6" },
+    { label: "Static",  count: customers.filter(c => c.type === "static").length,  color: "#10b981" },
+  ], [customers]);
 
   /* ─── Router filter options ─── */
   const routerOptions: { key: number | "all"; label: string; online: boolean | null }[] = [
@@ -315,7 +358,7 @@ export default function Dashboard() {
                       <stop offset="0%" stopColor="#06b6d4" /><stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
                     </linearGradient>
                   </defs>
-                  {MONTHLY_DATA.map((d, i) => {
+                  {monthlyData.map((d, i) => {
                     const barH = Math.round((d.count / maxCount) * 100);
                     const x = i * 36 + 6;
                     const barTop = 100 - barH;
@@ -350,16 +393,19 @@ export default function Dashboard() {
             <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)", marginBottom: "0.875rem" }}>All Users Insights</div>
               <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
-                <DonutChart />
+                <DonutChart insights={userInsights} />
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem", flex: 1 }}>
-                  {USER_INSIGHTS.map(seg => (
-                    <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, display: "inline-block", flexShrink: 0 }} />
-                      <span style={{ fontSize: "0.775rem", color: "var(--isp-text-muted)", flex: 1 }}>{seg.label}</span>
-                      <span style={{ fontSize: "0.775rem", fontWeight: 700, color: "var(--isp-text)" }}>{seg.count}</span>
-                      <span style={{ fontSize: "0.7rem", color: "var(--isp-text-sub)" }}>({Math.round(seg.count / INSIGHTS_TOTAL * 100)}%)</span>
-                    </div>
-                  ))}
+                  {userInsights.map(seg => {
+                    const total = userInsights.reduce((a, b) => a + b.count, 0);
+                    return (
+                      <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, display: "inline-block", flexShrink: 0 }} />
+                        <span style={{ fontSize: "0.775rem", color: "var(--isp-text-muted)", flex: 1 }}>{seg.label}</span>
+                        <span style={{ fontSize: "0.775rem", fontWeight: 700, color: "var(--isp-text)" }}>{seg.count}</span>
+                        <span style={{ fontSize: "0.7rem", color: "var(--isp-text-sub)" }}>({total > 0 ? Math.round(seg.count / total * 100) : 0}%)</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

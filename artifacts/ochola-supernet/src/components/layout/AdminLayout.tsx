@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
@@ -162,9 +163,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const { theme, toggle, isDark } = useTheme();
   const brand = useBrand();
   const adminName = getAdminName();
+  const queryClient = useQueryClient();
 
   const handleLogout = () => {
     clearAdminAuth();
+    queryClient.clear();
     setLocation("/admin/login");
   };
 
