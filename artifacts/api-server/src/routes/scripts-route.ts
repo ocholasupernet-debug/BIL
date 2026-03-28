@@ -108,17 +108,20 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         companyName    = admins[0].name;
       }
     } else if (req.query.admin_id) {
-      /* Fallback: explicit query param */
+      /* Fallback: explicit query param — use ID directly, try to fetch name but don't fail */
       const qid = parseInt(req.query.admin_id as string, 10);
       if (!isNaN(qid)) {
-        const admins = await sbGet<DbAdmin>(
-          `isp_admins?id=eq.${qid}&select=id,name,subdomain&limit=1`
-        );
-        if (admins.length > 0) {
-          adminId        = admins[0].id;
-          adminSubdomain = admins[0].subdomain ?? `admin${qid}`;
-          companyName    = admins[0].name;
-        }
+        adminId        = qid;
+        adminSubdomain = `admin${qid}`;
+        try {
+          const admins = await sbGet<DbAdmin>(
+            `isp_admins?id=eq.${qid}&select=id,name,subdomain&limit=1`
+          );
+          if (admins.length > 0) {
+            adminSubdomain = admins[0].subdomain ?? `admin${qid}`;
+            companyName    = admins[0].name;
+          }
+        } catch { /* use defaults if RLS blocks */ }
       }
     }
 
