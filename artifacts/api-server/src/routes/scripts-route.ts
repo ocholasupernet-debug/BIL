@@ -26,7 +26,9 @@ async function sbGet<T>(path: string): Promise<T[]> {
 ── */
 function parseSubdomain(host: string): string {
   const hostname = host.split(":")[0]; // strip port
-  const parts    = hostname.split(".");
+  // If it's an IP address, there's no subdomain
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return "";
+  const parts = hostname.split(".");
   return parts.length >= 3 ? parts[0] : "";
 }
 
