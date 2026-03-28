@@ -583,7 +583,7 @@ function SecurityTab() {
         </div>
       </Card>
 
-      <Card title="API Key" desc="For integrating with the OcholaSupernet API from scripts or third-party apps">
+      <Card title="API Key" desc="For integrating with the ISP Management API from scripts or third-party apps">
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px" }}>
           <Key size={13} style={{ color: C.muted, flexShrink: 0 }} />
           <span style={{ flex: 1, fontFamily: "monospace", fontSize: "0.78rem", color: C.text, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -760,7 +760,7 @@ function SystemTab() {
 
       <Card title="System Information" desc="Current software and environment details">
         {[
-          ["Platform",        "OcholaSupernet v2.6.0"],
+          ["Platform",        "ISP Management v2.6.0"],
           ["Database",        "PostgreSQL 15.4"],
           ["Runtime",         "Node.js 20.x / Express 5"],
           ["Last Backup",     "Mar 27, 2026 — 02:00 EAT"],

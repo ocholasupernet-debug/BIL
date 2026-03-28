@@ -539,9 +539,18 @@ export default function Customers() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const { data: customers = [], isLoading, refetch } = useQuery({ queryKey: ["isp_customers"], queryFn: fetchCustomers, refetchInterval: 60_000 });
-  const { data: plans    = [] } = useQuery({ queryKey: ["isp_plans_all"],  queryFn: fetchPlans   });
-  const { data: routers  = [] } = useQuery({ queryKey: ["isp_routers"],    queryFn: fetchRouters });
+  const { data: adminInfo } = useQuery({
+    queryKey: ["admin_info", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
+      return data as { name: string } | null;
+    },
+  });
+  const companyName = adminInfo?.name ?? "ISP";
+
+  const { data: customers = [], isLoading, refetch } = useQuery({ queryKey: ["isp_customers", ADMIN_ID], queryFn: fetchCustomers, refetchInterval: 60_000 });
+  const { data: plans    = [] } = useQuery({ queryKey: ["isp_plans_all", ADMIN_ID],  queryFn: fetchPlans   });
+  const { data: routers  = [] } = useQuery({ queryKey: ["isp_routers", ADMIN_ID],    queryFn: fetchRouters });
 
   /* ─── Mutations ─── */
   const createMutation = useMutation({
@@ -693,7 +702,7 @@ export default function Customers() {
               pppoe_username: c.pppoe_username ?? undefined,
               mac_address:   c.mac_address ?? undefined,
               ip_address:    c.ip_address ?? undefined,
-              comment:       `OcholaNet customer #${c.id}`,
+              comment:       `${companyName} customer #${c.id}`,
             })),
           })}
         />

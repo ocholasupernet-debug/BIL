@@ -371,10 +371,19 @@ export default function Vouchers() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const { data: plans   = [], isLoading: plansLoading   } = useQuery({ queryKey: ["isp_plans_hotspot"],  queryFn: fetchPlans   });
-  const { data: routers = [], isLoading: routersLoading } = useQuery({ queryKey: ["isp_routers"],        queryFn: fetchRouters });
+  const { data: adminInfo } = useQuery({
+    queryKey: ["admin_info", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
+      return data as { name: string } | null;
+    },
+  });
+  const companyName = adminInfo?.name ?? "ISP";
+
+  const { data: plans   = [], isLoading: plansLoading   } = useQuery({ queryKey: ["isp_plans_hotspot", ADMIN_ID],  queryFn: fetchPlans   });
+  const { data: routers = [], isLoading: routersLoading } = useQuery({ queryKey: ["isp_routers", ADMIN_ID],        queryFn: fetchRouters });
   const { data: vouchers = [], isLoading: vouchersLoading, refetch } = useQuery({
-    queryKey: ["vouchers"],
+    queryKey: ["vouchers", ADMIN_ID],
     queryFn: fetchVouchers,
     refetchOnWindowFocus: false,
   });
@@ -383,7 +392,7 @@ export default function Vouchers() {
   const generateMutation = useMutation({
     mutationFn: createVouchers,
     onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ["vouchers"] });
+      qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
       setShowGenerate(false);
       showToast(`${vars.codes.length} voucher${vars.codes.length !== 1 ? "s" : ""} created successfully`);
     },
@@ -393,14 +402,14 @@ export default function Vouchers() {
   /* ─── Delete single ─── */
   const deleteMutation = useMutation({
     mutationFn: deleteVoucher,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["vouchers"] }); showToast("Voucher deleted"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] }); showToast("Voucher deleted"); },
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
   /* ─── Delete bulk ─── */
   const deleteBulkMutation = useMutation({
     mutationFn: deleteVouchers,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["vouchers"] }); setSelected(new Set()); showToast(`Deleted ${selected.size} vouchers`); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] }); setSelected(new Set()); showToast(`Deleted ${selected.size} vouchers`); },
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
@@ -571,7 +580,7 @@ export default function Vouchers() {
               password:  v.code,
               type:      "voucher",
               plan_name: v.plan_name,
-              comment:   `OcholaNet voucher · ${v.plan_name}`,
+              comment:   `${companyName} voucher · ${v.plan_name}`,
             })),
           })}
         />

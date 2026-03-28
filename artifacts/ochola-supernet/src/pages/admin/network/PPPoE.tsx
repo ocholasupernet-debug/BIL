@@ -79,13 +79,13 @@ function defaultConfig(router?: DbRouter): PPPoEConfig {
 }
 
 /* ══════════════════════════ Script generators ══════════════════════════ */
-function genPPPoEOnlyScript(router: DbRouter, cfg: PPPoEConfig): string {
+function genPPPoEOnlyScript(router: DbRouter, cfg: PPPoEConfig, companyName: string): string {
   const radiusIp = "YOUR_RADIUS_SERVER_IP"; // replaced with actual server when deployed
   const secret   = router.router_secret ?? "changeme";
   const clientPorts = cfg.selectedPorts.filter(p => p !== cfg.wanInterface);
 
   return `# ============================================================
-# OcholaSupernet — PPPoE Only Configuration Script
+# ${companyName} — PPPoE Only Configuration Script
 # Router : ${router.name} (${router.host})
 # Mode   : PPPoE Only
 # Generated: ${new Date().toLocaleString("en-KE")}
@@ -106,7 +106,7 @@ function genPPPoEOnlyScript(router: DbRouter, cfg: PPPoEConfig): string {
 # /ip address add address=YOUR_WAN_IP/PREFIX interface=${cfg.wanInterface}
 
 # ─── 3. Create bridge for PPPoE clients ──────────────────────
-/interface bridge add name=${cfg.bridgeName} protocol-mode=none fast-forward=no comment="OcholaSupernet PPPoE bridge"
+/interface bridge add name=${cfg.bridgeName} protocol-mode=none fast-forward=no comment="${companyName} PPPoE bridge"
 
 # ─── 4. Add client-facing ports to bridge ────────────────────
 ${clientPorts.map(p => `/interface bridge port add bridge=${cfg.bridgeName} interface=${p} comment="${p}"`).join("\n")}
@@ -126,7 +126,7 @@ ${clientPorts.map(p => `/interface bridge port add bridge=${cfg.bridgeName} inte
   use-encryption=no \\
   dns-server=${cfg.dns1},${cfg.dns2} \\
   change-tcp-mss=yes \\
-  comment="OcholaSupernet default profile"
+  comment="${companyName} default profile"
 
 # ─── 8. RADIUS Client ────────────────────────────────────────
 /radius remove [find service=pppoe]
@@ -137,7 +137,7 @@ ${clientPorts.map(p => `/interface bridge port add bridge=${cfg.bridgeName} inte
   authentication-port=1812 \\
   accounting-port=1813 \\
   timeout=3000ms \\
-  comment="OcholaSupernet RADIUS"
+  comment="${companyName} RADIUS"
 
 /radius incoming set accept=yes port=3799
 
@@ -155,7 +155,7 @@ ${clientPorts.map(p => `/interface bridge port add bridge=${cfg.bridgeName} inte
   max-mtu=${cfg.maxMtu} \\
   one-session-per-host=yes \\
   keepalive-timeout=${cfg.keepAlive} \\
-  comment="OcholaSupernet PPPoE Server"
+  comment="${companyName} PPPoE Server"
 
 # ─── 11. Masquerade (NAT for PPPoE clients) ──────────────────
 /ip firewall nat add \\
@@ -165,25 +165,25 @@ ${clientPorts.map(p => `/interface bridge port add bridge=${cfg.bridgeName} inte
   out-interface=${cfg.wanInterface} \\
   comment="PPPoE clients masquerade"
 
-# ─── 12. API access for OcholaSupernet ───────────────────────
+# ─── 12. API access for ${companyName} ───────────────────────
 /ip service set api address=0.0.0.0/0 disabled=no
 /user add name=${router.router_username} password=${secret} group=full \\
-  comment="OcholaSupernet API user" disabled=no
+  comment="${companyName} API user" disabled=no
 
 # ─── Done ─────────────────────────────────────────────────────
-:log info "OcholaSupernet PPPoE Only config applied"
+:log info "${companyName} PPPoE Only config applied"
 :put "Configuration complete. PPPoE server is running on bridge: ${cfg.bridgeName}"
 `;
 }
 
-function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig): string {
+function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig, companyName: string): string {
   const radiusIp = "YOUR_RADIUS_SERVER_IP";
   const secret   = router.router_secret ?? "changeme";
   const cidr     = `${cfg.hotspotBridgeIp}/24`;
   const network  = cfg.hotspotBridgeIp.split(".").slice(0,3).join(".") + ".0";
 
   return `# ============================================================
-# OcholaSupernet — PPPoE over Hotspot Configuration Script
+# ${companyName} — PPPoE over Hotspot Configuration Script
 # Router : ${router.name} (${router.host})
 # Mode   : PPPoE over Hotspot
 # Generated: ${new Date().toLocaleString("en-KE")}
@@ -203,7 +203,7 @@ function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig): string {
 /interface bridge remove [find name="${cfg.hotspotBridge}"]
 
 # ─── 2. Create shared bridge ─────────────────────────────────
-/interface bridge add name=${cfg.hotspotBridge} protocol-mode=none fast-forward=no comment="OcholaSupernet shared bridge"
+/interface bridge add name=${cfg.hotspotBridge} protocol-mode=none fast-forward=no comment="${companyName} shared bridge"
 /interface bridge port add bridge=${cfg.hotspotBridge} interface=${cfg.hotspotInterface} comment="Client LAN"
 
 # ─── 3. Bridge IP address ────────────────────────────────────
@@ -235,7 +235,7 @@ function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig): string {
   login-by=http-chap,mac \\
   html-directory=hotspot \\
   mac-auth-mode=mac-as-username \\
-  comment="OcholaSupernet hotspot profile"
+  comment="${companyName} hotspot profile"
 
 /ip hotspot add \\
   name=hotspot-${router.name.replace(/\s+/g,"-").toLowerCase()} \\
@@ -292,7 +292,7 @@ function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig): string {
   max-mru=${cfg.maxMru} \\
   max-mtu=${cfg.maxMtu} \\
   one-session-per-host=yes \\
-  comment="OcholaSupernet PPPoE-over-Hotspot"
+  comment="${companyName} PPPoE-over-Hotspot"
 
 # ─── 11. NAT masquerade ──────────────────────────────────────
 /ip firewall nat add \\
@@ -300,13 +300,13 @@ function genPPPoEOverHotspotScript(router: DbRouter, cfg: PPPoEConfig): string {
   action=masquerade out-interface=ether1 \\
   comment="PPPoE/Hotspot clients masquerade"
 
-# ─── 12. API access for OcholaSupernet ───────────────────────
+# ─── 12. API access for ${companyName} ───────────────────────
 /ip service set api address=0.0.0.0/0 disabled=no
 /user add name=${router.router_username} password=${secret} group=full \\
-  comment="OcholaSupernet API user" disabled=no
+  comment="${companyName} API user" disabled=no
 
 # ─── Done ─────────────────────────────────────────────────────
-:log info "OcholaSupernet PPPoE-over-Hotspot config applied"
+:log info "${companyName} PPPoE-over-Hotspot config applied"
 :put "Done. Hotspot DNS: ${cfg.hotspotDnsName} | PPPoE server on ${cfg.hotspotBridge}"
 `;
 }
@@ -434,8 +434,17 @@ export default function PPPoE() {
 
   const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); };
 
+  const { data: adminInfo } = useQuery({
+    queryKey: ["admin_info", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
+      return data as { name: string } | null;
+    },
+  });
+  const companyName = adminInfo?.name ?? "ISP";
+
   const { data: routers = [], isLoading: loadingRouters } = useQuery({
-    queryKey: ["isp_routers"],
+    queryKey: ["isp_routers", ADMIN_ID],
     queryFn: async () => {
       const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID);
       if (error) throw error;
@@ -473,8 +482,8 @@ export default function PPPoE() {
   const generateScript = () => {
     if (!router) return;
     const s = cfg.mode === "pppoe_only"
-      ? genPPPoEOnlyScript(router, cfg)
-      : genPPPoEOverHotspotScript(router, cfg);
+      ? genPPPoEOnlyScript(router, cfg, companyName)
+      : genPPPoEOverHotspotScript(router, cfg, companyName);
     setScript(s);
   };
 

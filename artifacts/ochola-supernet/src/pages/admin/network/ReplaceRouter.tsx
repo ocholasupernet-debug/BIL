@@ -154,6 +154,16 @@ export default function ReplaceRouter() {
   const [done,        setDone]        = useState<boolean | null>(null);
   const [lastError,   setLastError]   = useState<string | undefined>(undefined);
 
+  /* ── Admin info ── */
+  const { data: adminInfo } = useQuery({
+    queryKey: ["admin_info", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
+      return data as { name: string } | null;
+    },
+  });
+  const companyName = adminInfo?.name ?? "ISP";
+
   /* ── Supabase data ── */
   const { data: routers = [] } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_rr"],
@@ -264,7 +274,7 @@ export default function ReplaceRouter() {
     if (doCustomers && customers.length > 0) {
       addLog(`▶ [${[doHotspot, doPlans].filter(Boolean).length + 1}/${steps}] Pushing ${customers.length} customer accounts…`);
       const r = await postSync("/api/admin/sync/users", {
-        users: customers.map(c => ({ username: c.username ?? "", password: "", type: c.type ?? "hotspot", plan_name: c.plan_id ? (planMap[c.plan_id] ?? "default") : "default", pppoe_username: c.pppoe_username ?? undefined, mac_address: c.mac_address ?? undefined, ip_address: c.ip_address ?? undefined, comment: `OcholaNet customer #${c.id}` })),
+        users: customers.map(c => ({ username: c.username ?? "", password: "", type: c.type ?? "hotspot", plan_name: c.plan_id ? (planMap[c.plan_id] ?? "default") : "default", pppoe_username: c.pppoe_username ?? undefined, mac_address: c.mac_address ?? undefined, ip_address: c.ip_address ?? undefined, comment: `${companyName} customer #${c.id}` })),
       });
       r.logs.forEach(l => addLog(`  ${l}`));
       if (!r.ok) { addLog(`❌ Customer sync failed: ${r.error}`); anyFail = true; }
@@ -276,7 +286,7 @@ export default function ReplaceRouter() {
     if (doVouchers && vouchers.length > 0) {
       addLog(`▶ [${[doHotspot, doPlans, doCustomers].filter(Boolean).length + 1}/${steps}] Pushing ${vouchers.length} voucher codes…`);
       const r = await postSync("/api/admin/sync/users", {
-        users: vouchers.map(v => ({ username: v.code, password: v.code, type: "voucher", plan_name: v.plan_name, comment: "OcholaNet voucher" })),
+        users: vouchers.map(v => ({ username: v.code, password: v.code, type: "voucher", plan_name: v.plan_name, comment: `${companyName} voucher` })),
       });
       r.logs.forEach(l => addLog(`  ${l}`));
       if (!r.ok) { addLog(`❌ Voucher sync failed: ${r.error}`); anyFail = true; }

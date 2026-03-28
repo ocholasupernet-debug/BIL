@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
@@ -123,7 +124,6 @@ export default function BridgePorts() {
   const params = new URLSearchParams(window.location.search);
   const routerIdParam = params.get("routerId");
 
-  const [routers, setRouters]       = useState<DbRouter[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(
     routerIdParam ? Number(routerIdParam) : null
   );
@@ -143,15 +143,16 @@ export default function BridgePorts() {
   const [applyOk, setApplyOk]       = useState<boolean | null>(null);
 
   /* load routers from Supabase */
-  useEffect(() => {
-    supabase
-      .from("isp_routers")
-      .select("id,name,host,status,router_username,router_secret")
-      .eq("admin_id", ADMIN_ID)
-      .then(({ data }) => {
-        if (data) setRouters(data as DbRouter[]);
-      });
-  }, []);
+  const { data: routers = [] } = useQuery<DbRouter[]>({
+    queryKey: ["isp_routers", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("isp_routers")
+        .select("id,name,host,status,router_username,router_secret")
+        .eq("admin_id", ADMIN_ID);
+      return (data ?? []) as DbRouter[];
+    },
+  });
 
   /* auto-fetch ports when router selected */
   useEffect(() => {

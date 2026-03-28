@@ -1,5 +1,7 @@
 import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Server, Wifi, Activity, Terminal, Shield, Plus,
   Copy, Check, Download, ChevronRight, Router, Settings2,
@@ -17,6 +19,7 @@ function generateScript(cfg: {
   poolStart: string;
   poolEnd: string;
   profileName: string;
+  companyName: string;
 }) {
   return `/ip hotspot profile
 add name=${cfg.profileName} \\
@@ -50,7 +53,7 @@ add chain=dstnat protocol=tcp dst-port=80 \\
   action=redirect to-ports=64872 \\
   hotspot=!auth comment="Hotspot redirect"
 
-/system identity set name=OcholaNet-HotspotRouter`.trim();
+/system identity set name=${cfg.companyName.replace(/\s+/g, "-")}-HotspotRouter`.trim();
 }
 
 /* ─── Recent Installations ─── */
@@ -72,6 +75,15 @@ const STEPS = [
 ];
 
 function SelfInstallTab() {
+  const { data: adminInfo } = useQuery({
+    queryKey: ["admin_info", ADMIN_ID],
+    queryFn: async () => {
+      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
+      return data as { name: string } | null;
+    },
+  });
+  const companyName = adminInfo?.name ?? "ISP";
+
   const [cfg, setCfg] = useState({
     hotspotIp: "192.168.1.1",
     dnsName: "hotspot.isplatty.org",
@@ -84,7 +96,7 @@ function SelfInstallTab() {
     routerTarget: "latty1",
   });
   const [copied, setCopied] = useState(false);
-  const script = generateScript(cfg);
+  const script = generateScript({ ...cfg, companyName });
 
   const handleCopy = () => {
     navigator.clipboard.writeText(script).then(() => {
