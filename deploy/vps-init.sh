@@ -88,7 +88,8 @@ sudo rm -f /etc/nginx/sites-enabled/default
 
 sudo nginx -t && sudo systemctl reload nginx
 
-# Open ports
+# Open ports (SSH must be first to avoid locking yourself out)
+sudo ufw allow 22/tcp  || true
 sudo ufw allow 80/tcp  || true
 sudo ufw allow 443/tcp || true
 sudo ufw --force enable || true
