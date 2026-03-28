@@ -26,7 +26,7 @@ sudo apt install -y certbot python3-certbot-nginx
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git /var/www/ocholasupernet
+git clone https://github.com/ocholasupernet-debug/BIL.git /var/www/ocholasupernet
 cd /var/www/ocholasupernet
 
 # Install dependencies
@@ -34,7 +34,7 @@ pnpm install
 
 # Build the frontend (VPS build — no Replit plugins)
 cd artifacts/ochola-supernet
-BASE_PATH="/" PORT=3000 pnpm run build:vps
+pnpm run build:vps
 cd ../..
 
 # Build the API server
@@ -44,10 +44,6 @@ cd ../..
 
 # Create logs directory
 mkdir -p logs
-
-# Copy environment file and fill in your values
-cp .env.example .env
-nano .env
 ```
 
 ---
