@@ -1,22 +1,16 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
 
 export const transactionsTable = pgTable("isp_transactions", {
-  id: serial("id").primaryKey(),
-  ispId: integer("isp_id").notNull(),
+  id: serial("id").primaryKey().notNull(),
   customerId: integer("customer_id"),
-  customerName: text("customer_name"),
-  phone: text("phone"),
+  planId: integer("plan_id"),
   amount: integer("amount").notNull(),
-  method: text("method").notNull().default("mpesa"),
-  planName: text("plan_name"),
-  mpesaRef: text("mpesa_ref"),
-  status: text("status").notNull().default("completed"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+  paymentMethod: text("payment_method").default("cash").notNull(),
+  reference: text("reference"),
+  status: text("status").default("completed").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { mode: "string" }).defaultNow().notNull(),
 });
 
-export const insertTransactionSchema = createInsertSchema(transactionsTable).omit({ id: true, createdAt: true, updatedAt: true });
-export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type Transaction = typeof transactionsTable.$inferSelect;
+export type InsertTransaction = typeof transactionsTable.$inferInsert;
