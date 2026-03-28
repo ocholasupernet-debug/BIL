@@ -45,7 +45,7 @@ const KPI_ROW2 = [
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><circle cx="32" cy="32" r="10"/><path d="M12 32a20 20 0 1 0 40 0A20 20 0 0 0 12 32" fillOpacity="0" stroke="white" strokeWidth="4"/></svg>,
   },
   {
-    label: "Vouchers Left", value: "1",
+    label: "Vouchers Left", value: "0",
     link: "View All", href: "/admin/vouchers",
     gradient: "linear-gradient(135deg,#a18cd1 0%,#fbc2eb 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="4" y="20" width="56" height="24" rx="4"/><circle cx="20" cy="32" r="4" fill="#ffffff66"/><rect x="28" y="28" width="24" height="4" rx="2" fill="#ffffff66"/></svg>,
@@ -215,7 +215,7 @@ export default function Dashboard() {
   const recentTxs = transactions.slice(0, 5);
 
   const kpiRow2WithLive = KPI_ROW2.map(k => {
-    if (k.label === "Routers Online") return { ...k, value: routersLoading ? "—" : String(onlineRouters) };
+    if (k.label === "Routers Online") return { ...k, value: routersLoading ? "0" : String(onlineRouters) };
     return k;
   });
 
@@ -228,10 +228,10 @@ export default function Dashboard() {
 
         {/* Online User Stat Cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-          <OnlineStatCard label="Hotspot Online Users" value="—" gradient="linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)" href="/admin/customers?status=online&type=hotspot" />
-          <OnlineStatCard label="PPPoE Online Users"   value="—" gradient="linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)" href="/admin/customers?status=online&type=pppoe" />
-          <OnlineStatCard label="Static Online Users"  value="—" gradient="linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)" href="/admin/customers?status=online&type=static" />
-          <OnlineStatCard label="Total Online Users"   value="—" gradient="linear-gradient(135deg,#d97706 0%,#f59e0b 100%)" href="/admin/customers?status=online" />
+          <OnlineStatCard label="Hotspot Online Users" value="0" gradient="linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)" href="/admin/customers?status=online&type=hotspot" />
+          <OnlineStatCard label="PPPoE Online Users"   value="0" gradient="linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)" href="/admin/customers?status=online&type=pppoe" />
+          <OnlineStatCard label="Static Online Users"  value="0" gradient="linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)" href="/admin/customers?status=online&type=static" />
+          <OnlineStatCard label="Total Online Users"   value="0" gradient="linear-gradient(135deg,#d97706 0%,#f59e0b 100%)" href="/admin/customers?status=online" />
         </div>
 
         {/* M-Pesa Status Bar */}
