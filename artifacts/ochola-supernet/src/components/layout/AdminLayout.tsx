@@ -6,11 +6,12 @@ import {
   Zap, MessageSquare, CheckSquare, Wifi, Layers, Shield,
   Search, Sun, Moon, ChevronDown, Globe, Radio,
   MonitorSmartphone, Sliders, FileCode2, Star, MoreHorizontal,
-  Activity, BookOpen
+  Activity, BookOpen, LogOut
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
+import { clearAdminAuth, getAdminName } from "@/lib/supabase";
 
 interface NavItem {
   name: string;
@@ -155,11 +156,17 @@ const navItems: NavItem[] = [
 ];
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedItems, setExpandedItems] = useState<string[]>(["Network", "Customers"]);
   const { theme, toggle, isDark } = useTheme();
   const brand = useBrand();
+  const adminName = getAdminName();
+
+  const handleLogout = () => {
+    clearAdminAuth();
+    setLocation("/admin/login");
+  };
 
   const toggleExpand = (name: string) => {
     setExpandedItems(prev =>
@@ -340,7 +347,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {/* Right: Quick Actions + avatar */}
+          {/* Right: Quick Actions + avatar + logout */}
           <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexShrink: 0 }}>
             <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "var(--isp-input-bg)", border: "1px solid var(--isp-input-border)", borderRadius: 8, padding: "0.4rem 0.875rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
               <Zap style={{ width: 13, height: 13, color: "#fbbf24" }} />
@@ -348,12 +355,20 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <ChevronDown style={{ width: 12, height: 12 }} />
             </button>
             <span style={{ fontSize: "1.1rem" }}>🇰🇪</span>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "var(--isp-input-bg)", borderRadius: 8, padding: "0.3rem 0.75rem", cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "var(--isp-input-bg)", borderRadius: 8, padding: "0.3rem 0.75rem" }}>
               <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 800, color: "white" }}>
-                A
+                {(adminName || "A").charAt(0).toUpperCase()}
               </div>
-              <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", fontWeight: 500 }}>{brand.adminName || "Administrator"}</span>
+              <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", fontWeight: 500 }}>{adminName || brand.adminName || "Administrator"}</span>
             </div>
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "0.4rem 0.75rem", color: "#f87171", fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.2s" }}
+            >
+              <LogOut style={{ width: 13, height: 13 }} />
+              Logout
+            </button>
           </div>
         </header>
 

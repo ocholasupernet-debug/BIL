@@ -77,7 +77,7 @@ export default function AdminRegister() {
         phone:     phone.trim(),
         username:  slug || "user",
         password:  phone.trim(),
-        is_active: false,
+        is_active: true,
         role:      "isp_admin",
       });
       if (error) throw error;
@@ -103,11 +103,11 @@ export default function AdminRegister() {
             <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-emerald-500/20 flex items-center justify-center">
               <CheckCircle2 className="w-10 h-10 text-emerald-400" />
             </div>
-            <h2 className="text-2xl font-black text-white mb-2">You're on the list!</h2>
+            <h2 className="text-2xl font-black text-white mb-2">Account Created!</h2>
             <p className="text-slate-300 text-sm mb-1">
-              <span className="text-violet-300 font-semibold">{company}</span> has been registered.
+              <span className="text-violet-300 font-semibold">{company}</span> is now registered.
             </p>
-            <p className="text-slate-500 text-xs mb-8">The Super Admin will review and activate your account shortly.</p>
+            <p className="text-slate-500 text-xs mb-8">Your account is active. Sign in with your phone number as the password.</p>
             <button
               onClick={() => setLocation("/admin/login")}
               className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all"

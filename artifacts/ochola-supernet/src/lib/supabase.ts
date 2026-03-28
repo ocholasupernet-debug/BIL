@@ -5,8 +5,38 @@ const SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-/* ─── Shared admin id for this ISP instance ─── */
-export const ADMIN_ID = 5;
+/* ─── Auth helpers ─── */
+function _getStoredAdminId(): number {
+  try { const v = localStorage.getItem("ochola_admin_id"); return v ? parseInt(v) : 5; } catch { return 5; }
+}
+
+export let ADMIN_ID: number = _getStoredAdminId();
+
+export function setAdminAuth(id: number, username: string, name: string) {
+  ADMIN_ID = id;
+  try {
+    localStorage.setItem("ochola_admin_id", String(id));
+    localStorage.setItem("ochola_admin_username", username);
+    localStorage.setItem("ochola_admin_name", name);
+  } catch {}
+}
+
+export function clearAdminAuth() {
+  ADMIN_ID = 5;
+  try {
+    localStorage.removeItem("ochola_admin_id");
+    localStorage.removeItem("ochola_admin_username");
+    localStorage.removeItem("ochola_admin_name");
+  } catch {}
+}
+
+export function getAdminName(): string {
+  try { return localStorage.getItem("ochola_admin_name") || ""; } catch { return ""; }
+}
+
+export function isLoggedIn(): boolean {
+  try { return !!localStorage.getItem("ochola_admin_id"); } catch { return false; }
+}
 
 /* ─── isp_plans row shape ─── */
 export interface DbPlan {

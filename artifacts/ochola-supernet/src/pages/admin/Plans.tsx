@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
-import { MOCK_BANDWIDTH_PLANS } from "@/hooks/use-mock-api";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth } from "@/lib/supabase";
 import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
