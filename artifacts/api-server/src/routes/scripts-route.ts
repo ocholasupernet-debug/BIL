@@ -222,8 +222,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
       ``,
       `# === Default User Profile ===`,
-      ros(`/ip hotspot user profile remove [find name=default]`),
-      ros(`/ip hotspot user profile add name=default shared-users=1 keepalive-timeout=2m idle-timeout=none`),
+      ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
     ];
 
     /* ── Plan profiles ── */
