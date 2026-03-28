@@ -247,7 +247,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === OVPN Client (Management Tunnel) ===`,
       `# NOTE: Import your CA cert first: /certificate import file-name=ca.crt`,
       `:do { /interface ovpn-client remove [find comment="${companyName} mgmt"] } on-error={}`,
-      `:do { /interface ovpn-client add name=ovpn-mgmt connect-to=${adminSubdomain}.isplatty.org port=1194 mode=ip protocol=tcp user="${routerSlug}" auth=sha1 cipher=aes256 add-default-route=no disabled=yes comment="${companyName} mgmt" } on-error={}`,
+      `:do { /interface ovpn-client add name=ovpn-mgmt connect-to=${adminSubdomain}.isplatty.org port=1194 mode=ip user="${routerSlug}" auth=sha1 cipher=aes256 add-default-route=no disabled=yes comment="${companyName} mgmt" } on-error={}`,
       `# To enable OVPN: /interface ovpn-client enable [find name=ovpn-mgmt]`,
       ``,
       `# === Default User Profile ===`,
