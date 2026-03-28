@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ShieldCheck, Settings, CreditCard,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
   Plug, Gauge, LogOut, Menu, X, ChevronRight,
-  Globe,
+  Globe, LogIn,
 } from "lucide-react";
 
 const S = {
@@ -34,8 +34,9 @@ const NAV: NavSection[] = [
   {
     label: "Management",
     items: [
-      { name: "Admins",              href: "/super-admin/admins",   icon: Users        },
-      { name: "Roles & Permissions", href: "/super-admin/roles",    icon: ShieldCheck  },
+      { name: "Admins",              href: "/super-admin/admins",       icon: Users        },
+      { name: "Impersonate Admin",   href: "/super-admin/impersonate",  icon: LogIn        },
+      { name: "Roles & Permissions", href: "/super-admin/roles",        icon: ShieldCheck  },
     ],
   },
   {

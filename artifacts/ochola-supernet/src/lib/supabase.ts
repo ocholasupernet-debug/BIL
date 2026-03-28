@@ -40,6 +40,36 @@ export function isLoggedIn(): boolean {
   try { return !!localStorage.getItem("ochola_admin_id"); } catch { return false; }
 }
 
+/* ─── Impersonation helpers ─── */
+export function startImpersonation(id: number, username: string, name: string) {
+  try {
+    // Save the impersonation marker so the admin layout can show the banner
+    localStorage.setItem("ochola_impersonating", "true");
+    localStorage.setItem("ochola_impersonate_name", name);
+    localStorage.setItem("ochola_impersonate_username", username);
+  } catch {}
+  setAdminAuth(id, username, name);
+}
+
+export function stopImpersonation() {
+  try {
+    localStorage.removeItem("ochola_impersonating");
+    localStorage.removeItem("ochola_impersonate_name");
+    localStorage.removeItem("ochola_impersonate_username");
+    localStorage.removeItem("ochola_admin_id");
+    localStorage.removeItem("ochola_admin_username");
+    localStorage.removeItem("ochola_admin_name");
+  } catch {}
+}
+
+export function isImpersonating(): boolean {
+  try { return localStorage.getItem("ochola_impersonating") === "true"; } catch { return false; }
+}
+
+export function getImpersonatedName(): string {
+  try { return localStorage.getItem("ochola_impersonate_name") || ""; } catch { return ""; }
+}
+
 /* ─── isp_plans row shape ─── */
 export interface DbPlan {
   id: number;

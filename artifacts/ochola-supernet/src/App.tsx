@@ -39,6 +39,7 @@ import SuperAdminAutomation from "./pages/super-admin/Automation";
 import SuperAdminBackups from "./pages/super-admin/Backups";
 import SuperAdminApiIntegrations from "./pages/super-admin/ApiIntegrations";
 import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
+import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -141,6 +142,7 @@ function Router() {
       <Route path="/super-admin/backups"        component={SuperAdminBackups}          />
       <Route path="/super-admin/api"            component={SuperAdminApiIntegrations}  />
       <Route path="/super-admin/limits"         component={SuperAdminSystemLimits}     />
+      <Route path="/super-admin/impersonate"    component={SuperAdminImpersonate}      />
       <Route path="/super-admin/login" component={() => <StubPage title="Super Admin Login" />} />
       
       <Route component={NotFound} />
