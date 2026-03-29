@@ -459,6 +459,49 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/reboot
+   Connects to a MikroTik router and sends /system reboot.
+   Body: { host, username, password, bridgeIp? }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/reboot", async (req, res): Promise<void> => {
+  const { host, username, password, bridgeIp } = req.body as {
+    host: string; username: string; password: string; bridgeIp?: string;
+  };
+  if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
+
+  let conn = makeConn(host, username, password);
+  let connected = false;
+  let via = host;
+
+  try {
+    await withTimeout(conn.connect(), 8000);
+    connected = true;
+  } catch {
+    if (bridgeIp && bridgeIp !== host) {
+      try {
+        conn = makeConn(bridgeIp, username, password);
+        await withTimeout(conn.connect(), 8000);
+        connected = true;
+        via = bridgeIp;
+      } catch { /* both failed */ }
+    }
+  }
+
+  if (!connected) {
+    res.json({ ok: false, error: connErr(host, "Connection timed out") });
+    return;
+  }
+
+  try {
+    /* Send reboot — router disconnects immediately, so we don't wait for a response */
+    conn.write(["/system/reboot"]).catch(() => { /* expected disconnect */ });
+    res.json({ ok: true, via, message: `Reboot command sent to ${via}` });
+  } catch (err) {
+    res.json({ ok: false, error: connErr(host, err) });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
    POST /api/admin/router/probe
    Connects to a MikroTik router and reads:
      - /system/resource  (version, board-name, uptime, cpu-load, memory)

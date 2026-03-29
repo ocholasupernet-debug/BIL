@@ -135,11 +135,15 @@ export interface DbRouter {
   name: string;
   host: string;
   ip_address: string | null;
+  bridge_ip: string | null;
+  router_secret: string | null;
+  router_username: string;
+  description: string | null;
   model: string | null;
+  serial: string | null;
   ros_version: string | null;
   status: string;
   last_seen: string | null;
-  router_username: string;
   created_at: string;
   updated_at: string;
 }
