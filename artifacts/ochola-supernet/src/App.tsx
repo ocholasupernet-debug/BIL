@@ -29,6 +29,7 @@ import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
+import PPPoELogin  from "./pages/portal/PPPoELogin";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
 import SuperAdminAdmins from "./pages/super-admin/Admins";
 import SuperAdminRoles from "./pages/super-admin/Roles";
@@ -135,7 +136,7 @@ function Router() {
       <Route path="/admin/register" component={AdminRegister} />
       <Route path="/admin/set-password" component={AdminSetPassword} />
       <Route path="/isp-register"    component={AdminRegister} />
-      <Route path="/pppoe-login" component={() => <StubPage title="PPPoE Client Portal" />} />
+      <Route path="/pppoe-login" component={PPPoELogin} />
       
       {/* Super Admin */}
       <Route path="/super-admin" component={SuperAdminDashboard} />

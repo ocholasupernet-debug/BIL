@@ -113,33 +113,48 @@ function ColorPicker({ label, value, onChange }: { label: string; value: string;
   );
 }
 
-/* ─── PPPoE Login Preview Modal ─── */
+/* ─── PPPoE Login Preview Modal — mirrors actual PPPoELogin.tsx ─── */
 function PPPoEPreviewModal({ onClose, settings, colors }: {
   onClose: () => void; settings: PSettings; colors: typeof DEFAULT_COLORS;
 }) {
-  const [tab, setTab] = useState<"login" | "register" | "voucher">("login");
+  const [tab, setTab] = useState<"login" | "forgot" | "voucher">("login");
 
-  const bg = `linear-gradient(135deg, ${colors.bgColor} 0%, ${colors.bgColor2} 100%)`;
-  const cardStyle: React.CSSProperties = {
-    background: colors.cardColor, border: `1px solid ${colors.primaryColor}33`,
-    borderRadius: 16, padding: "24px 28px",
+  const bg = `linear-gradient(160deg, ${colors.bgColor} 0%, ${colors.bgColor2} 100%)`;
+  const card: React.CSSProperties = {
+    background: colors.cardColor,
+    border: `1px solid ${colors.primaryColor}33`,
+    borderRadius: 20, padding: "24px 28px",
   };
-  const btnStyle: React.CSSProperties = {
-    padding: "12px 0", borderRadius: 10, color: "#fff",
-    fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer", width: "100%",
+  const mainBtn: React.CSSProperties = {
+    width: "100%", padding: "14px 0", borderRadius: 12, border: "none",
+    fontWeight: 700, fontSize: 14, color: "#fff", cursor: "pointer",
     background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})`,
   };
-  const inpStyle: React.CSSProperties = { ...INPUT, background: colors.inputBgColor, marginBottom: 12 };
-  const tabBtnBase: React.CSSProperties = {
-    padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
-    border: "none", cursor: "pointer",
+  const inp: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box",
+    background: colors.inputBgColor,
+    border: `1px solid ${colors.primaryColor}22`,
+    borderRadius: 10, padding: "12px 14px",
+    color: colors.textColor, fontSize: 13, outline: "none", marginBottom: 12,
   };
+  const lbl: React.CSSProperties = {
+    display: "block", fontSize: 10, fontWeight: 700,
+    color: colors.primaryColor, letterSpacing: "0.08em",
+    marginBottom: 6, textTransform: "uppercase" as const,
+  };
+  const tabBtn = (active: boolean): React.CSSProperties => ({
+    padding: "9px 16px", borderRadius: 9, border: "none", cursor: "pointer",
+    fontSize: 12, fontWeight: 700,
+    background: active ? colors.primaryColor : "transparent",
+    color: active ? "#fff" : `${colors.textColor}88`,
+  });
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ width: "min(900px,95vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", borderRadius: 20, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
+      <div style={{ width: "min(920px,96vw)", maxHeight: "93vh", display: "flex", flexDirection: "column", borderRadius: 20, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
 
-        <div style={{ background: "#0f172a", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+        {/* toolbar */}
+        <div style={{ background: "#0f172a", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Eye size={16} style={{ color: colors.primaryColor }} />
             <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 14 }}>PPPoE Login Page Preview</span>
@@ -150,85 +165,130 @@ function PPPoEPreviewModal({ onClose, settings, colors }: {
           </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", background: bg, color: colors.textColor }}>
-          {/* Header */}
-          <div style={{ padding: "16px 32px", borderBottom: `1px solid ${colors.primaryColor}22`, background: `${colors.bgColor}CC`, backdropFilter: "blur(10px)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {/* page body */}
+        <div style={{ flex: 1, overflowY: "auto", background: bg, color: colors.textColor, fontFamily: "sans-serif" }}>
+
+          {/* ── Header ── */}
+          <div style={{ padding: "16px 40px", borderBottom: `1px solid ${colors.primaryColor}1a`, background: `${colors.bgColor}cc`, backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {settings.logoUrl ? (
                 <img src={settings.logoUrl} alt="logo" style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 8 }} />
               ) : (
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg,${colors.primaryColor},${colors.accentColor})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg,${colors.primaryColor},${colors.accentColor})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Sliders size={18} color="#fff" />
                 </div>
               )}
               <div>
                 <div style={{ fontWeight: 800, fontSize: 15 }}>{settings.ispName}</div>
-                <div style={{ fontSize: 10, color: colors.primaryColor }}>PPPoE Portal</div>
+                <div style={{ fontSize: 10, color: colors.primaryColor }}>PPPoE Client Portal · {settings.ispName.toLowerCase()}.net</div>
               </div>
             </div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", borderRadius: 99, padding: "4px 12px" }}>● Connected</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", borderRadius: 99, padding: "4px 12px" }}>● Service Active</div>
           </div>
 
-          {/* Hero */}
-          <div style={{ textAlign: "center", padding: "40px 32px 24px" }}>
-            <h2 style={{ fontSize: 28, fontWeight: 900, margin: 0, marginBottom: 10 }}>
+          {/* ── Hero ── */}
+          <div style={{ textAlign: "center", padding: "36px 32px 20px" }}>
+            <h2 style={{ fontSize: 30, fontWeight: 900, margin: "0 0 10px" }}>
+              Your{" "}
               <span style={{ background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-                {settings.ispName}
+                Broadband Portal
               </span>
             </h2>
-            <p style={{ color: `${colors.textColor}99`, fontSize: 13, margin: 0 }}>{settings.tagline}</p>
+            <p style={{ color: `${colors.textColor}88`, fontSize: 13, margin: 0 }}>
+              {settings.tagline || "Manage your PPPoE account, track usage and renew your subscription."}
+            </p>
           </div>
 
-          {/* Tabs */}
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
-            <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 12, padding: 4, display: "inline-flex", gap: 2 }}>
-              {(["login", "register", "voucher"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} style={{ ...tabBtnBase, background: tab === t ? colors.primaryColor : "transparent", color: tab === t ? "#fff" : `${colors.textColor}88` }}>
-                  {t === "login" ? "Login" : t === "register" ? "Sign Up" : "Redeem Voucher"}
+          {/* ── Stats bar ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, maxWidth: 520, margin: "0 auto 28px", padding: "0 24px" }}>
+            {[
+              { icon: "⚡", label: "Speed",   value: "Up to 100 Mbps" },
+              { icon: "✅", label: "Uptime",  value: "99.9%" },
+              { icon: "🛠", label: "Support", value: "24/7" },
+            ].map(s => (
+              <div key={s.label} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 10px", textAlign: "center" }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{s.icon}</div>
+                <div style={{ fontWeight: 800, fontSize: 14 }}>{s.value}</div>
+                <div style={{ fontSize: 10, color: `${colors.primaryColor}aa`, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* ── Tabs ── */}
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 22 }}>
+            <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 14, padding: 4, display: "inline-flex", gap: 2 }}>
+              {(["login", "forgot", "voucher"] as const).map(t => (
+                <button key={t} onClick={() => setTab(t)} style={tabBtn(tab === t)}>
+                  {t === "login" ? "Member Login" : t === "forgot" ? "Forgot Password" : "Redeem Voucher"}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Tab content */}
-          <div style={{ maxWidth: 440, margin: "0 auto", padding: "0 24px 40px" }}>
+          {/* ── Tab content ── */}
+          <div style={{ maxWidth: 440, margin: "0 auto", padding: "0 24px 48px" }}>
+
             {tab === "login" && (
-              <div style={cardStyle}>
-                <div style={{ fontWeight: 700, textAlign: "center", fontSize: 18, marginBottom: 20 }}>Member Login</div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: colors.primaryColor, display: "block", marginBottom: 6 }}>USERNAME</label>
-                <input style={inpStyle} readOnly />
-                <label style={{ fontSize: 11, fontWeight: 700, color: colors.primaryColor, display: "block", marginBottom: 6 }}>PASSWORD</label>
-                <input type="password" style={{ ...inpStyle, marginBottom: 20 }} readOnly />
-                <button style={btnStyle}>Login</button>
+              <div style={card}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: `${colors.primaryColor}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>👤</div>
+                  <div style={{ fontWeight: 700, fontSize: 17 }}>Member Login</div>
+                </div>
+                <label style={lbl}>Username</label>
+                <input style={inp} readOnly placeholder="your_username" />
+                <label style={lbl}>Password</label>
+                <input type="password" style={{ ...inp, marginBottom: 20 }} readOnly placeholder="••••••••" />
+                <button style={mainBtn}>Login</button>
+                <p style={{ textAlign: "center", fontSize: 11, color: `${colors.textColor}55`, marginTop: 14 }}>
+                  Forgot your credentials?{" "}
+                  <span onClick={() => setTab("forgot")} style={{ color: colors.primaryColor, fontWeight: 700, cursor: "pointer" }}>Reset here</span>
+                </p>
                 {settings.supportPhone && (
-                  <p style={{ textAlign: "center", fontSize: 11, color: `${colors.textColor}66`, marginTop: 14 }}>
+                  <p style={{ textAlign: "center", fontSize: 11, color: `${colors.textColor}44`, marginTop: 8 }}>
                     Need help? Call <strong style={{ color: colors.primaryColor }}>{settings.supportPhone}</strong>
                   </p>
                 )}
               </div>
             )}
-            {tab === "register" && (
-              <div style={cardStyle}>
-                <div style={{ fontWeight: 700, textAlign: "center", fontSize: 18, marginBottom: 20 }}>Create Account</div>
-                {["Full Name", "Username", "Phone Number", "Password"].map(f => (
-                  <div key={f}>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: colors.primaryColor, display: "block", marginBottom: 6 }}>{f.toUpperCase()}</label>
-                    <input style={inpStyle} readOnly />
+
+            {tab === "forgot" && (
+              <div style={{ ...card, borderColor: `#f59e0b33` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(245,158,11,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🔑</div>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 17 }}>Reset Password</div>
+                    <div style={{ fontSize: 11, color: `${colors.textColor}66` }}>Enter your registered phone number</div>
                   </div>
-                ))}
-                <button style={{ ...btnStyle, marginTop: 8 }}>Register</button>
-              </div>
-            )}
-            {tab === "voucher" && (
-              <div style={cardStyle}>
-                <div style={{ textAlign: "center", marginBottom: 16 }}>
-                  <div style={{ fontWeight: 700, fontSize: 18 }}>🎟 Redeem Voucher</div>
-                  <div style={{ fontSize: 12, color: `${colors.textColor}88`, marginTop: 6 }}>Enter your printed code to activate</div>
                 </div>
-                <input placeholder="XXXX-XXXX-XXXX" style={{ ...inpStyle, textAlign: "center", fontFamily: "monospace", fontSize: 16, color: colors.primaryColor, marginBottom: 16 }} readOnly />
-                <button style={{ ...btnStyle, background: `linear-gradient(90deg,${colors.buttonColor},${colors.accentColor})` }}>Activate</button>
+                <div style={{ marginTop: 16 }}>
+                  <label style={{ ...lbl, color: "#f59e0b" }}>Phone Number</label>
+                  <input placeholder="07XX XXX XXX" style={{ ...inp, borderColor: "rgba(245,158,11,0.2)" }} readOnly />
+                </div>
+                <button style={{ ...mainBtn, marginTop: 4, background: "linear-gradient(90deg,#f59e0b,#ea580c)" }}>Request Reset</button>
               </div>
             )}
+
+            {tab === "voucher" && (
+              <div style={{ ...card, borderColor: `${colors.primaryColor}22` }}>
+                <div style={{ textAlign: "center", marginBottom: 20 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: "50%", background: `${colors.primaryColor}22`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px", fontSize: 22 }}>🎟</div>
+                  <div style={{ fontWeight: 700, fontSize: 17 }}>Redeem Voucher</div>
+                  <div style={{ fontSize: 12, color: `${colors.textColor}66`, marginTop: 4 }}>Enter your voucher code to renew your PPPoE subscription</div>
+                </div>
+                <input
+                  placeholder="XXXX-XXXX-XXXX"
+                  style={{ ...inp, textAlign: "center", fontFamily: "monospace", fontSize: 17, letterSpacing: "0.15em", color: colors.primaryColor, borderColor: `${colors.primaryColor}33`, marginBottom: 16 }}
+                  readOnly
+                />
+                <button style={mainBtn}>Activate Voucher</button>
+              </div>
+            )}
+
+          </div>
+
+          {/* ── Footer ── */}
+          <div style={{ textAlign: "center", padding: "16px 0 28px", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: 11, color: `${colors.textColor}33` }}>
+            &copy; {new Date().getFullYear()} {settings.ispName} — PPPoE Client Portal
           </div>
         </div>
       </div>
