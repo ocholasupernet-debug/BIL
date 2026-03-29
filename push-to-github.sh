@@ -2,7 +2,7 @@
 # Manual / auto push to GitHub
 # Usage: bash push-to-github.sh ["optional commit message"]
 
-REMOTE="origin"
+REPO="ocholasupernet-debug/BIL"
 LOCAL_BRANCH="main"
 REMOTE_BRANCH="main"
 
@@ -13,6 +13,13 @@ git config --local user.name  "OcholaSupernet"           2>/dev/null || true
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " OcholaSupernet → GitHub Push"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Build an authenticated push URL using the GITHUB_TOKEN secret
+if [ -z "$GITHUB_TOKEN" ]; then
+  echo "❌ GITHUB_TOKEN is not set — cannot push to GitHub."
+  exit 1
+fi
+PUSH_URL="https://${GITHUB_TOKEN}@github.com/${REPO}.git"
 
 # Stage and commit any uncommitted changes
 STAGED=$(git status --porcelain 2>/dev/null)
@@ -28,13 +35,20 @@ else
   echo "[2/3] Skipped commit"
 fi
 
-echo "[3/3] Pushing $LOCAL_BRANCH → $REMOTE/$REMOTE_BRANCH..."
-if git push "$REMOTE" "$LOCAL_BRANCH:$REMOTE_BRANCH" --force 2>&1; then
+echo "[3/3] Pushing $LOCAL_BRANCH → github/$REMOTE_BRANCH..."
+if git push "$PUSH_URL" "$LOCAL_BRANCH:$REMOTE_BRANCH" --force 2>&1; then
   echo ""
   echo "✅ Pushed successfully!"
+  echo "   https://github.com/${REPO}/tree/${REMOTE_BRANCH}"
 else
-  # Retry once in case of a transient lock error
+  # Retry once in case of a transient error
   sleep 2
-  git push "$REMOTE" "$LOCAL_BRANCH:$REMOTE_BRANCH" --force && echo "" && echo "✅ Pushed successfully (retry)!"
+  if git push "$PUSH_URL" "$LOCAL_BRANCH:$REMOTE_BRANCH" --force 2>&1; then
+    echo ""
+    echo "✅ Pushed successfully (retry)!"
+    echo "   https://github.com/${REPO}/tree/${REMOTE_BRANCH}"
+  else
+    echo "❌ Push failed. Check your GITHUB_TOKEN and network connectivity."
+    exit 1
+  fi
 fi
-echo "   https://github.com/ocholasupernet-debug/BIL/tree/$REMOTE_BRANCH"
