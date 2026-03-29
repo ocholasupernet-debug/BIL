@@ -73,12 +73,18 @@ function safeRos(cmd: string, label: string): string {
    Level 2: without verify-server-certificate  (older ROS 6 that lacks the param)
    RouterOS cipher enum uses "aes256" — never "aes256-cbc" (that's OpenSSL format).
    Each level only runs if the one above failed. ── */
-function ovpnAdd(fields: string): string {
-  const withV = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
-  const bare  = ros(`/interface ovpn-client add ${fields}`);
+function ovpnAdd(slug: string, baseFields: string): string {
+  /* Attempt 1: cert + password, verify-server-certificate=no (ROS 7) */
+  const a1 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet" certificate=${slug} verify-server-certificate=no`);
+  /* Attempt 2: cert + password, no verify-server-certificate (ROS 6) */
+  const a2 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet" certificate=${slug}`);
+  /* Attempt 3: password-only fallback — works even if cert import failed */
+  const a3 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet"`);
   return [
-    `:do { ${withV} } on-error={`,
-    ` :do { ${bare} } on-error={ :put "  WARN: VPN add failed - check /log" }`,
+    `:do { ${a1} } on-error={`,
+    ` :do { ${a2} } on-error={`,
+    `  :do { ${a3} } on-error={ :put "  WARN: VPN add failed - check /log" }`,
+    ` }`,
     `}`,
   ].join("\r\n");
 }
@@ -479,8 +485,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-      ovpnAdd(`name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip certificate=${routerSlug} cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
-      `:put "      VPN tunnel 'ocholasupernet' (cert: ${routerSlug})  OK"`,
+      ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
+      `:put "      VPN tunnel 'ocholasupernet' added  OK"`,
       ``,
       `# === Default User Profile ===`,
       safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),
