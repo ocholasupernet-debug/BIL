@@ -1,24 +1,25 @@
-import { pgTable, serial, text, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
 
-export const customersTable = pgTable("isp_customers", {
-  id: serial("id").primaryKey().notNull(),
+export const customersTable = pgTable("customers", {
+  id: serial("id").primaryKey(),
+  ispId: integer("isp_id").notNull(),
   name: text("name").notNull(),
-  username: text("username").notNull(),
-  password: text("password").notNull(),
+  phone: text("phone").notNull(),
   email: text("email"),
-  phone: text("phone"),
-  type: text("type").notNull(),
   planId: integer("plan_id"),
-  adminId: integer("admin_id"),
-  status: text("status").default("active").notNull(),
+  planName: text("plan_name"),
   ipAddress: text("ip_address"),
   macAddress: text("mac_address"),
+  status: text("status").notNull().default("active"),
+  expiryDate: timestamp("expiry_date", { withTimezone: true }),
+  amountPaid: integer("amount_paid").notNull().default(0),
   pppoeUsername: text("pppoe_username"),
-  dataUsedMb: integer("data_used_mb").default(0).notNull(),
-  expiresAt: timestamp("expires_at", { mode: "string" }),
-  createdAt: timestamp("created_at", { mode: "string" }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { mode: "string" }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
 
+export const insertCustomerSchema = createInsertSchema(customersTable).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Customer = typeof customersTable.$inferSelect;
-export type InsertCustomer = typeof customersTable.$inferInsert;

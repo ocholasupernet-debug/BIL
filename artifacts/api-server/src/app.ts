@@ -46,7 +46,7 @@ if (process.env.SERVE_STATIC === "true") {
     app.use(express.static(staticDir));
 
     // SPA fallback — send index.html for all non-API routes
-    app.get("/{*path}", (_req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(staticDir, "index.html"));
     });
 

@@ -142,10 +142,8 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
               {section.items.map(item => {
                 const active = location === item.href || location.startsWith(item.href + "/");
                 return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    style={{
+                  <Link key={item.href} href={item.href}>
+                    <a style={{
                       display: "flex", alignItems: "center", gap: 10,
                       padding: collapsed ? "10px 14px" : "9px 12px",
                       borderRadius: 8, marginBottom: 2, textDecoration: "none",
@@ -158,13 +156,14 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
                       cursor: "pointer",
                       justifyContent: collapsed ? "center" : "flex-start",
                     }}
-                    onMouseEnter={(e: React.MouseEvent<HTMLAnchorElement>) => { if (!active) { (e.currentTarget as HTMLElement).style.background = S.navHover; (e.currentTarget as HTMLElement).style.color = S.text; }}}
-                    onMouseLeave={(e: React.MouseEvent<HTMLAnchorElement>) => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = S.muted; }}}
+                    onMouseEnter={e => { if (!active) { e.currentTarget.style.background = S.navHover; e.currentTarget.style.color = S.text; }}}
+                    onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = S.muted; }}}
                     title={collapsed ? item.name : undefined}
-                  >
-                    <item.icon size={15} style={{ flexShrink: 0 }} />
-                    {!collapsed && <span style={{ whiteSpace: "nowrap" }}>{item.name}</span>}
-                    {!collapsed && active && <ChevronRight size={12} style={{ marginLeft: "auto", opacity: 0.6 }} />}
+                    >
+                      <item.icon size={15} style={{ flexShrink: 0 }} />
+                      {!collapsed && <span style={{ whiteSpace: "nowrap" }}>{item.name}</span>}
+                      {!collapsed && active && <ChevronRight size={12} style={{ marginLeft: "auto", opacity: 0.6 }} />}
+                    </a>
                   </Link>
                 );
               })}
@@ -185,18 +184,17 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           )}
-          <Link
-            href="/admin/login"
-            style={{
+          <Link href="/admin/login">
+            <a style={{
               display: "flex", alignItems: "center", gap: 8,
               justifyContent: collapsed ? "center" : "flex-start",
               padding: "8px 10px", borderRadius: 8, textDecoration: "none",
               background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)",
               color: "#f87171", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer",
-            }}
-          >
-            <LogOut size={14} />
-            {!collapsed && "Sign Out"}
+            }}>
+              <LogOut size={14} />
+              {!collapsed && "Sign Out"}
+            </a>
           </Link>
         </div>
       </aside>
