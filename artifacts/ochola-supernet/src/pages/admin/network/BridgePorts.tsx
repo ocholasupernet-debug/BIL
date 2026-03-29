@@ -266,7 +266,10 @@ export default function BridgePorts() {
         setPayload(data);
         if (data.connectedVia) setConnectedVia(data.connectedVia);
       } else {
-        setLoadError(data.error ?? "Failed to load ports");
+        setLoadError(
+          (data.error && data.error.trim()) ||
+          "Could not connect to router — API service may not be enabled on port 8728."
+        );
       }
     } catch (e) {
       setLoadError(String(e));

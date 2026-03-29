@@ -52,7 +52,7 @@ async function upsertByFilter(
 
 /* ─── Connect helper ─── */
 function makeConn(host: string, username: string, password: string): RouterOSAPI {
-  return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 10, keepalive: false });
+  return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 6, keepalive: false });
 }
 
 /* ─── Extract real client IP, unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) ─── */
@@ -123,11 +123,28 @@ function toSessionTimeout(value: number, unit: string): string {
 }
 
 /* ─── Connection error message ─── */
-function connErr(host: string, msg: string): string {
-  const isConnErr = /timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH/i.test(msg);
-  return isConnErr
-    ? `Cannot reach router at ${host}:8728. Check: 1) RouterOS API enabled (IP → Services → api), 2) Port 8728 not blocked by firewall, 3) Router reachable from server.`
-    : msg;
+function connErr(host: string, rawErr: unknown): string {
+  const msg = rawErr instanceof Error
+    ? rawErr.message
+    : typeof rawErr === "string"
+      ? rawErr
+      : JSON.stringify(rawErr);
+
+  /* A blank or generic message still means a connection problem */
+  const isConnProblem =
+    !msg.trim() ||
+    /timed out|timeout|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|socket hang up/i.test(msg);
+
+  if (isConnProblem) {
+    return (
+      `Cannot reach router at ${host}:8728 — connection timed out or refused. ` +
+      `To fix: 1) In RouterOS open IP → Services → enable "api" (port 8728). ` +
+      `2) Add a firewall rule to allow port 8728 from the VPN interface (e.g. /ip firewall filter add chain=input protocol=tcp dst-port=8728 action=accept). ` +
+      `3) Confirm the router's VPN tunnel IP is reachable from the server.` +
+      (msg.trim() ? ` (raw: ${msg})` : "")
+    );
+  }
+  return msg;
 }
 
 /* ═══════════════════════════════════════════════════════════════
