@@ -649,19 +649,33 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
    Body: { host, username, password, bridge, addPorts[], removePorts[] }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
-  const { host, username, password, bridge, addPorts = [], removePorts = [] } = req.body as {
+  const { host, username, password, bridge, addPorts = [], removePorts = [], bridgeIp } = req.body as {
     host: string; username: string; password: string;
     bridge: string; addPorts: string[]; removePorts: string[];
+    bridgeIp?: string;
   };
   if (!host || !bridge) { res.status(400).json({ ok: false, error: "host and bridge are required" }); return; }
 
   const logs: string[] = [];
   const log = (m: string) => logs.push(m);
-  const conn = makeConn(host, username, password);
+  let conn = makeConn(host, username, password);
+  let connectedVia = host;
 
   try {
-    await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected to ${host}`);
+    try {
+      await withTimeout(conn.connect(), 12000);
+      log(`✓ Connected to ${host}`);
+    } catch (directErr) {
+      if (bridgeIp) {
+        conn = makeConn(bridgeIp, username, password);
+        await withTimeout(conn.connect(), 12000);
+        connectedVia = `${bridgeIp} (VPN)`;
+        log(`✓ Connected via VPN tunnel (${bridgeIp})`);
+      } else {
+        throw directErr;
+      }
+    }
+    void connectedVia;
 
     /* Remove ports */
     for (const iface of removePorts) {

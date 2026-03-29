@@ -258,7 +258,7 @@ export default function BridgePorts() {
           host,
           username: r.router_username || "admin",
           password: r.router_secret   || "",
-          bridgeIp: (!r.host && r.bridge_ip) ? r.bridge_ip : undefined,
+          bridgeIp: r.bridge_ip || undefined,
         }),
       });
       const data = await res.json() as PortsPayload & { connectedVia?: string };
@@ -305,6 +305,7 @@ export default function BridgePorts() {
           password: activeRouter.router_secret   || "",
           bridge:   selectedBridge,
           addPorts, removePorts,
+          bridgeIp: activeRouter.bridge_ip || undefined,
         }),
       });
       const data = await res.json() as { ok: boolean; logs: string[]; error?: string };
