@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
+import { RouterLiveStats } from "@/components/router/RouterLiveStats";
 import {
   Loader2, RefreshCw, Wifi, WifiOff, ArrowRight,
   Cpu, Clock,
@@ -524,6 +525,20 @@ export default function Routers() {
                         {/* Expanded probe panel */}
                         {isOpen && ps?.ok === true && ps.data && (
                           <ProbePanel d={ps.data} logs={ps.logs} onClose={() => setExpanded(null)} />
+                        )}
+
+                        {/* Live stats panel — shown whenever the row is expanded */}
+                        {isOpen && (
+                          <tr>
+                            <td colSpan={8} style={{ padding: 0 }}>
+                              <RouterLiveStats
+                                routerHost={r.host || r.ip_address || undefined}
+                                routerUsername={r.router_username || "admin"}
+                                routerName={r.name}
+                                refetchIntervalMs={7000}
+                              />
+                            </td>
+                          </tr>
                         )}
 
                         {/* Expanded error state */}

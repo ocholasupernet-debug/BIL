@@ -10,6 +10,7 @@ import scriptsRouter from "./scripts-route";
 import vpnRouter from "./vpn-route";
 import provisionRouter from "./provision-route";
 import routerEnsureRouter from "./router-ensure-route";
+import mikrotikRouter from "./mikrotik-route";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(scriptsRouter);
 router.use(vpnRouter);
 router.use(provisionRouter);
 router.use(routerEnsureRouter);
+router.use(mikrotikRouter);
 
 export default router;
