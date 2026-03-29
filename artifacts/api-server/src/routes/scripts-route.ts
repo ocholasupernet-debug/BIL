@@ -400,7 +400,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:local hsdir ($storage . "/hotspot")`,
       `:if ($storage = "flash") do={ :set hsdir "flash/hotspot" }`,
       `:if ($storage = "disk1") do={ :set hsdir "disk1/hotspot" }`,
-      `:put "[5/8] Downloading hotspot portal files to " . $hsdir . "..."`,
+      `:put ("[5/8] Downloading hotspot portal files to " . $hsdir . "...")`,
       `# --- HTTPS connectivity check ---`,
       `:local httpsOk false`,
       `:do { /tool fetch url="${portalBase}/hotspot/api.json" dst-path=hs-check.tmp mode=https; :set httpsOk true; :do { /file remove [find name=hs-check.tmp] } on-error={} } on-error={ :put "  WARN: HTTPS unreachable from this router - portal files skipped" }`,
