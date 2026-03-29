@@ -100,17 +100,25 @@ export default function AdminRegister() {
     const slug = slugify(company);
     setLoading(true);
     try {
+      const finalSlug = slug || company.trim().toLowerCase();
       const { error } = await supabase.from("isp_admins").insert({
         name:      company.trim(),
         phone:     phone.trim(),
-        username:  slug || company.trim().toLowerCase(),
+        username:  finalSlug,
         password:  "admin",
         is_active: true,
         role:      "isp_admin",
-        subdomain: slug || company.trim().toLowerCase(),
+        subdomain: finalSlug,
       });
       if (error) throw error;
-      setRegisteredUsername(slug || company.trim().toLowerCase());
+
+      fetch("/api/isp/provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: finalSlug }),
+      }).catch(() => {});
+
+      setRegisteredUsername(finalSlug);
       setSuccess(true);
     } catch (err) {
       const msg = extractMsg(err);
