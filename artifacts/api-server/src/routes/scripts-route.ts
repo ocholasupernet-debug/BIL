@@ -79,7 +79,7 @@ function safeRm(cmd: string): string {
   if (m) {
     const menu = m[1];
     const cond = m[2];
-    return `:foreach x in=[${menu} find ${cond}] do={ ${menu} remove $x }`;
+    return `:foreach x in=[${menu} find ${cond}] do={ :do { ${menu} remove $x } on-error={} }`;
   }
   return `:do { ${cleaned} } on-error={}`;
 }
@@ -342,7 +342,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`),
       ``,
       `# === Hotspot ===`,
-      safeRm(`/ip hotspot remove [find name=hotspot1]`),
+      safeRm(`/ip hotspot remove [find interface="${bridgeIface}"]`),
       ros(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`),
       ``,
       `# === Ensure flash/hotspot directories exist ===`,
@@ -391,10 +391,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       ``,
       `# === OVPN Management Tunnel ===`,
-      safeFetch(`${portalBase}/api/vpn/ca.crt`, `ca.crt`),
-      `:do { /certificate import file-name=ca.crt passphrase="" } on-error={}`,
-      safeRm(`/interface ovpn-client remove [find name=ovpn-mgmt]`),
-      ros(`/interface ovpn-client add name=ovpn-mgmt connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="${routerSecret}" cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
+      safeFetch(`${portalBase}/api/vpn/ca.crt`, `flash/ca.crt`),
+      `:do { /certificate import file-name=flash/ca.crt } on-error={}`,
+      safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
+      ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="${routerSecret}" cipher=aes256 auth=sha1 verify-server-certificate=no add-default-route=no disabled=no`),
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),

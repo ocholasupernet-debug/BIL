@@ -20,8 +20,7 @@ router.get("/vpn/ca.crt", (_req, res): void => {
   }
   try {
     const cert = readFileSync(caPath, "utf-8");
-    res.set("Content-Type", "application/x-pem-file");
-    res.set("Content-Disposition", "attachment; filename=ca.crt");
+    res.set("Content-Type", "text/plain");
     res.set("Cache-Control", "no-cache");
     res.send(cert);
   } catch (err) {
