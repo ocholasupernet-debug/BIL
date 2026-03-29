@@ -262,7 +262,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const ipMask      = `${bridgeIp}/24`;
     const poolStart   = `${ipBase}.2`;
     const poolEnd     = `${ipBase}.254`;
-    const gatewayIp   = `${ipBase}.1`;
 
     const profileName = routerSlug;
     const portalBase  = `https://${adminSubdomain}.isplatty.org`;
@@ -328,10 +327,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" } on-error={}`,
       safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
       ros(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`),
-      ``,
-      `# === Default Route / Gateway ===`,
-      safeRm(`/ip route remove [find comment="${companyName} default route"]`),
-      `:do { /ip route add dst-address=0.0.0.0/0 gateway=${gatewayIp} comment="${companyName} default route" } on-error={}`,
       ``,
       `# === IP Pool ===`,
       safeRm(`/ip pool remove [find name=hspool]`),
