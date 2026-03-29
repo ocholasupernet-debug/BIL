@@ -59,6 +59,12 @@ function ros(cmd: string): string {
   return cmd.replace(/\s{2,}/g, " ").trim();
 }
 
+/* ── Safe remove: wraps in :do { ... } on-error={} so "no such item"
+   errors from missing entries on a fresh router are silently ignored. ── */
+function safeRm(cmd: string): string {
+  return `:do { ${ros(cmd)} } on-error={}`;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
    Dynamically generates a RouterOS .rsc file.
@@ -280,23 +286,23 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan1 comment="WiFi 2.4GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" } on-error={}`,
-      ros(`/ip address remove [find interface="${bridgeIface}"]`),
+      safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
       ros(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`),
       ``,
       `# === Default Route / Gateway ===`,
-      ros(`/ip route remove [find comment="${companyName} default route"]`),
+      safeRm(`/ip route remove [find comment="${companyName} default route"]`),
       `:do { /ip route add dst-address=0.0.0.0/0 gateway=${gatewayIp} comment="${companyName} default route" } on-error={}`,
       ``,
       `# === IP Pool ===`,
-      ros(`/ip pool remove [find name=hspool]`),
+      safeRm(`/ip pool remove [find name=hspool]`),
       ros(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd}`),
       ``,
       `# === Hotspot Profile ===`,
-      ros(`/ip hotspot profile remove [find name="${profileName}"]`),
+      safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
       ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`),
       ``,
       `# === Hotspot ===`,
-      ros(`/ip hotspot remove [find name=hotspot1]`),
+      safeRm(`/ip hotspot remove [find name=hotspot1]`),
       ros(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`),
       ``,
       `# === Ensure flash/hotspot directories exist ===`,
@@ -336,11 +342,11 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ros(`/tool fetch url="${portalBase}/hotspot/xml/WISPAP.xsd" dst-path=flash/hotspot/xml/WISPAP.xsd mode=https`),
       ``,
       `# === NAT (Captive Portal Redirect) ===`,
-      ros(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
+      safeRm(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
       ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
       ``,
       `# === Firewall (allow hotspot traffic) ===`,
-      ros(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
+      safeRm(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
       ros(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`),
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       ``,
@@ -368,13 +374,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# The script checks whether the hotspot service is running before pinging the`,
       `# billing server. ?hs=1 means the service is active (users can connect) and`,
       `# lights the green indicator in the admin dashboard. ?hs=0 turns it yellow.`,
-      ros(`/system script remove [find name=ochola-heartbeat-script]`),
+      safeRm(`/system script remove [find name=ochola-heartbeat-script]`),
       ros(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`),
-      ros(`/system scheduler remove [find name=ochola-heartbeat]`),
+      safeRm(`/system scheduler remove [find name=ochola-heartbeat]`),
       ros(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${companyName} heartbeat"`),
       ``,
       `# === Config Auto-Update Scheduler (daily) ===`,
-      ros(`/system scheduler remove [find name=ochola-autoupdate]`),
+      safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
       ros(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`),
     ];
 
@@ -386,7 +392,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         const rl      = toRateLimit(plan.speed_down, plan.speed_up, "Mbps");
         const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
         const shared  = plan.shared_users || 1;
-        lines.push(ros(`/ip hotspot user profile remove [find name="${pName}"]`));
+        lines.push(safeRm(`/ip hotspot user profile remove [find name="${pName}"]`));
         lines.push(ros(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan #${plan.id}"`));
       }
     }
