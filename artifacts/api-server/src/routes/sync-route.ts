@@ -66,6 +66,36 @@ function isVpnIp(ip: string): boolean {
   return /^10\.8\.0\./.test(ip);
 }
 
+/* ─── Returns true if IP is a private/link-local/loopback range ─── */
+function isPrivateIp(ip: string): boolean {
+  return (
+    /^127\./.test(ip) ||           // loopback
+    /^10\./.test(ip)  ||           // RFC-1918 (includes VPN 10.8.0.x)
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || // RFC-1918
+    /^192\.168\./.test(ip) ||      // RFC-1918
+    /^169\.254\./.test(ip) ||      // link-local
+    /^::1$/.test(ip) ||            // IPv6 loopback
+    /^fc|^fd/.test(ip)             // IPv6 ULA
+  );
+}
+
+/* ─── Returns true if IP looks like a routable public IP ─── */
+function isPublicIp(ip: string): boolean {
+  if (!ip || ip === "::1") return false;
+  return !isPrivateIp(ip);
+}
+
+/* ─── Returns true if IP is a private LAN (not VPN 10.8.0.x) ─── */
+function isLanOnlyIp(ip: string): boolean {
+  if (!ip) return false;
+  return (
+    /^192\.168\./.test(ip) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+    /^127\./.test(ip) ||
+    /^169\.254\./.test(ip)
+  );
+}
+
 /* ─── Background auto-probe: connect RouterOS API, save host/model/version ─── */
 async function bgAutoProbe(
   token: string,
@@ -146,6 +176,21 @@ function connErr(host: string, rawErr: unknown): string {
   }
   return msg;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/admin/server-info
+   Returns the server's outbound public IP so the frontend can show
+   the exact firewall rule the user needs to add on their router.
+═══════════════════════════════════════════════════════════════ */
+router.get("/admin/server-info", async (_req, res): Promise<void> => {
+  try {
+    const r = await fetch("https://api.ipify.org?format=json", { signal: AbortSignal.timeout(4000) });
+    const { ip } = await r.json() as { ip: string };
+    res.json({ ok: true, serverIp: ip });
+  } catch {
+    res.json({ ok: true, serverIp: "34.145.0.87" }); /* fallback to known IP */
+  }
+});
 
 /* ═══════════════════════════════════════════════════════════════
    POST /api/admin/sync
@@ -591,19 +636,6 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
    Reads all interfaces and current bridge-port memberships.
    Body: { host, username, password }
 ═══════════════════════════════════════════════════════════════ */
-/* Returns true if the IP is a LAN address that can NEVER be reached from the
-   cloud server. We intentionally exclude 10.x.x.x because VPN tunnels commonly
-   use that range (e.g. 10.8.0.2 for OpenVPN clients). */
-function isLanOnlyIp(ip: string): boolean {
-  if (!ip) return false;
-  return (
-    /^192\.168\./.test(ip) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
-    /^127\./.test(ip) ||
-    /^169\.254\./.test(ip)
-  );
-}
-
 router.post("/admin/router/ports", async (req, res): Promise<void> => {
   const { host, username, password, bridgeIp } = req.body as {
     host: string; username: string; password: string; bridgeIp?: string;
@@ -839,12 +871,35 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     console.log(`[heartbeat] ✓ ${routerName} ${newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, status: newStatus });
 
-    /* ── Auto-discovery: if request comes in over VPN (10.8.0.x), save the
-       VPN IP as host and run a background probe so the dashboard shows the
-       router as reachable without any manual setup. ── */
+    /* ── Auto-discovery:
+       1. If request comes in over VPN (10.8.0.x) → save VPN IP as host.
+       2. If request comes in from a public WAN IP AND current host is a
+          LAN-only IP (192.168.x.x etc.) → save WAN IP as host so the
+          backend can later reach the router via port 8728 (once the user
+          adds the firewall rule).  Always attempt a background probe. ── */
     const srcIp = clientIp(req);
-    if (isVpnIp(srcIp) && row && srcIp !== row.host) {
-      console.log(`[heartbeat] auto-discovering ${routerName} via VPN IP ${srcIp}`);
+    const currentHost = row?.host ?? "";
+    const hostIsUnreachable = !currentHost || isLanOnlyIp(currentHost);
+
+    if (row && (isVpnIp(srcIp) || (isPublicIp(srcIp) && hostIsUnreachable)) && srcIp !== currentHost) {
+      console.log(`[heartbeat] auto-discovering ${routerName} via ${isVpnIp(srcIp) ? "VPN" : "WAN"} IP ${srcIp}`);
+
+      /* Save the IP as host immediately so the next bridge-ports call uses it */
+      const HB_URL2 = hbUrl();
+      const HB_KEY2 = hbKey();
+      if (HB_URL2 && HB_KEY2) {
+        const enc2 = encodeURIComponent(token);
+        fetch(
+          `${HB_URL2}/rest/v1/isp_routers?or=(router_secret.eq.${enc2},token.eq.${enc2})`,
+          {
+            method: "PATCH",
+            headers: { apikey: HB_KEY2, Authorization: `Bearer ${HB_KEY2}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ host: srcIp }),
+          }
+        ).then(() => console.log(`[heartbeat] saved WAN IP ${srcIp} as host for ${routerName}`))
+         .catch((e: unknown) => console.warn(`[heartbeat] failed to save WAN IP: ${e instanceof Error ? e.message : e}`));
+      }
+
       bgAutoProbe(row.router_secret ?? token, srcIp, row.router_username ?? "admin");
     }
 

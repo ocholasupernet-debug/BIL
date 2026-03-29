@@ -135,6 +135,15 @@ export default function BridgePorts() {
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
+  /* server outbound IP — fetched once for firewall-rule instructions */
+  const [serverIp, setServerIp] = useState<string>("34.145.0.87");
+  useEffect(() => {
+    fetch("/api/admin/server-info")
+      .then(r => r.json())
+      .then((d: { ok: boolean; serverIp: string }) => { if (d.serverIp) setServerIp(d.serverIp); })
+      .catch(() => {});
+  }, []);
+
   /* loaded data */
   const [payload, setPayload]         = useState<PortsPayload | null>(null);
   const [loading, setLoading]         = useState(false);
@@ -166,7 +175,8 @@ export default function BridgePorts() {
         return [];
       }
     },
-    staleTime: 10_000,
+    staleTime: 5_000,
+    refetchInterval: 15_000, /* pick up WAN IP auto-saved by heartbeat */
   });
 
   /* ── Build unified list from Supabase ── */
@@ -469,12 +479,61 @@ export default function BridgePorts() {
           </div>
         )}
 
-        {loadError && !loading && (
-          <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 10, padding: "0.875rem 1.125rem", color: "#f87171", fontSize: "0.82rem" }}>
-            <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span>{loadError}</span>
-          </div>
-        )}
+        {loadError && !loading && (() => {
+          const isConnErr = /cannot reach|timed out|timeout|ECONNREFUSED|api.*disabled|connect/i.test(loadError);
+          const activeRouter = routers.find(r => r.key === selectedKey);
+          const routerHost   = activeRouter ? (activeRouter.host || activeRouter.bridge_ip || "?") : "?";
+          return (
+            <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 10, padding: "1rem 1.25rem", fontSize: "0.82rem" }}>
+              {/* header */}
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#f87171", fontWeight: 700, marginBottom: isConnErr ? "0.875rem" : 0 }}>
+                <AlertTriangle size={15} />
+                {isConnErr ? "Router API Not Reachable" : "Error Loading Ports"}
+              </div>
+
+              {/* generic message when NOT a connection error */}
+              {!isConnErr && (
+                <div style={{ color: "#fca5a5", marginTop: "0.4rem" }}>{loadError}</div>
+              )}
+
+              {/* detailed setup guide when it IS a connection error */}
+              {isConnErr && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  <p style={{ color: "#fca5a5", margin: 0, lineHeight: 1.6 }}>
+                    The server can see your router is <strong style={{ color: "#4ade80" }}>online</strong> (heartbeat working ✓),
+                    but it cannot open a direct API connection to <code style={{ fontFamily: "monospace", background: "rgba(255,255,255,0.07)", borderRadius: 4, padding: "1px 5px" }}>{routerHost}:8728</code>.
+                    Run these two commands in your MikroTik terminal to fix it:
+                  </p>
+
+                  {/* Step 1 */}
+                  <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "0.6rem 0.875rem", border: "1px solid rgba(255,255,255,0.08)" }}>
+                    <div style={{ color: "#94a3b8", fontSize: "0.72rem", marginBottom: "0.35rem", fontWeight: 600 }}>STEP 1 — Enable the API service (if not already on)</div>
+                    <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.8rem", display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {"/ip service enable api"}
+                    </code>
+                  </div>
+
+                  {/* Step 2 */}
+                  <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "0.6rem 0.875rem", border: "1px solid rgba(255,255,255,0.08)" }}>
+                    <div style={{ color: "#94a3b8", fontSize: "0.72rem", marginBottom: "0.35rem", fontWeight: 600 }}>STEP 2 — Allow port 8728 from this server's IP</div>
+                    <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.8rem", display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {`/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${serverIp} action=accept place-before=0`}
+                    </code>
+                    <div style={{ color: "#64748b", fontSize: "0.71rem", marginTop: "0.35rem" }}>
+                      Server IP: <strong style={{ color: "#a5b4fc" }}>{serverIp}</strong>
+                    </div>
+                  </div>
+
+                  {/* After-fix instructions */}
+                  <p style={{ color: "#94a3b8", margin: 0, fontSize: "0.78rem", lineHeight: 1.5 }}>
+                    After running both commands, click <strong style={{ color: "var(--isp-text)" }}>Refresh</strong> above.
+                    If your router heartbeat just fired, its WAN IP has been saved automatically — no other setup needed.
+                  </p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Port list */}
         {payload && !loading && (
