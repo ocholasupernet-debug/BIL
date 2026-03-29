@@ -4,9 +4,16 @@
 Options -MultiViews
 RewriteEngine On
 
+# Force HTTPS
+RewriteCond %{HTTPS} off
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# Never rewrite /api/* — these must reach the Express backend
+RewriteRule ^api/ - [L]
+
 # Don't rewrite real files or directories
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 
-# Rewrite everything else → index.html
+# Rewrite everything else → index.html (SPA client-side routing)
 RewriteRule ^ /index.html [L]
