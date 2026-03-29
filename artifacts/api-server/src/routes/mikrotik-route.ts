@@ -11,10 +11,15 @@ import {
   generateFirewallScript,
   generateVpnSetupScript,
   generateOvpnClientConfig,
+  generateRouterAsClientScript,
   getEnvCredentials,
   isPrivateIp,
   type RouterCredentials,
 } from "../lib/mikrotik";
+import {
+  generateVpsOvpnSetupScript,
+  describeVpnArchitecture,
+} from "../lib/vpn-utils";
 import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 
@@ -295,6 +300,138 @@ router.get("/probe", async (req, res): Promise<void> => {
     summary:    probe.reachable
       ? `Port ${port} on ${host} is OPEN (${probe.latencyMs}ms)`
       : `Port ${port} on ${host} is NOT reachable: ${probe.diagnosis ?? probe.error}`,
+  });
+});
+
+/* ─── GET /api/router/:id/router-as-client ──────────────────────────────── */
+/**
+ * CORRECT ARCHITECTURE for this setup:
+ *   VPS = OpenVPN SERVER (already running, tun0 10.8.0.1)
+ *   MikroTik = OpenVPN CLIENT (connects TO the VPS)
+ *
+ * Downloads a RouterOS script (.rsc) that configures the router as an OVPN client.
+ * Import on the router: /import router-as-client<id>.rsc
+ *
+ * Query params:
+ *   vpsIp           — VPS public IP (required — the OVPN server endpoint)
+ *   vpnPort         — OVPN server port (default 1194)
+ *   vpnUsername     — VPN user (default "admin")
+ *   vpnPassword     — VPN password (default "ochola")
+ *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel (default "10.8.0.2")
+ *   tunnelVpsIp     — VPS tunnel IP (default "10.8.0.1")
+ */
+router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
+
+  const vpsIp = String(req.query.vpsIp ?? "").trim();
+  if (!vpsIp) {
+    res.status(400).json({
+      error:   "vpsIp is required",
+      detail:  "Pass the public IP of your VPS (the OpenVPN server), e.g. ?vpsIp=102.212.246.73",
+      example: `/api/router/${id}/router-as-client?vpsIp=102.212.246.73`,
+    });
+    return;
+  }
+
+  const script = generateRouterAsClientScript({
+    vpsPublicIp:    vpsIp,
+    routerId:       id,
+    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
+    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
+    vpnPassword:    String(req.query.vpnPassword   ?? "ochola"),
+    tunnelRouterIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+    tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? "10.8.0.1"),
+  });
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="router-as-client${id}.rsc"`
+  );
+  res.send(script);
+});
+
+/* ─── GET /api/router/:id/vps-ovpn-setup ───────────────────────────────── */
+/**
+ * Downloads a bash script to run on the VPS as root.
+ * Patches the existing OpenVPN server to accept MikroTik OVPN clients:
+ *   - Switches to proto tcp
+ *   - Disables tls-auth/tls-crypt (not supported by MikroTik)
+ *   - Adds username/password auth for the router user
+ *   - Assigns a static tunnel IP to the router
+ *
+ * Run on VPS: sudo bash vps-ovpn-setup<id>.sh
+ *
+ * Query params:
+ *   vpsIp           — VPS public IP (informational, default "YOUR_VPS_IP")
+ *   vpnPort         — OVPN port (default 1194)
+ *   vpnUsername     — router VPN user (default "admin")
+ *   vpnPassword     — router VPN password (default "ochola")
+ *   tunnelRouterIp  — static IP to assign to router (default "10.8.0.2")
+ */
+router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
+
+  const vpsIp = String(req.query.vpsIp ?? "YOUR_VPS_IP").trim();
+
+  const script = generateVpsOvpnSetupScript({
+    vpsPublicIp:    vpsIp,
+    routerId:       id,
+    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
+    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
+    vpnPassword:    String(req.query.vpnPassword   ?? "ochola"),
+    tunnelBase:     String(req.query.tunnelBase     ?? "10.8.0"),
+    routerTunnelIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+  });
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="vps-ovpn-setup${id}.sh"`
+  );
+  res.send(script);
+});
+
+/* ─── GET /api/router/:id/vpn-info ─────────────────────────────────────── */
+/**
+ * Returns a JSON summary of the VPN architecture and setup steps.
+ * Use this to understand the setup before downloading the scripts.
+ */
+router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
+
+  const vpsIp = String(req.query.vpsIp ?? "").trim();
+  const info = describeVpnArchitecture({
+    vpsPublicIp:    vpsIp || "SET_vpsIp_QUERY_PARAM",
+    routerId:       id,
+    vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : 1194,
+    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
+    routerTunnelIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+  });
+
+  res.json({
+    routerId: id,
+    routerName: found.row.name,
+    configuredHost: found.row.host,
+    bridgeIp: found.row.bridge_ip,
+    scripts: {
+      vpsSetup:       `/api/router/${id}/vps-ovpn-setup?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
+      routerAsClient: `/api/router/${id}/router-as-client?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
+      firewallScript: `/api/router/${id}/firewall-script?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
+    },
+    ...info,
   });
 });
 

@@ -1006,6 +1006,125 @@ function prefixToMask(prefix: number): string {
   return [24, 16, 8, 0].map(s => (mask >> s) & 255).join(".");
 }
 
+/* ─── Router as OpenVPN CLIENT script generator ──────────────────────────── */
+
+export interface RouterAsClientOptions {
+  /** VPS public IP that is running the OpenVPN server */
+  vpsPublicIp: string;
+  /** OpenVPN server port on the VPS (default 1194) */
+  vpnPort?: number;
+  /** Username to authenticate with the VPS OVPN server */
+  vpnUsername?: string;
+  /** Password for the VPN user */
+  vpnPassword?: string;
+  /**
+   * VPN tunnel IP the VPS server will assign to the router.
+   * Depends on the VPS server's IP pool (default "10.8.0.2").
+   */
+  tunnelRouterIp?: string;
+  /** VPS tunnel IP (gateway end, default "10.8.0.1") */
+  tunnelVpsIp?: string;
+  /** Router LAN network for routing rules (default "192.168.88.0/24") */
+  lanNetwork?: string;
+  /** Router ID for comment labels */
+  routerId?: number;
+}
+
+/**
+ * Generates a MikroTik RouterOS script (.rsc) that configures the router
+ * as an OpenVPN CLIENT connecting back to the VPS server.
+ *
+ * Architecture (correct for this setup):
+ *   VPS  ──── OpenVPN SERVER (tun0 10.8.0.1) ◄──── MikroTik OVPN CLIENT (gets 10.8.0.2)
+ *
+ * After connect, the backend reaches the router API at:
+ *   MIKROTIK_BRIDGE_IP=10.8.0.2  (router's tunnel IP)
+ *
+ * Import on the router:
+ *   /import router-as-client.rsc
+ */
+export function generateRouterAsClientScript(opts: RouterAsClientOptions): string {
+  const {
+    vpsPublicIp,
+    vpnPort         = 1194,
+    vpnUsername     = "admin",
+    vpnPassword     = "ochola",
+    tunnelRouterIp  = "10.8.0.2",
+    tunnelVpsIp     = "10.8.0.1",
+    lanNetwork      = "192.168.88.0/24",
+    routerId,
+  } = opts;
+
+  const tag = routerId ? `ISP-${routerId}` : "ISP-OVPN";
+
+  return `# ═══════════════════════════════════════════════════════════════
+# OcholaSupernet — MikroTik Router as OpenVPN CLIENT
+# Generated  : ${new Date().toISOString()}
+# Architecture: Router connects TO VPS (VPS is the OVPN server)
+#
+# VPS OVPN server : ${vpsPublicIp}:${vpnPort}/tcp  (tun0 ${tunnelVpsIp})
+# Router tunnel IP: ${tunnelRouterIp}  (assigned by VPS server after connect)
+# VPN user        : ${vpnUsername}
+#
+# After import:
+#   - Router connects to VPS and gets tunnel IP ${tunnelRouterIp}
+#   - Backend: set MIKROTIK_BRIDGE_IP=${tunnelRouterIp}
+#   - API reaches router at ${tunnelRouterIp}:8728
+#
+# REQUIREMENTS on VPS side (run vps-ovpn-setup.sh first):
+#   - VPS OpenVPN server must use proto tcp
+#   - User '${vpnUsername}' must be added to /etc/openvpn/easy-rsa or auth file
+#   - tls-auth should be disabled or compatible with MikroTik
+#
+# USAGE: /import router-as-client${routerId ?? ""}.rsc
+# ═══════════════════════════════════════════════════════════════
+
+# ── Step 1: Create the OVPN client interface ─────────────────────────────────
+/interface ovpn-client
+add name=ovpn-to-vps \\
+    connect-to=${vpsPublicIp} \\
+    port=${vpnPort} \\
+    mode=ip \\
+    user=${vpnUsername} \\
+    password=${vpnPassword} \\
+    auth=sha1 \\
+    cipher=aes128 \\
+    add-default-route=no \\
+    disabled=no \\
+    comment="${tag} — VPS tunnel"
+
+# ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
+# The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
+/ip firewall filter
+add action=accept chain=input \\
+    src-address=${tunnelVpsIp}/32 \\
+    protocol=tcp dst-port=8728,8729 \\
+    comment="${tag}-api-from-vps-tunnel"
+
+# ── Step 3: Allow ping from VPS (connectivity check) ─────────────────────────
+add action=accept chain=input \\
+    src-address=${tunnelVpsIp}/32 \\
+    protocol=icmp \\
+    comment="${tag}-ping-from-vps-tunnel"
+
+# ── Step 4: Ensure API service is enabled ────────────────────────────────────
+/ip service
+enable api
+# enable api-ssl   # uncomment for port 8729 encrypted API
+
+# ── Step 5: Verify the interface came up ─────────────────────────────────────
+# Run this in terminal after import — should show "R" (running):
+#   /interface print where name=ovpn-to-vps
+#   /ip address print where interface=ovpn-to-vps
+#
+# Expected: inet ${tunnelRouterIp} on ovpn-to-vps
+# Then from VPS:  ping ${tunnelRouterIp}  and  curl http://${tunnelRouterIp}:8728
+
+:log info "${tag}: OVPN client configured → ${vpsPublicIp}:${vpnPort}"
+:log info "${tag}: After connect, router API reachable at ${tunnelRouterIp}:8728"
+`;
+}
+
 /* ─── MikroTik firewall script generator ────────────────────────────────── */
 
 /**
