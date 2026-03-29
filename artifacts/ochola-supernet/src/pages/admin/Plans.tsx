@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth } from "@/lib/supabase";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud } from "lucide-react";
+import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
+import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 
 function useTypeParam() {
@@ -24,6 +24,16 @@ async function fetchBandwidths(): Promise<DbBandwidth[]> {
   const { data, error } = await supabase.from("isp_bandwidth").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+async function fetchRouters(): Promise<DbRouter[]> {
+  const { data, error } = await supabase
+    .from("isp_routers")
+    .select("id,name,host,model,bridge_ip,status")
+    .eq("admin_id", ADMIN_ID)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as DbRouter[];
 }
 
 /* ─── Display helpers ─── */
@@ -58,41 +68,45 @@ interface ServicePlanFormProps {
   planType: string;
   initialData?: DbPlan | null;
   bandwidths: DbBandwidth[];
+  routers: DbRouter[];
   onCancel: () => void;
   onSaved: () => void;
 }
 
-function AddServicePlanForm({ planType, initialData, bandwidths, onCancel, onSaved }: ServicePlanFormProps) {
+function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCancel, onSaved }: ServicePlanFormProps) {
   const isEdit   = !!initialData;
   const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
   const isHotspot= planType === "hotspot" || planType === "trials";
 
-  const [status,      setStatus]      = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
-  const [canBuy,      setCanBuy]      = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
-  const [name,        setName]        = useState(initialData?.name ?? "");
-  const [planKind,    setPlanKind]    = useState<"unlimited"|"limited">("unlimited");
-  const [bandwidthId, setBandwidthId] = useState(initialData?.bandwidth_id?.toString() ?? "");
-  const [price,       setPrice]       = useState(initialData?.price?.toString() ?? "");
-  const [shared,      setShared]      = useState(initialData?.shared_users?.toString() ?? "1");
-  const [validity,    setValidity]    = useState(initialData?.validity?.toString() ?? "");
-  const [valUnit,     setValUnit]     = useState(initialData?.validity_unit ?? "Days");
-  const [router,      setRouter]      = useState(initialData?.router_id?.toString() ?? "");
-  const [activePool,  setActivePool]  = useState(initialData?.active_ip_pool ?? "");
-  const [expiredPool, setExpiredPool] = useState(initialData?.expired_ip_pool ?? "");
-  const [saving,      setSaving]      = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
+  const [status,        setStatus]        = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
+  const [canBuy,        setCanBuy]        = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
+  const [name,          setName]          = useState(initialData?.name ?? "");
+  const [planKind,      setPlanKind]      = useState<"unlimited"|"limited">("unlimited");
+  const [bandwidthId,   setBandwidthId]   = useState(initialData?.bandwidth_id?.toString() ?? "");
+  const [price,         setPrice]         = useState(initialData?.price?.toString() ?? "");
+  /* Sharing: if shared_users > 1 on edit, sharing was enabled */
+  const initSharing = initialData ? (initialData.shared_users ?? 1) > 1 : false;
+  const [sharingAllowed, setSharingAllowed] = useState<"yes"|"no">(initSharing ? "yes" : "no");
+  const [maxSharedUsers, setMaxSharedUsers] = useState(
+    initialData?.shared_users && initialData.shared_users > 1 ? initialData.shared_users.toString() : "5"
+  );
+  const [validity,      setValidity]      = useState(initialData?.validity?.toString() ?? "");
+  const [valUnit,       setValUnit]       = useState(initialData?.validity_unit ?? "Days");
+  const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
+  const [activePool,    setActivePool]    = useState(initialData?.active_ip_pool ?? "");
+  const [expiredPool,   setExpiredPool]   = useState(initialData?.expired_ip_pool ?? "");
+  const [saving,        setSaving]        = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
 
-  const units       = ["Mins", "Hrs", "Days", "Weeks", "Months"];
-  const routerOptions = ["latty1 — L009UiGS-2HaxD", "main-router — CCR1009", "backup-router — RB750Gr3"];
-  const poolOptions   = ["hs-pool-1 (192.168.2.2–192.168.2.254)", "pppoe-pool-1 (10.10.0.1–10.10.0.254)", "static-pool (10.20.0.1–10.20.0.50)"];
-  const expiredPoolOpts = ["expired-pool (192.168.178.5–192.168.178.254)", "blocked-pool (192.168.200.1–192.168.200.254)"];
+  const units = ["Mins", "Hrs", "Days", "Weeks", "Months"];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSaving(true);
     try {
+      const sharedUsers = sharingAllowed === "yes" ? (parseInt(maxSharedUsers) || 5) : 1;
       const payload = {
         admin_id:            ADMIN_ID,
         name,
@@ -104,8 +118,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, onCancel, onSav
         validity_days:       0,
         is_active:           status === "enable",
         client_can_purchase: canBuy === "yes",
-        shared_users:        parseInt(shared) || 1,
+        shared_users:        sharedUsers,
         bandwidth_id:        bandwidthId ? parseInt(bandwidthId) : null,
+        router_id:           routerId ? parseInt(routerId) : null,
         active_ip_pool:      activePool || null,
         expired_ip_pool:     expiredPool || null,
         updated_at:          new Date().toISOString(),
@@ -190,10 +205,31 @@ function AddServicePlanForm({ planType, initialData, bandwidths, onCancel, onSav
 
         {isHotspot && (
           <div style={ROW}>
-            <span style={LBL}>Shared Users</span>
+            <span style={{ ...LBL, display: "flex", alignItems: "center", gap: "0.35rem" }}>
+              <Share2 size={13} /> Allow Sharing
+            </span>
             <div style={{ flex: 1 }}>
-              <input type="number" min="1" style={INPUT} value={shared} onChange={e => setShared(e.target.value)} />
-              <p style={HINT}>Set to 1 if you want 1 device per purchase.</p>
+              <div style={{ display: "flex", gap: "1.25rem", paddingTop: "0.45rem", marginBottom: sharingAllowed === "yes" ? "0.75rem" : 0 }}>
+                <Radio name="sharingAllowed" value="no"  checked={sharingAllowed==="no"}  onChange={() => setSharingAllowed("no")}  label="No — 1 device only" />
+                <Radio name="sharingAllowed" value="yes" checked={sharingAllowed==="yes"} onChange={() => setSharingAllowed("yes")} label="Yes — allow sharing" />
+              </div>
+              {sharingAllowed === "yes" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.5rem" }}>
+                  <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>Max users:</span>
+                  <input
+                    type="number" min="2" max="100"
+                    style={{ ...INPUT, width: 80, flex: "none" }}
+                    value={maxSharedUsers}
+                    onChange={e => setMaxSharedUsers(e.target.value)}
+                  />
+                  <span style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
+                    devices can share one voucher/session
+                  </span>
+                </div>
+              )}
+              {sharingAllowed === "no" && (
+                <p style={HINT}>Each voucher/session is limited to 1 device only.</p>
+              )}
             </div>
           </div>
         )}
@@ -209,23 +245,33 @@ function AddServicePlanForm({ planType, initialData, bandwidths, onCancel, onSav
         </div>
 
         <div style={ROW}>
-          <span style={LBL_CYAN}>Router Name</span>
+          <span style={LBL_CYAN}>Router</span>
           <div style={{ flex: 1 }}>
-            <select style={{ ...SELECT, width: "100%" }} value={router} onChange={e => setRouter(e.target.value)}>
-              <option value="">Select Routers</option>
-              {routerOptions.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-            {!isEdit && <p style={HINT}>Cannot be changed after saved.</p>}
+            {routers.length === 0 ? (
+              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)", color: "#fbbf24", fontSize: "0.8rem" }}>
+                No routers found — <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline" }}>add a router first</a>
+              </div>
+            ) : (
+              <select style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => setRouterId(e.target.value)}>
+                <option value="">— No specific router —</option>
+                {routers.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}{r.model ? ` — ${r.model}` : ""}{r.host ? ` (${r.host})` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p style={HINT}>Assign this plan to a specific router (optional — used for multi-router setups).</p>
           </div>
         </div>
 
         {isPppoe && (
           <div style={ROW}>
             <span style={LBL_CYAN}>Active IP Pool</span>
-            <select style={{ ...SELECT, flex: 1 }} value={activePool} onChange={e => setActivePool(e.target.value)}>
-              <option value="">Select Pool</option>
-              {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <div style={{ flex: 1 }}>
+              <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. hs-pool-3 or pppoe-pool" />
+              <p style={HINT}>Pool name as defined in MikroTik → IP → Pool.</p>
+            </div>
           </div>
         )}
 
@@ -233,10 +279,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, onCancel, onSav
           <div style={ROW}>
             <span style={LBL}>Expired IP Pool</span>
             <div style={{ flex: 1 }}>
-              <select style={{ ...SELECT, width: "100%" }} value={expiredPool} onChange={e => setExpiredPool(e.target.value)}>
-                <option value="">Select Expired Pool</option>
-                {expiredPoolOpts.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired-pool" />
+              <p style={HINT}>Customers assigned here after plan expires.</p>
             </div>
           </div>
         )}
@@ -531,6 +575,11 @@ export default function Plans() {
     queryFn:  fetchBandwidths,
   });
 
+  const { data: routers = [] } = useQuery({
+    queryKey: ["isp_routers_plans", ADMIN_ID],
+    queryFn:  fetchRouters,
+  });
+
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
       const { error } = await supabase.from("isp_plans").delete().eq("id", id);
@@ -621,6 +670,7 @@ export default function Plans() {
             planType={activeTab}
             initialData={editingPlan}
             bandwidths={bandwidths}
+            routers={routers}
             onCancel={closeForm}
             onSaved={onSaved}
           />
@@ -660,8 +710,19 @@ export default function Plans() {
                           <Activity className="w-4 h-4 text-primary" />
                           Data: {p.data_limit_mb ? `${p.data_limit_mb} MB` : "Unlimited"}
                         </div>
-                        <div className="text-xs text-muted-foreground pt-4 border-t border-white/5 flex items-center gap-1.5">
-                          <Users size={11} /> {p.shared_users} shared user{p.shared_users !== 1 ? "s" : ""}
+                        <div className="pt-4 border-t border-white/5 flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1.5 text-xs" style={{ color: (p.shared_users ?? 1) > 1 ? "#4ade80" : "var(--isp-text-muted)" }}>
+                            <Share2 size={11} />
+                            {(p.shared_users ?? 1) > 1
+                              ? `Sharing allowed — up to ${p.shared_users} devices`
+                              : "No sharing — 1 device only"}
+                          </div>
+                          {p.router_id && (
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Wifi size={11} />
+                              {routers.find(r => r.id === p.router_id)?.name ?? `Router #${p.router_id}`}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="flex gap-3">
