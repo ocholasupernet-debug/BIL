@@ -389,7 +389,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === OVPN Management Tunnel ===`,
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
-      ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 verify-server-certificate=no max-mtu=1480 max-mru=1480 add-default-route=no disabled=no`),
+      ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 verify-server-certificate=no add-default-route=no disabled=no`),
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
