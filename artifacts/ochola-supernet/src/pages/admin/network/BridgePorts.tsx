@@ -498,37 +498,52 @@ export default function BridgePorts() {
 
               {/* detailed setup guide when it IS a connection error */}
               {isConnErr && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
                   <p style={{ color: "#fca5a5", margin: 0, lineHeight: 1.6 }}>
-                    The server can see your router is <strong style={{ color: "#4ade80" }}>online</strong> (heartbeat working ✓),
-                    but it cannot open a direct API connection to <code style={{ fontFamily: "monospace", background: "rgba(255,255,255,0.07)", borderRadius: 4, padding: "1px 5px" }}>{routerHost}:8728</code>.
-                    Run these two commands in your MikroTik terminal to fix it:
+                    The server can see your router is <strong style={{ color: "#4ade80" }}>online</strong> (heartbeat ✓),
+                    but could not open an API connection to <code style={{ fontFamily: "monospace", background: "rgba(255,255,255,0.07)", borderRadius: 4, padding: "1px 5px" }}>{routerHost}:8728</code>.
+                    The server tried both the WAN IP and the VPN tunnel IP automatically — all failed.
+                    Choose one of the two fixes below:
                   </p>
 
-                  {/* Step 1 */}
-                  <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "0.6rem 0.875rem", border: "1px solid rgba(255,255,255,0.08)" }}>
-                    <div style={{ color: "#94a3b8", fontSize: "0.72rem", marginBottom: "0.35rem", fontWeight: 600 }}>STEP 1 — Enable the API service (if not already on)</div>
-                    <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.8rem", display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                      {"/ip service enable api"}
-                    </code>
+                  {/* ── Option A: VPN (recommended) ── */}
+                  <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 8, padding: "0.75rem 1rem" }}>
+                    <div style={{ color: "#4ade80", fontSize: "0.72rem", fontWeight: 700, marginBottom: "0.5rem", letterSpacing: "0.04em" }}>
+                      ✦ OPTION A — Allow API through the VPN tunnel (recommended — no WAN exposure)
+                    </div>
+                    <p style={{ color: "#86efac", margin: "0 0 0.5rem", fontSize: "0.78rem", lineHeight: 1.5 }}>
+                      Run these two commands once on the router. The server will then connect via the VPN tunnel (<code style={{ fontFamily: "monospace" }}>10.8.0.x:8728</code>) — no public firewall hole needed:
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                      <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.78rem", display: "block", background: "rgba(0,0,0,0.35)", borderRadius: 5, padding: "0.4rem 0.7rem", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {"/ip service enable api"}
+                      </code>
+                      <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.78rem", display: "block", background: "rgba(0,0,0,0.35)", borderRadius: 5, padding: "0.4rem 0.7rem", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {"/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept place-before=0"}
+                      </code>
+                    </div>
+                    <p style={{ color: "#6ee7b7", margin: "0.5rem 0 0", fontSize: "0.72rem" }}>
+                      After running, click <strong>Refresh</strong>. The server reads the VPN status file automatically to find your router's tunnel IP.
+                    </p>
                   </div>
 
-                  {/* Step 2 */}
-                  <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 7, padding: "0.6rem 0.875rem", border: "1px solid rgba(255,255,255,0.08)" }}>
-                    <div style={{ color: "#94a3b8", fontSize: "0.72rem", marginBottom: "0.35rem", fontWeight: 600 }}>STEP 2 — Allow port 8728 from this server's IP</div>
-                    <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.8rem", display: "block", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                      {`/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${serverIp} action=accept place-before=0`}
-                    </code>
+                  {/* ── Option B: WAN firewall ── */}
+                  <div style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, padding: "0.75rem 1rem" }}>
+                    <div style={{ color: "#94a3b8", fontSize: "0.72rem", fontWeight: 700, marginBottom: "0.5rem", letterSpacing: "0.04em" }}>
+                      OPTION B — Allow API from the server's public IP (direct WAN access)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                      <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.78rem", display: "block", background: "rgba(0,0,0,0.35)", borderRadius: 5, padding: "0.4rem 0.7rem", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {"/ip service enable api"}
+                      </code>
+                      <code style={{ fontFamily: "monospace", color: "#67e8f9", fontSize: "0.78rem", display: "block", background: "rgba(0,0,0,0.35)", borderRadius: 5, padding: "0.4rem 0.7rem", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {`/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${serverIp} action=accept place-before=0`}
+                      </code>
+                    </div>
                     <div style={{ color: "#64748b", fontSize: "0.71rem", marginTop: "0.35rem" }}>
                       Server IP: <strong style={{ color: "#a5b4fc" }}>{serverIp}</strong>
                     </div>
                   </div>
-
-                  {/* After-fix instructions */}
-                  <p style={{ color: "#94a3b8", margin: 0, fontSize: "0.78rem", lineHeight: 1.5 }}>
-                    After running both commands, click <strong style={{ color: "var(--isp-text)" }}>Refresh</strong> above.
-                    If your router heartbeat just fired, its WAN IP has been saved automatically — no other setup needed.
-                  </p>
                 </div>
               )}
             </div>

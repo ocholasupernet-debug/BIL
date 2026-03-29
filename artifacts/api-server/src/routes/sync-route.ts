@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
+import { readFileSync } from "fs";
 
 const router: IRouter = Router();
 
@@ -95,6 +96,81 @@ function isLanOnlyIp(ip: string): boolean {
     /^169\.254\./.test(ip)
   );
 }
+
+/* ══════════════════════════════════════════════════════════════
+   OpenVPN status reader
+   Parses the server status file and returns two maps:
+     realIp  → vpnIp   (e.g. "129.222.147.23" → "10.8.0.6")
+     cn      → vpnIp   (e.g. "come1"           → "10.8.0.6")
+   so the bridge-ports endpoint can fall back to the VPN tunnel
+   IP when the WAN host is unreachable.
+══════════════════════════════════════════════════════════════ */
+const VPN_STATUS_PATHS = [
+  "/etc/openvpn/openvpn-status.log",
+  "/etc/openvpn/server/openvpn-status.log",
+  "/var/log/openvpn/openvpn-status.log",
+  "/tmp/openvpn-status.log",
+];
+
+interface VpnClient {
+  cn:     string;
+  vpnIp:  string;
+  realIp: string;
+}
+
+function readVpnClients(): VpnClient[] {
+  for (const path of VPN_STATUS_PATHS) {
+    try {
+      const text = readFileSync(path, "utf-8");
+      const clients: VpnClient[] = [];
+      let inRouting = false;
+      for (const raw of text.split("\n")) {
+        const line = raw.trim();
+        if (!line || line.startsWith("END")) break;
+        if (line.startsWith("ROUTING TABLE")) { inRouting = true; continue; }
+        if (inRouting && line.startsWith("Virtual Address")) continue; /* header */
+        if (!inRouting) continue;
+        /* Routing table line: vpnIp,cn,realIp:port,lastRef */
+        const parts = line.split(",");
+        if (parts.length < 3) continue;
+        const vpnIp  = parts[0].trim();
+        const cn     = parts[1].trim();
+        const realFull = parts[2].trim(); /* e.g. 129.222.147.23:PORT */
+        const realIp = realFull.split(":")[0];
+        if (vpnIp && cn && /^10\./.test(vpnIp)) {
+          clients.push({ cn, vpnIp, realIp });
+        }
+      }
+      if (clients.length > 0) {
+        console.log(`[vpn-status] loaded ${clients.length} client(s) from ${path}`);
+        return clients;
+      }
+    } catch { /* try next path */ }
+  }
+  return [];
+}
+
+/* Returns the VPN IP for a given WAN host IP or CN, or null */
+function vpnIpFor(hostOrCn: string, clients: VpnClient[]): string | null {
+  for (const c of clients) {
+    if (c.realIp === hostOrCn || c.cn === hostOrCn) return c.vpnIp;
+  }
+  return null;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/admin/vpn-status
+   Returns all currently connected OpenVPN clients from the
+   server-side status file.  Useful for debugging VPN IPs.
+═══════════════════════════════════════════════════════════════ */
+router.get("/admin/vpn-status", (_req, res) => {
+  const clients = readVpnClients();
+  if (clients.length === 0) {
+    res.json({ ok: false, error: "No VPN status file found or no clients connected", paths: VPN_STATUS_PATHS });
+    return;
+  }
+  res.json({ ok: true, clients });
+});
 
 /* ─── Background auto-probe: connect RouterOS API, save host/model/version ─── */
 async function bgAutoProbe(
@@ -685,36 +761,78 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
   };
   if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
 
-  /* Fast-fail when the host is a LAN-only IP with no different VPN fallback.
-     Saves the user from a 12–24 second timeout. */
-  const hasVpnFallback = !!bridgeIp && bridgeIp !== host && !isLanOnlyIp(bridgeIp);
-  if (isLanOnlyIp(host) && !hasVpnFallback) {
-    const detail = bridgeIp && bridgeIp === host
-      ? `Bridge IP is set to the same address (${bridgeIp}). ` +
-        `Update Bridge IP to the router's VPN tunnel IP (e.g. 10.8.0.2).`
-      : `Set the router's VPN tunnel IP (e.g. 10.8.0.2) in the Bridge IP field.`;
+  /* ── Build list of IPs to try in order ──────────────────────
+     1. host       (WAN or direct IP stored in Supabase)
+     2. bridgeIp   (explicit VPN bridge IP if set and different)
+     3. vpnIp      (auto-looked up from OpenVPN server status file)
+     ─────────────────────────────────────────────────────────── */
+  const vpnClients = readVpnClients();
+  const autoVpnIp  = vpnIpFor(host, vpnClients);   /* e.g. 10.8.0.6 */
+
+  /* Fast-fail only when ALL candidates are LAN-only with no VPN alternative */
+  const candidates = [host, bridgeIp, autoVpnIp].filter(Boolean) as string[];
+  const hasReachableCandidate = candidates.some(ip => !isLanOnlyIp(ip));
+  if (!hasReachableCandidate) {
+    const detail = autoVpnIp
+      ? ""
+      : bridgeIp && bridgeIp === host
+        ? `Bridge IP is set to the same LAN address (${bridgeIp}).`
+        : `No VPN tunnel IP found. Set the router's VPN IP in Bridge IP or ensure OpenVPN is running.`;
     res.json({
       ok: false,
-      error: `Router host ${host} is a private LAN address — the cloud server cannot reach it. ${detail} ` +
-        `Once the OpenVPN tunnel is active, the router will receive a VPN IP automatically.`,
+      error: `Router host ${host} is a private LAN address — the server cannot reach it directly. ${detail}`.trim(),
     });
     return;
   }
 
-  let conn = makeConn(host, username, password);
-  let connectedVia = host;
-  try {
+  /* ── Try each candidate in order ── */
+  let conn!: RouterOSAPI;
+  let connectedVia = "";
+  let lastErr: unknown;
+
+  const toTry: Array<{ ip: string; label: string }> = [];
+  if (!isLanOnlyIp(host)) toTry.push({ ip: host, label: host });
+  if (bridgeIp && bridgeIp !== host && !isLanOnlyIp(bridgeIp))
+    toTry.push({ ip: bridgeIp, label: `${bridgeIp} (bridge)` });
+  if (autoVpnIp && !toTry.find(t => t.ip === autoVpnIp))
+    toTry.push({ ip: autoVpnIp, label: `${autoVpnIp} (VPN tunnel)` });
+
+  for (const { ip, label } of toTry) {
     try {
-      await withTimeout(conn.connect(), 12000);
-    } catch (directErr) {
-      if (bridgeIp) {
-        conn = makeConn(bridgeIp, username, password);
-        await withTimeout(conn.connect(), 12000);
-        connectedVia = `${bridgeIp} (VPN)`;
-      } else {
-        throw directErr;
+      conn = makeConn(ip, username, password);
+      await withTimeout(conn.connect(), 8000);
+      connectedVia = label;
+
+      /* ── If we connected via auto-discovered VPN IP, save it as bridge_ip ──
+         This runs in the background so we don't delay the response. */
+      if (ip === autoVpnIp) {
+        const HB_URL = hbUrl();
+        const HB_KEY = hbKey();
+        if (HB_URL && HB_KEY) {
+          fetch(
+            `${HB_URL}/rest/v1/isp_routers?host=eq.${encodeURIComponent(host)}`,
+            {
+              method: "PATCH",
+              headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ bridge_ip: ip }),
+            }
+          ).catch(() => {});
+        }
       }
+      break; /* connected — stop trying */
+    } catch (err) {
+      lastErr = err;
+      try { conn?.close(); } catch { /* ignore */ }
     }
+  }
+
+  if (!connectedVia) {
+    /* All candidates failed */
+    res.json({ ok: false, error: connErr(host, lastErr) });
+    return;
+  }
+
+  try {
 
     /* All interfaces */
     const ifArr = await conn.write(["/interface/print"]);
@@ -944,6 +1062,35 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
       }
 
       bgAutoProbe(row.router_secret ?? token, srcIp, row.router_username ?? "admin");
+    }
+
+    /* ── VPN IP auto-save ──────────────────────────────────────────
+       Even when heartbeat arrives over WAN, the router may be
+       connected via VPN.  Read the OpenVPN status file and, if
+       we find a VPN IP for this router's WAN IP, save it as
+       bridge_ip so the bridge-ports endpoint can use the tunnel.
+    ── */
+    if (row && isPublicIp(srcIp)) {
+      const vpnClients = readVpnClients();
+      const foundVpnIp = vpnIpFor(srcIp, vpnClients);
+      const storedBridgeIp = (row as Record<string, unknown>).bridge_ip as string | undefined;
+      if (foundVpnIp && foundVpnIp !== storedBridgeIp) {
+        console.log(`[heartbeat] found VPN IP ${foundVpnIp} for router ${routerName} (real ${srcIp}), saving as bridge_ip`);
+        const HB_URL3 = hbUrl();
+        const HB_KEY3 = hbKey();
+        if (HB_URL3 && HB_KEY3) {
+          const enc3 = encodeURIComponent(token);
+          fetch(
+            `${HB_URL3}/rest/v1/isp_routers?or=(router_secret.eq.${enc3},token.eq.${enc3})`,
+            {
+              method: "PATCH",
+              headers: { apikey: HB_KEY3, Authorization: `Bearer ${HB_KEY3}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ bridge_ip: foundVpnIp }),
+            }
+          ).then(() => console.log(`[heartbeat] saved VPN IP ${foundVpnIp} as bridge_ip for ${routerName}`))
+           .catch((e: unknown) => console.warn(`[heartbeat] VPN IP save failed: ${e instanceof Error ? e.message : e}`));
+        }
+      }
     }
 
   } catch (err: unknown) {
