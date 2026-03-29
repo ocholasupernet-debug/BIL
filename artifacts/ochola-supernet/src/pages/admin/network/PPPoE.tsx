@@ -6,6 +6,7 @@ import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Shield, Wifi, Copy, Download, CheckCircle2,
   Loader2, FileCode2, ChevronDown, ChevronUp, Zap,
+  Upload, TerminalSquare,
 } from "lucide-react";
 
 /* ══════════════════════════ Types ══════════════════════════ */
@@ -194,8 +195,35 @@ function genPPPoEOverHotspotScript(router: DbRouter, companyName: string): strin
 `;
 }
 
+/* ══════════════════════════ Import script generator ══════════════════════════ */
+function genImportScript(configFilename: string, router: DbRouter, mode: Mode): string {
+  return `# ============================================================
+# MikroTik Import Script
+# Loads: ${configFilename}
+# Router: ${router.name} (${router.host})
+# ============================================================
+#
+# STEP 1 — Upload the config file to the router
+#   Option A: Open Winbox > Files > drag & drop "${configFilename}"
+#   Option B: FTP/SCP the file to the router's root directory
+#
+# STEP 2 — Open the MikroTik terminal (Winbox > New Terminal)
+#          and paste the line below:
+#
+/import file-name=${configFilename}
+#
+# STEP 3 — Wait for "Script file loaded and executed successfully"
+#   then verify with:
+/interface pppoe-server server print
+${mode === "pppoe_over_hotspot" ? "/ip hotspot print" : ""}
+/ppp profile print
+`;
+}
+
 /* ══════════════════════════ Script block ══════════════════════════ */
-function ScriptBlock({ code, filename }: { code: string; filename: string }) {
+function ScriptBlock({
+  code, filename, accent = "#22d3ee", label,
+}: { code: string; filename: string; accent?: string; label?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(true);
 
@@ -211,15 +239,27 @@ function ScriptBlock({ code, filename }: { code: string; filename: string }) {
   };
 
   return (
-    <div style={{ border: "1px solid rgba(6,182,212,0.25)", borderRadius: 12, overflow: "hidden" }}>
+    <div style={{ border: `1px solid ${accent}40`, borderRadius: 12, overflow: "hidden" }}>
+      {label && (
+        <div style={{
+          padding: "0.5rem 1rem",
+          background: `${accent}10`,
+          borderBottom: `1px solid ${accent}25`,
+          display: "flex", alignItems: "center", gap: "0.5rem",
+          fontSize: "0.72rem", fontWeight: 700, color: accent,
+          textTransform: "uppercase", letterSpacing: "0.07em",
+        }}>
+          {label}
+        </div>
+      )}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "0.75rem 1rem",
-        background: "rgba(6,182,212,0.06)",
-        borderBottom: expanded ? "1px solid rgba(6,182,212,0.15)" : "none",
+        background: `${accent}08`,
+        borderBottom: expanded ? `1px solid ${accent}20` : "none",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-          <FileCode2 size={14} style={{ color: "#22d3ee" }} />
+          <FileCode2 size={14} style={{ color: accent }} />
           <span style={{ fontWeight: 700, fontSize: "0.8125rem", color: "var(--isp-text)", fontFamily: "monospace" }}>
             {filename}
           </span>
@@ -287,7 +327,10 @@ function ScriptBlock({ code, filename }: { code: string; filename: string }) {
 export default function PPPoE() {
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [mode, setMode] = useState<Mode>("pppoe_only");
-  const [script, setScript] = useState("");
+  const [scripts, setScripts] = useState<{
+    config: string; configFilename: string;
+    importer: string; importFilename: string;
+  } | null>(null);
 
   const { data: adminInfo } = useQuery({
     queryKey: ["admin_info", ADMIN_ID],
@@ -315,27 +358,35 @@ export default function PPPoE() {
 
   const router = useMemo(() => routers.find(r => r.id === selectedRouterId) ?? null, [routers, selectedRouterId]);
 
-  const handleGenerate = () => {
-    if (!router) return;
-    const code = mode === "pppoe_only"
-      ? genPPPoEOnlyScript(router, companyName)
-      : genPPPoEOverHotspotScript(router, companyName);
-    setScript(code);
-
-    /* Also trigger immediate download */
-    const filename = mode === "pppoe_only"
-      ? `pppoe-only-${router.name}.rsc`
-      : `pppoe-hotspot-${router.name}.rsc`;
-    const blob = new Blob([code], { type: "text/plain" });
+  const triggerDownload = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
   };
 
-  const filename = router
-    ? (mode === "pppoe_only" ? `pppoe-only-${router.name}.rsc` : `pppoe-hotspot-${router.name}.rsc`)
-    : "script.rsc";
+  const handleGenerate = () => {
+    if (!router) return;
+    const slug = router.name.replace(/\s+/g, "-").toLowerCase();
+    const configFilename = mode === "pppoe_only"
+      ? `pppoe-only-${slug}.rsc`
+      : `pppoe-hotspot-${slug}.rsc`;
+    const importFilename = mode === "pppoe_only"
+      ? `import-pppoe-only-${slug}.rsc`
+      : `import-pppoe-hotspot-${slug}.rsc`;
+
+    const config = mode === "pppoe_only"
+      ? genPPPoEOnlyScript(router, companyName)
+      : genPPPoEOverHotspotScript(router, companyName);
+    const importer = genImportScript(configFilename, router, mode);
+
+    setScripts({ config, configFilename, importer, importFilename });
+
+    /* Download both files with a slight delay between them */
+    triggerDownload(config, configFilename);
+    setTimeout(() => triggerDownload(importer, importFilename), 400);
+  };
 
   const MODES: { id: Mode; label: string; sub: string; icon: React.ReactNode; color: string; border: string }[] = [
     {
@@ -385,7 +436,7 @@ export default function PPPoE() {
             </span>
             <select
               value={selectedRouterId ?? ""}
-              onChange={e => { setSelectedRouterId(Number(e.target.value)); setScript(""); }}
+              onChange={e => { setSelectedRouterId(Number(e.target.value)); setScripts(null); }}
               disabled={loadingRouters}
               style={{
                 flex: 1, background: "var(--isp-inner-card)",
@@ -422,7 +473,7 @@ export default function PPPoE() {
                 return (
                   <button
                     key={m.id}
-                    onClick={() => { setMode(m.id); setScript(""); }}
+                    onClick={() => { setMode(m.id); setScripts(null); }}
                     style={{
                       display: "flex", flexDirection: "column", alignItems: "flex-start",
                       gap: "0.5rem", padding: "1rem 1.125rem",
@@ -489,20 +540,35 @@ export default function PPPoE() {
           </div>
         </div>
 
-        {/* ── Generated script viewer ── */}
-        {script && (
-          <div style={{ maxWidth: 720, animation: "fadeIn 0.2s ease" }}>
+        {/* ── Generated scripts ── */}
+        {scripts && (
+          <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: "1rem", animation: "fadeIn 0.2s ease" }}>
             <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}} @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+
             <div style={{
               display: "flex", alignItems: "center", gap: "0.5rem",
-              marginBottom: "0.625rem", fontSize: "0.8rem",
-              color: "#4ade80",
+              fontSize: "0.8rem", color: "#4ade80",
             }}>
               <CheckCircle2 size={14} />
-              <span style={{ fontWeight: 600 }}>Script generated — file downloaded automatically.</span>
-              <span style={{ color: "var(--isp-text-muted)" }}>You can also copy or re-download below.</span>
+              <span style={{ fontWeight: 600 }}>2 files downloaded.</span>
+              <span style={{ color: "var(--isp-text-muted)" }}>Upload the config file to the router, then run the import script in the terminal.</span>
             </div>
-            <ScriptBlock code={script} filename={filename} />
+
+            {/* File 1 — Configuration */}
+            <ScriptBlock
+              code={scripts.config}
+              filename={scripts.configFilename}
+              accent="#22d3ee"
+              label={<><Upload size={11} /> File 1 — Configuration script (upload to router via Winbox Files / FTP)</>}
+            />
+
+            {/* File 2 — Importer */}
+            <ScriptBlock
+              code={scripts.importer}
+              filename={scripts.importFilename}
+              accent="#a78bfa"
+              label={<><TerminalSquare size={11} /> File 2 — Import runner (paste into MikroTik terminal)</>}
+            />
           </div>
         )}
 
