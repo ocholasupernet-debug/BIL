@@ -550,7 +550,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set rm [/system routerboard get model] } on-error={}`,
       `:do { :set ri [/system identity get name] } on-error={}`,
       `:do { :set rv [/system package get [find name=routeros] version] } on-error={}`,
-      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv) mode=https check-certificate=no dst-path=reg.tmp } on-error={}`,
+      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv . "&ip=${bridgeIp}") mode=https check-certificate=no dst-path=reg.tmp } on-error={}`,
       `:do { /file remove [find name=reg.tmp] } on-error={}`,
       ``,
       `# === Heartbeat Script + Scheduler ===`,

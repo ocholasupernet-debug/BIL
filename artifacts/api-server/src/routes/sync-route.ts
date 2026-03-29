@@ -55,6 +55,56 @@ function makeConn(host: string, username: string, password: string): RouterOSAPI
   return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 10, keepalive: false });
 }
 
+/* ─── Extract real client IP, unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) ─── */
+function clientIp(req: import("express").Request): string {
+  const raw = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
+  return raw.replace(/^::ffff:/, "");
+}
+
+/* ─── Returns true if IP is in the OpenVPN client subnet 10.8.0.x ─── */
+function isVpnIp(ip: string): boolean {
+  return /^10\.8\.0\./.test(ip);
+}
+
+/* ─── Background auto-probe: connect RouterOS API, save host/model/version ─── */
+async function bgAutoProbe(
+  token: string,
+  host:  string,
+  username: string,
+): Promise<void> {
+  const url = hbUrl();
+  const key = hbKey();
+  if (!url || !key) return;
+  const enc = encodeURIComponent(token);
+  try {
+    const conn = makeConn(host, username || "admin", token);
+    await withTimeout(conn.connect(), 10_000);
+    const resArr = await conn.write(["/system/resource/print"]);
+    const sysRes = (Array.isArray(resArr) && resArr[0]) ? resArr[0] as Record<string, string> : {};
+    let boardName = "";
+    try {
+      const rbArr = await conn.write(["/system/routerboard/print"]);
+      const rb = (Array.isArray(rbArr) && rbArr[0]) ? rbArr[0] as Record<string, string> : {};
+      boardName = rb.model || rb["board-name"] || "";
+    } catch { /* CHR/VM without routerboard */ }
+    conn.close();
+    const model   = boardName || sysRes["board-name"] || "";
+    const version = sysRes.version || "";
+    console.log(`[auto-probe] ✓ ${host} — model=${model} ver=${version}`);
+    /* Persist host + hardware info */
+    await fetch(
+      `${url}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+      {
+        method: "PATCH",
+        headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ host, model, ros_version: version, status: "online" }),
+      }
+    );
+  } catch (e) {
+    console.warn(`[auto-probe] ${host} unreachable: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 /* ─── Speed → MikroTik rate-limit string ─── */
 function toRateLimit(down: number, up: number, unit: string = "Mbps"): string {
   const suffix = unit === "Kbps" ? "k" : unit === "Gbps" ? "G" : "M";
@@ -720,10 +770,23 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
       return;
     }
 
-    const updated = await patchRes.json() as Array<{ id: number; name: string }>;
-    const routerName = updated[0]?.name ?? "unknown";
+    const updated = await patchRes.json() as Array<{
+      id: number; name: string; host?: string;
+      router_username?: string; router_secret?: string;
+    }>;
+    const row = updated[0];
+    const routerName = row?.name ?? "unknown";
     console.log(`[heartbeat] ✓ ${routerName} ${newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, status: newStatus });
+
+    /* ── Auto-discovery: if request comes in over VPN (10.8.0.x), save the
+       VPN IP as host and run a background probe so the dashboard shows the
+       router as reachable without any manual setup. ── */
+    const srcIp = clientIp(req);
+    if (isVpnIp(srcIp) && row && srcIp !== row.host) {
+      console.log(`[heartbeat] auto-discovering ${routerName} via VPN IP ${srcIp}`);
+      bgAutoProbe(row.router_secret ?? token, srcIp, row.router_username ?? "admin");
+    }
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -744,11 +807,12 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
      ?ver=7.3.1        — RouterOS version
 ═══════════════════════════════════════════════════════════════ */
 router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
-  const token  = (req.params.token ?? "").trim();
-  const model  = ((req.query.model  as string) ?? "").trim();
-  const rname  = ((req.query.rname  as string) ?? "").trim();
-  const ver    = ((req.query.ver    as string) ?? "").trim();
-  const ts     = new Date().toISOString();
+  const token    = (req.params.token ?? "").trim();
+  const model    = ((req.query.model  as string) ?? "").trim();
+  const rname    = ((req.query.rname  as string) ?? "").trim();
+  const ver      = ((req.query.ver    as string) ?? "").trim();
+  const bridgeIp = ((req.query.ip     as string) ?? "").trim();   // bridge IP sent by RouterOS
+  const ts       = new Date().toISOString();
 
   if (!token) {
     res.status(400).json({ ok: false, error: "invalid token" });
@@ -768,8 +832,9 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
   try {
     /* Build the patch — only include fields that were provided */
     const patch: Record<string, string> = { last_seen: ts, status: "online" };
-    if (model) patch.model       = model;
-    if (ver)   patch.ros_version = ver;
+    if (model)    patch.model       = model;
+    if (ver)      patch.ros_version = ver;
+    if (bridgeIp) patch.bridge_ip   = bridgeIp;
     /* If the router still has the auto-generated name, rename it to the RouterOS identity */
     if (rname) patch.identity = rname;   // store identity (non-destructive new field check below)
 
@@ -819,10 +884,21 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       return;
     }
 
-    const updated = await patchRes.json() as Array<{ id: number; name: string }>;
-    const routerName = updated[0]?.name ?? rname ?? "unknown";
+    const updated = await patchRes.json() as Array<{
+      id: number; name: string; host?: string; router_username?: string;
+    }>;
+    const row = updated[0];
+    const routerName = row?.name ?? rname ?? "unknown";
     console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, model, version: ver });
+
+    /* ── Auto-probe: prefer VPN source IP; fall back to bridge IP ── */
+    const srcIp   = clientIp(req);
+    const probeIp = isVpnIp(srcIp) ? srcIp : bridgeIp;
+    if (probeIp && probeIp !== row?.host) {
+      console.log(`[register] scheduling auto-probe for ${routerName} @ ${probeIp}`);
+      bgAutoProbe(token, probeIp, row?.router_username ?? "admin");
+    }
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
