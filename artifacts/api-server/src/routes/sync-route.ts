@@ -633,7 +633,7 @@ const HB_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const token = (req.params.token ?? "").trim();
 
-  if (token.length < 8) {
+  if (!token) {
     res.status(400).json({ ok: false, error: "invalid token" });
     return;
   }
