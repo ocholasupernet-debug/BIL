@@ -28,7 +28,7 @@ interface DbAdmin {
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 const BASE_DOMAIN = "isplatty.org";
-const STALE_MS    = 5 * 60 * 1000; // 5 min — freshly registered
+const STALE_MS    = 12 * 60 * 1000; // 12 min — heartbeat is every 5 min, give 2× headroom
 
 function slugify(str: string) {
   return str.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
