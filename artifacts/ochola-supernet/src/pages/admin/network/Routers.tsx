@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Wifi, WifiOff, ArrowRight,
   Cpu, Clock,
-  ChevronDown, ChevronRight, Zap, PlugZap,
+  ChevronDown, ChevronRight, Zap, PlugZap, Trash2, Shield,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -34,6 +34,7 @@ interface ProbeState {
   data: ProbeData | null;
   error?: string;
   logs: string[];
+  connectedVia?: string;
 }
 
 /* ── Helpers ── */
@@ -200,6 +201,8 @@ export default function Routers() {
   const [probeStates, setProbeStates] = useState<Record<number, ProbeState>>({});
   /* Which router's panel is expanded */
   const [expanded, setExpanded] = useState<number | null>(null);
+  /* Delete confirmation state: "idle" | "confirm" | "deleting" */
+  const [deleteState, setDeleteState] = useState<Record<number, "idle" | "confirm" | "deleting">>({});
 
   const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["isp_routers"],
@@ -222,7 +225,7 @@ export default function Routers() {
   const connected = routers.filter(isRouterConnected).length;
   const offline   = routers.length - online - connected;
 
-  /* ── Probe a single router ── */
+  /* ── Probe a single router (tries direct first, VPN bridge IP as fallback) ── */
   const probeRouter = async (r: DbRouter) => {
     setProbeStates(prev => ({ ...prev, [r.id]: { loading: true, ok: null, data: null, logs: [] } }));
     setExpanded(r.id);
@@ -236,29 +239,40 @@ export default function Routers() {
           username: r.router_username || "admin",
           password: (r as unknown as Record<string, string>).router_secret || "",
           routerId: r.id,
+          bridgeIp: (r as unknown as Record<string, string>).bridge_ip || undefined,
         }),
       });
-      const json = await res.json() as { ok: boolean; data?: ProbeData; logs: string[]; error?: string };
+      const json = await res.json() as { ok: boolean; data?: ProbeData; logs: string[]; error?: string; connectedVia?: string };
 
       if (json.ok && json.data) {
-        /* ── Save extracted fields back to Supabase ── */
         const patch: Record<string, string | number> = {
           status:      "online",
           last_seen:   new Date().toISOString(),
           ros_version: json.data.version,
         };
-        if (json.data.model)   patch.model       = json.data.model;
-        if (json.data.serial)  patch.serial       = json.data.serial;
+        if (json.data.model)   patch.model  = json.data.model;
+        if (json.data.serial)  patch.serial = json.data.serial;
         await supabase.from("isp_routers").update(patch).eq("id", r.id);
         qc.invalidateQueries({ queryKey: ["isp_routers"] });
 
-        setProbeStates(prev => ({ ...prev, [r.id]: { loading: false, ok: true, data: json.data!, logs: json.logs } }));
+        setProbeStates(prev => ({ ...prev, [r.id]: { loading: false, ok: true, data: json.data!, logs: json.logs, connectedVia: json.connectedVia } }));
       } else {
         setProbeStates(prev => ({ ...prev, [r.id]: { loading: false, ok: false, data: null, logs: json.logs, error: json.error } }));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setProbeStates(prev => ({ ...prev, [r.id]: { loading: false, ok: false, data: null, logs: [`❌ ${msg}`], error: msg } }));
+    }
+  };
+
+  /* ── Delete a router ── */
+  const deleteRouter = async (r: DbRouter) => {
+    setDeleteState(prev => ({ ...prev, [r.id]: "deleting" }));
+    try {
+      await supabase.from("isp_routers").delete().eq("id", r.id);
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+    } catch {
+      setDeleteState(prev => ({ ...prev, [r.id]: "idle" }));
     }
   };
 
@@ -426,7 +440,7 @@ export default function Routers() {
 
                           {/* Actions */}
                           <td style={{ padding: "0.75rem 1rem" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                               {/* Probe / Connect */}
                               <button
                                 onClick={() => probeRouter(r)}
@@ -451,10 +465,42 @@ export default function Routers() {
                               <button
                                 onClick={() => navigate(`/admin/network/replace-router?router=${r.id}`)}
                                 title="Replace this router with a new one"
-                                style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", color: "#f87171", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 6, padding: "0.2rem 0.6rem", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+                                style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.72rem", color: "#94a3b8", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "0.2rem 0.6rem", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
                                 <ArrowRight size={11} /> Replace
                               </button>
+
+                              {/* Delete */}
+                              {deleteState[r.id] === "confirm"
+                                ? <>
+                                    <button
+                                      onClick={() => deleteRouter(r)}
+                                      style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.72rem", fontWeight: 700, fontFamily: "inherit", padding: "0.2rem 0.6rem", borderRadius: 6, cursor: "pointer", background: "rgba(248,113,113,0.18)", border: "1px solid rgba(248,113,113,0.5)", color: "#f87171" }}>
+                                      <Trash2 size={10} /> Yes, delete
+                                    </button>
+                                    <button
+                                      onClick={() => setDeleteState(prev => ({ ...prev, [r.id]: "idle" }))}
+                                      style={{ fontSize: "0.72rem", fontWeight: 600, fontFamily: "inherit", padding: "0.2rem 0.5rem", borderRadius: 6, cursor: "pointer", background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "var(--isp-text-muted)" }}>
+                                      Cancel
+                                    </button>
+                                  </>
+                                : deleteState[r.id] === "deleting"
+                                ? <span style={{ fontSize: "0.72rem", color: "#f87171", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                                    <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Deleting…
+                                  </span>
+                                : <button
+                                    onClick={() => setDeleteState(prev => ({ ...prev, [r.id]: "confirm" }))}
+                                    title="Delete this router"
+                                    style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.72rem", fontWeight: 700, fontFamily: "inherit", padding: "0.2rem 0.55rem", borderRadius: 6, cursor: "pointer", background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171" }}>
+                                    <Trash2 size={10} />
+                                  </button>}
                             </div>
+
+                            {/* VPN badge — shown when probe connected via VPN */}
+                            {ps?.ok === true && ps.connectedVia?.includes("VPN") && (
+                              <div style={{ marginTop: "0.35rem", display: "inline-flex", alignItems: "center", gap: "0.2rem", fontSize: "0.63rem", color: "#a78bfa", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 4, padding: "0.1rem 0.4rem" }}>
+                                <Shield size={9} /> via VPN tunnel
+                              </div>
+                            )}
 
                             {/* Probe error */}
                             {ps?.ok === false && ps.error && (

@@ -357,21 +357,38 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
    Body: { host, username, password, routerId? }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/probe", async (req, res): Promise<void> => {
-  const { host, username, password } = req.body as {
-    host: string; username: string; password: string; routerId?: number;
+  const { host, username, password, bridgeIp } = req.body as {
+    host: string; username: string; password: string; routerId?: number; bridgeIp?: string;
   };
 
   if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
-  log(`▶ Probing ${host}:8728 as '${username || "admin"}'…`);
 
-  const conn = makeConn(host, username, password);
+  /* ── Try direct connection first, then VPN bridge IP as fallback ── */
+  let conn = makeConn(host, username, password);
+  let connectedVia = host;
   try {
+    log(`▶ Probing ${host}:8728 as '${username || "admin"}'…`);
     await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected`);
+    log(`✓ Connected (direct)`);
+  } catch (directErr) {
+    const directMsg = directErr instanceof Error ? directErr.message : String(directErr);
+    log(`✗ Direct connection failed: ${directMsg}`);
+    if (bridgeIp) {
+      log(`▶ Retrying via VPN bridge ${bridgeIp}:8728…`);
+      conn = makeConn(bridgeIp, username, password);
+      await withTimeout(conn.connect(), 12000);
+      connectedVia = `${bridgeIp} (VPN)`;
+      log(`✓ Connected via VPN bridge`);
+    } else {
+      throw directErr;
+    }
+  }
+  log(`✓ Via: ${connectedVia}`);
 
+  try {
     /* ── /system/resource ── */
     log(`Reading /system/resource…`);
     const resArr = await conn.write(["/system/resource/print"]);
@@ -462,6 +479,7 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
 
     res.json({
       ok: true,
+      connectedVia,
       logs,
       data: {
         version,
