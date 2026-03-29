@@ -59,10 +59,20 @@ function ros(cmd: string): string {
   return cmd.replace(/\s{2,}/g, " ").trim();
 }
 
-/* ── Safe remove: wraps in :do { ... } on-error={} so "no such item"
-   errors from missing entries on a fresh router are silently ignored. ── */
+/* ── Safe remove: converts "/MENU remove [find COND]" into
+   ":foreach x in=[/MENU find COND] do={ /MENU remove $x }"
+   The foreach body only runs when items exist, so RouterOS never
+   prints "no such item" — not even as a cosmetic message.
+   Falls back to :do { } on-error={} for non-standard patterns. ── */
 function safeRm(cmd: string): string {
-  return `:do { ${ros(cmd)} } on-error={}`;
+  const cleaned = ros(cmd);
+  const m = cleaned.match(/^(.+?)\s+remove\s+\[find\s+(.+)\]$/);
+  if (m) {
+    const menu = m[1];
+    const cond = m[2];
+    return `:foreach x in=[${menu} find ${cond}] do={ ${menu} remove $x }`;
+  }
+  return `:do { ${cleaned} } on-error={}`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
