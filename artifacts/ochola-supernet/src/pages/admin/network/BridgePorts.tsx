@@ -135,10 +135,6 @@ export default function BridgePorts() {
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  /* Manual IP override — shown when router host is empty */
-  const [manualHost, setManualHost]       = useState("");
-  const [showManualInput, setShowManualInput] = useState(false);
-
   /* loaded data */
   const [payload, setPayload]         = useState<PortsPayload | null>(null);
   const [loading, setLoading]         = useState(false);
@@ -216,11 +212,6 @@ export default function BridgePorts() {
     if (!r) return;
     autoFetchedRef.current = true;
 
-    /* If host is empty, show manual input instead of attempting connection */
-    if (!r.host && !r.bridge_ip) {
-      setShowManualInput(true);
-      return;
-    }
     fetchPortsForRouter(r);
   }, [selectedKey, routers.length]);
 
@@ -245,13 +236,13 @@ export default function BridgePorts() {
   const activeRouter = routers.find(r => r.key === selectedKey) ?? null;
 
   function effectiveHost(r: UnifiedRouter): string {
-    return manualHost.trim() || r.host || r.bridge_ip || "";
+    return r.host || r.bridge_ip || "";
   }
 
-  async function fetchPortsForRouter(r: UnifiedRouter, overrideHost?: string) {
-    const host = overrideHost?.trim() || effectiveHost(r);
+  async function fetchPortsForRouter(r: UnifiedRouter) {
+    const host = effectiveHost(r);
     if (!host) {
-      setShowManualInput(true);
+      setLoadError("No IP address available for this router. It will be set automatically once the VPN tunnel connects.");
       return;
     }
     setLoading(true);
@@ -273,16 +264,12 @@ export default function BridgePorts() {
       const data = await res.json() as PortsPayload & { connectedVia?: string };
       if (data.ok) {
         setPayload(data);
-        setShowManualInput(false);
         if (data.connectedVia) setConnectedVia(data.connectedVia);
       } else {
         setLoadError(data.error ?? "Failed to load ports");
-        /* If the host we tried didn't work, invite the user to enter the correct IP */
-        setShowManualInput(true);
       }
     } catch (e) {
       setLoadError(String(e));
-      setShowManualInput(true);
     } finally {
       setLoading(false);
     }
@@ -389,18 +376,10 @@ export default function BridgePorts() {
                   setSelectedPorts(new Set());
                   setConnectedVia(null);
                   setLoadError(null);
-                  setShowManualInput(false);
-                  setManualHost("");
                   autoFetchedRef.current = false;
                   if (key) {
                     const r = routers.find(x => x.key === key);
-                    if (r) {
-                      if (!r.host && !r.bridge_ip) {
-                        setShowManualInput(true);
-                      } else {
-                        setTimeout(() => fetchPortsForRouter(r), 0);
-                      }
-                    }
+                    if (r) setTimeout(() => fetchPortsForRouter(r), 0);
                   }
                 }}
                 style={{
@@ -463,60 +442,6 @@ export default function BridgePorts() {
             </button>
           )}
         </div>
-
-        {/* ── Manual IP input — shown when router host is empty or connection failed ── */}
-        {showManualInput && selectedKey && (
-          <div style={{
-            background: "rgba(6,182,212,0.05)", border: "1px solid rgba(6,182,212,0.25)",
-            borderRadius: 10, padding: "1rem 1.25rem",
-            display: "flex", flexDirection: "column", gap: "0.625rem",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <RouterIcon size={15} style={{ color: "#06b6d4" }} />
-              <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "var(--isp-text)" }}>
-                Enter router IP address
-              </span>
-            </div>
-            <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", margin: 0, lineHeight: 1.6 }}>
-              The router's stored host is empty or unreachable.
-              Enter the router's <strong>direct IP</strong> (e.g. <code style={{ fontFamily: "monospace" }}>192.168.88.1</code>) or
-              its <strong>VPN tunnel IP</strong> (e.g. <code style={{ fontFamily: "monospace" }}>10.9.0.2</code>) assigned when the OVPN connected.
-            </p>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              <input
-                type="text"
-                value={manualHost}
-                onChange={e => setManualHost(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === "Enter" && manualHost.trim() && activeRouter) {
-                    fetchPortsForRouter(activeRouter, manualHost.trim());
-                  }
-                }}
-                placeholder="192.168.88.1 or 10.9.0.x"
-                style={{
-                  flex: 1, maxWidth: 260,
-                  background: "var(--isp-input-bg)", border: "1px solid var(--isp-input-border)",
-                  borderRadius: 7, padding: "0.45rem 0.75rem",
-                  color: "var(--isp-text)", fontSize: "0.85rem", fontFamily: "monospace",
-                  outline: "none",
-                }}
-              />
-              <button
-                onClick={() => activeRouter && fetchPortsForRouter(activeRouter, manualHost.trim())}
-                disabled={!manualHost.trim() || loading}
-                style={{
-                  padding: "0.45rem 1.25rem", borderRadius: 7,
-                  background: manualHost.trim() ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)",
-                  border: "none", color: manualHost.trim() ? "white" : "var(--isp-text-muted)",
-                  fontWeight: 700, fontSize: "0.8rem", cursor: manualHost.trim() ? "pointer" : "not-allowed",
-                  fontFamily: "inherit",
-                }}
-              >
-                {loading ? "Connecting…" : "Connect"}
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* VPN connection badge */}
         {connectedVia?.includes("VPN") && (
