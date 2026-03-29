@@ -9,6 +9,8 @@ import {
   probeAllHosts,
   probePort,
   generateFirewallScript,
+  generateVpnSetupScript,
+  generateOvpnClientConfig,
   getEnvCredentials,
   isPrivateIp,
   type RouterCredentials,
@@ -294,6 +296,98 @@ router.get("/probe", async (req, res): Promise<void> => {
       ? `Port ${port} on ${host} is OPEN (${probe.latencyMs}ms)`
       : `Port ${port} on ${host} is NOT reachable: ${probe.diagnosis ?? probe.error}`,
   });
+});
+
+/* ─── GET /api/router/:id/vpn-setup-script ──────────────────────────────── */
+/**
+ * Generates a MikroTik RouterOS script (.rsc) that sets up an OpenVPN
+ * server and creates the default VPN/API admin user on the router.
+ *
+ * Download and run on the router:
+ *   /import ovpn-setup-router<id>.rsc
+ *
+ * Query params (all optional):
+ *   vpsIp         — VPS IP to restrict OVPN access (recommended)
+ *   vpnPort       — OVPN port on router (default 1194)
+ *   vpnUsername   — VPN user to create (default "admin")
+ *   vpnPassword   — VPN user password (default "ochola")
+ *   tunnelNetwork — first 3 octets of VPN tunnel subnet (default "192.168.89")
+ *   lanNetwork    — router LAN CIDR VPN clients can access (default "192.168.88.0/24")
+ */
+router.get("/router/:id/vpn-setup-script", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
+
+  const { row } = found;
+  /* Prefer the stored public host; fall back to bridge_ip if no public host */
+  const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
+    ? row.host.trim()
+    : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+
+  const script = generateVpnSetupScript({
+    routerPublicIp,
+    routerId:      id,
+    vpsIp:         String(req.query.vpsIp       ?? "").trim()   || undefined,
+    vpnPort:       req.query.vpnPort       ? parseInt(String(req.query.vpnPort),       10) : 1194,
+    vpnUsername:   String(req.query.vpnUsername  ?? "admin"),
+    vpnPassword:   String(req.query.vpnPassword  ?? "ochola"),
+    tunnelNetwork: String(req.query.tunnelNetwork ?? "192.168.89"),
+    lanNetwork:    String(req.query.lanNetwork    ?? "192.168.88.0/24"),
+  });
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="ovpn-setup-router${id}.rsc"`
+  );
+  res.send(script);
+});
+
+/* ─── GET /api/router/:id/ovpn-client ──────────────────────────────────── */
+/**
+ * Generates the .ovpn client configuration file for the VPS to connect
+ * to this router's OpenVPN server.
+ *
+ * Save on the VPS and run:
+ *   openvpn --config /etc/openvpn/router-admin.ovpn --daemon
+ *
+ * Query params (all optional):
+ *   vpnPort       — OVPN port on router (default 1194)
+ *   vpnUsername   — VPN user (default "admin")
+ *   vpnPassword   — VPN user password (default "ochola")
+ *   routeAll      — "true" to route ALL traffic through VPN (default: split)
+ *   lanNetwork    — LAN to route through tunnel (default "192.168.88.0/24")
+ */
+router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
+
+  const { row } = found;
+  const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
+    ? row.host.trim()
+    : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+
+  const config = generateOvpnClientConfig({
+    routerPublicIp,
+    vpnPort:        req.query.vpnPort     ? parseInt(String(req.query.vpnPort),     10) : 1194,
+    vpnUsername:    String(req.query.vpnUsername  ?? "admin"),
+    vpnPassword:    String(req.query.vpnPassword  ?? "ochola"),
+    lanNetwork:     String(req.query.lanNetwork   ?? "192.168.88.0/24"),
+    routeAll:       req.query.routeAll === "true",
+  });
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="router${id}-admin.ovpn"`
+  );
+  res.send(config);
 });
 
 /* ─── GET /api/router/:id/firewall-script?vpsIp=x.x.x.x ────────────────── */

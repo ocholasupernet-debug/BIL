@@ -724,6 +724,288 @@ export async function testConnection(
   }
 }
 
+/* ─── OpenVPN setup script generator ────────────────────────────────────── */
+
+export interface VpnSetupOptions {
+  /** Public IP or hostname of the router (used for VPN endpoint) */
+  routerPublicIp: string;
+  /** VPS public IP — used to restrict who can connect via OVPN */
+  vpsIp?: string;
+  /** OpenVPN port on the router (default: 1194) */
+  vpnPort?: number;
+  /** VPN user to create on the router */
+  vpnUsername?: string;
+  /** VPN user password */
+  vpnPassword?: string;
+  /** IP pool CIDR for VPN tunnel addresses (default: 192.168.89.0/24) */
+  tunnelNetwork?: string;
+  /** Router's LAN network — VPN clients get access to this (default: 192.168.88.0/24) */
+  lanNetwork?: string;
+  /** Router ID for comments/labelling */
+  routerId?: number;
+}
+
+/**
+ * Generates a MikroTik RouterOS script (.rsc) that:
+ *  1. Creates an IP pool for VPN clients
+ *  2. Creates a PPP profile for the VPN user
+ *  3. Creates the VPN user (PPP secret) with username/password
+ *  4. Enables and configures the OpenVPN server
+ *  5. Adds firewall rules to allow OpenVPN and API access from the VPN tunnel
+ *  6. Optionally restricts OVPN connections to the VPS IP only
+ *
+ * Paste or import this on the router terminal:
+ *   /import ovpn-setup.rsc
+ */
+export function generateVpnSetupScript(opts: VpnSetupOptions): string {
+  const {
+    routerPublicIp,
+    vpsIp,
+    vpnPort      = 1194,
+    vpnUsername  = "admin",
+    vpnPassword  = "ochola",
+    tunnelNetwork = "192.168.89",
+    lanNetwork   = "192.168.88.0/24",
+    routerId,
+  } = opts;
+
+  const routerGateway = `${tunnelNetwork}.1`;   /* router end of tunnel */
+  const clientStart   = `${tunnelNetwork}.2`;   /* first client IP */
+  const clientEnd     = `${tunnelNetwork}.10`;  /* last client IP */
+  const tunnelNet     = `${tunnelNetwork}.0/24`;
+  const tag           = routerId ? `ISP-${routerId}` : "ISP-OVPN";
+  const vpsRestrict   = vpsIp
+    ? `src-address=${vpsIp} `
+    : "";
+  const vpsNote       = vpsIp
+    ? `# VPN access restricted to VPS IP: ${vpsIp}`
+    : `# WARNING: OVPN port open to all IPs — set vpsIp to restrict access`;
+
+  return `# ═══════════════════════════════════════════════════════════════
+# OcholaSupernet — MikroTik OpenVPN Server Setup
+# Generated : ${new Date().toISOString()}
+# Router IP : ${routerPublicIp}
+# VPN Port  : ${vpnPort}/tcp
+# VPN User  : ${vpnUsername}  (password stored in PPP secrets)
+# Tunnel    : ${tunnelNet}
+# LAN Access: ${lanNetwork}
+# ${vpsNote}
+#
+# USAGE: Paste into RouterOS terminal, or upload and run:
+#          /import ovpn-setup-router${routerId ?? ""}.rsc
+# ═══════════════════════════════════════════════════════════════
+
+# ── Step 1: IP pool for VPN clients ─────────────────────────────────────────
+/ip pool
+add name=ovpn-pool ranges=${clientStart}-${clientEnd} comment="${tag}"
+
+# ── Step 2: PPP profile for VPN sessions ────────────────────────────────────
+/ppp profile
+add name=ovpn-profile \\
+    local-address=${routerGateway} \\
+    remote-address=ovpn-pool \\
+    use-compression=no \\
+    use-encryption=yes \\
+    use-upnp=no \\
+    dns-server=8.8.8.8,1.1.1.1 \\
+    comment="${tag}"
+
+# ── Step 3: VPN user account (PPP secret) ───────────────────────────────────
+# Password is stored in the router's PPP secrets — not in any config file.
+/ppp secret
+add name=${vpnUsername} \\
+    password=${vpnPassword} \\
+    profile=ovpn-profile \\
+    service=ovpn \\
+    local-address=${routerGateway} \\
+    remote-address=${clientStart} \\
+    comment="${tag} — default VPN/API admin (OcholaSupernet backend)"
+
+# ── Step 4: OpenVPN server ───────────────────────────────────────────────────
+# Requires a certificate. If you don't have one, generate a self-signed cert:
+#   /certificate add name=ovpn-ca common-name=ovpn-ca key-usage=key-cert-sign,crl-sign
+#   /certificate sign ovpn-ca
+#   /certificate add name=ovpn-server common-name=${routerPublicIp}
+#   /certificate sign ovpn-server ca=ovpn-ca
+/interface ovpn-server server
+set enabled=yes \\
+    port=${vpnPort} \\
+    mode=ip \\
+    protocol=tcp \\
+    auth=sha1 \\
+    cipher=aes128,aes192,aes256 \\
+    default-profile=ovpn-profile \\
+    require-client-certificate=no \\
+    certificate=none
+
+# ── Step 5: Firewall rules ───────────────────────────────────────────────────
+/ip firewall filter
+
+# 5a. Allow OpenVPN connections (port ${vpnPort}) on WAN
+add action=accept chain=input \\
+    ${vpsRestrict}protocol=tcp dst-port=${vpnPort} \\
+    in-interface-list=WAN \\
+    comment="${tag}-allow-ovpn"
+
+# 5b. Allow API access (8728 plain + 8729 SSL) from VPN tunnel
+add action=accept chain=input \\
+    src-address=${tunnelNet} \\
+    protocol=tcp dst-port=8728,8729 \\
+    comment="${tag}-api-from-vpn"
+
+# 5c. Allow full LAN access from VPN tunnel (PPPoE/Hotspot management)
+add action=accept chain=forward \\
+    src-address=${tunnelNet} \\
+    dst-address=${lanNetwork} \\
+    comment="${tag}-lan-from-vpn"
+
+# ── Step 6: Enable the API service (if not already) ─────────────────────────
+/ip service
+enable api
+# enable api-ssl   # uncomment if you want encrypted API-SSL on port 8729
+
+# ── Step 7: Route — allow VPN clients to reach the LAN ──────────────────────
+# (Usually handled automatically; add only if your routing table needs it)
+# /ip route add dst-address=${lanNetwork} gateway=${routerGateway}
+
+# ── Verify ───────────────────────────────────────────────────────────────────
+:log info "${tag}: OpenVPN server configured. User '${vpnUsername}' created."
+:log info "${tag}: VPN clients will get IPs in ${tunnelNet}"
+:log info "${tag}: API accessible at ${routerGateway}:8728 from VPN tunnel"
+`;
+}
+
+/* ─── OpenVPN client config (.ovpn) generator ────────────────────────────── */
+
+export interface OvpnClientOptions {
+  /** Router's public IP or hostname — the VPN endpoint */
+  routerPublicIp: string;
+  /** OpenVPN port on the router (default: 1194) */
+  vpnPort?: number;
+  /** VPN username for auth-user-pass */
+  vpnUsername?: string;
+  /** VPN password — CAUTION: only embed in .ovpn for dev/testing;
+   *  production setups should use a separate credentials file */
+  vpnPassword?: string;
+  /** Expected VPN tunnel IP the router will assign to this client */
+  tunnelClientIp?: string;
+  /** Router's LAN network to route through VPN (default: 192.168.88.0/24) */
+  lanNetwork?: string;
+  /** API port(s) to reach through the tunnel (informational, in comment) */
+  apiPorts?: string;
+  /** Whether to route ALL traffic through VPN (default: false = split tunnel) */
+  routeAll?: boolean;
+}
+
+/**
+ * Generates a .ovpn client configuration file for the VPS to connect
+ * to the router's OpenVPN server.
+ *
+ * Save as /etc/openvpn/router-admin.ovpn on the VPS and run:
+ *   openvpn --config /etc/openvpn/router-admin.ovpn --daemon
+ */
+export function generateOvpnClientConfig(opts: OvpnClientOptions): string {
+  const {
+    routerPublicIp,
+    vpnPort        = 1194,
+    vpnUsername    = "admin",
+    vpnPassword    = "ochola",
+    tunnelClientIp = "192.168.89.2",
+    lanNetwork     = "192.168.88.0/24",
+    apiPorts       = "8728, 8729",
+    routeAll       = false,
+  } = opts;
+
+  /* LAN route: e.g. "192.168.88.0 255.255.255.0" */
+  const [lanBase, lanPrefix] = lanNetwork.split("/");
+  const lanMask = prefixToMask(parseInt(lanPrefix ?? "24", 10));
+
+  return `# ═══════════════════════════════════════════════════════════════
+# OcholaSupernet — VPS OpenVPN Client Configuration
+# Generated  : ${new Date().toISOString()}
+# Server     : ${routerPublicIp}:${vpnPort}/tcp
+# VPN user   : ${vpnUsername}
+# Tunnel IP  : ${tunnelClientIp}  (assigned by router)
+# LAN access : ${lanNetwork}  (PPPoE/Hotspot management)
+# API ports  : ${apiPorts}  (reachable at router tunnel IP after connect)
+#
+# USAGE on VPS:
+#   1. Install OpenVPN:  apt install openvpn
+#   2. Save this file:   /etc/openvpn/router-admin.ovpn
+#   3. Create creds:     echo "${vpnUsername}\\n${vpnPassword}" > /etc/openvpn/router-creds.txt
+#                        chmod 600 /etc/openvpn/router-creds.txt
+#   4. Connect:          openvpn --config /etc/openvpn/router-admin.ovpn --daemon
+#   5. Verify:           ip addr show tun0    # should show ${tunnelClientIp}
+#                        ping 192.168.89.1    # ping router tunnel endpoint
+#                        curl http://192.168.89.1:8728  # test API port
+#
+# ENVIRONMENT VARIABLE — set in OcholaSupernet backend:
+#   MIKROTIK_BRIDGE_IP=${tunnelClientIp.replace(/\.\d+$/, ".1")}  # router's tunnel IP
+#
+# ── SECURITY NOTE ─────────────────────────────────────────────
+# The credentials below are for DEVELOPMENT / initial setup only.
+# In production, keep credentials in a separate file (see step 3 above)
+# and remove the <auth-user-pass> inline block.
+# ═══════════════════════════════════════════════════════════════
+
+client
+dev tun
+proto tcp
+
+# OpenVPN server endpoint
+remote ${routerPublicIp} ${vpnPort}
+
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+
+# Authentication
+auth SHA1
+cipher AES-128-CBC
+auth-nocache
+
+# Credentials — store in a separate file for production:
+#   auth-user-pass /etc/openvpn/router-creds.txt
+<auth-user-pass>
+${vpnUsername}
+${vpnPassword}
+</auth-user-pass>
+
+# MikroTik uses self-signed certs by default
+tls-client
+# If you configured a CA on the router, add:
+# <ca>
+# -----BEGIN CERTIFICATE-----
+# ... paste router CA cert here ...
+# -----END CERTIFICATE-----
+# </ca>
+
+# Disable cert verification for self-signed (remove in production with proper cert)
+verify-x509-name none
+# OR: ns-cert-type server   (for older RouterOS)
+
+${routeAll
+  ? `# Route ALL traffic through VPN
+redirect-gateway def1`
+  : `# Split tunnel — only route LAN traffic through VPN (recommended)
+route-nopull
+route ${lanBase} ${lanMask}
+# Route to router tunnel subnet (auto-assigned by server, but explicit here for clarity)
+route 192.168.89.0 255.255.255.0`}
+
+# Logging
+verb 3
+log /var/log/openvpn-router.log
+`;
+}
+
+/** Convert CIDR prefix length to dotted-decimal subnet mask */
+function prefixToMask(prefix: number): string {
+  const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+  return [24, 16, 8, 0].map(s => (mask >> s) & 255).join(".");
+}
+
 /* ─── MikroTik firewall script generator ────────────────────────────────── */
 
 /**
