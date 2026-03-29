@@ -369,23 +369,36 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
   /* ── Try direct connection first, then VPN bridge IP as fallback ── */
   let conn = makeConn(host, username, password);
   let connectedVia = host;
+  let connected = false;
+
   try {
     log(`▶ Probing ${host}:8728 as '${username || "admin"}'…`);
     await withTimeout(conn.connect(), 12000);
+    connected = true;
     log(`✓ Connected (direct)`);
   } catch (directErr) {
     const directMsg = directErr instanceof Error ? directErr.message : String(directErr);
     log(`✗ Direct connection failed: ${directMsg}`);
     if (bridgeIp) {
-      log(`▶ Retrying via VPN bridge ${bridgeIp}:8728…`);
-      conn = makeConn(bridgeIp, username, password);
-      await withTimeout(conn.connect(), 12000);
-      connectedVia = `${bridgeIp} (VPN)`;
-      log(`✓ Connected via VPN bridge`);
-    } else {
-      throw directErr;
+      try {
+        log(`▶ Retrying via VPN bridge ${bridgeIp}:8728…`);
+        conn = makeConn(bridgeIp, username, password);
+        await withTimeout(conn.connect(), 12000);
+        connectedVia = `${bridgeIp} (VPN)`;
+        connected = true;
+        log(`✓ Connected via VPN bridge`);
+      } catch (bridgeErr) {
+        const bridgeMsg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
+        log(`✗ VPN bridge also failed: ${bridgeMsg}`);
+      }
     }
   }
+
+  if (!connected) {
+    res.json({ ok: false, error: `Cannot reach ${host}:8728 — check the IP and that API is enabled (port 8728 open, /ip/service api=yes)`, logs });
+    return;
+  }
+
   log(`✓ Via: ${connectedVia}`);
 
   try {

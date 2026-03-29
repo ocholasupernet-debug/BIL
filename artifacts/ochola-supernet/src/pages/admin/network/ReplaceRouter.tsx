@@ -71,7 +71,7 @@ const inp: React.CSSProperties = {
 
 /* ─── API Panel (expandable per router) ──────────────────────── */
 function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }) {
-  const [host,     setHost]     = useState(router.host || "");
+  const [host,     setHost]     = useState(router.host || router.bridge_ip || "");
   const [user,     setUser]     = useState(router.router_username || "admin");
   const [pass,     setPass]     = useState(router.router_secret || "");
   const [showPass, setShowPass] = useState(false);
@@ -83,7 +83,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
 
   /* Reset fields if router prop changes */
   useEffect(() => {
-    setHost(router.host || "");
+    setHost(router.host || router.bridge_ip || "");
     setUser(router.router_username || "admin");
     setPass(router.router_secret || "");
     setProbe(null);
