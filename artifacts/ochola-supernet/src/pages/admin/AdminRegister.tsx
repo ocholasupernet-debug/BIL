@@ -103,7 +103,7 @@ export default function AdminRegister() {
       const { error } = await supabase.from("isp_admins").insert({
         name:      company.trim(),
         phone:     phone.trim(),
-        username:  "admin",
+        username:  slug || company.trim().toLowerCase(),
         password:  "admin",
         is_active: true,
         role:      "isp_admin",
@@ -148,7 +148,7 @@ export default function AdminRegister() {
               <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Your Login Credentials</p>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-400">Username</span>
-                <span className="text-sm font-mono font-bold text-cyan-300">admin</span>
+                <span className="text-sm font-mono font-bold text-cyan-300">{registeredUsername}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-400">Default Password</span>
