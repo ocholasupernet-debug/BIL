@@ -25,6 +25,7 @@ import {
 } from "../lib/vpn-utils";
 import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 
 const router: IRouter = Router();
 
@@ -71,6 +72,21 @@ function rowToCreds(row: SbRouter): RouterCredentials {
   };
 }
 
+/* ── VPN IP helper: true if IP is a VPN tunnel IP (10.8–11.x.x) ─────────── */
+function isVpnTunnelIp(ip: string): boolean {
+  return /^10\.(8|9|10|11)\.\d+\.\d+$/.test(ip);
+}
+
+/* ── True if IP is a LAN-only address unreachable from VPS ──────────────── */
+function isLanOnlyIp(ip: string): boolean {
+  return (
+    /^192\.168\./.test(ip) ||
+    /^10\.(?!8\.|9\.|10\.|11\.)/.test(ip) || /* 10.x.x.x but NOT VPN range */
+    /^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip) ||
+    /^169\.254\./.test(ip)
+  );
+}
+
 /* ─── Load credentials by Supabase isp_routers.id ───────────────────────── */
 async function getRouterCreds(id: number): Promise<{ creds: RouterCredentials; row: SbRouter } | null> {
   if (!supabaseConfigured) return null;
@@ -80,7 +96,30 @@ async function getRouterCreds(id: number): Promise<{ creds: RouterCredentials; r
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !row.bridge_ip?.trim())) return null;
-  return { creds: rowToCreds(row), row };
+
+  const creds = rowToCreds(row);
+
+  /* ── VPN IP auto-injection ──────────────────────────────────────────────
+     If bridge_ip is missing or is a LAN-only IP (unreachable from the VPS),
+     look up the router's VPN tunnel IP from the OpenVPN server status file.
+     This lets the backend connect via the VPN tunnel without any firewall
+     rule changes on the router's WAN interface.
+  ── */
+  const bridgeIpUsable = creds.bridgeIp && isVpnTunnelIp(creds.bridgeIp);
+  if (!bridgeIpUsable && creds.host) {
+    const vpnClients = readVpnClients();
+    /* Match by WAN IP (real IP seen by VPN server) */
+    const autoVpnIp = vpnIpFor(creds.host, vpnClients)
+      /* Also try matching by router name (certificate CN) */
+      ?? vpnIpFor(row.name, vpnClients);
+    if (autoVpnIp) {
+      logger.info({ routerId: id, host: creds.host, vpnIp: autoVpnIp },
+        "VPN IP auto-discovered from OpenVPN status — injecting as bridgeIp");
+      creds.bridgeIp = autoVpnIp;
+    }
+  }
+
+  return { creds, row };
 }
 
 /* ─── Load credentials by host IP ───────────────────────────────────────── */

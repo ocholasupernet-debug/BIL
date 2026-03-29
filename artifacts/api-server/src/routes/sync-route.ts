@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
-import { readFileSync } from "fs";
+import { readVpnClients, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 
 const router: IRouter = Router();
 
@@ -95,67 +95,6 @@ function isLanOnlyIp(ip: string): boolean {
     /^127\./.test(ip) ||
     /^169\.254\./.test(ip)
   );
-}
-
-/* ══════════════════════════════════════════════════════════════
-   OpenVPN status reader
-   Parses the server status file and returns two maps:
-     realIp  → vpnIp   (e.g. "129.222.147.23" → "10.8.0.6")
-     cn      → vpnIp   (e.g. "come1"           → "10.8.0.6")
-   so the bridge-ports endpoint can fall back to the VPN tunnel
-   IP when the WAN host is unreachable.
-══════════════════════════════════════════════════════════════ */
-const VPN_STATUS_PATHS = [
-  "/etc/openvpn/openvpn-status.log",
-  "/etc/openvpn/server/openvpn-status.log",
-  "/var/log/openvpn/openvpn-status.log",
-  "/tmp/openvpn-status.log",
-];
-
-interface VpnClient {
-  cn:     string;
-  vpnIp:  string;
-  realIp: string;
-}
-
-function readVpnClients(): VpnClient[] {
-  for (const path of VPN_STATUS_PATHS) {
-    try {
-      const text = readFileSync(path, "utf-8");
-      const clients: VpnClient[] = [];
-      let inRouting = false;
-      for (const raw of text.split("\n")) {
-        const line = raw.trim();
-        if (!line || line.startsWith("END")) break;
-        if (line.startsWith("ROUTING TABLE")) { inRouting = true; continue; }
-        if (inRouting && line.startsWith("Virtual Address")) continue; /* header */
-        if (!inRouting) continue;
-        /* Routing table line: vpnIp,cn,realIp:port,lastRef */
-        const parts = line.split(",");
-        if (parts.length < 3) continue;
-        const vpnIp  = parts[0].trim();
-        const cn     = parts[1].trim();
-        const realFull = parts[2].trim(); /* e.g. 129.222.147.23:PORT */
-        const realIp = realFull.split(":")[0];
-        if (vpnIp && cn && /^10\./.test(vpnIp)) {
-          clients.push({ cn, vpnIp, realIp });
-        }
-      }
-      if (clients.length > 0) {
-        console.log(`[vpn-status] loaded ${clients.length} client(s) from ${path}`);
-        return clients;
-      }
-    } catch { /* try next path */ }
-  }
-  return [];
-}
-
-/* Returns the VPN IP for a given WAN host IP or CN, or null */
-function vpnIpFor(hostOrCn: string, clients: VpnClient[]): string | null {
-  for (const c of clients) {
-    if (c.realIp === hostOrCn || c.cn === hostOrCn) return c.vpnIp;
-  }
-  return null;
 }
 
 /* ═══════════════════════════════════════════════════════════════
