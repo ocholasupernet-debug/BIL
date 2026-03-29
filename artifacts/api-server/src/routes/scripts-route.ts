@@ -66,24 +66,17 @@ function safeRos(cmd: string, label: string): string {
   return `:do { ${ros(cmd)} } on-error={ :put "  WARN: ${label} failed - check /log" }`;
 }
 
-/* ── OVPN add with multi-version fallback chain.
-   Level 1: verify-server-certificate=no + aes256 + sha1  (ROS 6.16+)
-   Level 2: no verify-server-certificate param            (older ROS 6)
-   Level 3: cipher=aes256-cbc (v7 explicit name)          (ROS 7 edge-case)
-   Level 4: bare add with no cipher/auth specified        (last resort)
+/* ── OVPN add with version fallback.
+   Level 1: with verify-server-certificate=no  (ROS 6.16+)
+   Level 2: without verify-server-certificate  (older ROS 6 that lacks the param)
+   RouterOS cipher enum uses "aes256" — never "aes256-cbc" (that's OpenSSL format).
    Each level only runs if the one above failed. ── */
 function ovpnAdd(fields: string): string {
-  const base   = ros(`/interface ovpn-client add ${fields}`);
-  const withV  = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
-  const cbcV   = ros(`/interface ovpn-client add ${fields.replace(/cipher=aes256(\s|$)/, "cipher=aes256-cbc$1")} verify-server-certificate=no`);
-  const cbc    = ros(`/interface ovpn-client add ${fields.replace(/cipher=aes256(\s|$)/, "cipher=aes256-cbc$1")}`);
+  const withV = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
+  const bare  = ros(`/interface ovpn-client add ${fields}`);
   return [
     `:do { ${withV} } on-error={`,
-    ` :do { ${base} } on-error={`,
-    `  :do { ${cbcV} } on-error={`,
-    `   :do { ${cbc} } on-error={ :put "  WARN: VPN add failed on all variants - check /log" }`,
-    `  }`,
-    ` }`,
+    ` :do { ${bare} } on-error={ :put "  WARN: VPN add failed - check /log" }`,
     `}`,
   ].join("\r\n");
 }
