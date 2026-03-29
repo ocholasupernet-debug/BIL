@@ -7,7 +7,7 @@ import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   ArrowRight, RefreshCw, CheckCircle2, AlertTriangle, Loader2,
   Server, Wifi, Users, Ticket, Settings2, UploadCloud, Eye, EyeOff,
-  Database, Check, X,
+  Database, Check, X, RotateCcw,
 } from "lucide-react";
 
 /* ══════════════════════════════ Types ══════════════════════════════ */
@@ -372,20 +372,47 @@ export default function ReplaceRouter() {
             </FLabel>
 
             {oldRouter && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.625rem", padding: "0.875rem", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)", borderRadius: 10 }}>
-                {[
-                  ["Name",    oldRouter.name],
-                  ["Host",    oldRouter.host],
-                  ["Model",   oldRouter.model ?? "MikroTik"],
-                  ["ROS",     oldRouter.ros_version ? `v${oldRouter.ros_version}` : "—"],
-                  ["Status",  oldRouter.status],
-                  ["API User",oldRouter.router_username || "admin"],
-                ].map(([k, v]) => (
-                  <div key={k}>
-                    <div style={{ fontSize: "0.65rem", fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k}</div>
-                    <div style={{ fontSize: "0.8rem", fontFamily: "monospace", color: "var(--isp-text)", marginTop: "0.15rem" }}>{v}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.625rem", padding: "0.875rem", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.15)", borderRadius: 10 }}>
+                  {[
+                    ["Name",    oldRouter.name],
+                    ["Host",    oldRouter.host],
+                    ["Model",   oldRouter.model ?? "MikroTik"],
+                    ["ROS",     oldRouter.ros_version ? `v${oldRouter.ros_version}` : "—"],
+                    ["Status",  oldRouter.status],
+                    ["API User",oldRouter.router_username || "admin"],
+                  ].map(([k, v]) => (
+                    <div key={k}>
+                      <div style={{ fontSize: "0.65rem", fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k}</div>
+                      <div style={{ fontSize: "0.8rem", fontFamily: "monospace", color: "var(--isp-text)", marginTop: "0.15rem" }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Reconfigure button */}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.75rem 0.875rem", background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 10 }}>
+                  <RotateCcw size={14} style={{ color: "#fbbf24", flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)" }}>
+                      Just want to re-run setup on this router?
+                    </div>
+                    <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginTop: "0.1rem" }}>
+                      Use Reconfigure to re-apply the setup script without creating a new router record.
+                    </div>
                   </div>
-                ))}
+                  <button
+                    onClick={() => navigate(`/admin/network/self-install?reconfigure=${oldRouter.id}`)}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: "0.375rem",
+                      padding: "0.45rem 1.125rem", borderRadius: 7,
+                      background: "rgba(251,191,36,0.12)", border: "1px solid rgba(251,191,36,0.35)",
+                      color: "#fbbf24", fontWeight: 700, fontSize: "0.8rem",
+                      cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                    }}
+                  >
+                    <RotateCcw size={12} /> Reconfigure
+                  </button>
+                </div>
               </div>
             )}
           </div>
