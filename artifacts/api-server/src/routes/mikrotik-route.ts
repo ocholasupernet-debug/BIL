@@ -5,6 +5,9 @@ import {
   fetchInterfaces,
   fetchTraffic,
   fetchRouterLiveData,
+  fetchWireless,
+  setWirelessInterface,
+  setWirelessSecurityProfile,
   testConnection,
   probeAllHosts,
   probePort,
@@ -632,6 +635,51 @@ router.get("/router/:id/live", async (req, res): Promise<void> => {
   try {
     const data = await fetchRouterLiveData(found.creds);
     res.json({ routerId: id, ...data });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
+});
+
+/* ─── GET /api/router/:id/wireless ─────────────────────────────────────── */
+router.get("/router/:id/wireless", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    const data = await fetchWireless(found.creds);
+    res.json({ routerId: id, ...data });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
+});
+
+/* ─── PATCH /api/router/:id/wireless ───────────────────────────────────── */
+/* Body: { interfaceId, ssid?, profileId?, password? } */
+router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const { interfaceId, ssid, profileId, password } = req.body as {
+    interfaceId?: string;
+    ssid?: string;
+    profileId?: string;
+    password?: string;
+  };
+
+  if (!interfaceId) { res.status(400).json({ error: "interfaceId is required" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+
+  try {
+    if (ssid !== undefined) {
+      await setWirelessInterface(found.creds, interfaceId, { ssid });
+    }
+    if (profileId !== undefined && password !== undefined) {
+      await setWirelessSecurityProfile(found.creds, profileId, { password });
+    }
+    res.json({ ok: true, message: "Wireless settings updated" });
   } catch (err) {
     routerErrorResponse(res, err);
   }

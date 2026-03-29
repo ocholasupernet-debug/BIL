@@ -438,6 +438,87 @@ export async function fetchHotspotUsers(
   });
 }
 
+/* ─── Wireless interfaces ────────────────────────────────────────────────── */
+
+export interface WirelessInterface {
+  id: string;
+  name: string;
+  ssid: string;
+  disabled: boolean;
+  band: string;
+  channel: string;
+  macAddress: string;
+  securityProfile: string;
+  mode: string;
+}
+
+export interface WirelessSecurityProfile {
+  id: string;
+  name: string;
+  wpa2PreSharedKey: string;
+  authentication: string;
+}
+
+export async function fetchWireless(
+  creds: RouterCredentials
+): Promise<{ interfaces: WirelessInterface[]; profiles: WirelessSecurityProfile[] }> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    const [ifaceRows, profileRows] = await Promise.all([
+      withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+
+    const interfaces: WirelessInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
+      id:              r[".id"]              ?? "",
+      name:            r.name               ?? "",
+      ssid:            r.ssid               ?? "",
+      disabled:        parseBool(r.disabled),
+      band:            r.band               ?? "",
+      channel:         r.channel            ?? "",
+      macAddress:      r["mac-address"]     ?? "",
+      securityProfile: r["security-profile"] ?? "default",
+      mode:            r.mode               ?? "",
+    }));
+
+    const profiles: WirelessSecurityProfile[] = (Array.isArray(profileRows) ? profileRows : []).map(r => ({
+      id:               r[".id"]                  ?? "",
+      name:             r.name                    ?? "",
+      wpa2PreSharedKey: r["wpa2-pre-shared-key"]  ?? "",
+      authentication:   r["authentication-types"]  ?? "",
+    }));
+
+    return { interfaces, profiles };
+  });
+}
+
+export async function setWirelessInterface(
+  creds: RouterCredentials,
+  interfaceId: string,
+  params: { ssid?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const cmd: string[] = ["/interface/wireless/set", `=.id=${interfaceId}`];
+    if (params.ssid !== undefined) cmd.push(`=ssid=${params.ssid}`);
+    await withTimeout(conn.write(cmd), ms);
+  });
+}
+
+export async function setWirelessSecurityProfile(
+  creds: RouterCredentials,
+  profileId: string,
+  params: { password?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const cmd: string[] = ["/interface/wireless/security-profiles/set", `=.id=${profileId}`];
+    if (params.password !== undefined) cmd.push(`=wpa2-pre-shared-key=${params.password}`);
+    await withTimeout(conn.write(cmd), ms);
+  });
+}
+
 export async function fetchPPPoEActive(
   creds: RouterCredentials
 ): Promise<ActivePPPoESession[]> {

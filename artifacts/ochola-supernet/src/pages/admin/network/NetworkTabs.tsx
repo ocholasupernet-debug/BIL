@@ -1,15 +1,16 @@
 import React from "react";
 import { Link } from "wouter";
 import {
-  Server, Shield, PlusCircle, Activity, Database, Network,
+  Server, Shield, PlusCircle, Activity, Database, Wifi,
 } from "lucide-react";
 
 const TABS = [
-  { id: "routers",      label: "Routers",     href: "/admin/network/routers",      icon: Server      },
-  { id: "add-router",   label: "Add Router",  href: "/admin/network/add-router",   icon: PlusCircle  },
-  { id: "pppoe",        label: "PPPoE",       href: "/admin/network/pppoe",        icon: Shield      },
-  { id: "queues",       label: "Queues",      href: "/admin/network/queues",       icon: Activity    },
-  { id: "ip-pools",     label: "IP Pools",    href: "/admin/network/ip-pools",     icon: Database    },
+  { id: "routers",    label: "Routers",    href: "/admin/network/routers",    icon: Server     },
+  { id: "add-router", label: "Add Router", href: "/admin/network/add-router", icon: PlusCircle },
+  { id: "pppoe",      label: "PPPoE",      href: "/admin/network/pppoe",      icon: Shield     },
+  { id: "wireless",   label: "Wireless",   href: "/admin/network/wireless",   icon: Wifi       },
+  { id: "queues",     label: "Queues",     href: "/admin/network/queues",     icon: Activity   },
+  { id: "ip-pools",   label: "IP Pools",   href: "/admin/network/ip-pools",   icon: Database   },
 ];
 
 export function NetworkTabs({ active }: { active: string }) {
