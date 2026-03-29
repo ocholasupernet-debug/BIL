@@ -640,6 +640,12 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
 
   const ts = new Date().toISOString();
 
+  /* ?hs=1  → router confirmed hotspot/PPPoE service is running → status "online"  (green)
+     ?hs=0  → router reachable but service not running            → status "connected" (yellow)
+     no hs  → old heartbeat without service check (backward compat)→ status "online"  (green) */
+  const hsParam = req.query.hs as string | undefined;
+  const newStatus = (hsParam === "0") ? "connected" : "online";
+
   if (!HB_URL || !HB_KEY) {
     console.log(`[heartbeat] token=${token.slice(0, 8)}… — db not configured, returning 200`);
     res.json({ ok: true, ts });
@@ -657,7 +663,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
           "Content-Type": "application/json",
           Prefer: "return=representation",
         },
-        body: JSON.stringify({ status: "online", last_seen: ts }),
+        body: JSON.stringify({ status: newStatus, last_seen: ts }),
       }
     );
 
@@ -670,8 +676,8 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
 
     const updated = await patchRes.json() as Array<{ id: number; name: string }>;
     const routerName = updated[0]?.name ?? "unknown";
-    console.log(`[heartbeat] ✓ ${routerName} online @ ${ts}`);
-    res.json({ ok: true, ts, router: routerName });
+    console.log(`[heartbeat] ✓ ${routerName} ${newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
+    res.json({ ok: true, ts, router: routerName, status: newStatus });
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

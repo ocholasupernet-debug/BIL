@@ -260,8 +260,20 @@ export default function Routers() {
     refetchInterval: 30_000,
   });
 
-  const online  = routers.filter(r => r.status === "online").length;
-  const offline = routers.filter(r => r.status !== "online").length;
+  /* Staleness threshold: router is only considered "online" if its last heartbeat
+     was received within the last 10 minutes AND the service is confirmed running. */
+  const STALE_MS  = 10 * 60 * 1000;
+  const isRouterOnline = (r: DbRouter) => {
+    const ms = r.last_seen ? Date.now() - new Date(r.last_seen).getTime() : Infinity;
+    return ms < STALE_MS && r.status === "online";
+  };
+  const isRouterConnected = (r: DbRouter) => {
+    const ms = r.last_seen ? Date.now() - new Date(r.last_seen).getTime() : Infinity;
+    return ms < STALE_MS && r.status === "connected";
+  };
+  const online    = routers.filter(isRouterOnline).length;
+  const connected = routers.filter(isRouterConnected).length;
+  const offline   = routers.length - online - connected;
 
   /* ── Probe a single router ── */
   const probeRouter = async (r: DbRouter) => {
@@ -313,7 +325,7 @@ export default function Routers() {
           <div>
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Network — Routers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
-              {isLoading ? "Loading…" : `${routers.length} router${routers.length !== 1 ? "s" : ""} registered · ${online} online · ${offline} offline`}
+              {isLoading ? "Loading…" : `${routers.length} router${routers.length !== 1 ? "s" : ""} · ${online} online · ${connected} connected · ${offline} offline`}
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -334,12 +346,20 @@ export default function Routers() {
 
         {/* Summary badges */}
         {!isLoading && routers.length > 0 && (
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontSize: "0.72rem", padding: "0.25rem 0.75rem", borderRadius: 20, background: "rgba(34,197,94,0.12)", color: "#22c55e", fontWeight: 700, border: "1px solid rgba(34,197,94,0.2)" }}>
               {online} Online
             </span>
+            {connected > 0 && (
+              <span style={{ fontSize: "0.72rem", padding: "0.25rem 0.75rem", borderRadius: 20, background: "rgba(251,191,36,0.12)", color: "#fbbf24", fontWeight: 700, border: "1px solid rgba(251,191,36,0.2)" }}>
+                {connected} Connected
+              </span>
+            )}
             <span style={{ fontSize: "0.72rem", padding: "0.25rem 0.75rem", borderRadius: 20, background: "rgba(248,113,113,0.12)", color: "#f87171", fontWeight: 700, border: "1px solid rgba(248,113,113,0.2)" }}>
               {offline} Offline
+            </span>
+            <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)", marginLeft: "0.25rem" }}>
+              · green = service active · yellow = router up, service unconfirmed
             </span>
           </div>
         )}
@@ -364,8 +384,18 @@ export default function Routers() {
                 </thead>
                 <tbody>
                   {routers.map(r => {
-                    const isOnline = r.status === "online";
-                    const ps       = probeStates[r.id];
+                    /* Green only if heartbeat was received within the last 10 min
+                       AND the router reported its hotspot/PPPoE service as running.
+                       This ensures the light reflects real connectivity, not stale DB data. */
+                    const STALE_MS   = 10 * 60 * 1000;
+                    const lastSeenMs = r.last_seen ? Date.now() - new Date(r.last_seen).getTime() : Infinity;
+                    const isFresh    = lastSeenMs < STALE_MS;
+                    /* "online"    = heartbeat + hotspot confirmed running  → green
+                       "connected" = heartbeat only (hotspot unconfirmed)   → yellow
+                       anything else / stale                                → red   */
+                    const isOnline    = isFresh && r.status === "online";
+                    const isConnected = isFresh && r.status === "connected";
+                    const ps          = probeStates[r.id];
                     const isProbing = ps?.loading;
                     const isOpen   = expanded === r.id;
 
@@ -385,6 +415,8 @@ export default function Routers() {
                             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                               {isOnline
                                 ? <Wifi size={13} style={{ color: "#22c55e", flexShrink: 0 }} />
+                                : isConnected
+                                ? <Wifi size={13} style={{ color: "#fbbf24", flexShrink: 0 }} />
                                 : <WifiOff size={13} style={{ color: "#f87171", flexShrink: 0 }} />}
                               <span style={{ color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
                             </div>
@@ -430,8 +462,16 @@ export default function Routers() {
                               ? <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: "rgba(248,113,113,0.1)", color: "#f87171" }}>
                                   Unreachable
                                 </span>
-                              : <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: isOnline ? "rgba(34,197,94,0.1)" : "rgba(248,113,113,0.1)", color: isOnline ? "#22c55e" : "#f87171" }}>
-                                  {isOnline ? "Online" : "Offline"}
+                              : isOnline
+                              ? <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: "rgba(34,197,94,0.1)", color: "#22c55e", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                                  <Zap size={10} /> Online
+                                </span>
+                              : isConnected
+                              ? <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: "rgba(251,191,36,0.12)", color: "#fbbf24", display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+                                  <Wifi size={10} /> Connected
+                                </span>
+                              : <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: "rgba(248,113,113,0.1)", color: "#f87171" }}>
+                                  Offline
                                 </span>}
                           </td>
 

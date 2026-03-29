@@ -182,8 +182,15 @@ export default function Dashboard() {
       return t.status === "completed" && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     }).reduce((s, t) => s + t.amount, 0), [transactions]);
 
-  const onlineRouters  = routers.filter(r => r.status === "online").length;
-  const offlineRouters = routers.filter(r => r.status !== "online").length;
+  /* Count routers as online only if heartbeat was fresh within 10 min AND
+     the router itself reported its hotspot/service as running (status="online").
+     A stale status in the DB never lights the green indicator. */
+  const STALE_MS = 10 * 60 * 1000;
+  const onlineRouters  = routers.filter(r => {
+    const ms = r.last_seen ? Date.now() - new Date(r.last_seen).getTime() : Infinity;
+    return ms < STALE_MS && r.status === "online";
+  }).length;
+  const offlineRouters = routers.length - onlineRouters;
 
   /* ─── Real monthly customer signups (current year) ─── */
   const monthlyData = useMemo(() => {
