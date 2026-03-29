@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 
 const router: IRouter = Router();
 
@@ -81,6 +82,21 @@ function safeRm(cmd: string): string {
     return `:foreach x in=[${menu} find ${cond}] do={ ${menu} remove $x }`;
   }
   return `:do { ${cleaned} } on-error={}`;
+}
+
+/* ── VPN psw-file updater ──
+   Keeps /etc/openvpn/psw-file in sync with the router's credentials.
+   The checkpsw.sh script reads this file on every connection attempt,
+   so no OpenVPN reload is needed — just a file write.
+   No-ops when the file doesn't exist (dev / non-VPS environments). ── */
+const PSW_FILE = "/etc/openvpn/psw-file";
+function updateVpnCredentials(username: string, password: string): void {
+  try {
+    const existing = existsSync(PSW_FILE) ? readFileSync(PSW_FILE, "utf-8") : "";
+    const lines = existing.split("\n").filter(l => l.trim() && !l.startsWith(`${username} `));
+    lines.push(`${username} ${password}`);
+    writeFileSync(PSW_FILE, lines.join("\n") + "\n", { mode: 0o600 });
+  } catch { /* non-root dev env — silently skip */ }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -283,6 +299,9 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
     const registerUrl  = `https://${adminSubdomain}.${baseDomain}/api/isp/router/register/${routerSecret}`;
 
+    /* Ensure this router can authenticate to the OpenVPN server */
+    updateVpnCredentials(routerSlug, routerSecret);
+
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
       `# ===================================================`,
@@ -371,10 +390,11 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ros(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`),
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       ``,
-      `# === OVPN Client (disabled until VPN provisioning is configured) ===`,
-      `# /tool fetch and /interface ovpn-client add are omitted here because`,
-      `# the VPN endpoint is not yet provisioned. The scheduler will add OVPN`,
-      `# once the ca.crt endpoint is live. Skipping avoids import timeouts.`,
+      `# === OVPN Management Tunnel ===`,
+      safeFetch(`${portalBase}/api/vpn/ca.crt`, `ca.crt`),
+      `:do { /certificate import file-name=ca.crt passphrase="" } on-error={}`,
+      safeRm(`/interface ovpn-client remove [find name=ovpn-mgmt]`),
+      ros(`/interface ovpn-client add name=ovpn-mgmt connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="${routerSecret}" cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
