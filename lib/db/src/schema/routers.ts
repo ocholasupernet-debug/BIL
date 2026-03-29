@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -12,6 +12,7 @@ export const routersTable = pgTable("routers", {
   apiPort: integer("api_port").notNull().default(8728),
   apiUsername: text("api_username"),
   apiPassword: text("api_password"),
+  apiUseSSL: boolean("api_use_ssl").notNull().default(false),
   status: text("status").notNull().default("online"),
   lastSeen: timestamp("last_seen", { withTimezone: true }),
   uptime: text("uptime"),

@@ -11,20 +11,37 @@ router.get("/routers", async (req, res): Promise<void> => {
 });
 
 router.post("/routers", async (req, res): Promise<void> => {
-  const { ispId = 1, name, ipAddress, model, rosVersion, apiPort, apiUsername, apiPassword } = req.body;
+  const { ispId = 1, name, ipAddress, model, rosVersion, apiPort, apiUsername, apiPassword, apiUseSSL } = req.body;
   if (!name || !ipAddress) {
     res.status(400).json({ error: "name and ipAddress are required" });
     return;
   }
-  const [r] = await db.insert(routersTable).values({ ispId, name, ipAddress, model, rosVersion, apiPort: apiPort || 8728, apiUsername, apiPassword, status: "online" }).returning();
+  const port = apiPort || 8728;
+  const useSSL = apiUseSSL === true || apiUseSSL === "true" || port === 8729;
+  const [r] = await db.insert(routersTable).values({
+    ispId, name, ipAddress, model, rosVersion,
+    apiPort: port, apiUsername, apiPassword,
+    apiUseSSL: useSSL,
+    status: "online",
+  }).returning();
   res.status(201).json(r);
 });
 
 router.patch("/routers/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
-  const { name, ipAddress, model, rosVersion, status } = req.body;
-  const [r] = await db.update(routersTable).set({ name, ipAddress, model, rosVersion, status, updatedAt: new Date() }).where(eq(routersTable.id, id)).returning();
+  const { name, ipAddress, model, rosVersion, status, apiPort, apiUsername, apiPassword, apiUseSSL } = req.body;
+  const updates: Partial<typeof routersTable.$inferInsert> & { updatedAt: Date } = { updatedAt: new Date() };
+  if (name        !== undefined) updates.name        = name;
+  if (ipAddress   !== undefined) updates.ipAddress   = ipAddress;
+  if (model       !== undefined) updates.model       = model;
+  if (rosVersion  !== undefined) updates.rosVersion  = rosVersion;
+  if (status      !== undefined) updates.status      = status;
+  if (apiPort     !== undefined) updates.apiPort     = apiPort;
+  if (apiUsername !== undefined) updates.apiUsername = apiUsername;
+  if (apiPassword !== undefined) updates.apiPassword = apiPassword;
+  if (apiUseSSL   !== undefined) updates.apiUseSSL   = apiUseSSL === true || apiUseSSL === "true" || apiPort === 8729;
+  const [r] = await db.update(routersTable).set(updates).where(eq(routersTable.id, id)).returning();
   if (!r) { res.status(404).json({ error: "Router not found" }); return; }
   res.json(r);
 });
