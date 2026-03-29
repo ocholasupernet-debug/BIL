@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { readFileSync, writeFileSync, existsSync } from "fs";
+import { ensureClientCert } from "./vpn-route.js";
 
 const router: IRouter = Router();
 
@@ -67,6 +68,7 @@ function safeRos(cmd: string, label: string): string {
 }
 
 /* ── OVPN add with version fallback.
+   Uses TLS client certificate (certificate=) instead of username/password.
    Level 1: with verify-server-certificate=no  (ROS 6.16+)
    Level 2: without verify-server-certificate  (older ROS 6 that lacks the param)
    RouterOS cipher enum uses "aes256" — never "aes256-cbc" (that's OpenSSL format).
@@ -325,7 +327,9 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
     const registerUrl  = `https://${adminSubdomain}.${baseDomain}/api/isp/router/register/${routerSecret}`;
 
-    /* Ensure this router can authenticate to the OpenVPN server */
+    /* Ensure this router has a TLS client certificate ready on the server.
+       Also keeps the psw-file in sync as a fallback during transition. */
+    ensureClientCert(routerSlug);
     updateVpnCredentials(routerSlug, "ocholasupernet");
 
     /* ── Step 5: Build the .rsc content ── */
@@ -366,9 +370,14 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Bridge Interface ===`,
       `:put "[3/8] Configuring bridge interface (${bridgeIp}/24)..."`,
       `:do { /interface bridge add name="${bridgeIface}" comment="${companyName} Hotspot Bridge" } on-error={}`,
+      `# Add all LAN ethernet ports (skip ether1 = WAN) dynamically — works on any router model`,
+      `:foreach x in=[/interface ethernet find where name!="ether1"] do={`,
+      `  :local ifname [/interface ethernet get $x name]`,
+      `  :do { /interface bridge port add bridge="${bridgeIface}" interface=$ifname comment="LAN" } on-error={}`,
+      `}`,
+      `# Also try WiFi APs if present`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan1 comment="WiFi 2.4GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" } on-error={}`,
-      `:do { /interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" } on-error={}`,
       safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
       safeRos(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`, "bridge IP add"),
       `:put "      Bridge '${bridgeIface}' IP set to ${ipMask}  OK"`,
@@ -438,11 +447,30 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       `:put "      NAT redirect + firewall rules applied  OK"`,
       ``,
-      `# === OVPN Management Tunnel ===`,
-      `:put "[7/8] Setting up management VPN tunnel..."`,
+      `# === OVPN TLS Certificates ===`,
+      `:put "[7/8] Importing VPN certificates and setting up tunnel..."`,
+      `# Remove any stale certs from previous imports`,
+      `:foreach x in=[/certificate find name="vpn-ca"]   do={ :do { /certificate remove $x } on-error={} }`,
+      `:foreach x in=[/certificate find name="vpn-ca_0"] do={ :do { /certificate remove $x } on-error={} }`,
+      `:foreach x in=[/certificate find name="${routerSlug}"]   do={ :do { /certificate remove $x } on-error={} }`,
+      `:foreach x in=[/certificate find name="${routerSlug}_0"] do={ :do { /certificate remove $x } on-error={} }`,
+      `# Download CA cert`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") mode=https } on-error={ :put "  WARN: CA cert download failed" }`,
+      `:do { /certificate import file-name=($storage . "/vpn-ca.crt") passphrase="" } on-error={ :put "  WARN: CA cert import failed" }`,
+      `:do { /file remove [find name=($storage . "/vpn-ca.crt")] } on-error={}`,
+      `# Download client certificate`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") mode=https } on-error={ :put "  WARN: client cert download failed" }`,
+      `:do { /certificate import file-name=($storage . "/${routerSlug}.crt") passphrase="" } on-error={ :put "  WARN: client cert import failed" }`,
+      `:do { /file remove [find name=($storage . "/${routerSlug}.crt")] } on-error={}`,
+      `# Download client private key`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") mode=https } on-error={ :put "  WARN: client key download failed" }`,
+      `:do { /certificate import file-name=($storage . "/${routerSlug}.key") passphrase="" } on-error={ :put "  WARN: client key import failed" }`,
+      `:do { /file remove [find name=($storage . "/${routerSlug}.key")] } on-error={}`,
+      `:put "      Certificates imported  OK"`,
+      `# === OVPN Management Tunnel (cert-based auth) ===`,
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
-      ovpnAdd(`name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
-      `:put "      VPN interface 'ocholasupernet' added  OK"`,
+      ovpnAdd(`name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip certificate=${routerSlug} cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
+      `:put "      VPN tunnel 'ocholasupernet' (cert: ${routerSlug})  OK"`,
       ``,
       `# === Default User Profile ===`,
       safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),
