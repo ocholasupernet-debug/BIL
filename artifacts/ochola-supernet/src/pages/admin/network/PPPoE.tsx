@@ -522,7 +522,7 @@ export default function PPPoE() {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Network — PPPoE Sign In</h1>
+        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>PPPoE Configuration</h1>
         <NetworkTabs active="pppoe" />
 
         {/* ─── Router picker ─── */}

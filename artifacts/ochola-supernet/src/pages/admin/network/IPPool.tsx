@@ -7,12 +7,12 @@ export default function IPPool() {
   return (
     <AdminLayout>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Network — IP Pool</h1>
-        <NetworkTabs active="ippool" />
+        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>IP Pools</h1>
+        <NetworkTabs active="ip-pools" />
         <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "4rem 2rem", textAlign: "center" }}>
           <Activity style={{ width: 44, height: 44, color: "var(--isp-text-sub)", margin: "0 auto 1rem", opacity: 0.5 }} />
           <h3 style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)", margin: "0 0 0.5rem" }}>Coming Soon</h3>
-          <p style={{ fontSize: "0.8125rem", color: "var(--isp-text-muted)", margin: 0 }}>IP Pool management module is under active development.</p>
+          <p style={{ fontSize: "0.8125rem", color: "var(--isp-text-muted)", margin: 0 }}>IP pool management is under active development.</p>
         </div>
       </div>
     </AdminLayout>

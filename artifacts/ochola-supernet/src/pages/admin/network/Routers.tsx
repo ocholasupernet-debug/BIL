@@ -285,7 +285,7 @@ export default function Routers() {
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Network — Routers</h1>
+            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Routers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
               {isLoading ? "Loading…" : `${routers.length} router${routers.length !== 1 ? "s" : ""} · ${online} online · ${connected} connected · ${offline} offline`}
             </p>
@@ -297,6 +297,11 @@ export default function Routers() {
               style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <RefreshCw style={{ width: 13, height: 13, animation: isFetching ? "spin 1s linear infinite" : "none" }} />
               Refresh
+            </button>
+            <button
+              onClick={() => { window.location.href = "/admin/network/add-router"; }}
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#06b6d4", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+              + Add Router
             </button>
           </div>
         </div>
@@ -576,11 +581,11 @@ export default function Routers() {
                   {routers.length === 0 && (
                     <tr>
                       <td colSpan={8} style={{ padding: "3rem 1.25rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.875rem" }}>
-                        No routers connected yet.{" "}
-                        <a href="/admin/network/self-install" style={{ color: "#06b6d4", textDecoration: "underline", fontWeight: 600 }}>
-                          Go to Self Install
+                        No routers added yet.{" "}
+                        <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline", fontWeight: 600 }}>
+                          Add your first router
                         </a>{" "}
-                        to link your first router.
+                        to get started.
                       </td>
                     </tr>
                   )}

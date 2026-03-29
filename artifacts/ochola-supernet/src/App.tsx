@@ -98,12 +98,15 @@ function Router() {
       <Route path="/admin/dashboard" component={AdminDashboard} />
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
-      <Route path="/admin/network/routers"      component={NetworkRouters}     />
-      <Route path="/admin/network/pppoe"        component={NetworkPPPoE}       />
-      <Route path="/admin/network/queues"       component={NetworkQueues}      />
-      <Route path="/admin/network/ippool"       component={NetworkIPPool}      />
-      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
+      <Route path="/admin/network/routers"        component={NetworkRouters}       />
+      <Route path="/admin/network/pppoe"          component={NetworkPPPoE}         />
+      <Route path="/admin/network/queues"         component={NetworkQueues}        />
+      <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
+      <Route path="/admin/network/add-router"     component={NetworkSelfInstall}   />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
+      {/* Legacy redirects — keep old paths working */}
+      <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
+      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions" component={AdminTransactions} />

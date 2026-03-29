@@ -202,7 +202,7 @@ export default function SelfInstall() {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap", marginBottom: "0.2rem" }}>
             <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>
-              {isReconfigure ? "Reconfigure Router" : "Self Install"}
+              {isReconfigure ? "Reconfigure Router" : "Add Router"}
             </h1>
             {adminSubdomain && (
               <span style={{
@@ -222,7 +222,7 @@ export default function SelfInstall() {
           </p>
         </div>
 
-        <NetworkTabs active="self-install" />
+        <NetworkTabs active="add-router" />
 
         {/* ═══ IDLE: name card + generate button ═══ */}
         {phase === "idle" && !isReconfigure && (

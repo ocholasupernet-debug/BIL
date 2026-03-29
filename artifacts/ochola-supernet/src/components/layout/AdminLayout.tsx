@@ -86,12 +86,11 @@ const navItems: NavItem[] = [
   {
     name: "Network", icon: Network,
     children: [
-      { name: "Routers",      href: "/admin/network/routers"       },
-      { name: "PPPoE Sign In",href: "/admin/network/pppoe"         },
-      { name: "Queues",       href: "/admin/network/queues"        },
-      { name: "IP Pool",      href: "/admin/network/ippool"        },
-      { name: "Self Install",    href: "/admin/network/self-install"   },
-      { name: "Replace Router",  href: "/admin/network/replace-router" },
+      { name: "Routers",     href: "/admin/network/routers"    },
+      { name: "Add Router",  href: "/admin/network/add-router" },
+      { name: "PPPoE",       href: "/admin/network/pppoe"      },
+      { name: "Queues",      href: "/admin/network/queues"     },
+      { name: "IP Pools",    href: "/admin/network/ip-pools"   },
     ]
   },
   {

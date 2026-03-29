@@ -517,7 +517,7 @@ export default function ReplaceRouter() {
           </p>
         </div>
 
-        <NetworkTabs active="replace-router" />
+        <NetworkTabs active="routers" />
 
         {/* Router rows */}
         {isLoading ? (

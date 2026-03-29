@@ -367,7 +367,7 @@ export default function BridgePorts() {
           )}
         </div>
 
-        <NetworkTabs active="self-install" />
+        <NetworkTabs active="add-router" />
 
         {/* ── Router + Bridge selectors ── */}
         <div style={{
