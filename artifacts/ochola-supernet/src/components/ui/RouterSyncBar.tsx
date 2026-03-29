@@ -132,14 +132,14 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
 
         <button
           onClick={handleSync}
-          disabled={syncing || !selectedRouter}
+          disabled={syncing || !selectedRouter || !selectedRouter.host}
           style={{
             display: "flex", alignItems: "center", gap: "0.45rem",
             padding: "0.575rem 1.25rem", borderRadius: 10,
-            background: syncing || !selectedRouter ? `${color}18` : `linear-gradient(135deg,${color},${color}cc)`,
-            border: "none", color: syncing || !selectedRouter ? "#94a3b8" : "white",
-            fontWeight: 800, fontSize: "0.85rem", cursor: syncing || !selectedRouter ? "not-allowed" : "pointer",
-            fontFamily: "inherit", boxShadow: syncing || !selectedRouter ? "none" : `0 4px 12px ${color}40`,
+            background: syncing || !selectedRouter || !selectedRouter.host ? `${color}18` : `linear-gradient(135deg,${color},${color}cc)`,
+            border: "none", color: syncing || !selectedRouter || !selectedRouter.host ? "#94a3b8" : "white",
+            fontWeight: 800, fontSize: "0.85rem", cursor: syncing || !selectedRouter || !selectedRouter.host ? "not-allowed" : "pointer",
+            fontFamily: "inherit", boxShadow: syncing || !selectedRouter || !selectedRouter.host ? "none" : `0 4px 12px ${color}40`,
             transition: "all 0.2s", whiteSpace: "nowrap",
           }}
         >
@@ -149,6 +149,14 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           }
         </button>
       </div>
+
+      {/* ── No host warning ── */}
+      {selectedRouter && !selectedRouter.host && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8, fontSize: "0.75rem", color: "#fbbf24" }}>
+          <AlertTriangle size={13} />
+          <span>No API host set for this router — open <strong>Settings → Routers</strong>, expand the API panel and save the router's IP address.</span>
+        </div>
+      )}
 
       {/* ── Router metadata strip ── */}
       {selectedRouter && (
