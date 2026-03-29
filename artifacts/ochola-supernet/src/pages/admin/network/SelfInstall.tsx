@@ -129,9 +129,10 @@ export default function SelfInstall() {
   /* Next name: if pending router exists in DB use it, else generate new name */
   const installedCount = routers.filter(isInstalled).length;
   const nextNumber     = routers.length + 1;  // next slot if all are installed
+  const nameBase       = adminSubdomain || "router";
   const nextName       = pendingRouter
     ? pendingRouter.name
-    : `${adminSubdomain}${nextNumber}`;
+    : `${nameBase}${nextNumber}`;
   const nextSlug = slugify(nextName);
 
   /* Active router (the one whose commands are shown) */
