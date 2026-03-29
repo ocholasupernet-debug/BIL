@@ -100,7 +100,7 @@ function safeFetch(url: string, dst: string): string {
    exactly which file failed by name, so silent failures are visible.
    filename is the short name shown in WARN output.  ── */
 function portalFetch(url: string, subpath: string, filename: string): string {
-  return `:do { /tool fetch url="${url}" dst-path=($hsdir . "/${subpath}") mode=https check-certificate=no } on-error={ :put "  WARN: ${filename} failed" }`;
+  return `:do { /tool fetch url="${url}" dst-path=($hsdir . "/${subpath}") mode=https } on-error={ :put "  WARN: ${filename} failed" }`;
 }
 
 /* ── Safe remove: converts "/MENU remove [find COND]" into
@@ -410,9 +410,9 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:if ($storage = "flash") do={ :set hsdir "flash/hotspot" }`,
       `:if ($storage = "disk1") do={ :set hsdir "disk1/hotspot" }`,
       `:put ("[5/8] Downloading hotspot portal files to " . $hsdir . "...")`,
-      `# --- HTTPS connectivity check ---`,
+      `# --- HTTPS connectivity check (uses cert-API endpoint — proven reachable) ---`,
       `:local httpsOk false`,
-      `:do { /tool fetch url="${portalBase}/hotspot/api.json" dst-path=hs-check.tmp mode=https check-certificate=no; :set httpsOk true; :do { /file remove [find name=hs-check.tmp] } on-error={} } on-error={ :put "  WARN: HTTPS unreachable from this router - portal files skipped" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/hs-check.tmp") mode=https; :set httpsOk true; :do { /file remove [find name=($storage . "/hs-check.tmp")] } on-error={} } on-error={ :put "  WARN: HTTPS unreachable from this router - portal files skipped" }`,
       `:if ($httpsOk) do={`,
       `  # Create subdirs: /file add (ROS 6) then make-dir (ROS 7) — one will succeed`,
       `  :do { /file add name=$hsdir type=directory } on-error={}`,
@@ -467,15 +467,15 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
       `:foreach x in=[/certificate find name~"vpn-ca"]        do={ :do { /certificate remove $x } on-error={} }`,
       `# 3) Download + import CA cert (used to verify server - optional with verify-server-certificate=no)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") mode=https check-certificate=no } on-error={ :put "  WARN: CA cert fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") mode=https } on-error={ :put "  WARN: CA cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/vpn-ca.crt") passphrase="" } on-error={ :put "  WARN: CA cert import failed" }`,
       `:do { /file remove [find name=($storage . "/vpn-ca.crt")] } on-error={}`,
       `# 4) Download + import client certificate`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") mode=https check-certificate=no } on-error={ :put "  WARN: client cert fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") mode=https } on-error={ :put "  WARN: client cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.crt") passphrase="" } on-error={ :put "  WARN: client cert import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.crt")] } on-error={}`,
       `# 5) Download + import client private key (auto-matches to cert by public key fingerprint)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") mode=https check-certificate=no } on-error={ :put "  WARN: client key fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") mode=https } on-error={ :put "  WARN: client key fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.key") passphrase="" } on-error={ :put "  WARN: client key import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.key")] } on-error={}`,
       `# 6) Mark cert as trusted and wait for RouterOS to finalise key binding`,
