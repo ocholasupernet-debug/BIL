@@ -181,7 +181,7 @@ export default function AdminRegister() {
                 <input
                   type="text"
                   value={company}
-                  onChange={e => setCompany(e.target.value)}
+                  onChange={e => setCompany(e.target.value.toLowerCase())}
                   placeholder="e.g. Ochola Networks"
                   autoComplete="organization"
                   className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
