@@ -70,9 +70,10 @@ const navItems: NavItem[] = [
   {
     name: "Transactions", icon: CreditCard,
     children: [
-      { name: "All Transactions", href: "/admin/transactions" },
-      { name: "M-Pesa", href: "/admin/transactions?method=mpesa" },
-      { name: "Voucher Sales", href: "/admin/transactions?method=voucher" },
+      { name: "All Transactions",   href: "/admin/transactions" },
+      { name: "M-Pesa",             href: "/admin/transactions?method=mpesa" },
+      { name: "Voucher Sales",      href: "/admin/transactions?method=voucher" },
+      { name: "Comparisons/Graphs", href: "/admin/transactions/graphs" },
     ]
   },
   { name: "Support Ticket", href: "/admin/support", icon: MessageSquare },

@@ -22,6 +22,7 @@ import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import AdminPlans from "./pages/admin/Plans";
 import AdminTransactions from "./pages/admin/Transactions";
+import TransactionGraphs from "./pages/admin/TransactionGraphs";
 import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 
@@ -111,6 +112,7 @@ function Router() {
       <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
       <Route path="/admin/plans" component={AdminPlans} />
+      <Route path="/admin/transactions/graphs" component={TransactionGraphs} />
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
