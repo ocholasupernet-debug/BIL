@@ -212,31 +212,41 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       hotspot_dns_name: string | null;
       bridge_ip: string | null;
       router_secret: string | null;
+      last_seen: string | null;
+      status: string;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,router_secret`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,router_secret,last_seen,status`
     );
 
-    /* "mainhotspot" is a special keyword meaning "first/main hotspot router" */
+    /* ── Helper to decide if a router record is "pending" (not yet installed) ── */
+    const STALE_MS = 12 * 60 * 1000;
+    function isPending(r: DbRouter): boolean {
+      if (!r.last_seen) return true;
+      return (Date.now() - new Date(r.last_seen).getTime()) > STALE_MS;
+    }
+
+    /* "mainhotspot" always serves the NEXT router that needs configuring:
+       1. First router that hasn't connected yet (pending)
+       2. If all are installed → auto-create the next numbered one */
     let router_row: DbRouter | undefined;
     if (slug === "mainhotspot" || slug === "main-hotspot") {
-      router_row = routers[0]; // use the first router for this admin
+      router_row = routers.find(isPending) ?? routers[0];
+      // If still undefined → all installed, we'll auto-create below
     } else {
       router_row = routers.find(r => slugify(r.name) === slug);
     }
 
-    /* ── Auto-create router if none exist for this admin ──
-       When "mainhotspot" or "main-hotspot" is requested and the admin
-       has no routers yet, we create a placeholder record so the script
-       can embed a router_secret.  The registration call inside the .rsc
-       will later fill in the real model and identity. */
+    /* ── Auto-create when mainhotspot is requested and no pending router found ──
+       Names use subdomain + sequential number: come1, come2, … */
     if (!router_row && (slug === "mainhotspot" || slug === "main-hotspot")) {
       const autoSecret = Buffer
         .from(`${adminId}:${Date.now()}:ocholanet`)
         .toString("base64")
         .replace(/[^a-zA-Z0-9]/g, "")
         .slice(0, 48);
-      const autoName = `${companyName} Router`;
+      const nextNum  = routers.length + 1;
+      const autoName = `${adminSubdomain}${nextNum}`;
       try {
         const createRes = await fetch(
           `${SUPABASE_URL}/rest/v1/isp_routers`,
