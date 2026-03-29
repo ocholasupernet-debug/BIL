@@ -150,6 +150,48 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       router_row = routers.find(r => slugify(r.name) === slug);
     }
 
+    /* ── Auto-create router if none exist for this admin ──
+       When "mainhotspot" or "main-hotspot" is requested and the admin
+       has no routers yet, we create a placeholder record so the script
+       can embed a router_secret.  The registration call inside the .rsc
+       will later fill in the real model and identity. */
+    if (!router_row && (slug === "mainhotspot" || slug === "main-hotspot")) {
+      const autoSecret = Buffer
+        .from(`${adminId}:${Date.now()}:ocholanet`)
+        .toString("base64")
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .slice(0, 48);
+      const autoName = `${companyName} Router`;
+      try {
+        const createRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/isp_routers`,
+          {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              "Content-Type": "application/json",
+              Prefer: "return=representation",
+            },
+            body: JSON.stringify({
+              admin_id:         adminId,
+              name:             autoName,
+              host:             "",
+              router_username:  "admin",
+              router_secret:    autoSecret,
+              bridge_interface: "bridge",
+              bridge_ip:        "192.168.88.1",
+              status:           "offline",
+            }),
+          }
+        );
+        if (createRes.ok) {
+          const rows = await createRes.json() as DbRouter[];
+          router_row = rows[0];
+        }
+      } catch { /* proceed with null — will 404 below */ }
+    }
+
     if (!router_row) {
       res.status(404).send(
         `# Error: no router found for admin "${adminSubdomain}" matching slug "${slug}"\n` +
@@ -212,6 +254,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       } catch { /* ignore */ }
     }
     const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
+    const registerUrl  = `https://${adminSubdomain}.${baseDomain}/api/isp/router/register/${routerSecret}`;
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
@@ -309,6 +352,17 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
+      ``,
+      `# === Auto-Register: detect model + link router to billing system ===`,
+      `# Reads the router's hardware model, identity, and ROS version,`,
+      `# then sends them to the billing server so the admin dashboard`,
+      `# shows the correct device name and lights the green indicator.`,
+      `:local rm ""; :local ri ""; :local rv ""`,
+      `:do { :set rm [/system routerboard get model] } on-error={}`,
+      `:do { :set ri [/system identity get name] } on-error={}`,
+      `:do { :set rv [/system package get [find name=routeros] version] } on-error={}`,
+      ros(`/tool fetch url=("${registerUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv) mode=https dst-path=reg.tmp`),
+      `:do { /file remove [find name=reg.tmp] } on-error={}`,
       ``,
       `# === Heartbeat Script + Scheduler ===`,
       `# The script checks whether the hotspot service is running before pinging the`,

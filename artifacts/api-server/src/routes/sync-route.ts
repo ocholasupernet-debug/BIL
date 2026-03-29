@@ -686,4 +686,98 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   }
 });
 
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/isp/router/register/:token
+   Called once during /import of the .rsc script on the MikroTik.
+   Detects router model, RouterOS version and identity then stores
+   them in isp_routers, also marking the router online.
+
+   Query params (URL-encoded, sent by RouterOS):
+     ?model=RB750Gr3   — routerboard model
+     ?rname=MyRouter   — /system identity name
+     ?ver=7.3.1        — RouterOS version
+═══════════════════════════════════════════════════════════════ */
+router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
+  const token  = (req.params.token ?? "").trim();
+  const model  = ((req.query.model  as string) ?? "").trim();
+  const rname  = ((req.query.rname  as string) ?? "").trim();
+  const ver    = ((req.query.ver    as string) ?? "").trim();
+  const ts     = new Date().toISOString();
+
+  if (!token) {
+    res.status(400).json({ ok: false, error: "invalid token" });
+    return;
+  }
+
+  if (!HB_URL || !HB_KEY) {
+    res.json({ ok: true, ts, note: "db not configured" });
+    return;
+  }
+
+  try {
+    /* Build the patch — only include fields that were provided */
+    const patch: Record<string, string> = { last_seen: ts, status: "online" };
+    if (model) patch.model       = model;
+    if (ver)   patch.ros_version = ver;
+    /* If the router still has the auto-generated name, rename it to the RouterOS identity */
+    if (rname) patch.identity = rname;   // store identity (non-destructive new field check below)
+
+    /* First: read current name to decide whether to rename */
+    const getRes = await fetch(
+      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}&select=id,name`,
+      {
+        headers: {
+          apikey: HB_KEY,
+          Authorization: `Bearer ${HB_KEY}`,
+          Accept: "application/json",
+        },
+      }
+    );
+    if (getRes.ok) {
+      const rows = await getRes.json() as Array<{ id: number; name: string }>;
+      const existing = rows[0];
+      /* Update name to RouterOS identity only if the current name ends with " Router"
+         (the auto-generated placeholder) and an identity was reported */
+      if (existing && rname && existing.name.endsWith(" Router")) {
+        patch.name = rname;
+      }
+    }
+
+    /* Remove identity from patch (it's not a DB column — only used for name logic above) */
+    delete patch.identity;
+
+    /* Apply the patch */
+    const patchRes = await fetch(
+      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: HB_KEY,
+          Authorization: `Bearer ${HB_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(patch),
+      }
+    );
+
+    if (!patchRes.ok) {
+      const errText = await patchRes.text();
+      console.error(`[register] Supabase PATCH ${patchRes.status}: ${errText}`);
+      res.status(500).json({ ok: false, error: "db update failed" });
+      return;
+    }
+
+    const updated = await patchRes.json() as Array<{ id: number; name: string }>;
+    const routerName = updated[0]?.name ?? rname ?? "unknown";
+    console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
+    res.json({ ok: true, ts, router: routerName, model, version: ver });
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[register] error: ${msg}`);
+    res.json({ ok: true, ts, note: "db error but registration ping received" });
+  }
+});
+
 export default router;
