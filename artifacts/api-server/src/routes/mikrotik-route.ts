@@ -6,6 +6,8 @@ import {
   fetchTraffic,
   fetchRouterLiveData,
   testConnection,
+  probeAllHosts,
+  probePort,
   generateFirewallScript,
   getEnvCredentials,
   isPrivateIp,
@@ -194,6 +196,103 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
     vpnFallbackIp: row.bridge_ip,
     warnings: [...warnings, ...result.warnings],
     ...result,
+  });
+});
+
+/* ─── GET /api/router/:id/probe ─────────────────────────────────────────── */
+/**
+ * Runs a TCP port probe ONLY — no RouterOS API login attempt.
+ * Returns per-host reachability, latency, and diagnosis.
+ *
+ * This is the fastest way to check if firewall/NAT is blocking the port
+ * before wasting time on a full connection attempt.
+ */
+router.get("/router/:id/probe", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+
+  const found = await getRouterCreds(id);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or has no host/bridge_ip configured" });
+    return;
+  }
+
+  const { creds, row } = found;
+  const timeoutMs = parseInt(String(req.query.timeout ?? "6000"), 10);
+  const probes    = await probeAllHosts(creds, Math.min(timeoutMs, 15000));
+
+  const allOpen  = probes.every(p => p.reachable);
+  const anyOpen  = probes.some(p => p.reachable);
+  const warnings: string[] = [];
+
+  if (row.host && isPrivateIp(row.host)) {
+    warnings.push(
+      `Host ${row.host} is a private/local IP. ` +
+      `The cloud server cannot reach this unless it is on the same LAN.`
+    );
+  }
+
+  res.status(anyOpen ? 200 : 503).json({
+    routerId:   id,
+    routerName: row.name,
+    port:       creds.port,
+    allOpen,
+    anyOpen,
+    warnings,
+    hosts: probes.map(p => ({
+      host:       p.host,
+      reachable:  p.reachable,
+      latencyMs:  p.latencyMs,
+      diagnosis:  p.diagnosis,
+      error:      p.error,
+    })),
+    summary: anyOpen
+      ? `Port ${creds.port} is open on ${probes.filter(p => p.reachable).map(p => p.host).join(", ")}`
+      : `Port ${creds.port} is NOT reachable on any configured host. ` +
+        `Check the router firewall (/ip firewall filter) and ensure API service is enabled (/ip service).`,
+  });
+});
+
+/* ─── GET /api/probe?host=x&port=8728 ───────────────────────────────────── */
+/**
+ * Ad-hoc port probe — no router record required.
+ * Useful for testing arbitrary host:port pairs before adding a router.
+ */
+router.get("/probe", async (req, res): Promise<void> => {
+  const host = String(req.query.host ?? "").trim();
+  const port = parseInt(String(req.query.port ?? "8728"), 10);
+
+  if (!host) {
+    res.status(400).json({ error: "host query param required", example: "/api/probe?host=203.0.113.1&port=8728" });
+    return;
+  }
+  if (isNaN(port) || port < 1 || port > 65535) {
+    res.status(400).json({ error: "port must be 1–65535" });
+    return;
+  }
+
+  const timeoutMs = parseInt(String(req.query.timeout ?? "6000"), 10);
+  const probe = await probePort(host, port, Math.min(timeoutMs, 15000));
+
+  const warnings: string[] = [];
+  if (isPrivateIp(host)) {
+    warnings.push(
+      `${host} is a private/local IP. The cloud server cannot reach this ` +
+      `unless it is on the same LAN. Use the router's public IP.`
+    );
+  }
+
+  res.status(probe.reachable ? 200 : 503).json({
+    host,
+    port,
+    reachable:  probe.reachable,
+    latencyMs:  probe.latencyMs,
+    diagnosis:  probe.diagnosis,
+    error:      probe.error,
+    warnings,
+    summary:    probe.reachable
+      ? `Port ${port} on ${host} is OPEN (${probe.latencyMs}ms)`
+      : `Port ${port} on ${host} is NOT reachable: ${probe.diagnosis ?? probe.error}`,
   });
 });
 

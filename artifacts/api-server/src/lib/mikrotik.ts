@@ -1,3 +1,4 @@
+import * as net from "net";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
 
@@ -142,31 +143,123 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+/* ─── TCP port probe ─────────────────────────────────────────────────────── */
+
+export interface PortProbeResult {
+  host: string;
+  port: number;
+  reachable: boolean;
+  latencyMs: number;
+  /** Raw socket error, if any */
+  error?: string;
+  /** Human-readable diagnosis — NAT, firewall, refused, DNS, etc. */
+  diagnosis?: string;
+}
+
+/**
+ * Probes whether a TCP port is open and reachable from this VPS.
+ * This is a raw socket connect — it does NOT speak the RouterOS API protocol.
+ * Use it to detect firewall blocks or NAT issues BEFORE attempting the API.
+ *
+ * Possible outcomes:
+ *  - reachable=true  → port is open; RouterOS API login will be attempted next
+ *  - ECONNREFUSED    → port reached but actively refused (API service may be disabled)
+ *  - ETIMEDOUT       → no reply — likely a firewall DROP rule or NAT not forwarding
+ *  - EHOSTUNREACH    → routing failure — wrong IP or VPS has no route to host
+ *  - ENOTFOUND       → DNS resolution failed — use an IP address instead of hostname
+ */
+export async function probePort(
+  host: string,
+  port: number,
+  timeoutMs = 5000
+): Promise<PortProbeResult> {
+  const start = Date.now();
+
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+
+    const finish = (reachable: boolean, errorMsg?: string) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      const latencyMs = Date.now() - start;
+
+      let diagnosis: string | undefined;
+      if (!reachable && errorMsg) {
+        if (errorMsg.includes("ECONNREFUSED")) {
+          diagnosis =
+            `Port ${port} was reached but refused — the RouterOS API service ` +
+            `may be disabled. Enable it under /ip service on the router.`;
+        } else if (
+          errorMsg.includes("ETIMEDOUT") ||
+          errorMsg.toLowerCase().includes("timed out")
+        ) {
+          diagnosis =
+            `Port ${port} did not respond within ${timeoutMs / 1000}s — ` +
+            `likely blocked by a firewall DROP rule or NAT is not forwarding ` +
+            `port ${port} to the router. Check /ip firewall filter and port-forward rules.`;
+        } else if (
+          errorMsg.includes("EHOSTUNREACH") ||
+          errorMsg.includes("ENETUNREACH")
+        ) {
+          diagnosis =
+            `Host ${host} is unreachable — routing failure. ` +
+            `Verify the IP is correct and the VPS has a network path to it. ` +
+            `If behind NAT with no public IP, configure a VPN tunnel instead.`;
+        } else if (errorMsg.includes("ENOTFOUND")) {
+          diagnosis =
+            `Hostname "${host}" could not be resolved. ` +
+            `Use the router's IP address directly instead of a hostname, ` +
+            `or ensure DNS is correctly configured on the VPS.`;
+        } else if (errorMsg.includes("EACCES")) {
+          diagnosis =
+            `Permission denied connecting to ${host}:${port}. ` +
+            `Check OS-level firewall rules on the VPS (iptables/ufw).`;
+        }
+      }
+
+      resolve({ host, port, reachable, latencyMs, error: errorMsg, diagnosis });
+    };
+
+    sock.setTimeout(timeoutMs);
+    sock.on("connect", () => finish(true));
+    sock.on("error",   (err) => finish(false, err.message));
+    sock.on("timeout", () => finish(false, `Timed out after ${timeoutMs / 1000}s`));
+    sock.connect(port, host);
+  });
+}
+
 /* ─── Retry logic ────────────────────────────────────────────────────────── */
 
 /**
- * Attempts to connect to the router, retrying on transient failures.
- * Returns the connected RouterOSAPI instance.
+ * Probes the TCP port first, then attempts the RouterOS API handshake.
+ * Retries on transient failures with exponential backoff.
  *
- * Strategy:
- *   1. Try primary host (creds.host)
- *   2. If that fails and bridgeIp is set, try VPN tunnel IP
- *   3. Retry up to MAX_RETRIES times with exponential backoff
+ * Strategy per host:
+ *   1. Probe TCP port — if blocked (timeout/refused), skip RouterOS API attempt
+ *      and return a clear diagnosis without burning the full connect timeout
+ *   2. If port is open, attempt RouterOS API login
+ *   3. Try primary host (creds.host), then VPN fallback (creds.bridgeIp)
+ *   4. Retry up to MAX_RETRIES times
  */
 async function connectWithRetry(
   creds: RouterCredentials
-): Promise<{ conn: RouterOSAPI; connectedHost: string }> {
-  const connectMs = creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS;
-  const hosts: Array<{ host: string; label: string }> = [];
+): Promise<{ conn: RouterOSAPI; connectedHost: string; probe: PortProbeResult }> {
+  const connectMs  = creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS;
+  /* Port probe uses a shorter timeout — fail fast, don't burn the full budget */
+  const probeMs    = Math.min(connectMs, 6000);
+
+  const hosts: Array<{ host: string; label: string; isVpn: boolean }> = [];
 
   if (creds.host) {
     const label = isPrivateIp(creds.host)
       ? `${creds.host} (⚠ private IP — VPS may not reach this)`
       : creds.host;
-    hosts.push({ host: creds.host, label });
+    hosts.push({ host: creds.host, label, isVpn: false });
   }
   if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
-    hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)` });
+    hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
   }
 
   if (hosts.length === 0) {
@@ -174,33 +267,60 @@ async function connectWithRetry(
   }
 
   let lastErr: Error = new Error("No connection attempts made");
+  let lastProbe: PortProbeResult = { host: "", port: creds.port, reachable: false, latencyMs: 0 };
 
   for (let attempt = 1; attempt <= Math.max(1, MAX_RETRIES); attempt++) {
-    for (const { host, label } of hosts) {
+    for (const { host, label, isVpn } of hosts) {
+
+      /* ── Step 1: TCP port probe ── */
+      logger.debug({ host: label, port: creds.port, attempt }, "Port probe");
+      const probe = await probePort(host, creds.port, probeMs);
+      lastProbe = probe;
+
+      if (!probe.reachable) {
+        const diag = probe.diagnosis ?? probe.error ?? "unreachable";
+        logger.warn(
+          { host: label, port: creds.port, attempt, diagnosis: diag },
+          "Port probe failed — skipping RouterOS API connect"
+        );
+        lastErr = new Error(
+          `Port ${creds.port} on ${label} is not reachable ` +
+          `(attempt ${attempt}/${MAX_RETRIES}): ${diag}`
+        );
+        /* Don't attempt RouterOS API when port is blocked — move to next host */
+        continue;
+      }
+
+      logger.debug({ host: label, port: creds.port, latencyMs: probe.latencyMs }, "Port open");
+
+      /* ── Step 2: RouterOS API login ── */
       const conn = makeConn(host, creds);
       try {
-        logger.debug({ host: label, attempt }, "MikroTik connect attempt");
+        logger.debug({ host: label, attempt }, "RouterOS API connect");
         await withTimeout(conn.connect(), connectMs);
-        logger.debug({ host: label, attempt }, "MikroTik connected");
-        return { conn, connectedHost: host };
+        logger.debug({ host: label, attempt }, "RouterOS API connected");
+        return { conn, connectedHost: host, probe };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ host: label, attempt, err: msg }, "MikroTik connect failed");
+        logger.warn({ host: label, attempt, err: msg }, "RouterOS API connect failed");
         lastErr = new Error(
-          `Cannot reach router at ${label} (attempt ${attempt}/${MAX_RETRIES}): ${msg}`
+          `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} ` +
+          `but RouterOS API login failed (attempt ${attempt}/${MAX_RETRIES}): ${msg}. ` +
+          `Check the API username and password, and that the API service is enabled.`
         );
         try { conn.close(); } catch { /* ignore */ }
       }
     }
 
-    /* Exponential backoff between full retry rounds (not between hosts) */
+    /* Exponential backoff between full retry rounds */
     if (attempt < MAX_RETRIES) {
       const delay = Math.min(500 * Math.pow(2, attempt - 1), 4000);
+      logger.debug({ attempt, delayMs: delay }, "Retry backoff");
       await new Promise(r => setTimeout(r, delay));
     }
   }
 
-  throw lastErr;
+  throw Object.assign(lastErr, { probe: lastProbe });
 }
 
 /* ─── Helper: run a command with a connected client ─────────────────────── */
@@ -215,6 +335,21 @@ async function withConn<T>(
   } finally {
     try { conn.close(); } catch { /* ignore */ }
   }
+}
+
+/**
+ * Probes all candidate hosts (primary + VPN) in parallel without attempting
+ * a full RouterOS API connection. Useful for pre-flight diagnostics.
+ */
+export async function probeAllHosts(
+  creds: RouterCredentials,
+  timeoutMs = 6000
+): Promise<PortProbeResult[]> {
+  const hosts: string[] = [];
+  if (creds.host)     hosts.push(creds.host);
+  if (creds.bridgeIp && creds.bridgeIp !== creds.host) hosts.push(creds.bridgeIp);
+  if (hosts.length === 0) return [];
+  return Promise.all(hosts.map(h => probePort(h, creds.port, timeoutMs)));
 }
 
 /* ─── Data types ─────────────────────────────────────────────────────────── */
@@ -483,7 +618,7 @@ export async function fetchRouterLiveData(
   }
 }
 
-/* ─── Connection test (quick ping without fetching full data) ────────────── */
+/* ─── Connection test ────────────────────────────────────────────────────── */
 
 export interface ConnectionTestResult {
   ok: boolean;
@@ -493,20 +628,71 @@ export interface ConnectionTestResult {
   usingSSL: boolean;
   error?: string;
   warnings: string[];
+  /**
+   * Per-host TCP port probe results — run BEFORE the RouterOS API login.
+   * Tells you immediately if a host is blocked by firewall/NAT.
+   */
+  portProbes: PortProbeResult[];
 }
 
 export async function testConnection(
   creds: RouterCredentials
 ): Promise<ConnectionTestResult> {
   const warnings: string[] = [];
-  if (isPrivateIp(creds.host)) {
+
+  if (creds.host && isPrivateIp(creds.host)) {
     warnings.push(
       `Host ${creds.host} is a private/local IP. This will only work if the VPS ` +
       `is on the same LAN. For remote access, use the router's public IP or ` +
-      `configure MIKROTIK_BRIDGE_IP for VPN tunnel access.`
+      `configure a VPN tunnel and set bridge_ip.`
+    );
+  }
+  if (!creds.host && creds.bridgeIp) {
+    warnings.push(
+      `No public host configured — will attempt via VPN tunnel IP ${creds.bridgeIp} only.`
     );
   }
 
+  /* Run port probes on ALL hosts in parallel FIRST — fast fail before API attempt */
+  const probeMs    = Math.min(creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS, 6000);
+  const portProbes = await probeAllHosts(creds, probeMs);
+
+  /* Log the probe summary */
+  for (const p of portProbes) {
+    if (p.reachable) {
+      logger.info(
+        { host: p.host, port: p.port, latencyMs: p.latencyMs },
+        "Port probe: OPEN"
+      );
+    } else {
+      logger.warn(
+        { host: p.host, port: p.port, error: p.error, diagnosis: p.diagnosis },
+        "Port probe: BLOCKED"
+      );
+      warnings.push(`${p.host}:${p.port} — ${p.diagnosis ?? p.error ?? "unreachable"}`);
+    }
+  }
+
+  const anyPortOpen = portProbes.some(p => p.reachable);
+  if (!anyPortOpen && portProbes.length > 0) {
+    /* All hosts blocked — skip RouterOS API attempt entirely */
+    const totalMs = portProbes.reduce((s, p) => s + p.latencyMs, 0);
+    return {
+      ok:            false,
+      connectedHost: "",
+      method:        "failed",
+      latencyMs:     totalMs,
+      usingSSL:      creds.useSSL ?? creds.port === 8729,
+      error:
+        `API port ${creds.port} is not reachable on any configured host. ` +
+        `Check firewall rules, NAT port-forwarding, and that the API service ` +
+        `is enabled on the router (/ip service enable api).`,
+      warnings,
+      portProbes,
+    };
+  }
+
+  /* Port(s) open — now try the full RouterOS API handshake */
   const start = Date.now();
   try {
     const { conn, connectedHost } = await connectWithRetry(creds);
@@ -519,19 +705,21 @@ export async function testConnection(
       connectedHost,
       method,
       latencyMs,
-      usingSSL: creds.useSSL ?? creds.port === 8729,
+      usingSSL:   creds.useSSL ?? creds.port === 8729,
       warnings,
+      portProbes,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
-      ok: false,
+      ok:            false,
       connectedHost: "",
-      method: "failed",
-      latencyMs: Date.now() - start,
-      usingSSL: creds.useSSL ?? creds.port === 8729,
-      error: msg,
+      method:        "failed",
+      latencyMs:     Date.now() - start,
+      usingSSL:      creds.useSSL ?? creds.port === 8729,
+      error:         msg,
       warnings,
+      portProbes,
     };
   }
 }
