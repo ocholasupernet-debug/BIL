@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
@@ -6,7 +6,7 @@ import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle,
-  Plug, Network, Wifi, Check, ChevronDown,
+  Plug, Network, Wifi, Check, ChevronDown, Shield,
 } from "lucide-react";
 
 /* ── types ── */
@@ -20,6 +20,7 @@ interface BridgePort { bridge: string; interface: string; id: string; }
 interface DbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null;
+  bridge_ip: string | null;
 }
 
 interface PortsPayload {
@@ -137,6 +138,9 @@ export default function BridgePorts() {
   const [selectedBridge, setSelectedBridge] = useState<string>("");
   const [selectedPorts, setSelectedPorts]   = useState<Set<string>>(new Set());
 
+  /* connection method (direct or VPN) */
+  const [connectedVia, setConnectedVia] = useState<string | null>(null);
+
   /* apply result */
   const [applying, setApplying]     = useState(false);
   const [applyLogs, setApplyLogs]   = useState<string[] | null>(null);
@@ -148,16 +152,21 @@ export default function BridgePorts() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,name,host,status,router_username,router_secret")
+        .select("id,name,host,status,router_username,router_secret,bridge_ip")
         .eq("admin_id", ADMIN_ID);
       return (data ?? []) as DbRouter[];
     },
   });
 
-  /* auto-fetch ports when router selected */
+  /* auto-fetch ports once routers are loaded — handles arriving from Next button
+     where routerId is pre-set in the URL but router credentials weren't available yet */
+  const autoFetchedRef = useRef(false);
   useEffect(() => {
-    if (selectedId) fetchPorts(selectedId);
-  }, [selectedId]);
+    if (selectedId && routers.length > 0 && !autoFetchedRef.current) {
+      autoFetchedRef.current = true;
+      fetchPorts(selectedId);
+    }
+  }, [selectedId, routers]);
 
   /* auto-select first bridge */
   useEffect(() => {
@@ -195,11 +204,16 @@ export default function BridgePorts() {
           host:     r.host,
           username: r.router_username || "admin",
           password: r.router_secret  || "",
+          bridgeIp: r.bridge_ip || undefined,
         }),
       });
-      const data = await res.json() as PortsPayload;
-      if (data.ok) setPayload(data);
-      else setLoadError(data.error ?? "Failed to load ports");
+      const data = await res.json() as PortsPayload & { connectedVia?: string };
+      if (data.ok) {
+        setPayload(data);
+        if (data.connectedVia) setConnectedVia(data.connectedVia);
+      } else {
+        setLoadError(data.error ?? "Failed to load ports");
+      }
     } catch (e) {
       setLoadError(String(e));
     } finally {
@@ -301,6 +315,8 @@ export default function BridgePorts() {
                   setPayload(null);
                   setSelectedBridge("");
                   setSelectedPorts(new Set());
+                  setConnectedVia(null);
+                  autoFetchedRef.current = false;
                 }}
                 style={{
                   background: "var(--isp-input-bg)", border: "1px solid var(--isp-input-border)",
@@ -362,6 +378,13 @@ export default function BridgePorts() {
             </button>
           )}
         </div>
+
+        {/* VPN connection badge */}
+        {connectedVia?.includes("VPN") && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.375rem", fontSize: "0.72rem", color: "#a78bfa", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 6, padding: "0.3rem 0.75rem", alignSelf: "flex-start" }}>
+            <Shield size={11} /> Connected via VPN tunnel — direct connection unavailable
+          </div>
+        )}
 
         {/* ── States ── */}
 

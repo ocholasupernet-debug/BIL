@@ -513,14 +513,25 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
    Body: { host, username, password }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/ports", async (req, res): Promise<void> => {
-  const { host, username, password } = req.body as {
-    host: string; username: string; password: string;
+  const { host, username, password, bridgeIp } = req.body as {
+    host: string; username: string; password: string; bridgeIp?: string;
   };
   if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
 
-  const conn = makeConn(host, username, password);
+  let conn = makeConn(host, username, password);
+  let connectedVia = host;
   try {
-    await withTimeout(conn.connect(), 12000);
+    try {
+      await withTimeout(conn.connect(), 12000);
+    } catch (directErr) {
+      if (bridgeIp) {
+        conn = makeConn(bridgeIp, username, password);
+        await withTimeout(conn.connect(), 12000);
+        connectedVia = `${bridgeIp} (VPN)`;
+      } else {
+        throw directErr;
+      }
+    }
 
     /* All interfaces */
     const ifArr = await conn.write(["/interface/print"]);
@@ -544,6 +555,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
     res.json({
       ok: true,
+      connectedVia,
       interfaces: interfaces.map(i => ({
         name:    i.name    || "",
         type:    i.type    || "ether",
