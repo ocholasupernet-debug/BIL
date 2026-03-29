@@ -60,6 +60,21 @@ function ros(cmd: string): string {
   return cmd.replace(/\s{2,}/g, " ").trim();
 }
 
+/* ── Safe ros: wraps a command in on-error so one failure can't abort
+   the whole script. Prints a WARN line instead so the user sees it. ── */
+function safeRos(cmd: string, label: string): string {
+  return `:do { ${ros(cmd)} } on-error={ :put "  WARN: ${label} failed - check /log" }`;
+}
+
+/* ── OVPN add with automatic fallback.
+   verify-server-certificate was added in RouterOS 6.16.
+   Try with it first; if the router rejects it, retry without. ── */
+function ovpnAdd(fields: string): string {
+  const withV = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
+  const noV   = ros(`/interface ovpn-client add ${fields}`);
+  return `:do { ${withV} } on-error={ :do { ${noV} } on-error={ :put "  WARN: VPN add failed - check /log" } }`;
+}
+
 /* ── Safe fetch: wraps /tool fetch in :do { } on-error={} so a
    connection timeout or 4xx/5xx during import doesn't kill the script.
    The file simply won't be updated if the fetch fails, which is
@@ -321,8 +336,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === System Identity & DNS ===`,
       `:put "[2/8] Setting identity and DNS..."`,
-      ros(`/system identity set name="${companyName}-${routerName}"`),
-      ros(`/ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes`),
+      safeRos(`/system identity set name="${companyName}-${routerName}"`, "identity set"),
+      safeRos(`/ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes`, "dns set"),
       `:put "      Identity: ${companyName}-${routerName}  DNS: 8.8.8.8"`,
       ``,
       `# === Bridge Interface ===`,
@@ -332,12 +347,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" } on-error={}`,
       safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
-      ros(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`),
+      safeRos(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`, "bridge IP add"),
       `:put "      Bridge '${bridgeIface}' IP set to ${ipMask}  OK"`,
       ``,
       `# === IP Pool ===`,
       safeRm(`/ip pool remove [find name=hspool]`),
-      ros(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd}`),
+      safeRos(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd}`, "pool add"),
       ``,
       `# === Hotspot (remove first so profile can be removed) ===`,
       safeRm(`/ip hotspot remove [find interface="${bridgeIface}"]`),
@@ -345,8 +360,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Hotspot Profile & Service ===`,
       `:put "[4/8] Starting hotspot service..."`,
       safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
-      ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`),
-      ros(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`),
+      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`, "hotspot profile add"),
+      safeRos(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`, "hotspot add"),
       `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       ``,
       `# === Hotspot Portal Files ===`,
@@ -384,20 +399,20 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === NAT + Firewall ===`,
       `:put "[6/8] Applying firewall and NAT rules..."`,
       safeRm(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
-      ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
+      safeRos(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`, "NAT redirect add"),
       safeRm(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
-      ros(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`),
+      safeRos(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`, "firewall hotspot accept"),
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       `:put "      NAT redirect + firewall rules applied  OK"`,
       ``,
       `# === OVPN Management Tunnel ===`,
       `:put "[7/8] Setting up management VPN tunnel..."`,
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
-      ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 verify-server-certificate=no add-default-route=no disabled=no`),
+      ovpnAdd(`name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
       `:put "      VPN interface 'ocholasupernet' added  OK"`,
       ``,
       `# === Default User Profile ===`,
-      ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
+      safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),
       ``,
       `# === Auto-Register & Heartbeat ===`,
       `:put "[8/8] Registering with billing system and scheduling heartbeat..."`,
@@ -416,13 +431,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# billing server. ?hs=1 means the service is active (users can connect) and`,
       `# lights the green indicator in the admin dashboard. ?hs=0 turns it yellow.`,
       safeRm(`/system script remove [find name=ochola-heartbeat-script]`),
-      ros(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`),
+      safeRos(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`, "heartbeat script add"),
       safeRm(`/system scheduler remove [find name=ochola-heartbeat]`),
-      ros(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${companyName} heartbeat"`),
+      safeRos(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${companyName} heartbeat"`, "heartbeat scheduler add"),
       ``,
       `# === Config Auto-Update Scheduler (daily) ===`,
       safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
-      ros(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`),
+      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
       `:put "      Heartbeat every 5 min, auto-update daily at 00:05  OK"`,
       ``,
       `:put ""`,
@@ -445,13 +460,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
         const shared  = plan.shared_users || 1;
         lines.push(safeRm(`/ip hotspot user profile remove [find name="${pName}"]`));
-        lines.push(ros(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan #${plan.id}"`));
+        lines.push(safeRos(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan #${plan.id}"`, `plan ${pName} add`));
         lines.push(`:put "      Plan '${pName}' (${rl}, ${timeout})  OK"`);
       }
     }
 
     lines.push(``);
-    lines.push(ros(`/log info message="${companyName}: ${routerSlug}.rsc imported successfully"`));
+    lines.push(safeRos(`/log info message="${companyName}: ${routerSlug}.rsc imported successfully"`, "log info"));
 
     const body = lines.join("\r\n");
 
