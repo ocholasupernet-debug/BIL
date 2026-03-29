@@ -310,23 +310,30 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# Generated: ${now}`,
       `# Import  : /import ${routerSlug}.rsc`,
       `# ===================================================`,
+      `:put ""`,
+      `:put "======================================================"`,
+      `:put " ${companyName} Setup — ${routerName}"`,
+      `:put "======================================================"`,
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
+      `:put "[1/8] Checking for config updates..."`,
       safeFetch(`${scriptBaseUrl}/${rawName}`, `${routerSlug}.rsc`),
       ``,
-      `# === System Identity ===`,
+      `# === System Identity & DNS ===`,
+      `:put "[2/8] Setting identity and DNS..."`,
       ros(`/system identity set name="${companyName}-${routerName}"`),
-      ``,
-      `# === DNS ===`,
       ros(`/ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes`),
+      `:put "      Identity: ${companyName}-${routerName}  DNS: 8.8.8.8"`,
       ``,
       `# === Bridge Interface ===`,
+      `:put "[3/8] Configuring bridge interface (${bridgeIp}/24)..."`,
       `:do { /interface bridge add name="${bridgeIface}" comment="${companyName} Hotspot Bridge" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan1 comment="WiFi 2.4GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=ether2 comment="LAN port 2" } on-error={}`,
       safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
       ros(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`),
+      `:put "      Bridge '${bridgeIface}' IP set to ${ipMask}  OK"`,
       ``,
       `# === IP Pool ===`,
       safeRm(`/ip pool remove [find name=hspool]`),
@@ -335,20 +342,19 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Hotspot (remove first so profile can be removed) ===`,
       safeRm(`/ip hotspot remove [find interface="${bridgeIface}"]`),
       ``,
-      `# === Hotspot Profile ===`,
+      `# === Hotspot Profile & Service ===`,
+      `:put "[4/8] Starting hotspot service..."`,
       safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
       ros(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`),
-      ``,
-      `# === Hotspot (add after profile is ready) ===`,
       ros(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`),
+      `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       ``,
-      `# === Ensure flash/hotspot directories exist ===`,
+      `# === Hotspot Portal Files ===`,
+      `:put "[5/8] Downloading hotspot portal files..."`,
       `:do { /file make-dir flash/hotspot } on-error={}`,
       `:do { /file make-dir flash/hotspot/css } on-error={}`,
       `:do { /file make-dir flash/hotspot/img } on-error={}`,
       `:do { /file make-dir flash/hotspot/xml } on-error={}`,
-      ``,
-      `# === Hotspot Static Assets (CSS / JS libraries / images) ===`,
       safeFetch(`${portalBase}/hotspot/css/style.css`,    `flash/hotspot/css/style.css`),
       safeFetch(`${portalBase}/hotspot/img/user.svg`,     `flash/hotspot/img/user.svg`),
       safeFetch(`${portalBase}/hotspot/img/password.svg`, `flash/hotspot/img/password.svg`),
@@ -356,8 +362,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       safeFetch(`${portalBase}/hotspot/md5.js`,           `flash/hotspot/md5.js`),
       safeFetch(`${portalBase}/hotspot/sweetalert2.js`,   `flash/hotspot/sweetalert2.js`),
       safeFetch(`${portalBase}/hotspot/tailwind.js`,      `flash/hotspot/tailwind.js`),
-      ``,
-      `# === Hotspot HTML Pages ===`,
       safeFetch(`${portalBase}/hotspot/login.html`,    `flash/hotspot/login.html`),
       safeFetch(`${portalBase}/hotspot/alogin.html`,   `flash/hotspot/alogin.html`),
       safeFetch(`${portalBase}/hotspot/logout.html`,   `flash/hotspot/logout.html`),
@@ -368,8 +372,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       safeFetch(`${portalBase}/hotspot/error.html`,    `flash/hotspot/error.html`),
       safeFetch(`${portalBase}/hotspot/errors.txt`,    `flash/hotspot/errors.txt`),
       safeFetch(`${portalBase}/hotspot/api.json`,      `flash/hotspot/api.json`),
-      ``,
-      `# === Hotspot XML Templates ===`,
       safeFetch(`${portalBase}/hotspot/xml/login.html`,   `flash/hotspot/xml/login.html`),
       safeFetch(`${portalBase}/hotspot/xml/alogin.html`,  `flash/hotspot/xml/alogin.html`),
       safeFetch(`${portalBase}/hotspot/xml/logout.html`,  `flash/hotspot/xml/logout.html`),
@@ -377,24 +379,28 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       safeFetch(`${portalBase}/hotspot/xml/rlogin.html`,  `flash/hotspot/xml/rlogin.html`),
       safeFetch(`${portalBase}/hotspot/xml/error.html`,   `flash/hotspot/xml/error.html`),
       safeFetch(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `flash/hotspot/xml/WISPAP.xsd`),
+      `:put "      Portal files downloaded  OK"`,
       ``,
-      `# === NAT (Captive Portal Redirect) ===`,
+      `# === NAT + Firewall ===`,
+      `:put "[6/8] Applying firewall and NAT rules..."`,
       safeRm(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
       ros(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`),
-      ``,
-      `# === Firewall (allow hotspot traffic) ===`,
       safeRm(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
       ros(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`),
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
+      `:put "      NAT redirect + firewall rules applied  OK"`,
       ``,
       `# === OVPN Management Tunnel ===`,
+      `:put "[7/8] Setting up management VPN tunnel..."`,
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
       ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="ocholasupernet" cipher=aes256 auth=sha1 verify-server-certificate=no add-default-route=no disabled=no`),
+      `:put "      VPN interface 'ocholasupernet' added  OK"`,
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
       ``,
-      `# === Auto-Register: detect model + link router to billing system ===`,
+      `# === Auto-Register & Heartbeat ===`,
+      `:put "[8/8] Registering with billing system and scheduling heartbeat..."`,
       `# Reads the router's hardware model, identity, and ROS version,`,
       `# then sends them to the billing server so the admin dashboard`,
       `# shows the correct device name and lights the green indicator.`,
@@ -417,11 +423,22 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Config Auto-Update Scheduler (daily) ===`,
       safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
       ros(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`),
+      `:put "      Heartbeat every 5 min, auto-update daily at 00:05  OK"`,
+      ``,
+      `:put ""`,
+      `:put "======================================================"`,
+      `:put " Setup complete! ${companyName} — ${routerName}"`,
+      `:put " Hotspot : active on '${bridgeIface}' (${bridgeIp})"`,
+      `:put " VPN     : ocholasupernet -> ${adminSubdomain}.isplatty.org"`,
+      `:put " Pool    : ${poolStart} - ${poolEnd}"`,
+      `:put " Check the admin dashboard for green indicator."`,
+      `:put "======================================================"`,
     ];
 
     /* ── Plan profiles ── */
     if (plans.length > 0) {
       lines.push(``, `# === Plan Profiles (${plans.length}) ===`);
+      lines.push(`:put "[+] Installing ${plans.length} plan profile(s)..."`);
       for (const plan of plans) {
         const pName   = plan.name.replace(/\s+/g, "-").toLowerCase();
         const rl      = toRateLimit(plan.speed_down, plan.speed_up, "Mbps");
@@ -429,15 +446,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         const shared  = plan.shared_users || 1;
         lines.push(safeRm(`/ip hotspot user profile remove [find name="${pName}"]`));
         lines.push(ros(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan #${plan.id}"`));
+        lines.push(`:put "      Plan '${pName}' (${rl}, ${timeout})  OK"`);
       }
     }
 
     lines.push(``);
     lines.push(ros(`/log info message="${companyName}: ${routerSlug}.rsc imported successfully"`));
-    lines.push(``);
-    lines.push(`# ===================================================`);
-    lines.push(`# Done - ${plans.length} plan profile(s) installed`);
-    lines.push(`# ===================================================`);
 
     const body = lines.join("\r\n");
 
