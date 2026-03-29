@@ -186,9 +186,31 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const portalBase  = `https://${adminSubdomain}.isplatty.org`;
     const now         = new Date().toISOString();
 
-    /* ── Router secret token for heartbeat ── */
-    const routerSecret = router_row.router_secret
-      ?? `${adminId}-${router_row.id}-${Buffer.from(`${adminId}:${router_row.id}:ocholanet`).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 40)}`;
+    /* ── Router secret token for heartbeat ──
+       If the router already has a secret, use it.
+       Otherwise generate one, persist it to Supabase, then use it.
+    ── */
+    let routerSecret = router_row.router_secret;
+    if (!routerSecret) {
+      const raw = `${adminId}:${router_row.id}:ocholanet:${Date.now()}`;
+      routerSecret = Buffer.from(raw).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
+      /* Persist to DB (best-effort, don't fail the request if this errors) */
+      try {
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/isp_routers?id=eq.${router_row.id}&admin_id=eq.${adminId}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({ router_secret: routerSecret }),
+          }
+        );
+      } catch { /* ignore */ }
+    }
     const heartbeatUrl = `${scriptBaseUrl}/../isp/router/heartbeat/${routerSecret}`;
 
     /* ── Step 5: Build the .rsc content ── */
