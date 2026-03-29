@@ -4,321 +4,85 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
-  Shield, Wifi, Copy, Download, CheckCircle2,
-  Loader2, FileCode2, ChevronDown, ChevronUp, Zap,
-  Upload, TerminalSquare,
+  Shield, Wifi, Copy, Check, Loader2,
+  Zap, Terminal, Download,
 } from "lucide-react";
+
+const BASE_DOMAIN = "isplatty.org";
 
 /* ══════════════════════════ Types ══════════════════════════ */
 interface DbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null; ros_version: string;
-  ports: string | null; pppoe_mode: string | null; pppoe_interface: string | null;
-  pppoe_configured_at: string | null; wan_interface: string | null;
-  bridge_interface: string | null; bridge_ip: string | null;
-  hotspot_dns_name: string | null; token: string;
+  ports: string | null; pppoe_mode: string | null;
+  wan_interface: string | null; bridge_interface: string | null;
+  bridge_ip: string | null; hotspot_dns_name: string | null;
+  pppoe_configured_at: string | null; token: string;
 }
 
 type Mode = "pppoe_only" | "pppoe_over_hotspot";
 
-/* ══════════════════════════ Script generators ══════════════════════════ */
-function genPPPoEOnlyScript(router: DbRouter, companyName: string): string {
-  const secret = router.router_secret ?? "changeme";
-  return `# ============================================================
-# ${companyName} — PPPoE Only Configuration
-# Router : ${router.name} (${router.host})
-# Generated: ${new Date().toLocaleString("en-KE")}
-# ============================================================
-
-# 1. Clean previous config
-/interface pppoe-server server remove [find]
-/ppp profile remove [find name~"internet"]
-/ip pool remove [find name~"pppoe"]
-/interface bridge remove [find name="bridge-pppoe"]
-
-# 2. Create bridge for PPPoE clients
-/interface bridge add name=bridge-pppoe protocol-mode=none fast-forward=no comment="${companyName} PPPoE bridge"
-/interface bridge port add bridge=bridge-pppoe interface=ether2 comment="ether2"
-/interface bridge port add bridge=bridge-pppoe interface=ether3 comment="ether3"
-
-# 3. Assign gateway IP to bridge
-/ip address add address=10.10.0.1/24 interface=bridge-pppoe
-
-# 4. IP Pool for PPPoE clients
-/ip pool add name=pppoe-pool ranges=10.10.0.2-10.10.0.254
-
-# 5. PPP Profile
-/ppp profile add \\
-  name=internet \\
-  local-address=10.10.0.1 \\
-  remote-address=pppoe-pool \\
-  use-radius=yes \\
-  dns-server=8.8.8.8,1.1.1.1 \\
-  change-tcp-mss=yes \\
-  comment="${companyName} profile"
-
-# 6. RADIUS Client
-/radius remove [find service=pppoe]
-/radius add \\
-  service=pppoe \\
-  address=YOUR_RADIUS_IP \\
-  secret=${secret} \\
-  authentication-port=1812 \\
-  accounting-port=1813 \\
-  timeout=3000ms
-
-/radius incoming set accept=yes port=3799
-/ppp aaa set use-radius=yes accounting=yes interim-update=1m
-
-# 7. PPPoE Server
-/interface pppoe-server server add \\
-  service-name=internet \\
-  interface=bridge-pppoe \\
-  default-profile=internet \\
-  authentication=pap,chap,mschap1,mschap2 \\
-  enabled=yes \\
-  max-mru=1480 \\
-  max-mtu=1480 \\
-  one-session-per-host=yes \\
-  keepalive-timeout=30 \\
-  comment="${companyName} PPPoE Server"
-
-# 8. NAT masquerade
-/ip firewall nat add \\
-  chain=srcnat src-address=10.10.0.0/24 \\
-  action=masquerade out-interface=ether1 \\
-  comment="PPPoE clients masquerade"
-
-# 9. API access
-/ip service set api address=0.0.0.0/0 disabled=no
-/user add name=${router.router_username} password=${secret} group=full \\
-  comment="${companyName} API user" disabled=no
-
-:log info "${companyName} PPPoE Only config applied"
-:put "Done. PPPoE server running on bridge-pppoe."
-`;
+/* ══════════════════════════ Helpers ══════════════════════════ */
+function slugify(s: string) {
+  return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
-function genPPPoEOverHotspotScript(router: DbRouter, companyName: string): string {
-  const secret = router.router_secret ?? "changeme";
-  return `# ============================================================
-# ${companyName} — PPPoE over Hotspot Configuration
-# Router : ${router.name} (${router.host})
-# Generated: ${new Date().toLocaleString("en-KE")}
-# ============================================================
-
-# 1. Clean existing config
-/interface pppoe-server server remove [find]
-/ip hotspot remove [find]
-/ip pool remove [find name~"hs-pool"]
-/ip pool remove [find name~"pppoe-pool"]
-/ppp profile remove [find name~"internet"]
-/interface bridge remove [find name="bridge-shared"]
-
-# 2. Create shared bridge
-/interface bridge add name=bridge-shared protocol-mode=none fast-forward=no comment="${companyName} shared bridge"
-/interface bridge port add bridge=bridge-shared interface=ether2 comment="Client LAN"
-
-# 3. Bridge IP
-/ip address add address=192.168.88.1/24 interface=bridge-shared
-
-# 4. DHCP for hotspot clients
-/ip pool add name=hs-pool ranges=192.168.88.10-192.168.88.200
-/ip dhcp-server add name=dhcp-hs interface=bridge-shared address-pool=hs-pool disabled=no lease-time=10m
-/ip dhcp-server network add address=192.168.88.0/24 gateway=192.168.88.1 dns-server=192.168.88.1
-
-# 5. DNS
-/ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
-
-# 6. Hotspot
-/ip hotspot profile add \\
-  name=hs-profile \\
-  dns-name=hotspot.local \\
-  hotspot-address=192.168.88.1 \\
-  use-radius=yes \\
-  login-by=http-chap,mac \\
-  mac-auth-mode=mac-as-username \\
-  comment="${companyName} hotspot profile"
-
-/ip hotspot add \\
-  name=hotspot1 \\
-  interface=bridge-shared \\
-  profile=hs-profile \\
-  address-pool=hs-pool \\
-  idle-timeout=5m \\
-  disabled=no
-
-# 7. RADIUS (hotspot + PPPoE)
-/radius remove [find service=hotspot]
-/radius remove [find service=pppoe]
-/radius add service=hotspot address=YOUR_RADIUS_IP secret=${secret} authentication-port=1812 accounting-port=1813 timeout=3000ms
-/radius add service=pppoe  address=YOUR_RADIUS_IP secret=${secret} authentication-port=1812 accounting-port=1813 timeout=3000ms
-/radius incoming set accept=yes port=3799
-
-# 8. PPPoE pool + profile
-/ip pool add name=pppoe-pool ranges=10.10.0.2-10.10.0.254
-/ppp profile add \\
-  name=internet \\
-  local-address=192.168.88.1 \\
-  remote-address=pppoe-pool \\
-  dns-server=8.8.8.8,1.1.1.1 \\
-  use-radius=yes \\
-  use-compression=no \\
-  change-tcp-mss=yes
-
-/ppp aaa set use-radius=yes accounting=yes interim-update=1m
-
-# 9. PPPoE server on shared bridge
-/interface pppoe-server server add \\
-  service-name=internet \\
-  interface=bridge-shared \\
-  default-profile=internet \\
-  authentication=pap,chap,mschap1,mschap2 \\
-  enabled=yes \\
-  max-mru=1480 max-mtu=1480 \\
-  one-session-per-host=yes \\
-  comment="${companyName} PPPoE-over-Hotspot"
-
-# 10. NAT masquerade
-/ip firewall nat add \\
-  chain=srcnat src-address=192.168.88.0/24 \\
-  action=masquerade out-interface=ether1 \\
-  comment="PPPoE/Hotspot masquerade"
-
-# 11. API access
-/ip service set api address=0.0.0.0/0 disabled=no
-/user add name=${router.router_username} password=${secret} group=full \\
-  comment="${companyName} API user" disabled=no
-
-:log info "${companyName} PPPoE-over-Hotspot config applied"
-:put "Done. Hotspot: hotspot.local | PPPoE server on bridge-shared."
-`;
-}
-
-/* ══════════════════════════ Import script generator ══════════════════════════ */
-function genImportScript(configFilename: string, router: DbRouter, mode: Mode): string {
-  return `# ============================================================
-# MikroTik Import Script
-# Loads: ${configFilename}
-# Router: ${router.name} (${router.host})
-# ============================================================
-#
-# STEP 1 — Upload the config file to the router
-#   Option A: Open Winbox > Files > drag & drop "${configFilename}"
-#   Option B: FTP/SCP the file to the router's root directory
-#
-# STEP 2 — Open the MikroTik terminal (Winbox > New Terminal)
-#          and paste the line below:
-#
-/import file-name=${configFilename}
-#
-# STEP 3 — Wait for "Script file loaded and executed successfully"
-#   then verify with:
-/interface pppoe-server server print
-${mode === "pppoe_over_hotspot" ? "/ip hotspot print" : ""}
-/ppp profile print
-`;
-}
-
-/* ══════════════════════════ Script block ══════════════════════════ */
-function ScriptBlock({
-  code, filename, accent = "#22d3ee", label,
-}: { code: string; filename: string; accent?: string; label?: React.ReactNode }) {
+/* ══════════════════════════ Copy button ══════════════════════════ */
+function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(true);
-
-  const copy = () => {
-    navigator.clipboard.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2200); });
-  };
-  const download = () => {
-    const blob = new Blob([code], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
-  };
-
   return (
-    <div style={{ border: `1px solid ${accent}40`, borderRadius: 12, overflow: "hidden" }}>
-      {label && (
-        <div style={{
-          padding: "0.5rem 1rem",
-          background: `${accent}10`,
-          borderBottom: `1px solid ${accent}25`,
-          display: "flex", alignItems: "center", gap: "0.5rem",
-          fontSize: "0.72rem", fontWeight: 700, color: accent,
-          textTransform: "uppercase", letterSpacing: "0.07em",
-        }}>
-          {label}
-        </div>
+    <button
+      onClick={() => navigator.clipboard.writeText(text).then(() => {
+        setCopied(true); setTimeout(() => setCopied(false), 2200);
+      })}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: "0.35rem",
+        padding: "0.35rem 0.875rem", borderRadius: 6,
+        background: copied ? "rgba(34,197,94,0.15)" : "rgba(99,102,241,0.18)",
+        border: `1px solid ${copied ? "rgba(34,197,94,0.4)" : "rgba(99,102,241,0.4)"}`,
+        color: copied ? "#4ade80" : "#a5b4fc",
+        fontSize: "0.74rem", fontWeight: 700, cursor: "pointer",
+        fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0,
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
+/* ══════════════════════════ Command block ══════════════════════════ */
+function CmdBlock({ step, title, cmd, note }: { step: number; title: string; cmd: string; note?: string }) {
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+        <span style={{
+          width: 22, height: 22, borderRadius: "50%",
+          background: "linear-gradient(135deg,#06b6d4,#0284c7)",
+          color: "white", fontSize: "0.68rem", fontWeight: 800,
+          display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+        }}>{step}</span>
+        <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>{title}</span>
+      </div>
+      {note && (
+        <p style={{ margin: "0 0 0.5rem 1.875rem", fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
+          {note}
+        </p>
       )}
       <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "0.75rem 1rem",
-        background: `${accent}08`,
-        borderBottom: expanded ? `1px solid ${accent}20` : "none",
+        background: "#060b12",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 8, padding: "0.875rem 1rem",
+        display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-          <FileCode2 size={14} style={{ color: accent }} />
-          <span style={{ fontWeight: 700, fontSize: "0.8125rem", color: "var(--isp-text)", fontFamily: "monospace" }}>
-            {filename}
-          </span>
-          <span style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)" }}>
-            {code.split("\n").length} lines
-          </span>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <button onClick={copy} style={{
-            display: "flex", alignItems: "center", gap: "0.35rem",
-            padding: "0.35rem 0.875rem", borderRadius: 7,
-            background: copied ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.06)",
-            border: `1px solid ${copied ? "rgba(74,222,128,0.3)" : "rgba(255,255,255,0.12)"}`,
-            color: copied ? "#4ade80" : "var(--isp-text-muted)",
-            fontWeight: 600, fontSize: "0.75rem", cursor: "pointer",
-            fontFamily: "inherit", transition: "all 0.15s",
-          }}>
-            {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
-            {copied ? "Copied!" : "Copy"}
-          </button>
-          <button onClick={download} style={{
-            display: "flex", alignItems: "center", gap: "0.35rem",
-            padding: "0.35rem 0.875rem", borderRadius: 7,
-            background: "linear-gradient(135deg,#06b6d4,#0284c7)",
-            border: "none", color: "white",
-            fontWeight: 700, fontSize: "0.75rem", cursor: "pointer",
-            fontFamily: "inherit",
-          }}>
-            <Download size={12} /> Download .rsc
-          </button>
-          <button onClick={() => setExpanded(e => !e)} style={{
-            display: "flex", alignItems: "center", padding: "0.35rem 0.5rem",
-            borderRadius: 7, background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "var(--isp-text-muted)", cursor: "pointer",
-          }}>
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-        </div>
+        <code style={{
+          fontFamily: "monospace", fontSize: "0.8rem", color: "#c7d2fe",
+          wordBreak: "break-all", lineHeight: 1.7, flex: 1,
+        }}>
+          {cmd}
+        </code>
+        <CopyBtn text={cmd} />
       </div>
-
-      {expanded && (
-        <div style={{ overflowX: "auto", maxHeight: 460, overflowY: "auto" }}>
-          <pre style={{
-            margin: 0, padding: "1rem 1.25rem",
-            background: "#070b10",
-            fontFamily: "monospace", fontSize: "0.75rem", lineHeight: 1.75,
-            color: "#e2e8f0", whiteSpace: "pre",
-          }}>
-            {code.split("\n").map((line, i) => {
-              let color = "#e2e8f0";
-              if (line.trim().startsWith("#")) color = "#4b5563";
-              else if (line.trim().startsWith("/")) color = "#22d3ee";
-              else if (line.includes("=")) color = "#a5f3fc";
-              return <span key={i} style={{ display: "block", color }}>{line || " "}</span>;
-            })}
-          </pre>
-        </div>
-      )}
     </div>
   );
 }
@@ -327,19 +91,21 @@ function ScriptBlock({
 export default function PPPoE() {
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [mode, setMode] = useState<Mode>("pppoe_only");
-  const [scripts, setScripts] = useState<{
-    config: string; configFilename: string;
-    importer: string; importFilename: string;
-  } | null>(null);
+  const [generated, setGenerated] = useState(false);
 
   const { data: adminInfo } = useQuery({
-    queryKey: ["admin_info", ADMIN_ID],
+    queryKey: ["admin_info_pppoe", ADMIN_ID],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
-      return data as { name: string } | null;
+      const { data } = await supabase
+        .from("isp_admins").select("name,subdomain").eq("id", ADMIN_ID).single();
+      return data as { name: string; subdomain: string | null } | null;
     },
   });
-  const companyName = adminInfo?.name ?? "ISP";
+
+  const adminSubdomain = adminInfo?.subdomain ?? null;
+  const scriptHost = adminSubdomain
+    ? `https://${adminSubdomain}.${BASE_DOMAIN}`
+    : window.location.origin;
 
   const { data: routers = [], isLoading: loadingRouters } = useQuery({
     queryKey: ["isp_routers_pppoe", ADMIN_ID],
@@ -356,37 +122,21 @@ export default function PPPoE() {
     }
   }, [routers, selectedRouterId]);
 
-  const router = useMemo(() => routers.find(r => r.id === selectedRouterId) ?? null, [routers, selectedRouterId]);
+  const router = useMemo(
+    () => routers.find(r => r.id === selectedRouterId) ?? null,
+    [routers, selectedRouterId],
+  );
 
-  const triggerDownload = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleGenerate = () => {
-    if (!router) return;
-    const slug = router.name.replace(/\s+/g, "-").toLowerCase();
-    const configFilename = mode === "pppoe_only"
-      ? `pppoe-only-${slug}.rsc`
-      : `pppoe-hotspot-${slug}.rsc`;
-    const importFilename = mode === "pppoe_only"
-      ? `import-pppoe-only-${slug}.rsc`
-      : `import-pppoe-hotspot-${slug}.rsc`;
-
-    const config = mode === "pppoe_only"
-      ? genPPPoEOnlyScript(router, companyName)
-      : genPPPoEOverHotspotScript(router, companyName);
-    const importer = genImportScript(configFilename, router, mode);
-
-    setScripts({ config, configFilename, importer, importFilename });
-
-    /* Download both files with a slight delay between them */
-    triggerDownload(config, configFilename);
-    setTimeout(() => triggerDownload(importer, importFilename), 400);
-  };
+  /* Derived filenames & commands */
+  const slug         = router ? slugify(router.name) : "router";
+  const configFile   = mode === "pppoe_only" ? `pppoe-only-${slug}.rsc` : `pppoe-hotspot-${slug}.rsc`;
+  const fetchCmd     = router
+    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}?admin_id=${ADMIN_ID}" dst-path=${configFile} mode=https check-certificate=no`
+    : "";
+  const importCmd    = `/import ${configFile}`;
+  const downloadUrl  = router
+    ? `/api/pppoe-script/${router.id}/${mode}?admin_id=${ADMIN_ID}`
+    : "#";
 
   const MODES: { id: Mode; label: string; sub: string; icon: React.ReactNode; color: string; border: string }[] = [
     {
@@ -394,21 +144,21 @@ export default function PPPoE() {
       label: "PPPoE Only",
       sub: "Pure PPPoE dial-up. Clients authenticate via username & password. Best for fiber/cable subscribers.",
       icon: <Shield size={22} style={{ color: "#06b6d4" }} />,
-      color: "rgba(6,182,212,0.08)",
-      border: "rgba(6,182,212,0.35)",
+      color: "rgba(6,182,212,0.08)", border: "rgba(6,182,212,0.35)",
     },
     {
       id: "pppoe_over_hotspot",
       label: "PPPoE over Hotspot",
       sub: "Combines a hotspot captive portal with a PPPoE server on the same bridge. Supports both auth methods simultaneously.",
       icon: <Wifi size={22} style={{ color: "#a78bfa" }} />,
-      color: "rgba(139,92,246,0.08)",
-      border: "rgba(139,92,246,0.35)",
+      color: "rgba(139,92,246,0.08)", border: "rgba(139,92,246,0.35)",
     },
   ];
 
   return (
     <AdminLayout>
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}} @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
         <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>
@@ -417,7 +167,7 @@ export default function PPPoE() {
 
         <NetworkTabs active="pppoe" />
 
-        {/* ── Compact generator card ── */}
+        {/* ── Compact selector card ── */}
         <div style={{
           maxWidth: 720,
           background: "var(--isp-section)",
@@ -425,25 +175,25 @@ export default function PPPoE() {
           borderRadius: 14, overflow: "hidden",
         }}>
 
-          {/* Router selector row */}
+          {/* Router picker */}
           <div style={{
             display: "flex", alignItems: "center", gap: "0.875rem",
             padding: "0.875rem 1.25rem",
             borderBottom: "1px solid var(--isp-border-subtle)",
           }}>
-            <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
-              Router
-            </span>
+            <span style={{
+              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
+              textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
+            }}>Router</span>
             <select
               value={selectedRouterId ?? ""}
-              onChange={e => { setSelectedRouterId(Number(e.target.value)); setScripts(null); }}
+              onChange={e => { setSelectedRouterId(Number(e.target.value)); setGenerated(false); }}
               disabled={loadingRouters}
               style={{
                 flex: 1, background: "var(--isp-inner-card)",
                 border: "1px solid var(--isp-border)", borderRadius: 8,
                 padding: "0.45rem 0.75rem", color: "var(--isp-text)",
-                fontSize: "0.8125rem", fontFamily: "inherit", outline: "none",
-                cursor: "pointer",
+                fontSize: "0.8125rem", fontFamily: "inherit", outline: "none", cursor: "pointer",
               }}
             >
               {loadingRouters && <option>Loading…</option>}
@@ -461,11 +211,12 @@ export default function PPPoE() {
             )}
           </div>
 
-          {/* Mode selection */}
+          {/* Mode selection + generate */}
           <div style={{ padding: "1.125rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              Select type
-            </span>
+            <span style={{
+              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
+              textTransform: "uppercase", letterSpacing: "0.06em",
+            }}>Select type</span>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
               {MODES.map(m => {
@@ -473,7 +224,7 @@ export default function PPPoE() {
                 return (
                   <button
                     key={m.id}
-                    onClick={() => { setMode(m.id); setScripts(null); }}
+                    onClick={() => { setMode(m.id); setGenerated(false); }}
                     style={{
                       display: "flex", flexDirection: "column", alignItems: "flex-start",
                       gap: "0.5rem", padding: "1rem 1.125rem",
@@ -484,7 +235,7 @@ export default function PPPoE() {
                       boxShadow: active ? `0 0 0 3px ${m.color}` : "none",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", width: "100%" }}>
                       {m.icon}
                       <span style={{ fontWeight: 700, fontSize: "0.875rem", color: "var(--isp-text)" }}>
                         {m.label}
@@ -509,24 +260,25 @@ export default function PPPoE() {
 
             {/* Generate button */}
             <button
-              onClick={handleGenerate}
+              onClick={() => router && setGenerated(true)}
               disabled={!router}
               style={{
                 marginTop: "0.25rem",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                 padding: "0.7rem 1.5rem", borderRadius: 9,
-                background: router ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)",
+                background: router
+                  ? "linear-gradient(135deg,#06b6d4,#0284c7)"
+                  : "rgba(255,255,255,0.06)",
                 border: "none",
                 color: router ? "white" : "var(--isp-text-muted)",
-                fontWeight: 700, fontSize: "0.9rem",
-                cursor: router ? "pointer" : "not-allowed",
+                fontWeight: 700, fontSize: "0.9rem", cursor: router ? "pointer" : "not-allowed",
                 fontFamily: "inherit",
                 boxShadow: router ? "0 4px 18px rgba(6,182,212,0.35)" : "none",
                 transition: "all 0.2s",
               }}
             >
               {router
-                ? <><Zap size={15} /> Generate &amp; Download Script</>
+                ? <><Zap size={15} /> Generate Commands</>
                 : <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Select a router first</>
               }
             </button>
@@ -534,41 +286,105 @@ export default function PPPoE() {
             {!router && !loadingRouters && routers.length === 0 && (
               <p style={{ margin: 0, fontSize: "0.78rem", color: "#f87171", textAlign: "center" }}>
                 No routers found.{" "}
-                <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600 }}>Add a router first →</a>
+                <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600 }}>
+                  Add a router first →
+                </a>
               </p>
             )}
           </div>
         </div>
 
-        {/* ── Generated scripts ── */}
-        {scripts && (
-          <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: "1rem", animation: "fadeIn 0.2s ease" }}>
-            <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}} @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+        {/* ── Command steps (shown after generate) ── */}
+        {generated && router && (
+          <div style={{
+            maxWidth: 720,
+            background: "var(--isp-card)",
+            border: "1px solid var(--isp-border-subtle)",
+            borderRadius: 14, overflow: "hidden",
+            animation: "fadeIn 0.2s ease",
+          }}>
 
+            {/* Header */}
             <div style={{
-              display: "flex", alignItems: "center", gap: "0.5rem",
-              fontSize: "0.8rem", color: "#4ade80",
+              padding: "0.875rem 1.375rem",
+              background: "rgba(6,182,212,0.05)",
+              borderBottom: "1px solid rgba(6,182,212,0.12)",
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem",
             }}>
-              <CheckCircle2 size={14} />
-              <span style={{ fontWeight: 600 }}>2 files downloaded.</span>
-              <span style={{ color: "var(--isp-text-muted)" }}>Upload the config file to the router, then run the import script in the terminal.</span>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                <Terminal size={16} style={{ color: "#06b6d4" }} />
+                <span style={{ fontWeight: 700, fontSize: "0.9rem", color: "var(--isp-text)" }}>
+                  MikroTik Terminal Commands
+                </span>
+                <span style={{
+                  fontSize: "0.68rem", fontWeight: 700, color: "#06b6d4",
+                  background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.28)",
+                  borderRadius: 5, padding: "0.1rem 0.45rem",
+                }}>
+                  {router.name}
+                </span>
+              </div>
+              {/* Download config file directly */}
+              <a
+                href={downloadUrl}
+                download={configFile}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                  padding: "0.35rem 0.875rem", borderRadius: 7,
+                  background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  color: "var(--isp-text-muted)",
+                  fontWeight: 600, fontSize: "0.74rem",
+                  textDecoration: "none", transition: "all 0.15s",
+                }}
+              >
+                <Download size={12} /> Download .rsc
+              </a>
             </div>
 
-            {/* File 1 — Configuration */}
-            <ScriptBlock
-              code={scripts.config}
-              filename={scripts.configFilename}
-              accent="#22d3ee"
-              label={<><Upload size={11} /> File 1 — Configuration script (upload to router via Winbox Files / FTP)</>}
-            />
+            {/* Steps */}
+            <div style={{ padding: "1.25rem 1.375rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+              <CmdBlock
+                step={1}
+                title="Fetch the configuration script onto the router"
+                note="Open the MikroTik terminal (Winbox → New Terminal) and paste this command. The router will download the config file from the server."
+                cmd={fetchCmd}
+              />
+              <CmdBlock
+                step={2}
+                title="Import and apply the configuration"
+                note="After the file is downloaded, run this to apply it. You will see 'Script file loaded and executed successfully' when done."
+                cmd={importCmd}
+              />
 
-            {/* File 2 — Importer */}
-            <ScriptBlock
-              code={scripts.importer}
-              filename={scripts.importFilename}
-              accent="#a78bfa"
-              label={<><TerminalSquare size={11} /> File 2 — Import runner (paste into MikroTik terminal)</>}
-            />
+              {/* Verify section */}
+              <div style={{
+                background: "rgba(74,222,128,0.05)",
+                border: "1px solid rgba(74,222,128,0.15)",
+                borderRadius: 10, padding: "0.875rem 1rem",
+              }}>
+                <p style={{ margin: "0 0 0.625rem", fontSize: "0.78rem", fontWeight: 700, color: "#4ade80" }}>
+                  Step 3 — Verify
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
+                  {[
+                    "/interface pppoe-server server print",
+                    "/ppp profile print",
+                    mode === "pppoe_over_hotspot" ? "/ip hotspot print" : "/ip pool print",
+                  ].map(cmd => (
+                    <div key={cmd} style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      background: "#060b12", borderRadius: 7, padding: "0.5rem 0.875rem", gap: "0.75rem",
+                    }}>
+                      <code style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#86efac", flex: 1 }}>
+                        {cmd}
+                      </code>
+                      <CopyBtn text={cmd} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
