@@ -159,8 +159,8 @@ export default function SelfInstall() {
     if (match) setActiveRouterId(match.id);
   }, [routers, phase, nextSlug, activeRouterId]);
 
-  /* ── Generate: show commands immediately, create record in background ── */
-  const handleGenerate = () => {
+  /* ── Generate: show commands + create router record via server endpoint ── */
+  const handleGenerate = async () => {
     /* If a pending router already exists, just use it immediately */
     if (pendingRouter) {
       setActiveRouterId(pendingRouter.id);
@@ -168,30 +168,25 @@ export default function SelfInstall() {
       return;
     }
 
-    /* Show commands now — don't wait for DB */
+    /* Show commands immediately so the UI is responsive */
     setPhase("generated");
 
-    /* Create record asynchronously so the .rsc endpoint can serve it */
-    const autoSecret = btoa(`${ADMIN_ID}:${Date.now()}:ocholanet`)
-      .replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
-    supabase.from("isp_routers").insert({
-      admin_id:         ADMIN_ID,
-      name:             nextName,
-      host:             "",
-      router_username:  "admin",
-      router_secret:    autoSecret,
-      bridge_interface: "bridge",
-      bridge_ip:        "192.168.88.1",
-      status:           "offline",
-    }).select("id").single()
-      .then(({ data }) => {
-        if (data) setActiveRouterId((data as { id: number }).id);
-        qc.invalidateQueries({ queryKey: ["isp_routers_si4", ADMIN_ID] });
-      })
-      .catch(() => {
-        /* If insert fails, router will be auto-created by scripts endpoint when MikroTik fetches */
-        qc.invalidateQueries({ queryKey: ["isp_routers_si4", ADMIN_ID] });
+    /* Call the server-side ensure endpoint (bypasses Supabase RLS) */
+    try {
+      const res = await fetch("/api/admin/router/ensure", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ adminId: ADMIN_ID, routerName: nextName }),
       });
+      const json = await res.json() as { ok: boolean; router?: { id: number } };
+      if (json.ok && json.router?.id) {
+        setActiveRouterId(json.router.id);
+      }
+    } catch {
+      /* If the endpoint fails, the scripts-route will auto-create when MikroTik fetches */
+    } finally {
+      qc.invalidateQueries({ queryKey: ["isp_routers_si4", ADMIN_ID] });
+    }
   };
 
   const isReconfigure = !!reconfigureId;

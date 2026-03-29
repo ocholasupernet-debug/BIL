@@ -254,40 +254,66 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         ? `${adminSubdomain}${routers.length + 1}`
         : slug;   // use the slug as the router name (e.g. "come1")
 
-      try {
-        const createRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/isp_routers`,
-          {
-            method: "POST",
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${SUPABASE_KEY}`,
-              "Content-Type": "application/json",
-              Prefer: "return=representation",
-            },
-            body: JSON.stringify({
-              admin_id:         adminId,
-              name:             autoName,
-              host:             "",
-              router_username:  "admin",
-              router_secret:    autoSecret,
-              bridge_interface: "bridge",
-              bridge_ip:        "192.168.88.1",
-              status:           "offline",
-            }),
+      let createError = "";
+      /* Try service-role key first (bypasses RLS), then anon key */
+      const serviceKey = process.env.SUPABASE_SERVICE_KEY ?? "";
+      const keysToTry  = serviceKey ? [serviceKey, SUPABASE_KEY].filter(Boolean) : [SUPABASE_KEY];
+      for (const key of keysToTry) {
+        if (router_row) break;
+        try {
+          const createRes = await fetch(
+            `${SUPABASE_URL}/rest/v1/isp_routers`,
+            {
+              method: "POST",
+              headers: {
+                apikey:          key,
+                Authorization:   `Bearer ${key}`,
+                "Content-Type":  "application/json",
+                Prefer:          "return=representation",
+              },
+              body: JSON.stringify({
+                admin_id:         adminId,
+                name:             autoName,
+                host:             "",
+                router_username:  "admin",
+                router_secret:    autoSecret,
+                bridge_interface: "bridge",
+                bridge_ip:        "192.168.88.1",
+                status:           "offline",
+              }),
+            }
+          );
+          const body = await createRes.text();
+          if (createRes.ok) {
+            try { const rows = JSON.parse(body) as DbRouter[]; router_row = rows[0]; } catch {}
+          } else if (createRes.status === 409) {
+            /* Row already exists — race condition; try to fetch it */
+            const existing = await sbGet<DbRouter>(
+              `isp_routers?admin_id=eq.${adminId}&name=eq.${encodeURIComponent(autoName)}&limit=1`
+            ).catch(() => []);
+            if (existing.length > 0) router_row = existing[0];
+          } else {
+            createError = `HTTP ${createRes.status}: ${body.slice(0, 200)}`;
           }
-        );
-        if (createRes.ok) {
-          const rows = await createRes.json() as DbRouter[];
-          router_row = rows[0];
+        } catch (e) {
+          createError = String(e);
         }
-      } catch { /* fall through to 404 below */ }
+      }
     }
 
     if (!router_row) {
+      const serviceSet = !!process.env.SUPABASE_SERVICE_KEY;
       res.status(404).send(
         `# Error: no router found for admin "${adminSubdomain}" matching slug "${slug}"\n` +
-        `# Available slugs: ${routers.map(r => slugify(r.name)).join(", ") || "(none)"}\n`
+        `# Available slugs: ${routers.map(r => slugify(r.name)).join(", ") || "(none)"}\n` +
+        `#\n` +
+        `# Auto-create failed. Supabase INSERT returned:\n` +
+        `#   ${(createError || "unknown error — check server logs").replace(/\n/g, "\n#   ")}\n` +
+        `#\n` +
+        (!serviceSet
+          ? `# HINT: Set SUPABASE_SERVICE_KEY (service_role key) in the server .env\n` +
+            `#       to allow the API to create router records bypassing Row-Level Security.\n`
+          : `# Service-role key IS set — check Supabase logs for the error above.\n`)
       );
       return;
     }
