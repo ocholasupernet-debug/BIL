@@ -228,7 +228,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
 
     /* "mainhotspot" always serves the NEXT router that needs configuring:
        1. First router that hasn't connected yet (pending)
-       2. If all are installed → auto-create the next numbered one */
+       2. If all are installed → auto-create the next numbered one
+       Any other slug → find router by name, or auto-create on-the-fly */
     let router_row: DbRouter | undefined;
     if (slug === "mainhotspot" || slug === "main-hotspot") {
       router_row = routers.find(isPending) ?? routers[0];
@@ -237,16 +238,22 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       router_row = routers.find(r => slugify(r.name) === slug);
     }
 
-    /* ── Auto-create when mainhotspot is requested and no pending router found ──
-       Names use subdomain + sequential number: come1, come2, … */
-    if (!router_row && (slug === "mainhotspot" || slug === "main-hotspot")) {
+    /* ── Auto-create when no matching router found ──
+       • mainhotspot  → name = ${adminSubdomain}${N}
+       • specific slug (e.g. come1) → name = that slug exactly
+         (handles the case where the frontend DB insert failed silently) */
+    if (!router_row) {
       const autoSecret = Buffer
         .from(`${adminId}:${Date.now()}:ocholanet`)
         .toString("base64")
         .replace(/[^a-zA-Z0-9]/g, "")
         .slice(0, 48);
-      const nextNum  = routers.length + 1;
-      const autoName = `${adminSubdomain}${nextNum}`;
+
+      const isMainHotspot = slug === "mainhotspot" || slug === "main-hotspot";
+      const autoName = isMainHotspot
+        ? `${adminSubdomain}${routers.length + 1}`
+        : slug;   // use the slug as the router name (e.g. "come1")
+
       try {
         const createRes = await fetch(
           `${SUPABASE_URL}/rest/v1/isp_routers`,
@@ -274,7 +281,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
           const rows = await createRes.json() as DbRouter[];
           router_row = rows[0];
         }
-      } catch { /* proceed with null — will 404 below */ }
+      } catch { /* fall through to 404 below */ }
     }
 
     if (!router_row) {
