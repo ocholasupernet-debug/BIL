@@ -21,10 +21,15 @@ export default function AdminRegister() {
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
 
-  /* availability */
-  const [checking, setChecking] = useState(false);
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* company availability */
+  const [checkingCompany, setCheckingCompany] = useState(false);
+  const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
+  const companyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* phone availability */
+  const [checkingPhone, setCheckingPhone] = useState(false);
+  const [phoneAvailable, setPhoneAvailable] = useState<boolean | null>(null);
+  const phoneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* submit */
   const [loading, setLoading] = useState(false);
@@ -33,33 +38,54 @@ export default function AdminRegister() {
   const [serverErr, setServerErr] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  /* ── live availability check ── */
+  /* ── live company availability check ── */
   useEffect(() => {
-    setAvailable(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setCompanyAvailable(null);
+    if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
     if (company.trim().length < 2) return;
 
-    debounceRef.current = setTimeout(async () => {
-      setChecking(true);
+    companyDebounceRef.current = setTimeout(async () => {
+      setCheckingCompany(true);
       const slug = slugify(company.trim());
       const { data } = await supabase
         .from("isp_admins")
         .select("id")
         .ilike("subdomain", slug)
         .limit(1);
-      setChecking(false);
-      setAvailable(!data || data.length === 0);
+      setCheckingCompany(false);
+      setCompanyAvailable(!data || data.length === 0);
     }, 600);
 
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    return () => { if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current); };
   }, [company]);
+
+  /* ── live phone availability check ── */
+  useEffect(() => {
+    setPhoneAvailable(null);
+    if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current);
+    if (phone.trim().length < 7) return;
+
+    phoneDebounceRef.current = setTimeout(async () => {
+      setCheckingPhone(true);
+      const { data } = await supabase
+        .from("isp_admins")
+        .select("id")
+        .eq("phone", phone.trim())
+        .limit(1);
+      setCheckingPhone(false);
+      setPhoneAvailable(!data || data.length === 0);
+    }, 600);
+
+    return () => { if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current); };
+  }, [phone]);
 
   /* ── validation ── */
   const validate = () => {
     const e: Record<string, string> = {};
     if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
-    if (available === false) e.company = "This company name is already taken";
+    if (companyAvailable === false) e.company = "This company name is already taken";
     if (!phone.trim()) e.phone = "Mobile number is required";
+    if (phoneAvailable === false) e.phone = "This phone number is already registered";
     return e;
   };
 
@@ -89,7 +115,7 @@ export default function AdminRegister() {
     } catch (err) {
       const msg = extractMsg(err);
       if (msg.includes("duplicate") || msg.includes("unique")) {
-        setServerErr("This company name or phone is already registered.");
+        setServerErr("This company name or phone number is already registered. Please use different details.");
       } else {
         setServerErr(msg || "Registration failed. Please try again.");
       }
@@ -97,6 +123,12 @@ export default function AdminRegister() {
       setLoading(false);
     }
   };
+
+  const canSubmit = !loading
+    && companyAvailable !== false
+    && phoneAvailable !== false
+    && !checkingCompany
+    && !checkingPhone;
 
   /* ══════════ Success ══════════ */
   if (success) {
@@ -147,7 +179,6 @@ export default function AdminRegister() {
       className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
       style={{ background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)" }}
     >
-      {/* decorative blobs */}
       <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full opacity-30 blur-3xl pointer-events-none"
            style={{ background: "radial-gradient(circle,#7c3aed,transparent)" }} />
       <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full opacity-20 blur-3xl pointer-events-none"
@@ -155,7 +186,6 @@ export default function AdminRegister() {
 
       <div className="w-full max-w-sm relative z-10">
 
-        {/* Logo */}
         <div className="flex flex-col items-center mb-10">
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl mb-4"
                style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5,#06b6d4)" }}>
@@ -166,7 +196,6 @@ export default function AdminRegister() {
         </div>
 
         <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
-          {/* top accent bar */}
           <div className="h-1 w-full" style={{ background: "linear-gradient(90deg,#7c3aed,#4f46e5,#06b6d4)" }} />
 
           <form onSubmit={handleSubmit} className="p-8 space-y-5">
@@ -182,26 +211,24 @@ export default function AdminRegister() {
                   type="text"
                   value={company}
                   onChange={e => setCompany(e.target.value.toLowerCase())}
-                  placeholder="e.g. Ochola Networks"
+                  placeholder="e.g. ochola networks"
                   autoComplete="organization"
                   className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
                     errors.company ? "border-red-500/60 focus:ring-red-500" :
-                    available === true ? "border-emerald-500/60 focus:ring-emerald-500" :
-                    available === false ? "border-red-500/60 focus:ring-red-500" :
+                    companyAvailable === true ? "border-emerald-500/60 focus:ring-emerald-500" :
+                    companyAvailable === false ? "border-red-500/60 focus:ring-red-500" :
                     "border-white/10 focus:border-violet-500 focus:ring-violet-500"
                   }`}
                 />
-                {/* status icon */}
                 <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
-                  {checking && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
-                  {!checking && available === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                  {!checking && available === false && <XCircle className="w-4 h-4 text-red-400" />}
+                  {checkingCompany && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
+                  {!checkingCompany && companyAvailable === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                  {!checkingCompany && companyAvailable === false && <XCircle className="w-4 h-4 text-red-400" />}
                 </div>
               </div>
-              {/* availability badge */}
-              {!errors.company && company.trim().length >= 2 && !checking && available !== null && (
-                <p className={`text-xs mt-1.5 font-medium ${available ? "text-emerald-400" : "text-red-400"}`}>
-                  {available ? "✓ Available" : "✗ Already taken"}
+              {!errors.company && company.trim().length >= 2 && !checkingCompany && companyAvailable !== null && (
+                <p className={`text-xs mt-1.5 font-medium ${companyAvailable ? "text-emerald-400" : "text-red-400"}`}>
+                  {companyAvailable ? "✓ Available" : "✗ Already taken — try a different name"}
                 </p>
               )}
               {errors.company && <p className="text-xs text-red-400 mt-1">{errors.company}</p>}
@@ -219,9 +246,24 @@ export default function AdminRegister() {
                   value={phone}
                   onChange={e => setPhone(e.target.value)}
                   placeholder="+254 700 000 000"
-                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-4 text-white placeholder:text-slate-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all text-sm ${errors.phone ? "border-red-500/60" : "border-white/10"}`}
+                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
+                    errors.phone ? "border-red-500/60 focus:ring-red-500" :
+                    phoneAvailable === true ? "border-emerald-500/60 focus:ring-emerald-500" :
+                    phoneAvailable === false ? "border-red-500/60 focus:ring-red-500" :
+                    "border-white/10 focus:border-violet-500 focus:ring-violet-500"
+                  }`}
                 />
+                <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
+                  {checkingPhone && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
+                  {!checkingPhone && phoneAvailable === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                  {!checkingPhone && phoneAvailable === false && <XCircle className="w-4 h-4 text-red-400" />}
+                </div>
               </div>
+              {!errors.phone && phone.trim().length >= 7 && !checkingPhone && phoneAvailable !== null && (
+                <p className={`text-xs mt-1.5 font-medium ${phoneAvailable ? "text-emerald-400" : "text-red-400"}`}>
+                  {phoneAvailable ? "✓ Phone available" : "✗ Phone already registered — try signing in instead"}
+                </p>
+              )}
               {errors.phone && <p className="text-xs text-red-400 mt-1">{errors.phone}</p>}
             </div>
 
@@ -236,7 +278,7 @@ export default function AdminRegister() {
             {/* ── Submit ── */}
             <button
               type="submit"
-              disabled={loading || available === false || checking}
+              disabled={!canSubmit}
               className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-60 group mt-2"
               style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)" }}
             >
