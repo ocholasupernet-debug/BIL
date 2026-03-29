@@ -59,6 +59,14 @@ function ros(cmd: string): string {
   return cmd.replace(/\s{2,}/g, " ").trim();
 }
 
+/* ── Safe fetch: wraps /tool fetch in :do { } on-error={} so a
+   connection timeout or 4xx/5xx during import doesn't kill the script.
+   The file simply won't be updated if the fetch fails, which is
+   acceptable — prior versions on flash remain intact. ── */
+function safeFetch(url: string, dst: string): string {
+  return `:do { /tool fetch url="${url}" dst-path=${dst} mode=https } on-error={}`;
+}
+
 /* ── Safe remove: converts "/MENU remove [find COND]" into
    ":foreach x in=[/MENU find COND] do={ /MENU remove $x }"
    The foreach body only runs when items exist, so RouterOS never
@@ -249,7 +257,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        Otherwise generate one, persist it to Supabase, then use it.
     ── */
     let routerSecret = router_row.router_secret;
-    if (!routerSecret) {
+    /* Treat missing, too-short, or obvious placeholder secrets as invalid
+       and auto-generate a proper 40-char alphanumeric token. */
+    const WEAK = !routerSecret || routerSecret.length < 20 || /^(admin|password|secret|test|default)$/i.test(routerSecret);
+    if (WEAK) {
       const raw = `${adminId}:${router_row.id}:ocholanet:${Date.now()}`;
       routerSecret = Buffer.from(raw).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
       /* Persist to DB (best-effort, don't fail the request if this errors) */
@@ -283,7 +294,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# ===================================================`,
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
-      ros(`/tool fetch url="${scriptBaseUrl}/${rawName}" dst-path=${routerSlug}.rsc mode=https`),
+      safeFetch(`${scriptBaseUrl}/${rawName}`, `${routerSlug}.rsc`),
       ``,
       `# === System Identity ===`,
       ros(`/system identity set name="${companyName}-${routerName}"`),
@@ -322,34 +333,34 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /file make-dir flash/hotspot/xml } on-error={}`,
       ``,
       `# === Hotspot Static Assets (CSS / JS libraries / images) ===`,
-      ros(`/tool fetch url="${portalBase}/hotspot/css/style.css" dst-path=flash/hotspot/css/style.css mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/img/user.svg" dst-path=flash/hotspot/img/user.svg mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/img/password.svg" dst-path=flash/hotspot/img/password.svg mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/favicon.ico" dst-path=flash/hotspot/favicon.ico mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/md5.js" dst-path=flash/hotspot/md5.js mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/sweetalert2.js" dst-path=flash/hotspot/sweetalert2.js mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/tailwind.js" dst-path=flash/hotspot/tailwind.js mode=https`),
+      safeFetch(`${portalBase}/hotspot/css/style.css`,    `flash/hotspot/css/style.css`),
+      safeFetch(`${portalBase}/hotspot/img/user.svg`,     `flash/hotspot/img/user.svg`),
+      safeFetch(`${portalBase}/hotspot/img/password.svg`, `flash/hotspot/img/password.svg`),
+      safeFetch(`${portalBase}/hotspot/favicon.ico`,      `flash/hotspot/favicon.ico`),
+      safeFetch(`${portalBase}/hotspot/md5.js`,           `flash/hotspot/md5.js`),
+      safeFetch(`${portalBase}/hotspot/sweetalert2.js`,   `flash/hotspot/sweetalert2.js`),
+      safeFetch(`${portalBase}/hotspot/tailwind.js`,      `flash/hotspot/tailwind.js`),
       ``,
       `# === Hotspot HTML Pages ===`,
-      ros(`/tool fetch url="${portalBase}/hotspot/login.html" dst-path=flash/hotspot/login.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/alogin.html" dst-path=flash/hotspot/alogin.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/logout.html" dst-path=flash/hotspot/logout.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/status.html" dst-path=flash/hotspot/status.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/rlogin.html" dst-path=flash/hotspot/rlogin.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/radvert.html" dst-path=flash/hotspot/radvert.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/redirect.html" dst-path=flash/hotspot/redirect.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/error.html" dst-path=flash/hotspot/error.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/errors.txt" dst-path=flash/hotspot/errors.txt mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/api.json" dst-path=flash/hotspot/api.json mode=https`),
+      safeFetch(`${portalBase}/hotspot/login.html`,    `flash/hotspot/login.html`),
+      safeFetch(`${portalBase}/hotspot/alogin.html`,   `flash/hotspot/alogin.html`),
+      safeFetch(`${portalBase}/hotspot/logout.html`,   `flash/hotspot/logout.html`),
+      safeFetch(`${portalBase}/hotspot/status.html`,   `flash/hotspot/status.html`),
+      safeFetch(`${portalBase}/hotspot/rlogin.html`,   `flash/hotspot/rlogin.html`),
+      safeFetch(`${portalBase}/hotspot/radvert.html`,  `flash/hotspot/radvert.html`),
+      safeFetch(`${portalBase}/hotspot/redirect.html`, `flash/hotspot/redirect.html`),
+      safeFetch(`${portalBase}/hotspot/error.html`,    `flash/hotspot/error.html`),
+      safeFetch(`${portalBase}/hotspot/errors.txt`,    `flash/hotspot/errors.txt`),
+      safeFetch(`${portalBase}/hotspot/api.json`,      `flash/hotspot/api.json`),
       ``,
       `# === Hotspot XML Templates ===`,
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/login.html" dst-path=flash/hotspot/xml/login.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/alogin.html" dst-path=flash/hotspot/xml/alogin.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/logout.html" dst-path=flash/hotspot/xml/logout.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/flogout.html" dst-path=flash/hotspot/xml/flogout.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/rlogin.html" dst-path=flash/hotspot/xml/rlogin.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/error.html" dst-path=flash/hotspot/xml/error.html mode=https`),
-      ros(`/tool fetch url="${portalBase}/hotspot/xml/WISPAP.xsd" dst-path=flash/hotspot/xml/WISPAP.xsd mode=https`),
+      safeFetch(`${portalBase}/hotspot/xml/login.html`,   `flash/hotspot/xml/login.html`),
+      safeFetch(`${portalBase}/hotspot/xml/alogin.html`,  `flash/hotspot/xml/alogin.html`),
+      safeFetch(`${portalBase}/hotspot/xml/logout.html`,  `flash/hotspot/xml/logout.html`),
+      safeFetch(`${portalBase}/hotspot/xml/flogout.html`, `flash/hotspot/xml/flogout.html`),
+      safeFetch(`${portalBase}/hotspot/xml/rlogin.html`,  `flash/hotspot/xml/rlogin.html`),
+      safeFetch(`${portalBase}/hotspot/xml/error.html`,   `flash/hotspot/xml/error.html`),
+      safeFetch(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `flash/hotspot/xml/WISPAP.xsd`),
       ``,
       `# === NAT (Captive Portal Redirect) ===`,
       safeRm(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
