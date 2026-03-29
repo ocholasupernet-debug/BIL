@@ -35,9 +35,13 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "8080",
         SERVE_STATIC: "true",
-        VITE_SUPABASE_URL:    process.env.VITE_SUPABASE_URL    || "",
-        VITE_SUPABASE_KEY:    process.env.VITE_SUPABASE_KEY    || "",
-        SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || "",
+        VITE_SUPABASE_URL:    process.env.VITE_SUPABASE_URL || "",
+        VITE_SUPABASE_KEY:    process.env.VITE_SUPABASE_KEY || "",
+        /* Only pass SUPABASE_SERVICE_KEY when it is actually set in .env,
+           otherwise leave it undefined so the API falls back to VITE_SUPABASE_KEY */
+        ...(process.env.SUPABASE_SERVICE_KEY
+          ? { SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY }
+          : {}),
       },
 
       error_file: "./logs/api-error.log",

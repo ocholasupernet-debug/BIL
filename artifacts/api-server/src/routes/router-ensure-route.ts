@@ -78,12 +78,14 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
 
   /* ── 2. Try INSERT (service-role key first, then anon key) ── */
   const keysToTry = SERVICE_KEY ? [SERVICE_KEY, ANON_KEY].filter(Boolean) : [ANON_KEY];
+  const secret = makeSecret(adminId);
   const payload = {
     admin_id:         adminId,
     name,
     host:             "",
     router_username:  "admin",
-    router_secret:    makeSecret(adminId),
+    router_secret:    secret,
+    token:            secret,   /* NOT NULL column — same value as router_secret */
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.88.1",
     status:           "offline",

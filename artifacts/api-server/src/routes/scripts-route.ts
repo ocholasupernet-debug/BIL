@@ -4,8 +4,9 @@ import { ensureClientCert } from "./vpn-route.js";
 
 const router: IRouter = Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY ?? "";
+/* Use || not ?? so an empty-string env var falls through to the next option */
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
 /* ── Supabase REST helper ── */
 async function sbGet<T>(path: string): Promise<T[]> {
@@ -277,6 +278,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
                 host:             "",
                 router_username:  "admin",
                 router_secret:    autoSecret,
+                token:            autoSecret,  /* NOT NULL column */
                 bridge_interface: "bridge",
                 bridge_ip:        "192.168.88.1",
                 status:           "offline",
