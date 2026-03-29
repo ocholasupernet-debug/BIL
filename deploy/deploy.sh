@@ -8,12 +8,10 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# CyberPanel serves static files from public_html/.
-# Auto-detect the path: try common locations.
-if   [ -d "/home/isplatty.org/public_html" ];    then PUBLIC_HTML="/home/isplatty.org/public_html"
-elif [ -d "/home/ocholasupernet/public_html" ];   then PUBLIC_HTML="/home/ocholasupernet/public_html"
+# CyberPanel serves static files from public_html/
+if   [ -d "/home/isplatty.org/public_html" ];  then PUBLIC_HTML="/home/isplatty.org/public_html"
+elif [ -d "/home/ocholasupernet/public_html" ]; then PUBLIC_HTML="/home/ocholasupernet/public_html"
 else
-  # Fallback: look for any public_html containing our index.html
   PUBLIC_HTML=$(find /home -maxdepth 3 -name "public_html" -type d 2>/dev/null | head -1)
 fi
 
@@ -23,20 +21,27 @@ echo "  Dir:         $PROJECT_DIR"
 echo "  public_html: ${PUBLIC_HTML:-NOT FOUND}"
 echo "══════════════════════════════════════════"
 
-# 1. Force-pull latest code from GitHub
+# 1. Force pull latest code (discard any local changes)
 echo "[1/6] Pulling latest from GitHub..."
 git fetch --all
 git reset --hard origin/main
-echo "      → $(git log -1 --format='%h %s')"
+echo "      → Now on: $(git log -1 --format='%h %s')"
 
-# 2. Install dependencies
+# 2. Install dependencies (no frozen-lockfile so it never blocks)
 echo "[2/6] Installing dependencies..."
 pnpm install --no-frozen-lockfile
 
-# 3. Build the frontend
+# 3. Build the frontend (VPS config — no Replit plugins)
+#    Source .env so VITE_SUPABASE_URL / VITE_SUPABASE_KEY are embedded at build time
 echo "[3/6] Building frontend..."
+if [ -f "$PROJECT_DIR/.env" ]; then
+  set -a; source "$PROJECT_DIR/.env"; set +a
+  echo "      ✓ Sourced .env (VITE_SUPABASE_URL=${VITE_SUPABASE_URL:+set})"
+else
+  echo "      ⚠ No .env found — Supabase env vars may be missing"
+fi
 cd "$PROJECT_DIR/artifacts/ochola-supernet"
-pnpm run build:vps
+BASE_PATH="/" pnpm run build:vps
 cd "$PROJECT_DIR"
 
 # 4. Build the API server
@@ -53,16 +58,16 @@ if [ -n "$PUBLIC_HTML" ]; then
     "$PUBLIC_HTML/"
   echo "      ✓ Synced to $PUBLIC_HTML"
 else
-  echo "      ⚠ public_html not found — skipping rsync (check the path manually)"
+  echo "      ⚠ public_html not found — skipping rsync"
 fi
 
-# 6. Restart API via PM2 (production mode — LiteSpeed serves static files)
+# 6. Restart API via PM2
 echo "[6/6] Restarting PM2..."
 mkdir -p logs
 if pm2 list | grep -q "ocholanet-api"; then
-  pm2 reload ecosystem.config.cjs --env production
+  pm2 reload ecosystem.config.cjs --env standalone
 else
-  pm2 start ecosystem.config.cjs --env production
+  pm2 start ecosystem.config.cjs --env standalone
   pm2 save
 fi
 

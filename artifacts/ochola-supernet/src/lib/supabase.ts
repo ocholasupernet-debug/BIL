@@ -1,9 +1,20 @@
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY as string;
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || "";
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_KEY as string) || "";
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+function makeClient() {
+  try {
+    if (SUPABASE_URL && SUPABASE_KEY) return createClient(SUPABASE_URL, SUPABASE_KEY);
+    console.warn("[supabase] VITE_SUPABASE_URL / VITE_SUPABASE_KEY not set — Supabase calls will be skipped.");
+    return createClient("https://placeholder.supabase.co", "placeholder-anon-key");
+  } catch (e) {
+    console.warn("[supabase] createClient failed:", e);
+    return createClient("https://placeholder.supabase.co", "placeholder-anon-key");
+  }
+}
+
+export const supabase = makeClient();
 
 /* ─── Auth helpers ─── */
 function _getStoredAdminId(): number {
