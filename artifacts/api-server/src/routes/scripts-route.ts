@@ -386,8 +386,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
       ``,
       `# === OVPN Management Tunnel ===`,
-      safeFetch(`${portalBase}/api/vpn/ca.crt`, `flash/ca.crt`),
-      `:do { /certificate import file-name=flash/ca.crt } on-error={}`,
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
       ros(`/interface ovpn-client add name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip user="${routerSlug}" password="${routerSecret}" cipher=aes256 auth=sha1 verify-server-certificate=no add-default-route=no disabled=no`),
       ``,
