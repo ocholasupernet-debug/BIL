@@ -31,13 +31,17 @@ interface ProbeResult {
   version?: string;
   model?: string;
   boardName?: string;
+  serial?: string;
+  firmware?: string;
   identity?: string;
   uptime?: string;
   cpuLoad?: number;
   freeMem?: number;
   totalMem?: number;
   ipAddresses?: Array<{ address: string; interface: string }>;
+  interfaces?: Array<{ name: string; type: string; running: boolean }>;
   connectedVia?: string;
+  logs?: string[];
   error?: string;
 }
 
@@ -125,6 +129,15 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       });
       const data = await res.json() as ProbeResult;
       setProbe(data);
+      /* ── Auto-save model/version/host into DB after successful probe ── */
+      if (data.ok) {
+        const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+        if (data.model)   patch.model       = data.model;
+        if (data.version) patch.ros_version = data.version;
+        if (!router.host && testHost) patch.host = testHost;
+        await supabase.from("isp_routers").update(patch).eq("id", router.id);
+        onSaved();
+      }
     } catch (e) {
       setProbe({ ok: false, error: String(e) });
     } finally {
@@ -296,13 +309,34 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
               )}
             </div>
           ) : (
-            <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
-              <AlertCircle size={14} style={{ color: "#f87171", flexShrink: 0, marginTop: "0.1rem" }} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: "0.83rem", color: "#f87171", marginBottom: "0.3rem" }}>Connection failed</div>
-                <div style={{ fontSize: "0.77rem", color: "#fca5a5", lineHeight: 1.6 }}>{probe.error}</div>
-                <div style={{ marginTop: "0.5rem", fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
-                  Check: API enabled (IP → Services → api, port 8728) · Firewall allows port 8728 · Correct credentials
+            <div>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", marginBottom: "0.875rem" }}>
+                <AlertCircle size={14} style={{ color: "#f87171", flexShrink: 0, marginTop: "0.1rem" }} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: "0.83rem", color: "#f87171", marginBottom: "0.3rem" }}>Connection failed</div>
+                  <div style={{ fontSize: "0.77rem", color: "#fca5a5", lineHeight: 1.6 }}>{probe.error}</div>
+                </div>
+              </div>
+              {/* ── RouterOS setup commands ── */}
+              <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 8, padding: "0.75rem 0.875rem" }}>
+                <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#fbbf24", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.6rem" }}>
+                  Run these commands in your router terminal to enable API access:
+                </div>
+                {[
+                  "/ip service set api enabled=yes",
+                  `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="OcholaNet API" place-before=0`,
+                  `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${router.bridge_ip ?? "192.168.88.0"}/24 action=accept comment="OcholaNet API" place-before=0`,
+                ].map((cmd, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.375rem" }}>
+                    <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.7rem", color: "#a3e635", background: "rgba(0,0,0,0.25)", padding: "0.25rem 0.5rem", borderRadius: 5, wordBreak: "break-all" }}>{cmd}</code>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(cmd)}
+                      style={{ flexShrink: 0, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "0.65rem", padding: "0.2rem 0.5rem", fontFamily: "inherit" }}
+                    >copy</button>
+                  </div>
+                ))}
+                <div style={{ marginTop: "0.5rem", fontSize: "0.68rem", color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
+                  Or re-run the install script — API rules are now added automatically in step 6.
                 </div>
               </div>
             </div>
