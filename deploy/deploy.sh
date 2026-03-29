@@ -63,9 +63,11 @@ fi
 
 # 6. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
-#    ecosystem.config.cjs reads process.env for those vars → --update-env applies them.
+#    Explicitly unset SUPABASE_SERVICE_KEY so PM2 doesn't inherit a stale empty-string
+#    value from a previous deploy — ecosystem.config.cjs only injects it when non-empty.
 echo "[6/6] Restarting PM2..."
 mkdir -p logs
+unset SUPABASE_SERVICE_KEY
 if pm2 list | grep -q "ocholanet-api"; then
   pm2 reload ecosystem.config.cjs --env standalone --update-env
 else

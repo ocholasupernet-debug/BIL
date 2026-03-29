@@ -658,7 +658,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
    Looks up the router by its router_secret token and marks it online.
 ═══════════════════════════════════════════════════════════════ */
 const HB_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-const HB_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY ?? "";
+const HB_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const token = (req.params.token ?? "").trim();
