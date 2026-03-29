@@ -4,8 +4,14 @@ import { ensureClientCert } from "./vpn-route.js";
 
 const router: IRouter = Router();
 
-/* Use || not ?? so an empty-string env var falls through to the next option */
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+/* Prefer VITE_SUPABASE_URL (the REST API base URL). SUPABASE_URL may be a bare
+   DB hostname without https:// — so always fall back to VITE_ first. */
+function resolveUrl(): string {
+  const raw = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+  if (!raw) return "";
+  return raw.startsWith("http") ? raw : `https://${raw}`;
+}
+const SUPABASE_URL = resolveUrl();
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
 /* ── Supabase REST helper ── */

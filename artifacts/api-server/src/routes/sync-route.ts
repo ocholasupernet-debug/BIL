@@ -574,11 +574,40 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
    Reads all interfaces and current bridge-port memberships.
    Body: { host, username, password }
 ═══════════════════════════════════════════════════════════════ */
+/* Returns true if the IP is a LAN address that can NEVER be reached from the
+   cloud server. We intentionally exclude 10.x.x.x because VPN tunnels commonly
+   use that range (e.g. 10.8.0.2 for OpenVPN clients). */
+function isLanOnlyIp(ip: string): boolean {
+  if (!ip) return false;
+  return (
+    /^192\.168\./.test(ip) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+    /^127\./.test(ip) ||
+    /^169\.254\./.test(ip)
+  );
+}
+
 router.post("/admin/router/ports", async (req, res): Promise<void> => {
   const { host, username, password, bridgeIp } = req.body as {
     host: string; username: string; password: string; bridgeIp?: string;
   };
   if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
+
+  /* Fast-fail when the host is a LAN-only IP with no different VPN fallback.
+     Saves the user from a 12–24 second timeout. */
+  const hasVpnFallback = !!bridgeIp && bridgeIp !== host && !isLanOnlyIp(bridgeIp);
+  if (isLanOnlyIp(host) && !hasVpnFallback) {
+    const detail = bridgeIp && bridgeIp === host
+      ? `Bridge IP is set to the same address (${bridgeIp}). ` +
+        `Update Bridge IP to the router's VPN tunnel IP (e.g. 10.8.0.2).`
+      : `Set the router's VPN tunnel IP (e.g. 10.8.0.2) in the Bridge IP field.`;
+    res.json({
+      ok: false,
+      error: `Router host ${host} is a private LAN address — the cloud server cannot reach it. ${detail} ` +
+        `Once the OpenVPN tunnel is active, the router will receive a VPN IP automatically.`,
+    });
+    return;
+  }
 
   let conn = makeConn(host, username, password);
   let connectedVia = host;

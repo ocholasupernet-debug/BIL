@@ -16,7 +16,13 @@ import { Router, type IRouter } from "express";
 
 const router: IRouter = Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
+/* Prefer VITE_SUPABASE_URL — SUPABASE_URL may be a bare DB hostname without https:// */
+function resolveSupabaseUrl(): string {
+  const raw = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+  if (!raw) return "";
+  return raw.startsWith("http") ? raw : `https://${raw}`;
+}
+const SUPABASE_URL = resolveSupabaseUrl();
 /* Prefer service-role key (bypasses RLS); fall back to anon key */
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? "";
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
