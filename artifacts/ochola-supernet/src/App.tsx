@@ -23,6 +23,8 @@ import NetworkWireless from "./pages/admin/network/Wireless";
 import AdminPlans from "./pages/admin/Plans";
 import AdminTransactions from "./pages/admin/Transactions";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
+import HotspotSettings from "./pages/admin/HotspotSettings";
+import PPPoESettings from "./pages/admin/PPPoESettings";
 import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 
@@ -116,6 +118,8 @@ function Router() {
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
+      <Route path="/admin/hotspot-settings" component={HotspotSettings} />
+      <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN Portal — vpn.isplatty.org */}
