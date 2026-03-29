@@ -35,6 +35,8 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "8080",
         SERVE_STATIC: "true",
+        VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || "",
+        VITE_SUPABASE_KEY: process.env.VITE_SUPABASE_KEY || "",
       },
 
       error_file: "./logs/api-error.log",

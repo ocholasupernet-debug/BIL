@@ -622,4 +622,62 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
   }
 });
 
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/isp/router/heartbeat/:token
+   Called by the MikroTik scheduler every 5 minutes.
+   Looks up the router by its router_secret token and marks it online.
+═══════════════════════════════════════════════════════════════ */
+const HB_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
+const HB_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.VITE_SUPABASE_KEY ?? "";
+
+router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
+  const token = (req.params.token ?? "").trim();
+
+  if (token.length < 8) {
+    res.status(400).json({ ok: false, error: "invalid token" });
+    return;
+  }
+
+  const ts = new Date().toISOString();
+
+  if (!HB_URL || !HB_KEY) {
+    console.log(`[heartbeat] token=${token.slice(0, 8)}… — db not configured, returning 200`);
+    res.json({ ok: true, ts });
+    return;
+  }
+
+  try {
+    const patchRes = await fetch(
+      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: HB_KEY,
+          Authorization: `Bearer ${HB_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify({ status: "online", last_seen: ts }),
+      }
+    );
+
+    if (!patchRes.ok) {
+      const errText = await patchRes.text();
+      console.error(`[heartbeat] Supabase PATCH ${patchRes.status}: ${errText}`);
+      res.status(500).json({ ok: false, error: "db update failed" });
+      return;
+    }
+
+    const updated = await patchRes.json() as Array<{ id: number; name: string }>;
+    const routerName = updated[0]?.name ?? "unknown";
+    console.log(`[heartbeat] ✓ ${routerName} online @ ${ts}`);
+    res.json({ ok: true, ts, router: routerName });
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[heartbeat] error: ${msg}`);
+    res.json({ ok: true, ts, note: "db error but router is alive" });
+  }
+});
+
 export default router;

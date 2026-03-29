@@ -136,9 +136,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       bridge_interface: string | null;
       hotspot_dns_name: string | null;
       bridge_ip: string | null;
+      router_secret: string | null;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,router_secret`
     );
 
     /* "mainhotspot" is a special keyword meaning "first/main hotspot router" */
@@ -184,6 +185,11 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const profileName = routerSlug;
     const portalBase  = `https://${adminSubdomain}.isplatty.org`;
     const now         = new Date().toISOString();
+
+    /* ── Router secret token for heartbeat ── */
+    const routerSecret = router_row.router_secret
+      ?? `${adminId}-${router_row.id}-${Buffer.from(`${adminId}:${router_row.id}:ocholanet`).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 40)}`;
+    const heartbeatUrl = `${scriptBaseUrl}/../isp/router/heartbeat/${routerSecret}`;
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
@@ -281,6 +287,14 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Default User Profile ===`,
       ros(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`),
+      ``,
+      `# === Heartbeat Scheduler (keeps router online in billing system) ===`,
+      ros(`/system scheduler remove [find name=ochola-heartbeat]`),
+      ros(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/tool fetch url=\\"${heartbeatUrl}\\" mode=https dst-path=hb.tmp; /file remove [find name=hb.tmp]" comment="${companyName} heartbeat"`),
+      ``,
+      `# === Config Auto-Update Scheduler (daily) ===`,
+      ros(`/system scheduler remove [find name=ochola-autoupdate]`),
+      ros(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`),
     ];
 
     /* ── Plan profiles ── */
