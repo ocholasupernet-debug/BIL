@@ -95,11 +95,11 @@ function safeFetch(url: string, dst: string): string {
   return `:do { /tool fetch url="${url}" dst-path="${dst}" mode=https } on-error={}`;
 }
 
-/* ── Safe fetch (dynamic path): dst is a RouterOS expression that may
-   reference script variables, e.g. ($storage . "/hotspot/login.html").
-   No quotes are added around the expression. ── */
-function safeFetchDyn(url: string, dstExpr: string): string {
-  return `:do { /tool fetch url="${url}" dst-path=${dstExpr} mode=https } on-error={}`;
+/* ── Portal file fetch: uses pre-computed $hsdir variable and reports
+   exactly which file failed by name, so silent failures are visible.
+   filename is the short name shown in WARN output.  ── */
+function portalFetch(url: string, subpath: string, filename: string): string {
+  return `:do { /tool fetch url="${url}" dst-path=($hsdir . "/${subpath}") mode=https } on-error={ :put "  WARN: ${filename} failed" }`;
 }
 
 /* ── Safe remove: converts "/MENU remove [find COND]" into
@@ -395,36 +395,46 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       ``,
       `# === Hotspot Portal Files ===`,
-      `:put "[5/8] Downloading hotspot portal files to " . $storage . "/hotspot..."`,
-      `:do { /file make-dir ($storage . "/hotspot") } on-error={}`,
-      `:do { /file make-dir ($storage . "/hotspot/css") } on-error={}`,
-      `:do { /file make-dir ($storage . "/hotspot/img") } on-error={}`,
-      `:do { /file make-dir ($storage . "/hotspot/xml") } on-error={}`,
-      safeFetchDyn(`${portalBase}/hotspot/css/style.css`,    `($storage . "/hotspot/css/style.css")`),
-      safeFetchDyn(`${portalBase}/hotspot/img/user.svg`,     `($storage . "/hotspot/img/user.svg")`),
-      safeFetchDyn(`${portalBase}/hotspot/img/password.svg`, `($storage . "/hotspot/img/password.svg")`),
-      safeFetchDyn(`${portalBase}/hotspot/favicon.ico`,      `($storage . "/hotspot/favicon.ico")`),
-      safeFetchDyn(`${portalBase}/hotspot/md5.js`,           `($storage . "/hotspot/md5.js")`),
-      safeFetchDyn(`${portalBase}/hotspot/sweetalert2.js`,   `($storage . "/hotspot/sweetalert2.js")`),
-      safeFetchDyn(`${portalBase}/hotspot/tailwind.js`,      `($storage . "/hotspot/tailwind.js")`),
-      safeFetchDyn(`${portalBase}/hotspot/login.html`,    `($storage . "/hotspot/login.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/alogin.html`,   `($storage . "/hotspot/alogin.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/logout.html`,   `($storage . "/hotspot/logout.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/status.html`,   `($storage . "/hotspot/status.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/rlogin.html`,   `($storage . "/hotspot/rlogin.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/radvert.html`,  `($storage . "/hotspot/radvert.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/redirect.html`, `($storage . "/hotspot/redirect.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/error.html`,    `($storage . "/hotspot/error.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/errors.txt`,    `($storage . "/hotspot/errors.txt")`),
-      safeFetchDyn(`${portalBase}/hotspot/api.json`,      `($storage . "/hotspot/api.json")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/login.html`,   `($storage . "/hotspot/xml/login.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/alogin.html`,  `($storage . "/hotspot/xml/alogin.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/logout.html`,  `($storage . "/hotspot/xml/logout.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/flogout.html`, `($storage . "/hotspot/xml/flogout.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/rlogin.html`,  `($storage . "/hotspot/xml/rlogin.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/error.html`,   `($storage . "/hotspot/xml/error.html")`),
-      safeFetchDyn(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `($storage . "/hotspot/xml/WISPAP.xsd")`),
-      `:put "      Portal files downloaded  OK"`,
+      `# $hsdir is a pre-computed scalar (not an inline expression) so it`,
+      `# works reliably on all RouterOS versions including very old builds.`,
+      `:local hsdir ($storage . "/hotspot")`,
+      `:if ($storage = "flash") do={ :set hsdir "flash/hotspot" }`,
+      `:if ($storage = "disk1") do={ :set hsdir "disk1/hotspot" }`,
+      `:put "[5/8] Downloading hotspot portal files to " . $hsdir . "..."`,
+      `# --- HTTPS connectivity check ---`,
+      `:local httpsOk false`,
+      `:do { /tool fetch url="${portalBase}/hotspot/api.json" dst-path=hs-check.tmp mode=https; :set httpsOk true; :do { /file remove [find name=hs-check.tmp] } on-error={} } on-error={ :put "  WARN: HTTPS unreachable from this router - portal files skipped" }`,
+      `:if ($httpsOk) do={`,
+      `  :do { /file make-dir $hsdir } on-error={}`,
+      `  :do { /file make-dir ($hsdir . "/css") } on-error={}`,
+      `  :do { /file make-dir ($hsdir . "/img") } on-error={}`,
+      `  :do { /file make-dir ($hsdir . "/xml") } on-error={}`,
+      `  ` + portalFetch(`${portalBase}/hotspot/css/style.css`,    `css/style.css`,    `style.css`),
+      `  ` + portalFetch(`${portalBase}/hotspot/img/user.svg`,     `img/user.svg`,     `user.svg`),
+      `  ` + portalFetch(`${portalBase}/hotspot/img/password.svg`, `img/password.svg`, `password.svg`),
+      `  ` + portalFetch(`${portalBase}/hotspot/favicon.ico`,      `favicon.ico`,      `favicon.ico`),
+      `  ` + portalFetch(`${portalBase}/hotspot/md5.js`,           `md5.js`,           `md5.js`),
+      `  ` + portalFetch(`${portalBase}/hotspot/sweetalert2.js`,   `sweetalert2.js`,   `sweetalert2.js`),
+      `  ` + portalFetch(`${portalBase}/hotspot/tailwind.js`,      `tailwind.js`,      `tailwind.js`),
+      `  ` + portalFetch(`${portalBase}/hotspot/login.html`,    `login.html`,    `login.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/alogin.html`,   `alogin.html`,   `alogin.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/logout.html`,   `logout.html`,   `logout.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/status.html`,   `status.html`,   `status.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/rlogin.html`,   `rlogin.html`,   `rlogin.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/radvert.html`,  `radvert.html`,  `radvert.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/redirect.html`, `redirect.html`, `redirect.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/error.html`,    `error.html`,    `error.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/errors.txt`,    `errors.txt`,    `errors.txt`),
+      `  ` + portalFetch(`${portalBase}/hotspot/api.json`,      `api.json`,      `api.json`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/login.html`,   `xml/login.html`,   `xml/login.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/alogin.html`,  `xml/alogin.html`,  `xml/alogin.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/logout.html`,  `xml/logout.html`,  `xml/logout.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/flogout.html`, `xml/flogout.html`, `xml/flogout.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/rlogin.html`,  `xml/rlogin.html`,  `xml/rlogin.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/error.html`,   `xml/error.html`,   `xml/error.html`),
+      `  ` + portalFetch(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `xml/WISPAP.xsd`,   `xml/WISPAP.xsd`),
+      `  :put "      Portal files downloaded  OK"`,
+      `}`,
       ``,
       `# === NAT + Firewall ===`,
       `:put "[6/8] Applying firewall and NAT rules..."`,
