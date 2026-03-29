@@ -211,7 +211,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         );
       } catch { /* ignore */ }
     }
-    const heartbeatUrl = `${scriptBaseUrl}/../isp/router/heartbeat/${routerSecret}`;
+    const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
