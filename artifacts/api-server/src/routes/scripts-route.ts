@@ -66,21 +66,40 @@ function safeRos(cmd: string, label: string): string {
   return `:do { ${ros(cmd)} } on-error={ :put "  WARN: ${label} failed - check /log" }`;
 }
 
-/* ── OVPN add with automatic fallback.
-   verify-server-certificate was added in RouterOS 6.16.
-   Try with it first; if the router rejects it, retry without. ── */
+/* ── OVPN add with multi-version fallback chain.
+   Level 1: verify-server-certificate=no + aes256 + sha1  (ROS 6.16+)
+   Level 2: no verify-server-certificate param            (older ROS 6)
+   Level 3: cipher=aes256-cbc (v7 explicit name)          (ROS 7 edge-case)
+   Level 4: bare add with no cipher/auth specified        (last resort)
+   Each level only runs if the one above failed. ── */
 function ovpnAdd(fields: string): string {
-  const withV = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
-  const noV   = ros(`/interface ovpn-client add ${fields}`);
-  return `:do { ${withV} } on-error={ :do { ${noV} } on-error={ :put "  WARN: VPN add failed - check /log" } }`;
+  const base   = ros(`/interface ovpn-client add ${fields}`);
+  const withV  = ros(`/interface ovpn-client add ${fields} verify-server-certificate=no`);
+  const cbcV   = ros(`/interface ovpn-client add ${fields.replace(/cipher=aes256(\s|$)/, "cipher=aes256-cbc$1")} verify-server-certificate=no`);
+  const cbc    = ros(`/interface ovpn-client add ${fields.replace(/cipher=aes256(\s|$)/, "cipher=aes256-cbc$1")}`);
+  return [
+    `:do { ${withV} } on-error={`,
+    ` :do { ${base} } on-error={`,
+    `  :do { ${cbcV} } on-error={`,
+    `   :do { ${cbc} } on-error={ :put "  WARN: VPN add failed on all variants - check /log" }`,
+    `  }`,
+    ` }`,
+    `}`,
+  ].join("\r\n");
 }
 
-/* ── Safe fetch: wraps /tool fetch in :do { } on-error={} so a
-   connection timeout or 4xx/5xx during import doesn't kill the script.
-   The file simply won't be updated if the fetch fails, which is
-   acceptable — prior versions on flash remain intact. ── */
+/* ── Safe fetch (static path): wraps /tool fetch in :do {} on-error={}.
+   The file simply won't be updated if the fetch fails — prior versions
+   on flash remain intact. ── */
 function safeFetch(url: string, dst: string): string {
-  return `:do { /tool fetch url="${url}" dst-path=${dst} mode=https } on-error={}`;
+  return `:do { /tool fetch url="${url}" dst-path="${dst}" mode=https } on-error={}`;
+}
+
+/* ── Safe fetch (dynamic path): dst is a RouterOS expression that may
+   reference script variables, e.g. ($storage . "/hotspot/login.html").
+   No quotes are added around the expression. ── */
+function safeFetchDyn(url: string, dstExpr: string): string {
+  return `:do { /tool fetch url="${url}" dst-path=${dstExpr} mode=https } on-error={}`;
 }
 
 /* ── Safe remove: converts "/MENU remove [find COND]" into
@@ -330,6 +349,17 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put " ${companyName} Setup — ${routerName}"`,
       `:put "======================================================"`,
       ``,
+      `# === Detect RouterOS version & storage path ===`,
+      `# $storage: flash (NAND/internal) or disk1 (CHR / USB primary)`,
+      `# $rosMajor: 6 or 7 — controls version-specific behaviour`,
+      `:local storage "flash"`,
+      `:local rosMajor 6`,
+      `:local rosVer "unknown"`,
+      `:do { :set rosVer [/system package get [find name=routeros] version] } on-error={}`,
+      `:do { :if ([:pick $rosVer 0 1] = "7") do={ :set rosMajor 7 } } on-error={}`,
+      `:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }`,
+      `:put ("      RouterOS v" . $rosVer . " | Storage: " . $storage)`,
+      ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
       `:put "[1/8] Checking for config updates..."`,
       safeFetch(`${scriptBaseUrl}/${rawName}`, `${routerSlug}.rsc`),
@@ -360,40 +390,40 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Hotspot Profile & Service ===`,
       `:put "[4/8] Starting hotspot service..."`,
       safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
-      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=flash/hotspot`, "hotspot profile add"),
+      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=($storage . "/hotspot")`, "hotspot profile add"),
       safeRos(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`, "hotspot add"),
       `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       ``,
       `# === Hotspot Portal Files ===`,
-      `:put "[5/8] Downloading hotspot portal files..."`,
-      `:do { /file make-dir flash/hotspot } on-error={}`,
-      `:do { /file make-dir flash/hotspot/css } on-error={}`,
-      `:do { /file make-dir flash/hotspot/img } on-error={}`,
-      `:do { /file make-dir flash/hotspot/xml } on-error={}`,
-      safeFetch(`${portalBase}/hotspot/css/style.css`,    `flash/hotspot/css/style.css`),
-      safeFetch(`${portalBase}/hotspot/img/user.svg`,     `flash/hotspot/img/user.svg`),
-      safeFetch(`${portalBase}/hotspot/img/password.svg`, `flash/hotspot/img/password.svg`),
-      safeFetch(`${portalBase}/hotspot/favicon.ico`,      `flash/hotspot/favicon.ico`),
-      safeFetch(`${portalBase}/hotspot/md5.js`,           `flash/hotspot/md5.js`),
-      safeFetch(`${portalBase}/hotspot/sweetalert2.js`,   `flash/hotspot/sweetalert2.js`),
-      safeFetch(`${portalBase}/hotspot/tailwind.js`,      `flash/hotspot/tailwind.js`),
-      safeFetch(`${portalBase}/hotspot/login.html`,    `flash/hotspot/login.html`),
-      safeFetch(`${portalBase}/hotspot/alogin.html`,   `flash/hotspot/alogin.html`),
-      safeFetch(`${portalBase}/hotspot/logout.html`,   `flash/hotspot/logout.html`),
-      safeFetch(`${portalBase}/hotspot/status.html`,   `flash/hotspot/status.html`),
-      safeFetch(`${portalBase}/hotspot/rlogin.html`,   `flash/hotspot/rlogin.html`),
-      safeFetch(`${portalBase}/hotspot/radvert.html`,  `flash/hotspot/radvert.html`),
-      safeFetch(`${portalBase}/hotspot/redirect.html`, `flash/hotspot/redirect.html`),
-      safeFetch(`${portalBase}/hotspot/error.html`,    `flash/hotspot/error.html`),
-      safeFetch(`${portalBase}/hotspot/errors.txt`,    `flash/hotspot/errors.txt`),
-      safeFetch(`${portalBase}/hotspot/api.json`,      `flash/hotspot/api.json`),
-      safeFetch(`${portalBase}/hotspot/xml/login.html`,   `flash/hotspot/xml/login.html`),
-      safeFetch(`${portalBase}/hotspot/xml/alogin.html`,  `flash/hotspot/xml/alogin.html`),
-      safeFetch(`${portalBase}/hotspot/xml/logout.html`,  `flash/hotspot/xml/logout.html`),
-      safeFetch(`${portalBase}/hotspot/xml/flogout.html`, `flash/hotspot/xml/flogout.html`),
-      safeFetch(`${portalBase}/hotspot/xml/rlogin.html`,  `flash/hotspot/xml/rlogin.html`),
-      safeFetch(`${portalBase}/hotspot/xml/error.html`,   `flash/hotspot/xml/error.html`),
-      safeFetch(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `flash/hotspot/xml/WISPAP.xsd`),
+      `:put "[5/8] Downloading hotspot portal files to " . $storage . "/hotspot..."`,
+      `:do { /file make-dir ($storage . "/hotspot") } on-error={}`,
+      `:do { /file make-dir ($storage . "/hotspot/css") } on-error={}`,
+      `:do { /file make-dir ($storage . "/hotspot/img") } on-error={}`,
+      `:do { /file make-dir ($storage . "/hotspot/xml") } on-error={}`,
+      safeFetchDyn(`${portalBase}/hotspot/css/style.css`,    `($storage . "/hotspot/css/style.css")`),
+      safeFetchDyn(`${portalBase}/hotspot/img/user.svg`,     `($storage . "/hotspot/img/user.svg")`),
+      safeFetchDyn(`${portalBase}/hotspot/img/password.svg`, `($storage . "/hotspot/img/password.svg")`),
+      safeFetchDyn(`${portalBase}/hotspot/favicon.ico`,      `($storage . "/hotspot/favicon.ico")`),
+      safeFetchDyn(`${portalBase}/hotspot/md5.js`,           `($storage . "/hotspot/md5.js")`),
+      safeFetchDyn(`${portalBase}/hotspot/sweetalert2.js`,   `($storage . "/hotspot/sweetalert2.js")`),
+      safeFetchDyn(`${portalBase}/hotspot/tailwind.js`,      `($storage . "/hotspot/tailwind.js")`),
+      safeFetchDyn(`${portalBase}/hotspot/login.html`,    `($storage . "/hotspot/login.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/alogin.html`,   `($storage . "/hotspot/alogin.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/logout.html`,   `($storage . "/hotspot/logout.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/status.html`,   `($storage . "/hotspot/status.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/rlogin.html`,   `($storage . "/hotspot/rlogin.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/radvert.html`,  `($storage . "/hotspot/radvert.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/redirect.html`, `($storage . "/hotspot/redirect.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/error.html`,    `($storage . "/hotspot/error.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/errors.txt`,    `($storage . "/hotspot/errors.txt")`),
+      safeFetchDyn(`${portalBase}/hotspot/api.json`,      `($storage . "/hotspot/api.json")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/login.html`,   `($storage . "/hotspot/xml/login.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/alogin.html`,  `($storage . "/hotspot/xml/alogin.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/logout.html`,  `($storage . "/hotspot/xml/logout.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/flogout.html`, `($storage . "/hotspot/xml/flogout.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/rlogin.html`,  `($storage . "/hotspot/xml/rlogin.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/error.html`,   `($storage . "/hotspot/xml/error.html")`),
+      safeFetchDyn(`${portalBase}/hotspot/xml/WISPAP.xsd`,   `($storage . "/hotspot/xml/WISPAP.xsd")`),
       `:put "      Portal files downloaded  OK"`,
       ``,
       `# === NAT + Firewall ===`,
@@ -443,10 +473,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put ""`,
       `:put "======================================================"`,
       `:put " Setup complete! ${companyName} — ${routerName}"`,
-      `:put " Hotspot : active on '${bridgeIface}' (${bridgeIp})"`,
-      `:put " VPN     : ocholasupernet -> ${adminSubdomain}.isplatty.org"`,
-      `:put " Pool    : ${poolStart} - ${poolEnd}"`,
+      `:put (" RouterOS : v" . $rosVer . " | Storage: " . $storage)`,
+      `:put " Hotspot  : '${bridgeIface}' (${bridgeIp})"`,
+      `:put " VPN      : ocholasupernet -> ${adminSubdomain}.isplatty.org"`,
+      `:put " Pool     : ${poolStart} - ${poolEnd}"`,
       `:put " Check the admin dashboard for green indicator."`,
+      `:put " If any WARN lines appeared above, check /log for details."`,
       `:put "======================================================"`,
     ];
 
