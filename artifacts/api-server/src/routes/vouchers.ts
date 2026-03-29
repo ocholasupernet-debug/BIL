@@ -1,50 +1,61 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
-import { db, vouchersTable } from "@workspace/db";
+import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client";
 import crypto from "crypto";
 
 const router: IRouter = Router();
 
+/*
+ * /api/vouchers — Supabase isp_vouchers proxy.
+ *
+ * Note: Hotspot vouchers in this system use the FreeRADIUS tables
+ * (radcheck / radusergroup). This route manages a separate "isp_vouchers"
+ * table used for prepaid card / PIN code vouchers if present.
+ * If the table doesn't exist in Supabase the calls return [] gracefully.
+ *
+ * Query param: adminId or ispId → filters by admin_id
+ */
+
 router.get("/vouchers", async (req, res): Promise<void> => {
-  const ispId = req.query.ispId ? parseInt(req.query.ispId as string, 10) : 1;
-  const vouchers = await db.select().from(vouchersTable).where(eq(vouchersTable.ispId, ispId));
-  res.json(vouchers);
+  const adminId = req.query.adminId ?? req.query.ispId ?? "1";
+  const rows = await sbSelect("isp_vouchers", `admin_id=eq.${adminId}&select=*&order=created_at.desc`);
+  res.json(rows);
 });
 
 router.post("/vouchers/generate", async (req, res): Promise<void> => {
-  const { ispId = 1, planId, planName, duration, price, quantity = 10, batchName } = req.body;
+  const { adminId = 1, ispId, planId, planName, duration, price, quantity = 10, batchName } = req.body;
   if (!quantity || quantity < 1 || quantity > 500) {
     res.status(400).json({ error: "quantity must be between 1 and 500" });
     return;
   }
-  const vouchers = Array.from({ length: quantity }, () => ({
-    ispId: Number(ispId),
-    planId: planId ? Number(planId) : undefined,
-    code: crypto.randomBytes(4).toString("hex").toUpperCase(),
-    batchName: batchName || `Batch-${Date.now()}`,
-    planName,
-    duration,
-    price: price ? Number(price) : undefined,
-    status: "unused" as const,
+  const effectiveAdminId = adminId || ispId || 1;
+  const vouchers = Array.from({ length: Number(quantity) }, () => ({
+    admin_id:   effectiveAdminId,
+    plan_id:    planId   ? Number(planId) : null,
+    code:       crypto.randomBytes(4).toString("hex").toUpperCase(),
+    batch_name: batchName || `Batch-${Date.now()}`,
+    plan_name:  planName  ?? null,
+    duration:   duration  ?? null,
+    price:      price ? Number(price) : null,
+    status:     "unused",
   }));
-  const inserted = await db.insert(vouchersTable).values(vouchers).returning();
+  const inserted = await sbInsert<Record<string, unknown>>("isp_vouchers", vouchers);
   res.status(201).json(inserted);
 });
 
 router.patch("/vouchers/:id", async (req, res): Promise<void> => {
-  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const id = parseInt(raw, 10);
+  const id = req.params.id;
   const { status, usedBy } = req.body;
-  const [voucher] = await db.update(vouchersTable).set({ status, usedBy, usedAt: status === "used" ? new Date() : undefined, updatedAt: new Date() }).where(eq(vouchersTable.id, id)).returning();
-  if (!voucher) { res.status(404).json({ error: "Voucher not found" }); return; }
-  res.json(voucher);
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (status !== undefined) updates.status   = status;
+  if (usedBy !== undefined) updates.used_by  = usedBy;
+  if (status === "used")    updates.used_at  = new Date().toISOString();
+  const [row] = await sbUpdate<Record<string, unknown>>("isp_vouchers", `id=eq.${id}`, updates);
+  if (!row) { res.status(404).json({ error: "Voucher not found" }); return; }
+  res.json(row);
 });
 
 router.delete("/vouchers/:id", async (req, res): Promise<void> => {
-  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const id = parseInt(raw, 10);
-  const [v] = await db.delete(vouchersTable).where(eq(vouchersTable.id, id)).returning();
-  if (!v) { res.status(404).json({ error: "Voucher not found" }); return; }
+  await sbDelete("isp_vouchers", `id=eq.${req.params.id}`);
   res.sendStatus(204);
 });
 

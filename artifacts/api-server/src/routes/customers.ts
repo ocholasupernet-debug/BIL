@@ -1,46 +1,61 @@
 import { Router, type IRouter } from "express";
-import { eq } from "drizzle-orm";
-import { db, customersTable } from "@workspace/db";
+import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client";
 
 const router: IRouter = Router();
 
+/*
+ * /api/customers — Supabase isp_customers proxy.
+ * Query param: adminId or ispId → filters by admin_id
+ */
+
 router.get("/customers", async (req, res): Promise<void> => {
-  const ispId = req.query.ispId ? parseInt(req.query.ispId as string, 10) : 1;
-  const customers = await db.select().from(customersTable).where(eq(customersTable.ispId, ispId));
-  res.json(customers);
+  const adminId = req.query.adminId ?? req.query.ispId ?? "1";
+  const rows = await sbSelect("isp_customers", `admin_id=eq.${adminId}&select=*`);
+  res.json(rows);
 });
 
 router.post("/customers", async (req, res): Promise<void> => {
-  const { ispId = 1, name, phone, email, planId, planName, ipAddress, macAddress, status, expiryDate, amountPaid, pppoeUsername } = req.body;
+  const { adminId = 1, ispId, name, phone, email, planId, type, ipAddress, macAddress, status, expiryDate, pppoeUsername } = req.body;
   if (!name || !phone) {
     res.status(400).json({ error: "name and phone are required" });
     return;
   }
-  const [customer] = await db.insert(customersTable).values({
-    ispId, name, phone, email, planId, planName, ipAddress, macAddress,
-    status: status || "active", expiryDate: expiryDate ? new Date(expiryDate) : undefined,
-    amountPaid: amountPaid || 0, pppoeUsername
-  }).returning();
-  res.status(201).json(customer);
+  const [row] = await sbInsert<Record<string, unknown>>("isp_customers", {
+    admin_id:       adminId || ispId || 1,
+    name,
+    phone,
+    email:          email    ?? null,
+    plan_id:        planId   ?? null,
+    type:           type     ?? "hotspot",
+    ip_address:     ipAddress ?? null,
+    mac_address:    macAddress ?? null,
+    status:         status   ?? "active",
+    expires_at:     expiryDate ? new Date(expiryDate).toISOString() : null,
+    pppoe_username: pppoeUsername ?? null,
+  });
+  if (!row) { res.status(500).json({ error: "Failed to create customer" }); return; }
+  res.status(201).json(row);
 });
 
 router.patch("/customers/:id", async (req, res): Promise<void> => {
-  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const id = parseInt(raw, 10);
-  const { name, phone, email, planId, planName, ipAddress, status, expiryDate, amountPaid } = req.body;
-  const [customer] = await db.update(customersTable)
-    .set({ name, phone, email, planId, planName, ipAddress, status, expiryDate: expiryDate ? new Date(expiryDate) : undefined, amountPaid, updatedAt: new Date() })
-    .where(eq(customersTable.id, id))
-    .returning();
-  if (!customer) { res.status(404).json({ error: "Customer not found" }); return; }
-  res.json(customer);
+  const id = req.params.id;
+  const { name, phone, email, planId, type, ipAddress, status, expiryDate } = req.body;
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (name       !== undefined) updates.name       = name;
+  if (phone      !== undefined) updates.phone      = phone;
+  if (email      !== undefined) updates.email      = email;
+  if (planId     !== undefined) updates.plan_id    = planId;
+  if (type       !== undefined) updates.type       = type;
+  if (ipAddress  !== undefined) updates.ip_address = ipAddress;
+  if (status     !== undefined) updates.status     = status;
+  if (expiryDate !== undefined) updates.expires_at = new Date(expiryDate).toISOString();
+  const [row] = await sbUpdate<Record<string, unknown>>("isp_customers", `id=eq.${id}`, updates);
+  if (!row) { res.status(404).json({ error: "Customer not found" }); return; }
+  res.json(row);
 });
 
 router.delete("/customers/:id", async (req, res): Promise<void> => {
-  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const id = parseInt(raw, 10);
-  const [customer] = await db.delete(customersTable).where(eq(customersTable.id, id)).returning();
-  if (!customer) { res.status(404).json({ error: "Customer not found" }); return; }
+  await sbDelete("isp_customers", `id=eq.${req.params.id}`);
   res.sendStatus(204);
 });
 

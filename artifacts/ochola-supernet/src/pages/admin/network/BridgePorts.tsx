@@ -37,13 +37,6 @@ interface UnifiedRouter {
   status: string;
 }
 
-/* Local DB shape from GET /api/routers */
-interface LocalDbRouter {
-  id: number; name: string; ipAddress: string; status: string;
-  apiUsername: string | null; apiPassword: string | null;
-  apiPort: number; apiUseSSL: boolean;
-}
-
 /* Supabase isp_routers shape */
 interface SbRouter {
   id: number; name: string; host: string; status: string;
@@ -163,18 +156,7 @@ export default function BridgePorts() {
   const [applyLogs, setApplyLogs]   = useState<string[] | null>(null);
   const [applyOk, setApplyOk]       = useState<boolean | null>(null);
 
-  /* ── Source 1: Local DB routers ── */
-  const { data: localRouters = [] } = useQuery<LocalDbRouter[]>({
-    queryKey: ["local_routers_bp"],
-    queryFn: async () => {
-      const res = await fetch("/api/routers?ispId=1");
-      if (!res.ok) return [];
-      return res.json() as Promise<LocalDbRouter[]>;
-    },
-    staleTime: 10_000,
-  });
-
-  /* ── Source 2: Supabase routers (optional — gracefully empty if not configured) ── */
+    /* ── Load routers from Supabase isp_routers ── */
   const { data: sbRouters = [] } = useQuery<SbRouter[]>({
     queryKey: ["sb_routers_bp", ADMIN_ID],
     queryFn: async () => {
@@ -191,34 +173,18 @@ export default function BridgePorts() {
     staleTime: 10_000,
   });
 
-  /* ── Merge both sources into a unified list ── */
-  const routers: UnifiedRouter[] = [
-    ...localRouters.map(r => ({
-      key:            `local:${r.id}`,
-      id:             r.id,
-      name:           r.name,
-      host:           r.ipAddress ?? "",
-      router_username: r.apiUsername ?? "admin",
-      router_secret:  r.apiPassword ?? "",
-      bridge_ip:      null,
-      source:         "local" as const,
-      status:         r.status,
-    })),
-    /* Add Supabase routers that aren't already in the local list (match by name) */
-    ...sbRouters
-      .filter(sb => !localRouters.some(l => l.name === sb.name))
-      .map(r => ({
-        key:            `sb:${r.id}`,
-        id:             r.id,
-        name:           r.name,
-        host:           r.host ?? "",
-        router_username: r.router_username ?? "admin",
-        router_secret:  r.router_secret ?? "",
-        bridge_ip:      r.bridge_ip ?? null,
-        source:         "supabase" as const,
-        status:         r.status,
-      })),
-  ];
+  /* ── Build unified list from Supabase ── */
+  const routers: UnifiedRouter[] = sbRouters.map(r => ({
+    key:             `sb:${r.id}`,
+    id:              r.id,
+    name:            r.name,
+    host:            r.host ?? "",
+    router_username: r.router_username ?? "admin",
+    router_secret:   r.router_secret ?? "",
+    bridge_ip:       r.bridge_ip ?? null,
+    source:          "supabase" as const,
+    status:          r.status,
+  }));
 
   /* ── Auto-select router from URL param once data is loaded ── */
   const autoSelectedRef = useRef(false);
@@ -445,28 +411,9 @@ export default function BridgePorts() {
                 }}
               >
                 <option value="">— select router —</option>
-                {routers.length > 0 && localRouters.length > 0 && (
-                  <optgroup label="Local routers">
-                    {routers.filter(r => r.source === "local").map(r => (
-                      <option key={r.key} value={r.key}>
-                        {r.name} ({r.host || "no IP"}) {r.status === "online" ? "🟢" : "🔴"}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {routers.filter(r => r.source === "supabase").length > 0 && (
-                  <optgroup label="Cloud routers">
-                    {routers.filter(r => r.source === "supabase").map(r => (
-                      <option key={r.key} value={r.key}>
-                        {r.name} ({r.host || "no IP"}) {r.status === "online" ? "🟢" : "🔴"}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* Fallback flat list when optgroups would be confusing */}
-                {localRouters.length === 0 && sbRouters.length === 0 && routers.map(r => (
+                {routers.map(r => (
                   <option key={r.key} value={r.key}>
-                    {r.name} ({r.host || "no IP"})
+                    {r.name} ({r.host || "no IP"}) {r.status === "online" ? "🟢" : "🔴"}
                   </option>
                 ))}
               </select>
