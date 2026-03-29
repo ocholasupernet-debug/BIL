@@ -669,8 +669,9 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
    Called by the MikroTik scheduler every 5 minutes.
    Looks up the router by its router_secret token and marks it online.
 ═══════════════════════════════════════════════════════════════ */
-const HB_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-const HB_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+/* Per-request env helpers — use || so empty-string falls through */
+function hbUrl(): string { return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""; }
+function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
 
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const token = (req.params.token ?? "").trim();
@@ -681,6 +682,8 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   }
 
   const ts = new Date().toISOString();
+  const HB_URL = hbUrl();
+  const HB_KEY = hbKey();
 
   /* ?hs=1  → router confirmed hotspot/PPPoE service is running → status "online"  (green)
      ?hs=0  → router reachable but service not running            → status "connected" (yellow)
@@ -689,14 +692,15 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const newStatus = (hsParam === "0") ? "connected" : "online";
 
   if (!HB_URL || !HB_KEY) {
-    console.log(`[heartbeat] token=${token.slice(0, 8)}… — db not configured, returning 200`);
-    res.json({ ok: true, ts });
+    console.warn(`[heartbeat] token=${token.slice(0, 8)}… — db not configured (SUPABASE_URL/KEY missing)`);
+    res.json({ ok: true, ts, note: "db-not-configured" });
     return;
   }
 
   try {
+    const enc = encodeURIComponent(token);
     const patchRes = await fetch(
-      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}`,
+      `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: {
@@ -751,10 +755,15 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     return;
   }
 
-  if (!HB_URL || !HB_KEY) {
-    res.json({ ok: true, ts, note: "db not configured" });
+  const REG_URL = hbUrl();
+  const REG_KEY = hbKey();
+
+  if (!REG_URL || !REG_KEY) {
+    res.json({ ok: true, ts, note: "db-not-configured" });
     return;
   }
+
+  const enc = encodeURIComponent(token);
 
   try {
     /* Build the patch — only include fields that were provided */
@@ -766,11 +775,11 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
 
     /* First: read current name to decide whether to rename */
     const getRes = await fetch(
-      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}&select=id,name`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name`,
       {
         headers: {
-          apikey: HB_KEY,
-          Authorization: `Bearer ${HB_KEY}`,
+          apikey: REG_KEY,
+          Authorization: `Bearer ${REG_KEY}`,
           Accept: "application/json",
         },
       }
@@ -790,12 +799,12 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
 
     /* Apply the patch */
     const patchRes = await fetch(
-      `${HB_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(token)}`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: {
-          apikey: HB_KEY,
-          Authorization: `Bearer ${HB_KEY}`,
+          apikey: REG_KEY,
+          Authorization: `Bearer ${REG_KEY}`,
           "Content-Type": "application/json",
           Prefer: "return=representation",
         },

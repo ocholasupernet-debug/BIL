@@ -4,8 +4,14 @@ import { execSync } from "child_process";
 
 const router: IRouter = Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+/* Read env per-call so changes after startup are picked up */
+function sbUrl(): string {
+  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+}
+function sbKey(): string {
+  /* Prefer service key (bypasses RLS) → falls back to anon */
+  return process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+}
 
 const CA_PATHS = [
   "/etc/openvpn/ca.crt",
@@ -38,16 +44,27 @@ export function ensureClientCert(slug: string): boolean {
 }
 
 async function slugBySecret(secret: string): Promise<string | null> {
-  if (!SUPABASE_URL || !SUPABASE_KEY || !secret) return null;
+  const url = sbUrl();
+  const key = sbKey();
+  if (!url || !key || !secret) return null;
+  const enc = encodeURIComponent(secret);
   try {
+    /* Query by router_secret OR token — covers both column aliases */
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/isp_routers?router_secret=eq.${encodeURIComponent(secret)}&select=name&limit=1`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      `${url}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=name&limit=1`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`[vpn] slugBySecret DB error ${res.status}: ${await res.text()}`);
+      return null;
+    }
     const rows = (await res.json()) as { name: string }[];
+    if (!rows.length) {
+      console.error(`[vpn] slugBySecret: no router found for secret …${secret.slice(-6)}`);
+    }
     return rows.length ? slugify(rows[0].name) : null;
-  } catch {
+  } catch (e) {
+    console.error(`[vpn] slugBySecret error: ${e}`);
     return null;
   }
 }
