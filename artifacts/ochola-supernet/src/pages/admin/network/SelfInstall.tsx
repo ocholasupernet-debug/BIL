@@ -122,8 +122,8 @@ export default function SelfInstall() {
   });
 
   /* Computed values */
-  const adminSubdomain = adminData?.subdomain ?? slugify(adminData?.name ?? "");
-  const nameBase       = adminSubdomain || "router";
+  const adminSubdomain = adminData?.subdomain ?? "";
+  const nameBase       = slugify(adminData?.name ?? "") || adminSubdomain || "router";
   const scriptHost     = adminSubdomain
     ? `https://${adminSubdomain}.${BASE_DOMAIN}`
     : window.location.origin;

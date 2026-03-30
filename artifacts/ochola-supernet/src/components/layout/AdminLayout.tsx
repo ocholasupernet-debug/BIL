@@ -87,8 +87,9 @@ const navItems: NavItem[] = [
   {
     name: "Network", icon: Network,
     children: [
-      { name: "Routers",     href: "/admin/network/routers"    },
-      { name: "Add Router",  href: "/admin/network/add-router" },
+      { name: "Routers",        href: "/admin/network/routers"         },
+      { name: "Add Router",     href: "/admin/network/add-router"      },
+      { name: "Replace Router", href: "/admin/network/replace-router"  },
       { name: "PPPoE",       href: "/admin/network/pppoe"      },
       { name: "PPP",            href: "/admin/network/ppp"               },
       { name: "Wireless",       href: "/admin/network/wireless"          },
