@@ -8,7 +8,7 @@ import {
   Zap, MessageSquare, CheckSquare, Wifi, Layers, Shield,
   Search, Sun, Moon, ChevronDown, Globe, Radio,
   MonitorSmartphone, Sliders, FileCode2, Star, MoreHorizontal,
-  Activity, BookOpen, LogOut
+  Activity, BookOpen, LogOut, Webhook
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/context/ThemeContext";
@@ -127,6 +127,7 @@ const navItems: NavItem[] = [
       { name: "Login Page", href: "/admin/hotspot-settings?tab=login" },
     ]
   },
+  { name: "Payment Webhooks", href: "/admin/webhooks", icon: Webhook },
   { name: "Page Builder", href: "/admin/page-builder", icon: FileCode2 },
   {
     name: "Bonga Points", icon: Star,

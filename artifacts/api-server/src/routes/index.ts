@@ -12,6 +12,7 @@ import provisionRouter from "./provision-route";
 import routerEnsureRouter from "./router-ensure-route";
 import mikrotikRouter from "./mikrotik-route";
 import pppoeScriptRouter from "./pppoe-script-route";
+import webhookRouter from "./webhook-route";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(provisionRouter);
 router.use(routerEnsureRouter);
 router.use(mikrotikRouter);
 router.use(pppoeScriptRouter);
+router.use(webhookRouter);
 
 export default router;
