@@ -4,10 +4,28 @@ import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
-import {
-  Loader2, RefreshCw, CheckCircle2, AlertTriangle,
-  Plug, Network, Wifi, Check, ChevronDown, Shield, Router as RouterIcon,
-} from "lucide-react";
+
+const API = import.meta.env.VITE_API_BASE ?? "";
+const DEFAULT_VPN_PASSWORD = "ocholasupernet";
+
+function slugify(s: string) {
+  return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+async function ensureVpnUser(routerName: string): Promise<void> {
+  try {
+    await fetch(`${API}/api/vpn/users`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        adminId:  ADMIN_ID,
+        username: slugify(routerName),
+        password: DEFAULT_VPN_PASSWORD,
+        notes:    `Auto — router: ${routerName}`,
+      }),
+    });
+  } catch { /* non-critical — VPN user can be created manually later */ }
+}
 
 /* ── types ── */
 interface Iface {
@@ -275,6 +293,8 @@ export default function BridgePorts() {
       if (data.ok) {
         setPayload(data);
         if (data.connectedVia) setConnectedVia(data.connectedVia);
+        /* Router is confirmed online + interfaces fetched — create VPN user now */
+        void ensureVpnUser(r.name);
       } else {
         setLoadError(
           (data.error && data.error.trim()) ||

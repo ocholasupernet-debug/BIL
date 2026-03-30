@@ -414,7 +414,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        Also keeps the psw-file in sync as a fallback during transition. */
     ensureClientCert(routerSlug);
     updateVpnCredentials(routerSlug, "ocholasupernet");
-    void ensureVpnUser(Number(adminId), routerSlug, "ocholasupernet", routerName);
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
