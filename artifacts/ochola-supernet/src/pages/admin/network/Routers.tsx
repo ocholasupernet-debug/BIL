@@ -422,7 +422,7 @@ export default function Routers() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
                 <thead>
                   <tr>
-                    {["ID","ROUTER NAME","IP ADDRESS","PROXY VPN BACKUP","USERNAME","DESCRIPTION","STATUS","STATE","UPTIME","MODEL","LAST SEEN","REBOOT","MANAGE","REMOTE ACCESS"].map(h => (
+                    {["ID","ROUTER NAME","WAN IP (Public)","VPN IP (Tunnel)","USERNAME","DESCRIPTION","STATUS","STATE","UPTIME","MODEL","LAST SEEN","REBOOT","MANAGE","REMOTE ACCESS"].map(h => (
                       <Th key={h} label={h} />
                     ))}
                   </tr>
@@ -690,18 +690,21 @@ export default function Routers() {
       {editRouter && (
         <Modal title={`Edit Router — ${editRouter.name}`} onClose={() => setEditRouter(null)}>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+            <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
+              <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and only set the <em>VPN Tunnel IP</em>. The system uses the VPN IP to reach the router. Seeing the same IP in both fields is normal.
+            </div>
             {(["name", "host", "bridge_ip", "router_username", "router_secret"] as const).map((field) => {
               const labels: Record<string, string> = {
                 name:            "Router Name",
-                host:            "IP Address / Host",
-                bridge_ip:       "VPN IP (10.8.0.x)",
+                host:            "WAN / Public IP (optional — leave empty if no public IP)",
+                bridge_ip:       "VPN Tunnel IP (10.8.0.x) — used for API connection",
                 router_username: "API Username",
                 router_secret:   "API Password",
               };
               const placeholders: Record<string, string> = {
                 name:            "e.g. come1",
-                host:            "e.g. 10.8.0.2",
-                bridge_ip:       "e.g. 10.8.0.2",
+                host:            "e.g. 41.80.123.45 — public WAN IP if available",
+                bridge_ip:       "e.g. 10.8.0.2 — assigned by OpenVPN",
                 router_username: "admin",
                 router_secret:   "••••••••",
               };
