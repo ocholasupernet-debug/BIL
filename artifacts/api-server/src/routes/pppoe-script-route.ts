@@ -99,8 +99,7 @@ function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): strin
   remote-address=pppoe-pool \\
   use-radius=no \\
   dns-server=8.8.8.8,1.1.1.1 \\
-  change-tcp-mss=yes \\
-  comment="${companyName} profile"
+  change-tcp-mss=yes
 
 # 6. PPPoE Server
 /interface pppoe-server server add \\
@@ -199,7 +198,7 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
 /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
 
 # 6. Hotspot profile & server
-/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac${hsProfileExtras} comment="${companyName} hotspot profile"
+/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac${hsProfileExtras}
 
 /ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=5m disabled=no
 
@@ -214,8 +213,7 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
   dns-server=8.8.8.8,1.1.1.1 \\
   use-radius=no \\
   use-compression=no \\
-  change-tcp-mss=yes \\
-  comment="${companyName} PPPoE profile"
+  change-tcp-mss=yes
 
 # 9. PPPoE server on shared bridge
 /interface pppoe-server server add \\
