@@ -1082,9 +1082,11 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     /* If the router still has the auto-generated name, rename it to the RouterOS identity */
     if (rname) patch.identity = rname;   // store identity (non-destructive new field check below)
 
-    /* First: read current name to decide whether to rename */
+    /* First: read current name + admin_id to decide whether to rename + for VPN user */
+    let existingAdminId: number | null = null;
+    let existingName: string = "";
     const getRes = await fetch(
-      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name,admin_id`,
       {
         headers: {
           apikey: REG_KEY,
@@ -1094,12 +1096,16 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       }
     );
     if (getRes.ok) {
-      const rows = await getRes.json() as Array<{ id: number; name: string }>;
+      const rows = await getRes.json() as Array<{ id: number; name: string; admin_id: number }>;
       const existing = rows[0];
-      /* Update name to RouterOS identity only if the current name ends with " Router"
-         (the auto-generated placeholder) and an identity was reported */
-      if (existing && rname && existing.name.endsWith(" Router")) {
-        patch.name = rname;
+      if (existing) {
+        existingAdminId = existing.admin_id;
+        existingName    = existing.name;
+        /* Update name to RouterOS identity only if the current name ends with " Router"
+           (the auto-generated placeholder) and an identity was reported */
+        if (rname && existing.name.endsWith(" Router")) {
+          patch.name = rname;
+        }
       }
     }
 
@@ -1132,7 +1138,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       id: number; name: string; host?: string; router_username?: string;
     }>;
     const row = updated[0];
-    const routerName = row?.name ?? rname ?? "unknown";
+    const routerName = row?.name ?? existingName ?? rname ?? "unknown";
     console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, model, version: ver });
 
@@ -1142,6 +1148,33 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     if (probeIp && probeIp !== row?.host) {
       console.log(`[register] scheduling auto-probe for ${routerName} @ ${probeIp}`);
       bgAutoProbe(token, probeIp, row?.router_username ?? "admin");
+    }
+
+    /* ── Auto-create VPN user ──────────────────────────────────────
+       Upsert a VPN user in isp_vpn_users so the router appears in
+       Remote Access → VPN Users immediately after installation,
+       without requiring the admin to create it manually. ── */
+    const adminId = existingAdminId ?? (row as Record<string, unknown> | undefined)?.admin_id as number | undefined;
+    if (adminId && routerName !== "unknown") {
+      const vpnUsername = routerName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      fetch(`${REG_URL}/rest/v1/isp_vpn_users`, {
+        method: "POST",
+        headers: {
+          apikey:         REG_KEY,
+          Authorization:  `Bearer ${REG_KEY}`,
+          "Content-Type": "application/json",
+          Prefer:         "resolution=ignore-duplicates,return=minimal",
+        },
+        body: JSON.stringify({
+          admin_id:  adminId,
+          username:  vpnUsername,
+          password:  "ocholasupernet",
+          notes:     `Auto — router: ${routerName}`,
+          is_active: true,
+        }),
+      })
+        .then(() => console.log(`[register] VPN user '${vpnUsername}' ensured for ${routerName}`))
+        .catch((e: unknown) => console.warn(`[register] VPN user upsert failed: ${e instanceof Error ? e.message : e}`));
     }
 
   } catch (err: unknown) {
