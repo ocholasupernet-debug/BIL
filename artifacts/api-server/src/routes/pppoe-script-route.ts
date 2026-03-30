@@ -198,7 +198,6 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
   hotspot-address=${net.gateway} \\
   use-radius=no \\
   login-by=http-chap,mac \\
-  mac-auth-mode=mac-as-username \\
   comment="${companyName} hotspot profile"
 
 /ip hotspot add \\
