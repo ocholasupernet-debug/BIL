@@ -225,6 +225,18 @@ function connErr(host: string, rawErr: unknown): string {
   return msg;
 }
 
+/* ─── Enrich "not enough permissions" errors with the fix command ─── */
+function enrichPermErr(err: unknown, username: string): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/not enough permissions|permission/i.test(msg)) {
+    return (
+      `not enough permissions — the API user "${username}" needs the "write" policy. ` +
+      `Run in router terminal: /user set [find name="${username}"] policy=read,write,api,test`
+    );
+  }
+  return msg;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    GET /api/admin/server-info
    Returns the server's outbound public IP so the frontend can show
@@ -370,7 +382,7 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {
-          log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
+          log(`  ❌ ${enrichPermErr(e, username)}`);
           skipped++;
         }
       } else if (plan.type === "hotspot" || plan.type === "trials") {
@@ -386,7 +398,7 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {
-          log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
+          log(`  ❌ ${enrichPermErr(e, username)}`);
           skipped++;
         }
       } else {
