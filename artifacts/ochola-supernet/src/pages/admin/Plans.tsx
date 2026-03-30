@@ -82,7 +82,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
   const [status,        setStatus]        = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
   const [canBuy,        setCanBuy]        = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
   const [name,          setName]          = useState(initialData?.name ?? "");
-  const [planKind,      setPlanKind]      = useState<"unlimited"|"limited">("unlimited");
+  const [planKind,      setPlanKind]      = useState<"unlimited"|"limited">(initialData?.plan_type === "limited" ? "limited" : "unlimited");
   const [bandwidthId,   setBandwidthId]   = useState(initialData?.bandwidth_id?.toString() ?? "");
   const [price,         setPrice]         = useState(initialData?.price?.toString() ?? "");
   /* Sharing: if shared_users > 1 on edit, sharing was enabled */
@@ -99,6 +99,20 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
 
+  /* ── Data cap (for Limited plans) ── */
+  const initDataUnit = (() => {
+    const mb = initialData?.data_limit_mb ?? 0;
+    if (!mb) return "GB";
+    return mb % 1000 === 0 ? "GB" : "MB";
+  })();
+  const initDataVal = (() => {
+    const mb = initialData?.data_limit_mb ?? 0;
+    if (!mb) return "";
+    return initDataUnit === "GB" ? String(mb / 1000) : String(mb);
+  })();
+  const [dataLimitVal,  setDataLimitVal]  = useState(initDataVal);
+  const [dataLimitUnit, setDataLimitUnit] = useState<"MB"|"GB"|"TB">(initDataUnit as "MB"|"GB"|"TB");
+
   const units = ["Mins", "Hrs", "Days", "Weeks", "Months"];
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -111,6 +125,15 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
       const bw = bandwidthId ? bandwidths.find(b => b.id === parseInt(bandwidthId)) : null;
       const speedDown = bw?.speed_down ?? 0;
       const speedUp   = bw?.speed_up   ?? 0;
+      /* Convert data limit to MB for storage */
+      const dataLimitMb = planKind === "limited" && dataLimitVal
+        ? (() => {
+            const v = parseFloat(dataLimitVal) || 0;
+            if (dataLimitUnit === "TB") return Math.round(v * 1_000_000);
+            if (dataLimitUnit === "GB") return Math.round(v * 1_000);
+            return Math.round(v); // MB
+          })()
+        : null;
       const payload = {
         admin_id:            ADMIN_ID,
         name,
@@ -129,6 +152,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
         router_id:           routerId ? parseInt(routerId) : null,
         active_ip_pool:      activePool || null,
         expired_ip_pool:     expiredPool || null,
+        data_limit_mb:       dataLimitMb,
         updated_at:          new Date().toISOString(),
       };
 
@@ -189,6 +213,49 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
             <div style={{ display: "flex", gap: "1.25rem", paddingTop: "0.45rem" }}>
               <Radio name="planKind" value="unlimited" checked={planKind==="unlimited"} onChange={() => setPlanKind("unlimited")} label="Unlimited" />
               <Radio name="planKind" value="limited"   checked={planKind==="limited"}   onChange={() => setPlanKind("limited")}   label="Limited" />
+            </div>
+          </div>
+        )}
+
+        {isHotspot && planKind === "limited" && (
+          <div style={ROW}>
+            <span style={{ ...LBL_CYAN, display: "flex", alignItems: "center", gap: "0.35rem" }}>
+              Data Cap
+            </span>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.1"
+                  style={{ ...INPUT, flex: 1, maxWidth: 140 }}
+                  value={dataLimitVal}
+                  onChange={e => setDataLimitVal(e.target.value)}
+                  placeholder="e.g. 10"
+                  required={planKind === "limited"}
+                />
+                <select
+                  style={{ ...SELECT, minWidth: 80 }}
+                  value={dataLimitUnit}
+                  onChange={e => setDataLimitUnit(e.target.value as "MB"|"GB"|"TB")}
+                >
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                  <option value="TB">TB</option>
+                </select>
+                {dataLimitVal && (
+                  <span style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>
+                    = {dataLimitUnit === "TB"
+                        ? `${(parseFloat(dataLimitVal)*1_000_000).toLocaleString()} MB`
+                        : dataLimitUnit === "GB"
+                        ? `${(parseFloat(dataLimitVal)*1_000).toLocaleString()} MB`
+                        : `${parseFloat(dataLimitVal).toLocaleString()} MB`}
+                  </span>
+                )}
+              </div>
+              <p style={HINT}>
+                When a customer's data usage reaches this limit, their session will be cut off or moved to the expired pool.
+              </p>
             </div>
           </div>
         )}
@@ -714,7 +781,13 @@ export default function Plans() {
                         </div>
                         <div className="flex items-center gap-3 text-sm text-slate-300">
                           <Activity className="w-4 h-4 text-primary" />
-                          Data: {p.data_limit_mb ? `${p.data_limit_mb} MB` : "Unlimited"}
+                          Data: {p.data_limit_mb
+                            ? p.data_limit_mb >= 1_000_000
+                              ? `${(p.data_limit_mb / 1_000_000).toLocaleString()} TB`
+                              : p.data_limit_mb >= 1_000
+                              ? `${(p.data_limit_mb / 1_000).toLocaleString()} GB`
+                              : `${p.data_limit_mb.toLocaleString()} MB`
+                            : "Unlimited"}
                         </div>
                         <div className="pt-4 border-t border-white/5 flex flex-col gap-1.5">
                           <div className="flex items-center gap-1.5 text-xs" style={{ color: (p.shared_users ?? 1) > 1 ? "#4ade80" : "var(--isp-text-muted)" }}>
