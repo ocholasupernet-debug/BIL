@@ -352,6 +352,48 @@ export async function probeAllHosts(
   return Promise.all(hosts.map(h => probePort(h, creds.port, timeoutMs)));
 }
 
+/* ═══ Router health ping ════════════════════════════════════════════════════
+ * Quick connectivity + identity check. Returns status info on success,
+ * throws on failure so the caller can mark the router as offline.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+export interface RouterPingResult {
+  online:      boolean;
+  identity:    string;
+  uptime:      string;
+  version:     string;
+  board:       string;
+  cpuLoad:     number;
+  freeMemory:  number;
+  connectedAt: string;          /* ISO timestamp */
+  connectedHost: string;        /* which IP was used */
+}
+
+export async function pingRouter(creds: RouterCredentials): Promise<RouterPingResult> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    const [identRows, resRows] = await Promise.all([
+      withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+
+    const id  = identRows[0] ?? {};
+    const res = resRows[0]   ?? {};
+
+    return {
+      online:        true,
+      identity:      id.name        ?? "unknown",
+      uptime:        res.uptime     ?? "",
+      version:       res.version    ?? "",
+      board:         res["board-name"] ?? res["board"] ?? "",
+      cpuLoad:       parseInt(res["cpu-load"] ?? "0", 10),
+      freeMemory:    parseInt(res["free-memory"] ?? "0", 10),
+      connectedAt:   new Date().toISOString(),
+      connectedHost,
+    };
+  });
+}
+
 /* ─── Data types ─────────────────────────────────────────────────────────── */
 
 export interface ActiveHotspotUser {

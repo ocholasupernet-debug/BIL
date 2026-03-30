@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight,
+  AlertCircle, ChevronLeft, ChevronRight, Radio,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -98,6 +98,38 @@ export default function Routers() {
   const [deleteState, setDeleteState]   = useState<Record<number, "idle" | "confirm" | "deleting">>({});
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
+
+  /* ping state */
+  const [pingState,  setPingState]  = useState<Record<number, "idle" | "pinging" | "online" | "offline">>({});
+  const [pingResult, setPingResult] = useState<Record<number, { identity?: string; uptime?: string; error?: string }>>({});
+  const [pingingAll, setPingingAll] = useState(false);
+
+  /* ping a single router */
+  const pingOneRouter = async (r: DbRouter) => {
+    setPingState(p => ({ ...p, [r.id]: "pinging" }));
+    setPingResult(p => ({ ...p, [r.id]: {} }));
+    try {
+      const res = await fetch(`/api/routers/${r.id}/ping`, { method: "POST" });
+      const data = await res.json() as { ok: boolean; identity?: string; uptime?: string; error?: string };
+      setPingState(p => ({ ...p, [r.id]: data.ok ? "online" : "offline" }));
+      setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, error: data.error } }));
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+    } catch (e) {
+      setPingState(p => ({ ...p, [r.id]: "offline" }));
+      setPingResult(p => ({ ...p, [r.id]: { error: (e as Error).message } }));
+    }
+  };
+
+  /* ping all routers */
+  const pingAll = async () => {
+    setPingingAll(true);
+    try {
+      await fetch(`/api/routers/ping-all?adminId=${ADMIN_ID}`, { method: "POST" });
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+    } finally {
+      setPingingAll(false);
+    }
+  };
 
   const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["isp_routers"],
@@ -256,6 +288,22 @@ export default function Routers() {
           >
             <RefreshCw size={12} style={{ animation: isFetching ? "spin 1s linear infinite" : "none" }} />
           </button>
+          <button
+            onClick={pingAll}
+            disabled={pingingAll}
+            title="Ping all routers — checks if each router is reachable and updates their status"
+            style={{
+              display: "flex", alignItems: "center", gap: "0.3rem", padding: "0.45rem 0.85rem",
+              background: pingingAll ? "rgba(6,182,212,0.08)" : "rgba(6,182,212,0.05)",
+              border: "1px solid rgba(6,182,212,0.3)",
+              borderRadius: 7, color: "#06b6d4", fontSize: "0.78rem",
+              cursor: pingingAll ? "default" : "pointer", fontFamily: "inherit", fontWeight: 600,
+            }}
+          >
+            {pingingAll
+              ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
+              : <><Radio size={12} /> Ping All</>}
+          </button>
           <div style={{ flex: 1 }} />
           <button
             onClick={() => navigate("/admin/network/add-router")}
@@ -300,11 +348,13 @@ export default function Routers() {
                       </td>
                     </tr>
                   ) : pageRows.map((r, idx) => {
-                    const online  = isOnline(r);
+                    const online     = isOnline(r);
                     const currOnline = isCurrentlyOnline(r);
-                    const rb      = rebootState[r.id] ?? "idle";
-                    const delSt   = deleteState[r.id] ?? "idle";
-                    const rowBg   = idx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)";
+                    const rb         = rebootState[r.id]  ?? "idle";
+                    const delSt      = deleteState[r.id]  ?? "idle";
+                    const pingSt     = pingState[r.id]    ?? "idle";
+                    const pingRes    = pingResult[r.id]   ?? {};
+                    const rowBg      = idx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)";
 
                     return (
                       <tr key={r.id} style={{ borderBottom: "1px solid var(--isp-border-subtle)", background: rowBg }}>
@@ -431,6 +481,34 @@ export default function Routers() {
                                 onClick={() => setDeleteState(p => ({ ...p, [r.id]: "confirm" }))}
                                 color="#f87171" bg="rgba(248,113,113,0.08)" border="rgba(248,113,113,0.25)"
                                 title="Delete router"
+                              />
+                            )}
+                            {pingSt === "pinging" ? (
+                              <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#06b6d4" }}>
+                                <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Pinging…
+                              </span>
+                            ) : pingSt === "online" ? (
+                              <span
+                                title={`${pingRes.identity ?? ""}${pingRes.uptime ? ` · up ${pingRes.uptime}` : ""}`}
+                                style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#4ade80", cursor: "pointer" }}
+                                onClick={() => pingOneRouter(r)}
+                              >
+                                <CheckCircle size={10} /> Online
+                              </span>
+                            ) : pingSt === "offline" ? (
+                              <span
+                                title={pingRes.error ?? "Unreachable"}
+                                style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#f87171", cursor: "pointer" }}
+                                onClick={() => pingOneRouter(r)}
+                              >
+                                <AlertCircle size={10} /> Offline
+                              </span>
+                            ) : (
+                              <Btn
+                                label="Ping"
+                                icon={<Radio size={10} />}
+                                onClick={() => pingOneRouter(r)}
+                                color="#06b6d4" bg="rgba(6,182,212,0.08)" border="rgba(6,182,212,0.3)"
                               />
                             )}
                             <Btn
