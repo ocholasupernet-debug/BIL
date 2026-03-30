@@ -252,11 +252,16 @@ async function connectWithRetry(
 
   const hosts: Array<{ host: string; label: string; isVpn: boolean }> = [];
 
+  const isVpnIp = (ip: string) => /^10\.8\./.test(ip);
+
   if (creds.host) {
-    const label = isPrivateIp(creds.host)
-      ? `${creds.host} (⚠ private IP — VPS may not reach this)`
-      : creds.host;
-    hosts.push({ host: creds.host, label, isVpn: false });
+    const vpn = isVpnIp(creds.host);
+    const label = vpn
+      ? `${creds.host} (VPN tunnel)`
+      : isPrivateIp(creds.host)
+        ? `${creds.host} (⚠ LAN IP — only reachable on local network)`
+        : creds.host;
+    hosts.push({ host: creds.host, label, isVpn: vpn });
   }
   if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
     hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
