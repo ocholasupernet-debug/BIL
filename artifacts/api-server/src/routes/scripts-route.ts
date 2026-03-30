@@ -693,7 +693,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
         const shared  = plan.shared_users || 1;
         lines.push(safeRm(`/ip hotspot user profile remove [find name="${pName}"]`));
-        lines.push(safeRos(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared} comment="${companyName} plan id${plan.id}"`, `plan ${pName} add`));
+        lines.push(safeRos(`/ip hotspot user profile add name="${pName}" rate-limit="${rl}" session-timeout=${timeout} shared-users=${shared}`, `plan ${pName} add`));
         lines.push(`:put "      Plan '${pName}' (${rl}, ${timeout})  OK"`);
       }
     }
