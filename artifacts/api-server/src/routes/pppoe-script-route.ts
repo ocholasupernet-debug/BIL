@@ -201,27 +201,15 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
 # 5. DNS
 /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
 
-# 6. Hotspot profile & server — local authentication (no RADIUS)
-/ip hotspot profile add \\
-  name=hs-profile \\
-  dns-name=${dnsName} \\
-  hotspot-address=${net.gateway} \\
-  use-radius=no \\
-  login-by=http-chap,mac \\
-  comment="${companyName} hotspot profile"
+# 6. Hotspot profile & server — local authentication
+/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac comment="${companyName} hotspot profile"
 
-# ROS 7+: set mac-auth-mode (parameter not available on ROS 6)
+# ROS 7+: parameters that do not exist in ROS 6
 :if ($rosMajor >= 7) do={
-  /ip hotspot profile set [find name="hs-profile"] mac-auth-mode=mac-as-username
+  /ip hotspot profile set [find name="hs-profile"] use-radius=no mac-auth-mode=mac-as-username
 }
 
-/ip hotspot add \\
-  name=hotspot1 \\
-  interface=${bridgeName} \\
-  profile=hs-profile \\
-  address-pool=hs-pool \\
-  idle-timeout=5m \\
-  disabled=no
+/ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=5m disabled=no
 
 # 7. PPPoE IP pool (separate range so it doesn't conflict with hotspot clients)
 /ip pool add name=pppoe-pool ranges=${pppPrefix}.2-${pppPrefix}.254
