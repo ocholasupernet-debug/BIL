@@ -6,6 +6,39 @@ const router: IRouter = Router();
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
+/* ── Auto-upsert an IP pool record for a router ──
+   Called every time a PPPoE script is served so the pool always appears
+   in the IP Pools page without the admin needing to create it manually. ── */
+async function autoUpsertPool(
+  adminId: number, routerId: number, name: string, rangeStart: string, rangeEnd: string
+): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  const now = new Date().toISOString();
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/isp_ip_pools`, {
+      method: "POST",
+      headers: {
+        apikey:          SUPABASE_KEY,
+        Authorization:   `Bearer ${SUPABASE_KEY}`,
+        "Content-Type":  "application/json",
+        Prefer:          "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify({
+        admin_id:    adminId,
+        router_id:   routerId,
+        name,
+        range_start: rangeStart,
+        range_end:   rangeEnd,
+        created_at:  now,
+        updated_at:  now,
+      }),
+    });
+    console.log(`[auto-pool] upserted "${name}" (${rangeStart}-${rangeEnd}) → router ${routerId}`);
+  } catch (e) {
+    console.warn(`[auto-pool] upsert failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 /* ── Supabase REST helper ── */
 async function sbGet<T>(path: string): Promise<T[]> {
   const url = `${SUPABASE_URL}/rest/v1/${path}`;
@@ -305,6 +338,24 @@ async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(script);
+
+    /* ── Auto-register pool(s) in isp_ip_pools — fire-and-forget ──
+       Mirrors the pool values the generator writes into the script so the
+       IP Pools page is populated automatically after script download. ── */
+    const adminId  = router.admin_id;
+    const routerPk = router.id;
+    if (mode === "pppoe_only") {
+      const rawIp = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
+      const net   = deriveNet(rawIp);
+      autoUpsertPool(adminId, routerPk, "pppoe-pool", net.poolStart, net.poolEnd).catch(() => {});
+    } else {
+      const rawIp       = (router.bridge_ip ?? "192.168.88.1").replace(/\/\d+$/, "");
+      const hsPoolStart = rawIp.replace(/\.\d+$/, ".10");
+      const hsPoolEnd   = rawIp.replace(/\.\d+$/, ".200");
+      const pppPrefix   = "10.20.0";
+      autoUpsertPool(adminId, routerPk, "hs-pool",    hsPoolStart,           hsPoolEnd          ).catch(() => {});
+      autoUpsertPool(adminId, routerPk, "pppoe-pool", `${pppPrefix}.2`, `${pppPrefix}.254`).catch(() => {});
+    }
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

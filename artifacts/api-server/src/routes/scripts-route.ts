@@ -14,6 +14,39 @@ function resolveUrl(): string {
 const SUPABASE_URL = resolveUrl();
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
+/* ── Auto-upsert an IP pool record for a router ──
+   Called after script generation so pool ranges are always in the DB.
+   Fire-and-forget — errors are logged but never bubble to the response. ── */
+async function autoUpsertPool(
+  adminId: number, routerId: number, name: string, rangeStart: string, rangeEnd: string
+): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  const now = new Date().toISOString();
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/isp_ip_pools`, {
+      method: "POST",
+      headers: {
+        apikey:          SUPABASE_KEY,
+        Authorization:   `Bearer ${SUPABASE_KEY}`,
+        "Content-Type":  "application/json",
+        Prefer:          "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify({
+        admin_id:    adminId,
+        router_id:   routerId,
+        name,
+        range_start: rangeStart,
+        range_end:   rangeEnd,
+        created_at:  now,
+        updated_at:  now,
+      }),
+    });
+    console.log(`[auto-pool] upserted "${name}" (${rangeStart}-${rangeEnd}) → router ${routerId}`);
+  } catch (e) {
+    console.warn(`[auto-pool] upsert failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 /* ── Supabase REST helper ── */
 async function sbGet<T>(path: string): Promise<T[]> {
   const url = `${SUPABASE_URL}/rest/v1/${path}`;
@@ -378,6 +411,11 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const profileName = routerSlug;
     const portalBase  = `https://${adminSubdomain}.isplatty.org`;
     const now         = new Date().toISOString();
+
+    /* ── Auto-register the hotspot IP pool in isp_ip_pools ──
+       Done every time the script is served so the record is always in sync
+       with whatever bridge_ip the router has configured. Fire-and-forget. ── */
+    autoUpsertPool(adminId, router_row.id, "hspool", poolStart, poolEnd).catch(() => {});
 
     /* ── Router secret token for heartbeat ──
        If the router already has a secret, use it.
