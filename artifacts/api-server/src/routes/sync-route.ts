@@ -56,6 +56,34 @@ function makeConn(host: string, username: string, password: string): RouterOSAPI
   return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 6, keepalive: false });
 }
 
+/* ─── Connect with optional bridgeIp fallback ─── */
+async function connectWithFallback(
+  host: string,
+  bridgeIp: string | undefined,
+  username: string,
+  password: string,
+  log: (msg: string) => void,
+): Promise<{ conn: RouterOSAPI; via: string }> {
+  const primary = host || bridgeIp || "";
+  if (!primary) throw new Error("No host or bridge IP provided");
+
+  log(`▶ Connecting to ${primary}:8728 as '${username || "admin"}'...`);
+  const conn = makeConn(primary, username, password);
+  try {
+    await withTimeout(conn.connect(), 12000);
+    log(`✓ Connected via ${primary}`);
+    return { conn, via: primary };
+  } catch (firstErr) {
+    const fallback = bridgeIp && bridgeIp !== primary ? bridgeIp : null;
+    if (!fallback) throw firstErr;
+    log(`⚠ ${primary} unreachable, trying VPN bridge ${fallback}...`);
+    const conn2 = makeConn(fallback, username, password);
+    await withTimeout(conn2.connect(), 12000);
+    log(`✓ Connected via VPN bridge ${fallback}`);
+    return { conn: conn2, via: fallback };
+  }
+}
+
 /* ─── Extract real client IP, unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) ─── */
 function clientIp(req: import("express").Request): string {
   const raw = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
@@ -298,8 +326,8 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/plans", async (req, res): Promise<void> => {
-  const { host, username, password, plans } = req.body as {
-    host: string; username: string; password: string;
+  const { host, bridgeIp, username, password, plans } = req.body as {
+    host: string; bridgeIp?: string; username: string; password: string;
     plans: Array<{
       id: number; name: string; type: string;
       speed_down: number; speed_up: number;
@@ -309,16 +337,15 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
     }>;
   };
 
-  if (!host || !plans?.length) { res.status(400).json({ ok: false, error: "host and plans are required" }); return; }
+  if ((!host && !bridgeIp) || !plans?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and plans are required" }); return; }
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
-  log(`▶ Connecting to ${host}:8728 as '${username || "admin"}'...`);
 
-  const conn = makeConn(host, username, password);
+  let conn!: RouterOSAPI;
   try {
-    await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected — pushing ${plans.length} plan profile(s)\n`);
+    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    log(`  pushing ${plans.length} plan profile(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
 
@@ -373,7 +400,7 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
     try { conn.close(); } catch { /* ignore */ }
-    res.json({ ok: false, error: connErr(host, msg), logs });
+    res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
   }
 });
 
@@ -387,8 +414,8 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/users", async (req, res): Promise<void> => {
-  const { host, username, password, users } = req.body as {
-    host: string; username: string; password: string;
+  const { host, bridgeIp, username, password, users } = req.body as {
+    host: string; bridgeIp?: string; username: string; password: string;
     users: Array<{
       username: string; password: string;
       type: string;           // "hotspot" | "pppoe" | "static" | "voucher"
@@ -400,16 +427,15 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
     }>;
   };
 
-  if (!host || !users?.length) { res.status(400).json({ ok: false, error: "host and users are required" }); return; }
+  if ((!host && !bridgeIp) || !users?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and users are required" }); return; }
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
-  log(`▶ Connecting to ${host}:8728 as '${username || "admin"}'...`);
 
-  const conn = makeConn(host, username, password);
+  let conn!: RouterOSAPI;
   try {
-    await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected — pushing ${users.length} user(s)\n`);
+    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    log(`  pushing ${users.length} user(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
 
@@ -469,7 +495,7 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
     try { conn.close(); } catch { /* ignore */ }
-    res.json({ ok: false, error: connErr(host, msg), logs });
+    res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
   }
 });
 

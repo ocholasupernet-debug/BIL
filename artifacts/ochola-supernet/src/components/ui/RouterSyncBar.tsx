@@ -5,7 +5,7 @@ import { RefreshCw, Loader2, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp
 
 /* ─── Router type from Supabase ─── */
 interface DbRouterMin {
-  id: number; name: string; host: string; status: string;
+  id: number; name: string; host: string; bridge_ip: string | null; status: string;
   router_username: string; router_secret: string | null;
 }
 
@@ -73,22 +73,26 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
   const { data: routers = [] } = useQuery<DbRouterMin[]>({
     queryKey: ["isp_routers_sync"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host,status,router_username,router_secret").eq("admin_id", ADMIN_ID);
+      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID);
       return (data ?? []) as DbRouterMin[];
     },
   });
 
   const selectedRouter = routers.find(r => r.id === selectedId) ?? null;
 
+  const canSync = !!selectedRouter && !!(selectedRouter.host || selectedRouter.bridge_ip);
+
   const handleSync = async () => {
-    if (!selectedRouter) return;
+    if (!selectedRouter || !canSync) return;
     setSyncing(true);
     setResult(null);
     try {
       const payload = {
-        host:     selectedRouter.host,
-        username: selectedRouter.router_username || "admin",
-        password: selectedRouter.router_secret   || "",
+        host:       selectedRouter.host     || selectedRouter.bridge_ip || "",
+        bridgeIp:   selectedRouter.bridge_ip || undefined,
+        routerId:   selectedRouter.id,
+        username:   selectedRouter.router_username || "admin",
+        password:   selectedRouter.router_secret   || "",
         ...buildPayload(selectedRouter),
       };
       const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -132,14 +136,14 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
 
         <button
           onClick={handleSync}
-          disabled={syncing || !selectedRouter || !selectedRouter.host}
+          disabled={syncing || !canSync}
           style={{
             display: "flex", alignItems: "center", gap: "0.45rem",
             padding: "0.575rem 1.25rem", borderRadius: 10,
-            background: syncing || !selectedRouter || !selectedRouter.host ? `${color}18` : `linear-gradient(135deg,${color},${color}cc)`,
-            border: "none", color: syncing || !selectedRouter || !selectedRouter.host ? "#94a3b8" : "white",
-            fontWeight: 800, fontSize: "0.85rem", cursor: syncing || !selectedRouter || !selectedRouter.host ? "not-allowed" : "pointer",
-            fontFamily: "inherit", boxShadow: syncing || !selectedRouter || !selectedRouter.host ? "none" : `0 4px 12px ${color}40`,
+            background: syncing || !canSync ? `${color}18` : `linear-gradient(135deg,${color},${color}cc)`,
+            border: "none", color: syncing || !canSync ? "#94a3b8" : "white",
+            fontWeight: 800, fontSize: "0.85rem", cursor: syncing || !canSync ? "not-allowed" : "pointer",
+            fontFamily: "inherit", boxShadow: syncing || !canSync ? "none" : `0 4px 12px ${color}40`,
             transition: "all 0.2s", whiteSpace: "nowrap",
           }}
         >
@@ -150,11 +154,16 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         </button>
       </div>
 
-      {/* ── No host warning ── */}
-      {selectedRouter && !selectedRouter.host && (
+      {/* ── No host / bridge_ip warning ── */}
+      {selectedRouter && !selectedRouter.host && !selectedRouter.bridge_ip && (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8, fontSize: "0.75rem", color: "#fbbf24" }}>
           <AlertTriangle size={13} />
-          <span>No API host set for this router — open <strong>Settings → Routers</strong>, expand the API panel and save the router's IP address.</span>
+          <span>No IP address found for this router. Make sure it has sent a heartbeat (VPN IP auto-detected) or go to <strong>Routers</strong> and save its IP manually.</span>
+        </div>
+      )}
+      {selectedRouter && !selectedRouter.host && selectedRouter.bridge_ip && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 8, fontSize: "0.75rem", color: "#22d3ee" }}>
+          <span>Using VPN tunnel IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.bridge_ip}</strong> to reach this router.</span>
         </div>
       )}
 
