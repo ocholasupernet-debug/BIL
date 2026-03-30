@@ -420,6 +420,59 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/sync/ip-pools
+   Pushes IP pools to a MikroTik router.
+   Body: { host, bridgeIp?, username, password,
+           pools: [{ name, rangeStart, rangeEnd }] }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
+  const { host, bridgeIp, username, password, pools } = req.body as {
+    host: string; bridgeIp?: string; username: string; password: string;
+    pools: Array<{ name: string; rangeStart: string; rangeEnd: string }>;
+  };
+
+  if ((!host && !bridgeIp) || !pools?.length) {
+    res.status(400).json({ ok: false, error: "host/bridgeIp and pools are required" });
+    return;
+  }
+
+  const logs: string[] = [];
+  const log = (msg: string) => logs.push(msg);
+
+  let conn!: RouterOSAPI;
+  try {
+    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    log(`  pushing ${pools.length} IP pool(s)\n`);
+
+    let created = 0, updated = 0;
+
+    for (const pool of pools) {
+      const ranges = `${pool.rangeStart}-${pool.rangeEnd}`;
+      log(`▶ Pool: ${pool.name} | ranges: ${ranges}`);
+      try {
+        const action = await upsertByFilter(conn, "/ip/pool", "name", pool.name, {
+          name: pool.name,
+          ranges,
+        });
+        log(`  ✓ ${action}`);
+        action === "created" ? created++ : updated++;
+      } catch (e) {
+        log(`  ❌ ${enrichPermErr(e, username)}`);
+      }
+    }
+
+    log(`\n✅ Done — ${created} created, ${updated} updated`);
+    conn.close();
+    res.json({ ok: true, logs });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`❌ ${msg}`);
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
    POST /api/admin/sync/users
    Pushes customers or vouchers to router as hotspot users / PPPoE secrets
    Body: {
