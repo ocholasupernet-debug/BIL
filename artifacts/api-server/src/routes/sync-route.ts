@@ -184,15 +184,20 @@ function toRateLimit(down: number, up: number, unit: string = "Mbps"): string {
   return `${up}${suffix}/${down}${suffix}`;
 }
 
-/* ─── Validity → MikroTik session-timeout string ─── */
+/* ─── Validity → MikroTik session-timeout string (HH:MM:SS, hours may exceed 24) ─── */
 function toSessionTimeout(value: number, unit: string): string {
   const u = (unit || "Days").toLowerCase();
-  if (u.startsWith("min"))   return `${value}m`;
-  if (u.startsWith("hr"))    return `${value}h`;
-  if (u.startsWith("day"))   return `${value}d`;
-  if (u.startsWith("week"))  return `${value * 7}d`;
-  if (u.startsWith("month")) return `${value * 30}d`;
-  return `${value}d`;
+  let totalSec = 0;
+  if (u.startsWith("min"))   totalSec = value * 60;
+  else if (u.startsWith("hr"))    totalSec = value * 3600;
+  else if (u.startsWith("day"))   totalSec = value * 86400;
+  else if (u.startsWith("week"))  totalSec = value * 7 * 86400;
+  else if (u.startsWith("month")) totalSec = value * 30 * 86400;
+  else totalSec = value * 86400;
+  const hh = Math.floor(totalSec / 3600);
+  const mm = Math.floor((totalSec % 3600) / 60);
+  const ss = totalSec % 60;
+  return `${hh.toString().padStart(2, "0")}:${mm.toString().padStart(2, "0")}:${ss.toString().padStart(2, "0")}`;
 }
 
 /* ─── Connection error message ─── */
@@ -359,9 +364,8 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
         log(`▶ PPPoE profile: ${profileName} | rate-limit: ${rateLimit}`);
         try {
           const action = await upsertByFilter(conn, "/ppp/profile", "name", profileName, {
-            name:        profileName,
+            name:         profileName,
             "rate-limit": rateLimit,
-            comment:     `OcholaNet plan #${plan.id}`,
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
@@ -374,11 +378,10 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
         log(`▶ Hotspot profile: ${profileName} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users}`);
         try {
           const action = await upsertByFilter(conn, "/ip/hotspot/user/profile", "name", profileName, {
-            name:             profileName,
-            "rate-limit":     rateLimit,
+            name:              profileName,
+            "rate-limit":      rateLimit,
             "session-timeout": sessionTime,
-            "shared-users":   String(plan.shared_users || 1),
-            comment:          `OcholaNet plan #${plan.id}`,
+            "shared-users":    String(plan.shared_users || 1),
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
