@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 
 const router: IRouter = Router();
 
@@ -49,7 +49,7 @@ function deriveNet(ip: string): { gateway: string; network: string; poolStart: s
 }
 
 /* ══════════════════════════ Script generators ══════════════════════════ */
-function genPPPoEOnly(router: DbRouter, companyName: string): string {
+function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): string {
   const secret    = router.router_secret ?? "changeme";
   const wanIface  = router.wan_interface  ?? "ether1";
   const rawIp     = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
@@ -60,14 +60,10 @@ function genPPPoEOnly(router: DbRouter, companyName: string): string {
 # ${companyName} — PPPoE Only Configuration
 # Router : ${router.name} (${router.host})
 # Generated: ${new Date().toLocaleString("en-KE")}
+# Target : RouterOS ${ros}
 # WAN interface : ${wanIface}
 # PPPoE gateway : ${net.gateway}/24
 # ============================================================
-
-# ── Detect RouterOS major version so version-specific commands run only where supported ──
-:local rosVer [/system package get system version]
-:local rosMajor [:tonum [:pick $rosVer 0 1]]
-:log info ("ROS major version: " . $rosMajor)
 
 # 1. Clean previous PPPoE config
 :do { /interface pppoe-server server remove [find] } on-error={}
@@ -140,7 +136,7 @@ function genPPPoEOnly(router: DbRouter, companyName: string): string {
 `;
 }
 
-function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
+function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number): string {
   const secret      = router.router_secret   ?? "changeme";
   const wanIface    = router.wan_interface   ?? "ether1";
   const bridgeName  = router.bridge_interface ?? "hotspot-bridge";
@@ -151,18 +147,19 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
   const hsPoolEnd   = rawIp.replace(/\.\d+$/, ".200");
   const pppPrefix   = "10.20.0";
 
+  /* ROS-version-specific hotspot profile params */
+  const hsProfileExtras = ros >= 7
+    ? ` use-radius=no mac-auth-mode=mac-as-username`
+    : ``;
+
   return `# ============================================================
 # ${companyName} — PPPoE over Hotspot Configuration
 # Router : ${router.name} (${router.host})
 # Generated: ${new Date().toLocaleString("en-KE")}
+# Target : RouterOS ${ros}
 # WAN interface : ${wanIface}
 # Bridge / Hotspot IP : ${net.gateway}/24
 # ============================================================
-
-# ── Detect RouterOS major version so version-specific commands run only where supported ──
-:local rosVer [/system package get system version]
-:local rosMajor [:tonum [:pick $rosVer 0 1]]
-:log info ("ROS major version: " . $rosMajor)
 
 # 1. Clean existing config
 :do { /interface pppoe-server server remove [find] } on-error={}
@@ -201,13 +198,8 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
 # 5. DNS
 /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
 
-# 6. Hotspot profile & server — local authentication
-/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac comment="${companyName} hotspot profile"
-
-# ROS 7+: parameters that do not exist in ROS 6
-:if ($rosMajor >= 7) do={
-  /ip hotspot profile set [find name="hs-profile"] use-radius=no mac-auth-mode=mac-as-username
-}
+# 6. Hotspot profile & server
+/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac${hsProfileExtras} comment="${companyName} hotspot profile"
 
 /ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=5m disabled=no
 
@@ -257,14 +249,16 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   GET /api/pppoe-script/:routerId/:mode
+   GET /api/pppoe-script/:routerId/:mode/:rosVersion?
    Serves the PPPoE .rsc config file so the router can fetch it
-   with /tool fetch.
-   mode = "pppoe_only" | "pppoe_over_hotspot"
+   with /tool fetch (no ? in the URL — RouterOS terminal eats it).
+   mode       = "pppoe_only" | "pppoe_over_hotspot"
+   rosVersion = "6" | "7"  (defaults to "6" if omitted)
 ══════════════════════════════════════════════════════════════ */
-router.get("/pppoe-script/:routerId/:mode", async (req, res): Promise<void> => {
-  const routerId = parseInt(req.params.routerId ?? "", 10);
-  const mode     = req.params.mode as "pppoe_only" | "pppoe_over_hotspot";
+async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
+  const routerId   = parseInt(req.params.routerId ?? "", 10);
+  const mode       = req.params.mode as "pppoe_only" | "pppoe_over_hotspot";
+  const rosVersion = parseInt(req.params.rosVersion ?? "6", 10) || 6;
 
   if (isNaN(routerId) || !["pppoe_only", "pppoe_over_hotspot"].includes(mode)) {
     res.status(400).send("# Error: invalid routerId or mode");
@@ -294,14 +288,14 @@ router.get("/pppoe-script/:routerId/:mode", async (req, res): Promise<void> => {
       if (admins.length > 0) companyName = admins[0].name;
     } catch { /* use defaults */ }
 
-    const slug   = slugify(router.name);
+    const slug     = slugify(router.name);
     const filename = mode === "pppoe_only"
       ? `pppoe-only-${slug}.rsc`
       : `pppoe-hotspot-${slug}.rsc`;
 
     const script = mode === "pppoe_only"
-      ? genPPPoEOnly(router, companyName)
-      : genPPPoEOverHotspot(router, companyName);
+      ? genPPPoEOnly(router, companyName, rosVersion)
+      : genPPPoEOverHotspot(router, companyName, rosVersion);
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -311,6 +305,10 @@ router.get("/pppoe-script/:routerId/:mode", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).send(`# Error generating script: ${msg}`);
   }
-});
+}
+
+/* Register both with and without rosVersion segment (Express 5 doesn't support :param?) */
+router.get("/pppoe-script/:routerId/:mode/:rosVersion", handlePPPoEScript);
+router.get("/pppoe-script/:routerId/:mode",             handlePPPoEScript);
 
 export default router;

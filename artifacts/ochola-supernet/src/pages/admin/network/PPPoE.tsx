@@ -88,10 +88,18 @@ function CmdBlock({ step, title, cmd, note }: { step: number; title: string; cmd
 }
 
 /* ══════════════════════════ Main Page ══════════════════════════ */
+type RosVer = "6" | "7";
+
+function detectMajor(ver: string | null | undefined): RosVer {
+  const m = (ver ?? "").match(/^(\d+)/);
+  return m && parseInt(m[1]) >= 7 ? "7" : "6";
+}
+
 export default function PPPoE() {
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [mode, setMode] = useState<Mode>("pppoe_only");
   const [generated, setGenerated] = useState(false);
+  const [rosVer, setRosVer] = useState<RosVer>("6");
 
   const { data: adminInfo } = useQuery({
     queryKey: ["admin_info_pppoe", ADMIN_ID],
@@ -118,7 +126,9 @@ export default function PPPoE() {
 
   useEffect(() => {
     if (routers.length > 0 && selectedRouterId === null) {
-      setSelectedRouterId(routers[0].id);
+      const first = routers[0];
+      setSelectedRouterId(first.id);
+      setRosVer(detectMajor(first.ros_version));
     }
   }, [routers, selectedRouterId]);
 
@@ -131,11 +141,11 @@ export default function PPPoE() {
   const slug         = router ? slugify(router.name) : "router";
   const configFile   = mode === "pppoe_only" ? `pppoe-only-${slug}.rsc` : `pppoe-hotspot-${slug}.rsc`;
   const fetchCmd     = router
-    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}" dst-path=${configFile} mode=https check-certificate=no`
+    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}/${rosVer}" dst-path=${configFile} mode=https check-certificate=no`
     : "";
   const importCmd    = `/import ${configFile}`;
   const downloadUrl  = router
-    ? `/api/pppoe-script/${router.id}/${mode}`
+    ? `/api/pppoe-script/${router.id}/${mode}/${rosVer}`
     : "#";
 
   const MODES: { id: Mode; label: string; sub: string; icon: React.ReactNode; color: string; border: string }[] = [
@@ -187,7 +197,13 @@ export default function PPPoE() {
             }}>Router</span>
             <select
               value={selectedRouterId ?? ""}
-              onChange={e => { setSelectedRouterId(Number(e.target.value)); setGenerated(false); }}
+              onChange={e => {
+                const id = Number(e.target.value);
+                setSelectedRouterId(id);
+                setGenerated(false);
+                const r = routers.find(x => x.id === id);
+                if (r) setRosVer(detectMajor(r.ros_version));
+              }}
               disabled={loadingRouters}
               style={{
                 flex: 1, background: "var(--isp-inner-card)",
@@ -209,6 +225,43 @@ export default function PPPoE() {
                 ROS {router.ros_version || "—"}
               </span>
             )}
+          </div>
+
+          {/* ROS version selector */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.875rem",
+            padding: "0.75rem 1.25rem",
+            borderBottom: "1px solid var(--isp-border-subtle)",
+          }}>
+            <span style={{
+              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
+              textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
+            }}>ROS Version</span>
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              {(["6", "7"] as RosVer[]).map(v => {
+                const active = rosVer === v;
+                return (
+                  <button
+                    key={v}
+                    onClick={() => { setRosVer(v); setGenerated(false); }}
+                    style={{
+                      padding: "0.3rem 0.875rem", borderRadius: 7, fontFamily: "inherit",
+                      fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", transition: "all 0.14s",
+                      background: active ? "rgba(6,182,212,0.15)" : "var(--isp-inner-card)",
+                      border: `1px solid ${active ? "rgba(6,182,212,0.5)" : "var(--isp-border)"}`,
+                      color: active ? "#06b6d4" : "var(--isp-text-muted)",
+                    }}
+                  >
+                    ROS {v}
+                  </button>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginLeft: "auto" }}>
+              {rosVer === "7"
+                ? "Includes use-radius, mac-auth-mode"
+                : "Compatible with RouterOS 6.x"}
+            </span>
           </div>
 
           {/* Mode selection + generate */}
@@ -322,6 +375,13 @@ export default function PPPoE() {
                   borderRadius: 5, padding: "0.1rem 0.45rem",
                 }}>
                   {router.name}
+                </span>
+                <span style={{
+                  fontSize: "0.68rem", fontWeight: 700, color: "#a78bfa",
+                  background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.28)",
+                  borderRadius: 5, padding: "0.1rem 0.45rem",
+                }}>
+                  ROS {rosVer}
                 </span>
               </div>
               {/* Download config file directly */}
