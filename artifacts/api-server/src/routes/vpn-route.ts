@@ -139,6 +139,8 @@ const IPP_PATHS = [
   "/var/log/openvpn/ipp.txt",
 ];
 const STATUS_PATHS = [
+  "/run/openvpn/server.status",          /* systemd unit: --status /run/openvpn/server.status */
+  "/run/openvpn/server.status.tmp",
   "/etc/openvpn/server/openvpn-status.log",
   "/var/log/openvpn/status.log",
   "/tmp/openvpn-status.log",
@@ -167,12 +169,34 @@ function readStatusLog(): Map<string, { ip: string; realAddr: string; since: str
     const lines = readFileSync(path, "utf-8").split("\n");
     let inRouting = false;
     for (const line of lines) {
-      if (line.startsWith("ROUTING TABLE") || line.startsWith("HEADER,ROUTING TABLE")) { inRouting = true; continue; }
-      if (line.startsWith("GLOBAL STATS") || line.startsWith("END")) { inRouting = false; continue; }
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      /* ── v2 format: ROUTING_TABLE,10.8.0.x,clientname,realAddr,... ── */
+      if (trimmed.startsWith("ROUTING_TABLE,")) {
+        const parts = trimmed.split(",");
+        /* parts[1] = VPN IP, parts[2] = client name, parts[3] = real addr */
+        const ip   = parts[1]?.trim() ?? "";
+        const name = parts[2]?.trim() ?? "";
+        const real = parts[3]?.trim() ?? "";
+        if (ip.startsWith("10.") && name) {
+          map.set(name, { ip, realAddr: real, since: parts[5]?.trim() ?? "" });
+        }
+        continue;
+      }
+
+      /* ── v1 format: section-based ── */
+      if (trimmed.startsWith("ROUTING TABLE") || trimmed.startsWith("HEADER,ROUTING TABLE")) {
+        inRouting = true; continue;
+      }
+      if (trimmed.startsWith("GLOBAL STATS") || trimmed.startsWith("GLOBAL_STATS") || trimmed === "END") {
+        inRouting = false; continue;
+      }
       if (!inRouting) continue;
-      if (line.startsWith("HEADER") || line.startsWith("Virtual")) continue;
-      /* Format: 10.8.0.x,clientname,realAddr:port,lastRef */
-      const parts = line.split(",");
+      if (trimmed.startsWith("HEADER") || trimmed.startsWith("Virtual")) continue;
+
+      /* v1 routing row: 10.8.0.x,clientname,realAddr:port,lastRef */
+      const parts = trimmed.split(",");
       if (parts.length >= 3 && parts[0]?.startsWith("10.")) {
         map.set(parts[1]?.trim() ?? "", {
           ip:       parts[0].trim(),
