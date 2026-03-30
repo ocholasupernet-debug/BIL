@@ -64,6 +64,11 @@ function genPPPoEOnly(router: DbRouter, companyName: string): string {
 # PPPoE gateway : ${net.gateway}/24
 # ============================================================
 
+# ── Detect RouterOS major version so version-specific commands run only where supported ──
+:local rosVer [/system package get system version]
+:local rosMajor [:tonum [:pick $rosVer 0 1]]
+:log info ("ROS major version: " . $rosMajor)
+
 # 1. Clean previous PPPoE config
 :do { /interface pppoe-server server remove [find] } on-error={}
 :do { /ppp profile remove [find name~"internet"] } on-error={}
@@ -154,6 +159,11 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
 # Bridge / Hotspot IP : ${net.gateway}/24
 # ============================================================
 
+# ── Detect RouterOS major version so version-specific commands run only where supported ──
+:local rosVer [/system package get system version]
+:local rosMajor [:tonum [:pick $rosVer 0 1]]
+:log info ("ROS major version: " . $rosMajor)
+
 # 1. Clean existing config
 :do { /interface pppoe-server server remove [find] } on-error={}
 :do { /ip hotspot remove [find] } on-error={}
@@ -199,6 +209,11 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
   use-radius=no \\
   login-by=http-chap,mac \\
   comment="${companyName} hotspot profile"
+
+# ROS 7+: set mac-auth-mode (parameter not available on ROS 6)
+:if ($rosMajor >= 7) do={
+  /ip hotspot profile set [find name="hs-profile"] mac-auth-mode=mac-as-username
+}
 
 /ip hotspot add \\
   name=hotspot1 \\
