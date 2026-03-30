@@ -269,7 +269,8 @@ export default function BridgePorts() {
 
   async function fetchPortsForRouter(r: UnifiedRouter) {
     const host = effectiveHost(r);
-    if (!host) {
+    const cn   = slugify(r.name);   /* VPN certificate CN — fallback when host is unknown */
+    if (!host && !cn) {
       setLoadError("No IP address available for this router. It will be set automatically once the VPN tunnel connects.");
       return;
     }
@@ -287,6 +288,8 @@ export default function BridgePorts() {
           username: r.router_username || "admin",
           password: r.router_secret   || "",
           bridgeIp: r.bridge_ip || undefined,
+          routerCn: cn,
+          routerId: r.id,
         }),
       });
       const data = await res.json() as PortsPayload & { connectedVia?: string };

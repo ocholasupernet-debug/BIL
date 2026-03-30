@@ -62,9 +62,9 @@ function clientIp(req: import("express").Request): string {
   return raw.replace(/^::ffff:/, "");
 }
 
-/* ─── Returns true if IP is in the OpenVPN client subnet 10.8.0.x ─── */
+/* ─── Returns true if IP is in the OpenVPN tunnel subnet 10.8.x.x ─── */
 function isVpnIp(ip: string): boolean {
-  return /^10\.8\.0\./.test(ip);
+  return /^10\.8\./.test(ip);   /* covers 10.8.0.x, 10.8.1.x … 10.8.255.x */
 }
 
 /* ─── Returns true if IP is a private/link-local/loopback range ─── */
@@ -695,31 +695,40 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
    Body: { host, username, password }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/ports", async (req, res): Promise<void> => {
-  const { host, username, password, bridgeIp } = req.body as {
-    host: string; username: string; password: string; bridgeIp?: string;
+  const { host, username, password, bridgeIp, routerCn, routerId } = req.body as {
+    host: string; username: string; password: string;
+    bridgeIp?: string; routerCn?: string; routerId?: number;
   };
-  if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
 
   /* ── Build list of IPs to try in order ──────────────────────
      1. host       (WAN or direct IP stored in Supabase)
      2. bridgeIp   (explicit VPN bridge IP if set and different)
-     3. vpnIp      (auto-looked up from OpenVPN server status file)
+     3. vpnIp      (auto-looked up from OpenVPN server status file by WAN IP)
+     4. cnVpnIp    (looked up by router VPN certificate CN — fallback when
+                    host is empty, e.g. brand-new router whose host was never set)
      ─────────────────────────────────────────────────────────── */
   const vpnClients = readVpnClients();
-  const autoVpnIp  = vpnIpFor(host, vpnClients);   /* e.g. 10.8.0.6 */
+  const autoVpnIp  = host ? vpnIpFor(host, vpnClients) : null;   /* e.g. 10.8.0.6 */
+  const cnVpnIp    = routerCn ? vpnIpFor(routerCn, vpnClients) : null;
+
+  /* Require at least one usable address */
+  if (!host && !bridgeIp && !autoVpnIp && !cnVpnIp) {
+    res.status(400).json({ ok: false, error: "host is required" });
+    return;
+  }
 
   /* Fast-fail only when ALL candidates are LAN-only with no VPN alternative */
-  const candidates = [host, bridgeIp, autoVpnIp].filter(Boolean) as string[];
+  const candidates = [host, bridgeIp, autoVpnIp, cnVpnIp].filter(Boolean) as string[];
   const hasReachableCandidate = candidates.some(ip => !isLanOnlyIp(ip));
   if (!hasReachableCandidate) {
-    const detail = autoVpnIp
+    const detail = (autoVpnIp || cnVpnIp)
       ? ""
       : bridgeIp && bridgeIp === host
         ? `Bridge IP is set to the same LAN address (${bridgeIp}).`
         : `No VPN tunnel IP found. Set the router's VPN IP in Bridge IP or ensure OpenVPN is running.`;
     res.json({
       ok: false,
-      error: `Router host ${host} is a private LAN address — the server cannot reach it directly. ${detail}`.trim(),
+      error: `Router host ${host || "(none)"} is a private LAN address — the server cannot reach it directly. ${detail}`.trim(),
     });
     return;
   }
@@ -730,11 +739,13 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
   let lastErr: unknown;
 
   const toTry: Array<{ ip: string; label: string }> = [];
-  if (!isLanOnlyIp(host)) toTry.push({ ip: host, label: host });
+  if (host && !isLanOnlyIp(host)) toTry.push({ ip: host, label: host });
   if (bridgeIp && bridgeIp !== host && !isLanOnlyIp(bridgeIp))
     toTry.push({ ip: bridgeIp, label: `${bridgeIp} (bridge)` });
   if (autoVpnIp && !toTry.find(t => t.ip === autoVpnIp))
     toTry.push({ ip: autoVpnIp, label: `${autoVpnIp} (VPN tunnel)` });
+  if (cnVpnIp && !toTry.find(t => t.ip === cnVpnIp))
+    toTry.push({ ip: cnVpnIp, label: `${cnVpnIp} (VPN by CN)` });
 
   for (const { ip, label } of toTry) {
     try {
@@ -742,19 +753,23 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
       await withTimeout(conn.connect(), 8000);
       connectedVia = label;
 
-      /* ── If we connected via auto-discovered VPN IP, save it as bridge_ip ──
-         This runs in the background so we don't delay the response. */
-      if (ip === autoVpnIp) {
-        const HB_URL = hbUrl();
-        const HB_KEY = hbKey();
-        if (HB_URL && HB_KEY) {
+      /* ── Save discovered VPN IP back to Supabase in background ── */
+      const HB_URL = hbUrl();
+      const HB_KEY = hbKey();
+      if (HB_URL && HB_KEY) {
+        if (ip === autoVpnIp && host) {
+          /* Found VPN IP by matching WAN host → save as bridge_ip */
           fetch(
             `${HB_URL}/rest/v1/isp_routers?host=eq.${encodeURIComponent(host)}`,
-            {
-              method: "PATCH",
-              headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ bridge_ip: ip }),
-            }
+            { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ bridge_ip: ip }) }
+          ).catch(() => {});
+        } else if (ip === cnVpnIp && routerId) {
+          /* Found VPN IP by CN (host was empty) → save as both host and bridge_ip using router ID */
+          fetch(
+            `${HB_URL}/rest/v1/isp_routers?id=eq.${routerId}`,
+            { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ host: ip, bridge_ip: ip }) }
           ).catch(() => {});
         }
       }
