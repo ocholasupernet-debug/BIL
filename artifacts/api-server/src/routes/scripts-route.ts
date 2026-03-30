@@ -141,6 +141,32 @@ function updateVpnCredentials(username: string, password: string): void {
   } catch { /* non-root dev env — silently skip */ }
 }
 
+/* Upsert a VPN user record in Supabase (isp_vpn_users table).
+   Called when a router setup script is generated so every router
+   automatically gets a corresponding VPN login. */
+async function ensureVpnUser(adminId: number, username: string, password: string, routerName: string): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/isp_vpn_users`, {
+      method: "POST",
+      headers: {
+        apikey:          SUPABASE_KEY,
+        Authorization:   `Bearer ${SUPABASE_KEY}`,
+        "Content-Type":  "application/json",
+        /* Upsert: ignore conflict on (admin_id, username) */
+        Prefer:          "resolution=ignore-duplicates,return=minimal",
+      },
+      body: JSON.stringify({
+        admin_id:  adminId,
+        username,
+        password,
+        notes:     `Auto — router: ${routerName}`,
+        is_active: true,
+      }),
+    });
+  } catch { /* ignore — non-critical */ }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
    Dynamically generates a RouterOS .rsc file.
@@ -388,6 +414,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        Also keeps the psw-file in sync as a fallback during transition. */
     ensureClientCert(routerSlug);
     updateVpnCredentials(routerSlug, "ocholasupernet");
+    void ensureVpnUser(Number(adminId), routerSlug, "ocholasupernet", routerName);
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
