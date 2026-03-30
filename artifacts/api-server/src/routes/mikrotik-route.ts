@@ -2,6 +2,12 @@ import { Router, type IRouter } from "express";
 import {
   fetchHotspotUsers,
   fetchPPPoEActive,
+  fetchPPPSecrets,
+  fetchPPPProfiles,
+  addPPPSecret,
+  removePPPSecret,
+  updatePPPSecret,
+  disconnectPPPActive,
   fetchInterfaces,
   fetchTraffic,
   fetchRouterLiveData,
@@ -722,6 +728,90 @@ router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
   } catch (err) {
     routerErrorResponse(res, err);
   }
+});
+
+/* ══════════════════════ PPP Secrets ════════════════════════════════════════ */
+
+/* GET /api/router/:id/ppp/secrets */
+router.get("/router/:id/ppp/secrets", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    const secrets = await fetchPPPSecrets(found.creds);
+    res.json({ routerId: id, secrets, fetchedAt: new Date().toISOString() });
+  } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* POST /api/router/:id/ppp/secrets — add a new PPP user */
+router.post("/router/:id/ppp/secrets", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const { name, password, profile, service, comment } = req.body as {
+    name: string; password: string; profile?: string; service?: string; comment?: string;
+  };
+  if (!name || !password) { res.status(400).json({ error: "name and password are required" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await addPPPSecret(found.creds, { name, password, profile, service, comment });
+    res.json({ ok: true, message: `PPP secret '${name}' created` });
+  } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* PATCH /api/router/:id/ppp/secrets/:secretId — update password/profile/disabled */
+router.patch("/router/:id/ppp/secrets/:secretId", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const secretId = req.params.secretId;
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const { password, profile, disabled, comment } = req.body as {
+    password?: string; profile?: string; disabled?: boolean; comment?: string;
+  };
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await updatePPPSecret(found.creds, secretId, { password, profile, disabled, comment });
+    res.json({ ok: true, message: "PPP secret updated" });
+  } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* DELETE /api/router/:id/ppp/secrets/:secretId */
+router.delete("/router/:id/ppp/secrets/:secretId", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const secretId = req.params.secretId;
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await removePPPSecret(found.creds, secretId);
+    res.json({ ok: true, message: "PPP secret deleted" });
+  } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* GET /api/router/:id/ppp/profiles */
+router.get("/router/:id/ppp/profiles", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    const profiles = await fetchPPPProfiles(found.creds);
+    res.json({ routerId: id, profiles, fetchedAt: new Date().toISOString() });
+  } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* DELETE /api/router/:id/ppp/active/:sessionId — disconnect a PPP session */
+router.delete("/router/:id/ppp/active/:sessionId", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const sessionId = req.params.sessionId;
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const found = await getRouterCreds(id);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await disconnectPPPActive(found.creds, sessionId);
+    res.json({ ok: true, message: "Session disconnected" });
+  } catch (err) { routerErrorResponse(res, err); }
 });
 
 export default router;

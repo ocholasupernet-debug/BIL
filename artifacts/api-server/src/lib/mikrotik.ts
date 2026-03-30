@@ -540,6 +540,114 @@ export async function fetchPPPoEActive(
   });
 }
 
+/* ══ PPP Secrets ═══════════════════════════════════════════════════════════ */
+export interface PPPSecret {
+  id: string;
+  name: string;
+  password: string;
+  service: string;
+  profile: string;
+  localAddress: string;
+  remoteAddress: string;
+  disabled: boolean;
+  comment: string;
+}
+
+export async function fetchPPPSecrets(creds: RouterCredentials): Promise<PPPSecret[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/secret/print"]), ms)) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:            r[".id"]              ?? "",
+      name:          r.name               ?? "",
+      password:      r.password           ?? "",
+      service:       r.service            ?? "any",
+      profile:       r.profile            ?? "default",
+      localAddress:  r["local-address"]   ?? "",
+      remoteAddress: r["remote-address"]  ?? "",
+      disabled:      parseBool(r.disabled),
+      comment:       r.comment            ?? "",
+    }));
+  });
+}
+
+export async function addPPPSecret(
+  creds: RouterCredentials,
+  opts: { name: string; password: string; profile?: string; service?: string; comment?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ppp/secret/add",
+      `=name=${opts.name}`,
+      `=password=${opts.password}`,
+      `=service=${opts.service ?? "pppoe"}`,
+      `=profile=${opts.profile ?? "default"}`,
+    ];
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removePPPSecret(creds: RouterCredentials, id: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    await withTimeout(conn.write(["/ppp/secret/remove", `=.id=${id}`]), ms);
+  });
+}
+
+export async function updatePPPSecret(
+  creds: RouterCredentials,
+  id: string,
+  fields: { password?: string; profile?: string; disabled?: boolean; comment?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params: string[] = ["/ppp/secret/set", `=.id=${id}`];
+    if (fields.password  !== undefined) params.push(`=password=${fields.password}`);
+    if (fields.profile   !== undefined) params.push(`=profile=${fields.profile}`);
+    if (fields.disabled  !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
+    if (fields.comment   !== undefined) params.push(`=comment=${fields.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function disconnectPPPActive(creds: RouterCredentials, id: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    await withTimeout(conn.write(["/ppp/active/remove", `=.id=${id}`]), ms);
+  });
+}
+
+/* ══ PPP Profiles ══════════════════════════════════════════════════════════ */
+export interface PPPProfile {
+  id: string;
+  name: string;
+  localAddress: string;
+  remoteAddress: string;
+  rateLimit: string;
+  sessionTimeout: string;
+  idleTimeout: string;
+  comment: string;
+}
+
+export async function fetchPPPProfiles(creds: RouterCredentials): Promise<PPPProfile[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/profile/print"]), ms)) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:             r[".id"]              ?? "",
+      name:           r.name               ?? "",
+      localAddress:   r["local-address"]   ?? "",
+      remoteAddress:  r["remote-address"]  ?? "",
+      rateLimit:      r["rate-limit"]      ?? "",
+      sessionTimeout: r["session-timeout"] ?? "",
+      idleTimeout:    r["idle-timeout"]    ?? "",
+      comment:        r.comment            ?? "",
+    }));
+  });
+}
+
 export async function fetchInterfaces(
   creds: RouterCredentials
 ): Promise<RouterInterface[]> {
