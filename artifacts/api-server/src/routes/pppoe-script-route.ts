@@ -20,14 +20,6 @@ async function sbGet<T>(path: string): Promise<T[]> {
   return res.json() as Promise<T[]>;
 }
 
-/* ── Parse subdomain from Host header ── */
-function parseSubdomain(host: string): string {
-  const hostname = host.split(":")[0];
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return "";
-  const parts = hostname.split(".");
-  return parts.length >= 3 ? parts[0] : "";
-}
-
 interface DbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null;
@@ -278,27 +270,10 @@ router.get("/pppoe-script/:routerId/:mode", async (req, res): Promise<void> => {
   }
 
   try {
-    /* Resolve admin */
-    const hostHeader   = (req.headers.host ?? "") as string;
-    const subdomain    = parseSubdomain(hostHeader);
-    let   adminId      = parseInt(req.query.admin_id as string ?? "", 10) || 5;
-    let   companyName  = "ISP";
-
-    if (subdomain) {
-      const admins = await sbGet<DbAdmin>(
-        `isp_admins?subdomain=eq.${encodeURIComponent(subdomain)}&select=id,name,subdomain&limit=1`
-      );
-      if (admins.length > 0) { adminId = admins[0].id; companyName = admins[0].name; }
-    } else if (!isNaN(adminId)) {
-      try {
-        const admins = await sbGet<DbAdmin>(`isp_admins?id=eq.${adminId}&select=id,name&limit=1`);
-        if (admins.length > 0) companyName = admins[0].name;
-      } catch { /* use defaults */ }
-    }
-
-    /* Fetch router */
+    /* Fetch router by ID alone — no admin_id needed in the URL
+       (RouterOS terminal treats '?' as a help key and strips it) */
     const rows = await sbGet<DbRouter>(
-      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=*&limit=1`
+      `isp_routers?id=eq.${routerId}&select=*&limit=1`
     );
 
     if (rows.length === 0) {
@@ -307,6 +282,16 @@ router.get("/pppoe-script/:routerId/:mode", async (req, res): Promise<void> => {
     }
 
     const router = rows[0];
+
+    /* Resolve company name from the router's own admin_id */
+    let companyName = "ISP";
+    try {
+      const admins = await sbGet<DbAdmin>(
+        `isp_admins?id=eq.${router.admin_id}&select=id,name&limit=1`
+      );
+      if (admins.length > 0) companyName = admins[0].name;
+    } catch { /* use defaults */ }
+
     const slug   = slugify(router.name);
     const filename = mode === "pppoe_only"
       ? `pppoe-only-${slug}.rsc`

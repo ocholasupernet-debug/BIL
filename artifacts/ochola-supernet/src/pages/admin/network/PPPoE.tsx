@@ -131,11 +131,11 @@ export default function PPPoE() {
   const slug         = router ? slugify(router.name) : "router";
   const configFile   = mode === "pppoe_only" ? `pppoe-only-${slug}.rsc` : `pppoe-hotspot-${slug}.rsc`;
   const fetchCmd     = router
-    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}?admin_id=${ADMIN_ID}" dst-path=${configFile} mode=https check-certificate=no`
+    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}" dst-path=${configFile} mode=https check-certificate=no`
     : "";
   const importCmd    = `/import ${configFile}`;
   const downloadUrl  = router
-    ? `/api/pppoe-script/${router.id}/${mode}?admin_id=${ADMIN_ID}`
+    ? `/api/pppoe-script/${router.id}/${mode}`
     : "#";
 
   const MODES: { id: Mode; label: string; sub: string; icon: React.ReactNode; color: string; border: string }[] = [
