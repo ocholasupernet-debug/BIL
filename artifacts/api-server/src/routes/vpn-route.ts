@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { sbSelect, sbUpdate } from "../lib/supabase-client";
 import { pingRouter } from "../lib/mikrotik";
@@ -386,6 +386,181 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
     results,
     vpnClients: Object.fromEntries(clientMap),
   });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * VPN USER MANAGEMENT
+ * Users are stored in Supabase (isp_vpn_users table) and synced to
+ * /etc/openvpn/users.db on the VPS for password verification.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const USERS_DB   = "/etc/openvpn/users.db";
+const AUTH_SCRIPT = "/etc/openvpn/check-auth.sh";
+
+const AUTH_SCRIPT_CONTENT = `#!/bin/bash
+# OpenVPN username/password verify script
+CREDS_FILE="$1"
+USERNAME=$(sed -n '1p' "\${CREDS_FILE}")
+PASSWORD=$(sed -n '2p' "\${CREDS_FILE}")
+if grep -qF "\${USERNAME}:\${PASSWORD}" /etc/openvpn/users.db 2>/dev/null; then
+  exit 0
+fi
+exit 1
+`;
+
+function ensureAuthInfra(): void {
+  try {
+    if (!existsSync(AUTH_SCRIPT)) {
+      writeFileSync(AUTH_SCRIPT, AUTH_SCRIPT_CONTENT, { mode: 0o755 });
+    }
+    if (!existsSync(USERS_DB)) {
+      writeFileSync(USERS_DB, "", { mode: 0o600 });
+    }
+  } catch { /* no-op in dev environment */ }
+}
+
+function syncUserToDb(username: string, password: string): void {
+  try {
+    ensureAuthInfra();
+    const content = existsSync(USERS_DB) ? readFileSync(USERS_DB, "utf-8") : "";
+    const lines = content.split("\n").filter(l => l.trim() && !l.startsWith(`${username}:`));
+    lines.push(`${username}:${password}`);
+    writeFileSync(USERS_DB, lines.join("\n") + "\n", { mode: 0o600 });
+  } catch { /* dev env */ }
+}
+
+function removeUserFromDb(username: string): void {
+  try {
+    if (!existsSync(USERS_DB)) return;
+    const content = readFileSync(USERS_DB, "utf-8");
+    const lines = content.split("\n").filter(l => l.trim() && !l.startsWith(`${username}:`));
+    writeFileSync(USERS_DB, lines.join("\n") + "\n", { mode: 0o600 });
+  } catch { /* dev env */ }
+}
+
+function generateOvpn(username: string): string {
+  const serverHost = process.env.VPN_HOST
+    || process.env.VITE_API_BASE?.replace(/^https?:\/\//, "").split(":")[0]
+    || "proxyvpn.isplatty.org";
+
+  const caPath = CA_PATHS.find(p => existsSync(p));
+  const caCert = caPath ? readFileSync(caPath, "utf-8").trim() : "# CA cert not available — paste your ca.crt here";
+
+  return [
+    `# OcholaSupernet VPN — ${username}`,
+    `# Generated: ${new Date().toISOString()}`,
+    `client`,
+    `dev tun`,
+    `proto tcp`,
+    `remote ${serverHost} 1194`,
+    `resolv-retry infinite`,
+    `nobind`,
+    `persist-key`,
+    `persist-tun`,
+    `auth-user-pass`,
+    `remote-cert-tls server`,
+    `cipher AES-256-CBC`,
+    `auth SHA1`,
+    `verb 3`,
+    `<ca>`,
+    caCert,
+    `</ca>`,
+  ].join("\n");
+}
+
+/* ── GET /api/vpn/users ── list VPN users for an admin */
+router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
+  const adminId = req.query.adminId ?? "1";
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    const r = await fetch(
+      `${url}/rest/v1/isp_vpn_users?admin_id=eq.${adminId}&order=created_at.desc&select=id,username,notes,is_active,created_at,expires_at`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+    );
+    if (!r.ok) throw new Error(await r.text());
+    res.json(await r.json());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── POST /api/vpn/users ── create a VPN user */
+router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => {
+  const { adminId = 1, username, password, notes, expiresAt } = req.body;
+  if (!username || !password) { res.status(400).json({ error: "username and password required" }); return; }
+
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    const r = await fetch(`${url}/rest/v1/isp_vpn_users`, {
+      method: "POST",
+      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({
+        admin_id:   Number(adminId),
+        username:   username.trim(),
+        password:   password.trim(),
+        notes:      notes?.trim() || null,
+        is_active:  true,
+        expires_at: expiresAt || null,
+      }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    syncUserToDb(username.trim(), password.trim());
+    res.status(201).json(rows[0]);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── DELETE /api/vpn/users/:id ── delete a VPN user */
+router.delete("/vpn/users/:id", async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    /* Fetch username first so we can remove from users.db */
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    const rows = await gr.json() as { username: string }[];
+    if (rows.length) removeUserFromDb(rows[0].username);
+
+    const dr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+      method: "DELETE",
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    if (!dr.ok) throw new Error(await dr.text());
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── GET /api/vpn/users/:id/ovpn ── download .ovpn config */
+router.get("/vpn/users/:id/ovpn", async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    const r = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    const rows = await r.json() as { username: string }[];
+    if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
+
+    const ovpn = generateOvpn(rows[0].username);
+    res.set("Content-Type", "application/x-openvpn-profile");
+    res.set("Content-Disposition", `attachment; filename="${rows[0].username}.ovpn"`);
+    res.send(ovpn);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;
