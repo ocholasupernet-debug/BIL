@@ -1,6 +1,9 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
+import { sbSelect, sbUpdate } from "../lib/supabase-client";
+import { pingRouter } from "../lib/mikrotik";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -122,6 +125,243 @@ router.get("/vpn/client-cert/:secret/:file", async (req, res): Promise<void> => 
 router.get("/vpn/status", (_req, res): void => {
   const caExists = CA_PATHS.some(p => existsSync(p));
   res.json({ ca_cert_available: caExists, server_port: 1194, proto: "tcp" });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * GET /api/vpn/ip-map
+ *
+ * Reads OpenVPN ipp.txt (all-time IP assignments) and status.log (currently
+ * connected clients) from the VPS. Returns a map of client → VPN IP.
+ * ══════════════════════════════════════════════════════════════════════════ */
+const IPP_PATHS = [
+  "/etc/openvpn/server/ipp.txt",
+  "/etc/openvpn/ipp.txt",
+  "/var/log/openvpn/ipp.txt",
+];
+const STATUS_PATHS = [
+  "/etc/openvpn/server/openvpn-status.log",
+  "/var/log/openvpn/status.log",
+  "/tmp/openvpn-status.log",
+  "/etc/openvpn/openvpn-status.log",
+];
+
+function readIppFile(): Map<string, string> {
+  const map = new Map<string, string>();
+  const path = IPP_PATHS.find(p => existsSync(p));
+  if (!path) return map;
+  try {
+    const lines = readFileSync(path, "utf-8").split("\n");
+    for (const line of lines) {
+      const [name, ip] = line.trim().split(",");
+      if (name && ip && ip.startsWith("10.")) map.set(name.trim(), ip.trim());
+    }
+  } catch { /* ignore */ }
+  return map;
+}
+
+function readStatusLog(): Map<string, { ip: string; realAddr: string; since: string }> {
+  const map = new Map<string, { ip: string; realAddr: string; since: string }>();
+  const path = STATUS_PATHS.find(p => existsSync(p));
+  if (!path) return map;
+  try {
+    const lines = readFileSync(path, "utf-8").split("\n");
+    let inRouting = false;
+    for (const line of lines) {
+      if (line.startsWith("ROUTING TABLE") || line.startsWith("HEADER,ROUTING TABLE")) { inRouting = true; continue; }
+      if (line.startsWith("GLOBAL STATS") || line.startsWith("END")) { inRouting = false; continue; }
+      if (!inRouting) continue;
+      if (line.startsWith("HEADER") || line.startsWith("Virtual")) continue;
+      /* Format: 10.8.0.x,clientname,realAddr:port,lastRef */
+      const parts = line.split(",");
+      if (parts.length >= 3 && parts[0]?.startsWith("10.")) {
+        map.set(parts[1]?.trim() ?? "", {
+          ip:       parts[0].trim(),
+          realAddr: parts[2]?.trim() ?? "",
+          since:    parts[3]?.trim() ?? "",
+        });
+      }
+    }
+  } catch { /* ignore */ }
+  return map;
+}
+
+function readTunNeigh(): Map<string, string> {
+  const map = new Map<string, string>();
+  try {
+    const out = execSync("ip neigh show dev tun0 2>/dev/null", { timeout: 3000 }).toString();
+    /* 10.8.0.6 dev tun0 lladdr ... REACHABLE */
+    for (const line of out.split("\n")) {
+      const ip = line.split(" ")[0];
+      if (ip?.startsWith("10.")) map.set(ip, ip);
+    }
+  } catch { /* tun0 may not exist in dev environment */ }
+  return map;
+}
+
+router.get("/vpn/ip-map", async (_req: Request, res: Response): Promise<void> => {
+  const ipp    = readIppFile();
+  const status = readStatusLog();
+  const neigh  = readTunNeigh();
+
+  const clients: Record<string, { vpnIp: string; connected: boolean; realAddr?: string; since?: string }> = {};
+
+  /* Merge: ipp.txt first, then status log overrides */
+  for (const [name, ip] of ipp) {
+    clients[name] = { vpnIp: ip, connected: false };
+  }
+  for (const [name, info] of status) {
+    clients[name] = { vpnIp: info.ip, connected: true, realAddr: info.realAddr, since: info.since };
+  }
+
+  const connectedIps = new Set([...neigh.values(), ...[...status.values()].map(v => v.ip)]);
+
+  /* Mark ipp entries as connected if their IP is reachable */
+  for (const [name, entry] of Object.entries(clients)) {
+    if (!entry.connected && connectedIps.has(entry.vpnIp)) {
+      clients[name].connected = true;
+    }
+  }
+
+  res.json({
+    clients,
+    ippPath:    IPP_PATHS.find(p => existsSync(p)) ?? null,
+    statusPath: STATUS_PATHS.find(p => existsSync(p)) ?? null,
+    total:      Object.keys(clients).length,
+    connected:  Object.values(clients).filter(c => c.connected).length,
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * POST /api/vpn/auto-fix-ips
+ *
+ * Reads the VPN IP map, fuzzy-matches client names to router names in
+ * Supabase, updates bridge_ip to the 10.8.0.x VPN IP, then pings each
+ * updated router to verify the connection immediately.
+ * ══════════════════════════════════════════════════════════════════════════ */
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[\s\-_.]/g, "");
+}
+
+function bestMatch(routerName: string, clients: string[]): string | null {
+  const rn = normalize(routerName);
+  /* Exact */
+  const exact = clients.find(c => normalize(c) === rn);
+  if (exact) return exact;
+  /* Router name contains client name */
+  const contains = clients.find(c => rn.includes(normalize(c)) || normalize(c).includes(rn));
+  if (contains) return contains;
+  /* First token match */
+  const firstToken = rn.split(/\d/)[0];
+  if (firstToken.length > 2) {
+    const partial = clients.find(c => normalize(c).startsWith(firstToken) || firstToken.startsWith(normalize(c).split(/\d/)[0]));
+    if (partial) return partial;
+  }
+  return null;
+}
+
+router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<void> => {
+  const adminId = req.body?.adminId ?? req.query.adminId ?? "1";
+
+  /* 1. Read VPN IP map */
+  const ipp    = readIppFile();
+  const status = readStatusLog();
+
+  const clientMap = new Map<string, string>();
+  for (const [name, ip] of ipp)    clientMap.set(name, ip);
+  for (const [name, info] of status) clientMap.set(name, info.ip);
+
+  if (clientMap.size === 0) {
+    res.json({
+      ok:    false,
+      error: "No VPN client IP data found on this server. Check that OpenVPN is running and ipp.txt exists.",
+      searched: [...IPP_PATHS, ...STATUS_PATHS],
+    });
+    return;
+  }
+
+  /* 2. Load all routers */
+  const routers = await sbSelect<{
+    id: number; name: string; host: string; bridge_ip: string | null;
+    router_username: string; router_secret: string | null;
+  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret`);
+
+  const clientNames = [...clientMap.keys()];
+  const results: {
+    routerId: number; routerName: string; matched: boolean;
+    clientName?: string; oldIp?: string; newIp?: string;
+    pingOk?: boolean; pingError?: string; identity?: string; uptime?: string;
+  }[] = [];
+
+  /* 3. For each router, find matching VPN client and update */
+  await Promise.allSettled(
+    routers.map(async (row) => {
+      const match = bestMatch(row.name, clientNames);
+
+      if (!match) {
+        results.push({ routerId: row.id, routerName: row.name, matched: false });
+        return;
+      }
+
+      const newIp  = clientMap.get(match)!;
+      const oldIp  = row.bridge_ip || row.host;
+
+      /* Update Supabase */
+      await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+        bridge_ip:  newIp,
+        host:       newIp,
+        updated_at: new Date().toISOString(),
+      });
+
+      logger.info({ routerId: row.id, name: row.name, match, newIp }, "[vpn/auto-fix] IP updated");
+
+      /* Immediately ping the router with the new IP */
+      const creds = {
+        host:     newIp,
+        port:     8728,
+        username: row.router_username || "admin",
+        password: row.router_secret   || "",
+        useSSL:   false,
+        connectTimeoutMs: 8000,
+        requestTimeoutMs: 8000,
+      };
+
+      try {
+        const ping = await pingRouter(creds);
+        await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+          status:     "online",
+          last_seen:  ping.connectedAt,
+          model:      ping.board     || undefined,
+          ros_version: ping.version  || undefined,
+          updated_at: ping.connectedAt,
+        });
+        results.push({
+          routerId: row.id, routerName: row.name, matched: true,
+          clientName: match, oldIp, newIp,
+          pingOk: true, identity: ping.identity, uptime: ping.uptime,
+        });
+      } catch (err) {
+        await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+          status: "offline", updated_at: new Date().toISOString(),
+        });
+        results.push({
+          routerId: row.id, routerName: row.name, matched: true,
+          clientName: match, oldIp, newIp,
+          pingOk: false, pingError: (err as Error).message,
+        });
+      }
+    })
+  );
+
+  const updated  = results.filter(r => r.matched).length;
+  const online   = results.filter(r => r.pingOk).length;
+  const unmatched = results.filter(r => !r.matched).length;
+
+  res.json({
+    ok: true,
+    summary: { total: routers.length, updated, online, unmatched },
+    results,
+    vpnClients: Object.fromEntries(clientMap),
+  });
 });
 
 export default router;

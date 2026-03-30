@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio,
+  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -128,6 +128,35 @@ export default function Routers() {
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
     } finally {
       setPingingAll(false);
+    }
+  };
+
+  /* auto-fix VPN IPs */
+  const [autoFixing,     setAutoFixing]     = useState(false);
+  const [autoFixResults, setAutoFixResults] = useState<null | {
+    ok: boolean; error?: string;
+    summary?: { total: number; updated: number; online: number; unmatched: number };
+    results?: {
+      routerId: number; routerName: string; matched: boolean;
+      clientName?: string; oldIp?: string; newIp?: string;
+      pingOk?: boolean; pingError?: string; identity?: string; uptime?: string;
+    }[];
+    vpnClients?: Record<string, string>;
+    searched?: string[];
+  }>(null);
+
+  const autoFixVpnIps = async () => {
+    setAutoFixing(true);
+    setAutoFixResults(null);
+    try {
+      const res  = await fetch(`/api/vpn/auto-fix-ips?adminId=${ADMIN_ID}`, { method: "POST" });
+      const data = await res.json();
+      setAutoFixResults(data);
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+    } catch (e) {
+      setAutoFixResults({ ok: false, error: (e as Error).message });
+    } finally {
+      setAutoFixing(false);
     }
   };
 
@@ -303,6 +332,22 @@ export default function Routers() {
             {pingingAll
               ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
               : <><Radio size={12} /> Ping All</>}
+          </button>
+          <button
+            onClick={autoFixVpnIps}
+            disabled={autoFixing}
+            title="Auto-detect VPN IPs from OpenVPN ipp.txt and update router IP addresses"
+            style={{
+              display: "flex", alignItems: "center", gap: "0.3rem", padding: "0.45rem 0.85rem",
+              background: autoFixing ? "rgba(167,139,250,0.08)" : "rgba(167,139,250,0.05)",
+              border: "1px solid rgba(167,139,250,0.3)",
+              borderRadius: 7, color: "#a78bfa", fontSize: "0.78rem",
+              cursor: autoFixing ? "default" : "pointer", fontFamily: "inherit", fontWeight: 600,
+            }}
+          >
+            {autoFixing
+              ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Detecting…</>
+              : <><Wand2 size={12} /> Auto-fix IPs</>}
           </button>
           <div style={{ flex: 1 }} />
           <button
@@ -642,6 +687,143 @@ export default function Routers() {
             </button>
           </div>
         </Modal>
+      )}
+
+      {/* ── Auto-fix VPN IPs Results Modal ── */}
+      {autoFixResults && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
+        }} onClick={() => setAutoFixResults(null)}>
+          <div style={{
+            background: "var(--isp-section)", border: "1px solid var(--isp-border)",
+            borderRadius: 14, padding: "1.5rem", width: "100%", maxWidth: 580,
+            maxHeight: "80vh", overflow: "auto",
+          }} onClick={e => e.stopPropagation()}>
+
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Wand2 size={16} style={{ color: "#a78bfa" }} />
+                <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>Auto-fix VPN IPs — Results</span>
+              </div>
+              <button onClick={() => setAutoFixResults(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)", padding: 4 }}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Error state */}
+            {!autoFixResults.ok && (
+              <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 10, padding: "1rem" }}>
+                <p style={{ margin: "0 0 6px", fontWeight: 700, color: "#f87171", fontSize: "0.85rem" }}>
+                  <AlertCircle size={12} style={{ display: "inline", marginRight: 5 }} />
+                  Could not read VPN IP data from server
+                </p>
+                <p style={{ margin: "0 0 8px", fontSize: "0.78rem", color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
+                  {autoFixResults.error}
+                </p>
+                {autoFixResults.searched && (
+                  <div>
+                    <p style={{ margin: "0 0 4px", fontSize: "0.73rem", color: "var(--isp-text-muted)", fontWeight: 600 }}>Looked in these paths on the VPS:</p>
+                    {autoFixResults.searched.map(p => (
+                      <code key={p} style={{ display: "block", fontSize: "0.7rem", color: "#94a3b8", fontFamily: "monospace", padding: "1px 0" }}>{p}</code>
+                    ))}
+                    <p style={{ margin: "10px 0 0", fontSize: "0.73rem", color: "#fbbf24", lineHeight: 1.6 }}>
+                      Make sure OpenVPN is running on the VPS and the <code style={{ fontFamily: "monospace" }}>ipp.txt</code> file exists. You may need to add <code style={{ fontFamily: "monospace" }}>ifconfig-pool-persist /etc/openvpn/server/ipp.txt</code> to your OpenVPN server config.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Success state */}
+            {autoFixResults.ok && autoFixResults.summary && (
+              <>
+                {/* Summary pills */}
+                <div style={{ display: "flex", gap: 8, marginBottom: "1rem", flexWrap: "wrap" }}>
+                  {[
+                    { label: "Routers found",  val: autoFixResults.summary.total,     color: "#94a3b8" },
+                    { label: "IPs updated",    val: autoFixResults.summary.updated,   color: "#a78bfa" },
+                    { label: "Now online",     val: autoFixResults.summary.online,    color: "#4ade80" },
+                    { label: "No VPN match",   val: autoFixResults.summary.unmatched, color: "#f87171" },
+                  ].map(p => (
+                    <div key={p.label} style={{ flex: 1, minWidth: 100, background: "rgba(255,255,255,0.04)", borderRadius: 9, padding: "10px 12px", textAlign: "center" }}>
+                      <p style={{ margin: "0 0 2px", fontSize: "1.4rem", fontWeight: 800, color: p.color }}>{p.val}</p>
+                      <p style={{ margin: 0, fontSize: "0.68rem", color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{p.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* VPN clients detected */}
+                {autoFixResults.vpnClients && Object.keys(autoFixResults.vpnClients).length > 0 && (
+                  <div style={{ marginBottom: "1rem" }}>
+                    <p style={{ margin: "0 0 6px", fontSize: "0.75rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      VPN clients detected on this server
+                    </p>
+                    <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "8px 10px" }}>
+                      {Object.entries(autoFixResults.vpnClients).map(([name, ip]) => (
+                        <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                          <span style={{ fontSize: "0.75rem", color: "var(--isp-text)" }}>{name}</span>
+                          <code style={{ fontSize: "0.73rem", color: "#06b6d4", fontFamily: "monospace" }}>{ip}</code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-router results */}
+                <div>
+                  <p style={{ margin: "0 0 6px", fontSize: "0.75rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Router results</p>
+                  {(autoFixResults.results ?? []).map(r => (
+                    <div key={r.routerId} style={{
+                      display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 0",
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                    }}>
+                      <span style={{ marginTop: 2, flexShrink: 0 }}>
+                        {r.pingOk
+                          ? <CheckCircle size={13} style={{ color: "#4ade80" }} />
+                          : r.matched
+                            ? <AlertCircle size={13} style={{ color: "#f59e0b" }} />
+                            : <AlertCircle size={13} style={{ color: "#64748b" }} />}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: "0 0 2px", fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)" }}>
+                          {r.routerName}
+                        </p>
+                        {r.matched ? (
+                          <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
+                            Matched <strong style={{ color: "#a78bfa" }}>{r.clientName}</strong>
+                            {" → "}
+                            <code style={{ fontFamily: "monospace", color: "#06b6d4" }}>{r.newIp}</code>
+                            {r.pingOk
+                              ? <span style={{ color: "#4ade80" }}> · Online ✓ {r.identity && `(${r.identity})`} {r.uptime && `up ${r.uptime}`}</span>
+                              : <span style={{ color: "#f87171" }}> · Still unreachable — {r.pingError}</span>}
+                          </p>
+                        ) : (
+                          <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>
+                            No VPN client matched this router name. Edit the router and set the IP manually.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {autoFixResults.summary.unmatched > 0 && (
+                  <div style={{ marginTop: "0.75rem", background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 8, padding: "10px 12px", fontSize: "0.75rem", color: "#fbbf24", lineHeight: 1.6 }}>
+                    <strong>Unmatched routers</strong> — the router name in the database doesn't match any OpenVPN client name. Make sure the OpenVPN client name on the MikroTik matches the router name here. You can also edit the router and set the IP manually.
+                  </div>
+                )}
+              </>
+            )}
+
+            <button onClick={() => setAutoFixResults(null)} style={{
+              marginTop: "1rem", width: "100%", padding: "8px", borderRadius: 8,
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+              color: "var(--isp-text-muted)", fontSize: "0.8rem", cursor: "pointer",
+            }}>Close</button>
+          </div>
+        </div>
       )}
 
     </AdminLayout>
