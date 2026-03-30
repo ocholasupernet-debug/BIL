@@ -101,7 +101,7 @@ export default function Routers() {
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", router_username: "", router_secret: "" });
+  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", bridge_interface: "", router_username: "", router_secret: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -110,9 +110,10 @@ export default function Routers() {
     setEditForm({
       name:            r.name            ?? "",
       host:            r.host            ?? "",
-      bridge_ip:       (r as any).bridge_ip        ?? "",
-      router_username: (r as any).router_username  ?? "admin",
-      router_secret:   (r as any).router_secret    ?? "",
+      bridge_ip:        (r as any).bridge_ip         ?? "",
+      bridge_interface: (r as any).bridge_interface ?? "hotspot-bridge",
+      router_username:  (r as any).router_username  ?? "admin",
+      router_secret:    (r as any).router_secret    ?? "",
     });
     setEditError(null);
   }
@@ -127,8 +128,9 @@ export default function Routers() {
         .update({
           name:            editForm.name.trim()            || editRouter.name,
           host:            editForm.host.trim()            || editRouter.host,
-          bridge_ip:       editForm.bridge_ip.trim()       || null,
-          router_username: editForm.router_username.trim() || "admin",
+          bridge_ip:        editForm.bridge_ip.trim()        || null,
+          bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
+          router_username:  editForm.router_username.trim() || "admin",
           router_secret:   editForm.router_secret.trim()   || null,
           updated_at:      new Date().toISOString(),
         })
@@ -693,20 +695,22 @@ export default function Routers() {
             <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
               <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and only set the <em>VPN Tunnel IP</em>. The system uses the VPN IP to reach the router. Seeing the same IP in both fields is normal.
             </div>
-            {(["name", "host", "bridge_ip", "router_username", "router_secret"] as const).map((field) => {
+            {(["name", "host", "bridge_ip", "bridge_interface", "router_username", "router_secret"] as const).map((field) => {
               const labels: Record<string, string> = {
-                name:            "Router Name",
-                host:            "WAN / Public IP (optional — leave empty if no public IP)",
-                bridge_ip:       "VPN Tunnel IP (10.8.0.x) — used for API connection",
-                router_username: "API Username",
-                router_secret:   "API Password",
+                name:             "Router Name",
+                host:             "WAN / Public IP (optional — leave empty if no public IP)",
+                bridge_ip:        "VPN Tunnel IP (10.8.0.x) — used for API connection",
+                bridge_interface: "Hotspot Bridge Interface Name",
+                router_username:  "API Username",
+                router_secret:    "API Password",
               };
               const placeholders: Record<string, string> = {
-                name:            "e.g. come1",
-                host:            "e.g. 41.80.123.45 — public WAN IP if available",
-                bridge_ip:       "e.g. 10.8.0.2 — assigned by OpenVPN",
-                router_username: "admin",
-                router_secret:   "••••••••",
+                name:             "e.g. come1",
+                host:             "e.g. 41.80.123.45 — public WAN IP if available",
+                bridge_ip:        "e.g. 10.8.0.2 — assigned by OpenVPN",
+                bridge_interface: "hotspot-bridge",
+                router_username:  "admin",
+                router_secret:    "••••••••",
               };
               return (
                 <div key={field}>

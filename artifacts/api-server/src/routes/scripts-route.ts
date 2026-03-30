@@ -285,7 +285,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
                 router_username:  "admin",
                 router_secret:    autoSecret,
                 token:            autoSecret,  /* NOT NULL column */
-                bridge_interface: "bridge",
+                bridge_interface: "hotspot-bridge",
                 bridge_ip:        "192.168.88.1",
                 status:           "offline",
               }),
@@ -340,7 +340,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     /* ── Step 4: Derive config values ── */
     const routerName  = router_row.name;
     const routerSlug  = slug === "mainhotspot" || slug === "main-hotspot" ? slugify(routerName) : slug;
-    const bridgeIface = router_row.bridge_interface  || "bridge";
+    const bridgeIface = router_row.bridge_interface  || "hotspot-bridge";
     const hotspotDns  = router_row.hotspot_dns_name  || `wifi.${routerSlug}.local`;
     const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";
 
