@@ -73,7 +73,10 @@ function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): strin
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
 # 2. Create PPPoE bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
-/interface bridge add name=${bridgeName} protocol-mode=none fast-forward=no comment="${companyName} PPPoE bridge"
+# Bridge is created first, then optional params applied separately so old ROS never aborts.
+:do { /interface bridge add name=${bridgeName} comment="${companyName} PPPoE bridge" } on-error={}
+:do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}
+:do { /interface bridge set [find name=${bridgeName}] protocol-mode=none } on-error={}
 :foreach x in=[/interface ethernet find] do={
   :local ifname [/interface ethernet get $x name]
   :if ($ifname != "${wanIface}") do={
@@ -173,7 +176,11 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
 # 2. Create shared bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
-/interface bridge add name=${bridgeName} protocol-mode=none fast-forward=no comment="${companyName} Hotspot+PPPoE bridge"
+# Bridge created first; fast-forward and protocol-mode applied separately for ROS 6 compat.
+# fast-forward=no is critical — without it the hotspot never intercepts packets for redirect.
+:do { /interface bridge add name=${bridgeName} comment="${companyName} Hotspot+PPPoE bridge" } on-error={}
+:do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}
+:do { /interface bridge set [find name=${bridgeName}] protocol-mode=none } on-error={}
 :foreach x in=[/interface ethernet find] do={
   :local ifname [/interface ethernet get $x name]
   :if ($ifname != "${wanIface}") do={
@@ -189,10 +196,10 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
 # 3. Bridge gateway IP
 /ip address add address=${net.gateway}/24 interface=${bridgeName} comment="${companyName} gateway"
 
-# 4. DHCP pool for hotspot clients
+# 4. IP pool for hotspot clients
+# Note: hotspot uses address-pool=hs-pool for its own built-in DHCP — no separate DHCP
+# server is needed. Having both causes duplicate DHCP responses that prevent redirect.
 /ip pool add name=hs-pool ranges=${hsPoolStart}-${hsPoolEnd}
-/ip dhcp-server add name=dhcp-hs interface=${bridgeName} address-pool=hs-pool disabled=no lease-time=10m
-/ip dhcp-server network add address=${net.network} gateway=${net.gateway} dns-server=${net.gateway}
 
 # 5. DNS
 /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
