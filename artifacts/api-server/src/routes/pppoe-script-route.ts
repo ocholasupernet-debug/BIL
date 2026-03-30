@@ -165,6 +165,10 @@ function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): strin
 :do { /user remove [find name="${router.router_username}"] } on-error={}
 /user add name=${router.router_username} password=${secret} group=full \\
   comment="${companyName} API user" disabled=no
+# Allow port 8728 from VPN subnet and LAN (place-before=0 with fallback for empty chain)
+:do { /ip firewall filter remove [find comment="${companyName} - allow API"] } on-error={}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" } on-error={} }
 
 :log info "${companyName} PPPoE Only config applied"
 :put "Done. PPPoE server on ${bridgeName} | gateway ${net.gateway}/24 | pool ${net.poolStart}-${net.poolEnd}"
@@ -280,6 +284,10 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
 :do { /user remove [find name="${router.router_username}"] } on-error={}
 /user add name=${router.router_username} password=${secret} group=full \\
   comment="${companyName} API user" disabled=no
+# Allow port 8728 from VPN subnet and LAN (place-before=0 with fallback for empty chain)
+:do { /ip firewall filter remove [find comment="${companyName} - allow API"] } on-error={}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" } on-error={} }
 
 :log info "${companyName} PPPoE-over-Hotspot config applied"
 :put "Done. Bridge: ${bridgeName} | Hotspot: ${dnsName} | PPPoE pool: ${pppPrefix}.2-${pppPrefix}.254"
