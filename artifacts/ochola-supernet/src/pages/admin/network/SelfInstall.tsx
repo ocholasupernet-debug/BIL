@@ -366,53 +366,50 @@ export default function SelfInstall() {
               </div>
             </div>
 
-            {/* ── Next button ── */}
-            {!isReconfigure && (
-              <div style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                gap: "1rem", flexWrap: "wrap",
-                background: "var(--isp-card)",
-                border: "1px solid rgba(6,182,212,0.22)",
-                borderRadius: 12, padding: "1.125rem 1.5rem",
-              }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: "0.87rem", color: "var(--isp-text)", marginBottom: "0.2rem" }}>
-                    Load Router Ports
-                  </div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
-                    After running the commands above the router connects via OpenVPN.
-                    Click <strong style={{ color: "var(--isp-text)" }}>Next</strong> to load its physical ports and assign them to the hotspot bridge.
-                  </div>
+            {/* ── Next → Ports button (shown for both Add Router and Reconfigure) ── */}
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: "1rem", flexWrap: "wrap",
+              background: "var(--isp-card)",
+              border: "1px solid rgba(6,182,212,0.22)",
+              borderRadius: 12, padding: "1.125rem 1.5rem",
+            }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "0.87rem", color: "var(--isp-text)", marginBottom: "0.2rem" }}>
+                  {isReconfigure ? "Reassign Bridge Ports" : "Load Router Ports"}
                 </div>
-                <button
-                  onClick={() => {
-                    if (routerIdForNext) {
-                      window.location.href = `/admin/network/bridge-ports?routerId=${routerIdForNext}`;
-                    }
-                  }}
-                  disabled={!routerIdForNext}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: "0.5rem",
-                    padding: "0.65rem 1.875rem", borderRadius: 9,
-                    background: routerIdForNext
-                      ? "linear-gradient(135deg,#06b6d4,#0284c7)"
-                      : "rgba(255,255,255,0.07)",
-                    border: routerIdForNext ? "none" : "1px solid rgba(255,255,255,0.1)",
-                    color: routerIdForNext ? "white" : "var(--isp-text-muted)",
-                    fontWeight: 700, fontSize: "0.9rem",
-                    cursor: routerIdForNext ? "pointer" : "not-allowed",
-                    fontFamily: "inherit",
-                    boxShadow: routerIdForNext ? "0 4px 16px rgba(6,182,212,0.35)" : "none",
-                    transition: "all 0.2s", whiteSpace: "nowrap",
-                  }}
-                >
-                  {routerIdForNext
-                    ? <>Next <ArrowRight size={15} /></>
-                    : <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Preparing…</>
+                <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
+                  {isReconfigure
+                    ? "After re-running the script, click Next to verify and reassign the bridge ports."
+                    : <>After running the commands above the router connects via OpenVPN.
+                        Click <strong style={{ color: "var(--isp-text)" }}>Next</strong> to load its physical ports and assign them to the hotspot bridge.</>
                   }
-                </button>
+                </div>
               </div>
-            )}
+              <button
+                onClick={() => {
+                  const id = routerIdForNext ?? (isReconfigure ? reconfigureId : null);
+                  if (id) window.location.href = `/admin/network/bridge-ports?routerId=${id}`;
+                }}
+                disabled={!routerIdForNext && !(isReconfigure && reconfigureId)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.5rem",
+                  padding: "0.65rem 1.875rem", borderRadius: 9,
+                  background: (routerIdForNext || (isReconfigure && reconfigureId))
+                    ? "linear-gradient(135deg,#06b6d4,#0284c7)"
+                    : "rgba(255,255,255,0.07)",
+                  border: (routerIdForNext || (isReconfigure && reconfigureId)) ? "none" : "1px solid rgba(255,255,255,0.1)",
+                  color: (routerIdForNext || (isReconfigure && reconfigureId)) ? "white" : "var(--isp-text-muted)",
+                  fontWeight: 700, fontSize: "0.9rem",
+                  cursor: (routerIdForNext || (isReconfigure && reconfigureId)) ? "pointer" : "not-allowed",
+                  fontFamily: "inherit",
+                  boxShadow: (routerIdForNext || (isReconfigure && reconfigureId)) ? "0 4px 16px rgba(6,182,212,0.35)" : "none",
+                  transition: "all 0.2s", whiteSpace: "nowrap",
+                }}
+              >
+                <>Next <ArrowRight size={15} /></>
+              </button>
+            </div>
 
             {/* Step tracker */}
             <div style={{ display: "flex", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, overflow: "hidden" }}>
