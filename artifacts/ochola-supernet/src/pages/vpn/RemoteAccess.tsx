@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
-const ADMIN_ID = localStorage.getItem("ochola_admin_id") ?? "1";
 
 function getAdminId() {
   return localStorage.getItem("ochola_admin_id") ?? "1";
@@ -117,20 +116,22 @@ type VpnUser = {
   is_active: boolean; created_at: string; expires_at?: string;
 };
 
-function generatePassword(len = 14): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$";
-  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+const DEFAULT_PASSWORD = "ocholasupernet";
+
+function slugify(name: string) {
+  return name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
-function VpnUsersSection() {
+function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
   const qc = useQueryClient();
   const adminId = getAdminId();
 
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ username: "", password: generatePassword(), notes: "" });
+  const [form, setForm] = useState({ username: "", password: DEFAULT_PASSWORD, notes: "" });
   const [showPass, setShowPass] = useState(false);
   const [visiblePasses, setVisiblePasses] = useState<Record<number, boolean>>({});
   const [userPasswords, setUserPasswords] = useState<Record<number, string>>({});
+  const [bulkCreating, setBulkCreating] = useState(false);
 
   const { data: users = [], isLoading, refetch } = useQuery<VpnUser[]>({
     queryKey: ["vpn-users", adminId],
@@ -154,7 +155,7 @@ function VpnUsersSection() {
     onSuccess: (created) => {
       setUserPasswords(p => ({ ...p, [created.id]: form.password }));
       setShowCreate(false);
-      setForm({ username: "", password: generatePassword(), notes: "" });
+      setForm({ username: "", password: DEFAULT_PASSWORD, notes: "" });
       qc.invalidateQueries({ queryKey: ["vpn-users"] });
     },
   });
@@ -167,8 +168,29 @@ function VpnUsersSection() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["vpn-users"] }),
   });
 
+  async function bulkCreateFromRouters() {
+    if (!routers.length) return;
+    setBulkCreating(true);
+    for (const r of routers) {
+      const username = slugify(r.name);
+      try {
+        await fetch(`${API}/api/vpn/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId, username, password: DEFAULT_PASSWORD, notes: `Auto — ${r.name}` }),
+        });
+      } catch { /* skip duplicates */ }
+    }
+    setBulkCreating(false);
+    qc.invalidateQueries({ queryKey: ["vpn-users"] });
+  }
+
   function downloadOvpn(user: VpnUser) {
     window.open(`${API}/api/vpn/users/${user.id}/ovpn`, "_blank");
+  }
+
+  function pickRouter(name: string) {
+    setForm(p => ({ ...p, username: slugify(name), notes: `Router — ${name}` }));
   }
 
   return (
@@ -183,25 +205,48 @@ function VpnUsersSection() {
           <button onClick={() => refetch()} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100">
             <RefreshCw size={14} />
           </button>
-          <button onClick={() => setShowCreate(true)}
+          {routers.length > 0 && (
+            <button onClick={bulkCreateFromRouters} disabled={bulkCreating}
+              className="flex items-center gap-1.5 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60">
+              {bulkCreating ? <RefreshCw size={12} className="animate-spin" /> : <Router size={12} />}
+              {bulkCreating ? "Creating…" : "All Routers"}
+            </button>
+          )}
+          <button onClick={() => { setShowCreate(true); setForm({ username: "", password: DEFAULT_PASSWORD, notes: "" }); }}
             className="flex items-center gap-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg transition-colors">
             <Plus size={13} /> New User
           </button>
         </div>
       </div>
 
-      {/* Create modal */}
+      {/* Create form */}
       {showCreate && (
         <div className="border-b border-gray-100 bg-blue-50/50 px-5 py-4 space-y-3">
           <p className="text-sm font-bold text-gray-700 flex items-center gap-2"><Plus size={14} className="text-blue-500" /> Create VPN User</p>
+
+          {/* Router quick-pick */}
+          {routers.length > 0 && (
+            <div>
+              <label className="text-xs font-medium text-gray-500 block mb-1">Pick a router (auto-fills username)</label>
+              <div className="flex flex-wrap gap-2">
+                {routers.map(r => (
+                  <button key={r.id} onClick={() => pickRouter(r.name)}
+                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-colors font-mono ${form.username === slugify(r.name) ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-600 border-gray-200 hover:border-blue-400"}`}>
+                    <Router size={11} /> {r.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-gray-500 block mb-1">Username</label>
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2">
                 <User size={13} className="text-gray-400" />
                 <input value={form.username} onChange={e => setForm(p => ({ ...p, username: e.target.value }))}
-                  placeholder="e.g. john.doe"
-                  className="flex-1 text-sm outline-none bg-transparent" />
+                  placeholder="e.g. come1"
+                  className="flex-1 text-sm font-mono outline-none bg-transparent" />
               </div>
             </div>
             <div>
@@ -214,9 +259,9 @@ function VpnUsersSection() {
                 <button onClick={() => setShowPass(v => !v)} className="text-gray-400 hover:text-gray-600">
                   {showPass ? <EyeOff size={13} /> : <Eye size={13} />}
                 </button>
-                <button onClick={() => setForm(p => ({ ...p, password: generatePassword() }))}
-                  title="Generate new password" className="text-gray-400 hover:text-blue-600">
-                  <RefreshCw size={12} />
+                <button onClick={() => setForm(p => ({ ...p, password: DEFAULT_PASSWORD }))}
+                  title="Reset to default" className="text-gray-400 hover:text-blue-600 text-[10px] font-bold">
+                  reset
                 </button>
               </div>
             </div>
@@ -224,7 +269,7 @@ function VpnUsersSection() {
           <div>
             <label className="text-xs font-medium text-gray-500 block mb-1">Notes (optional)</label>
             <input value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
-              placeholder="e.g. Network admin — Nairobi"
+              placeholder="e.g. come1 router access"
               className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none" />
           </div>
           <div className="flex items-center gap-2 justify-end">
@@ -405,7 +450,7 @@ export default function RemoteAccess() {
         )}
 
         {/* VPN Users tab */}
-        {tab === "users" && <VpnUsersSection />}
+        {tab === "users" && <VpnUsersSection routers={routers} />}
       </div>
     </VpnLayout>
   );
