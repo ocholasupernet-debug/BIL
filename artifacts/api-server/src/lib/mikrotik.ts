@@ -438,6 +438,82 @@ export async function fetchHotspotUsers(
   });
 }
 
+/* ══ Hotspot User Management ═══════════════════════════════════════════════ */
+export interface HotspotUser {
+  id: string;
+  name: string;
+  password: string;
+  profile: string;
+  comment: string;
+  disabled: boolean;
+  limitUptime: string;
+  limitBytesTotal: number;
+}
+
+export async function fetchHotspotUserList(creds: RouterCredentials): Promise<HotspotUser[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print"]), ms)) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:              r[".id"]             ?? "",
+      name:            r.name              ?? "",
+      password:        r.password          ?? "",
+      profile:         r.profile           ?? "default",
+      comment:         r.comment           ?? "",
+      disabled:        parseBool(r.disabled),
+      limitUptime:     r["limit-uptime"]   ?? "",
+      limitBytesTotal: parseBytes(r["limit-bytes-total"]),
+    }));
+  });
+}
+
+export async function addHotspotUser(
+  creds: RouterCredentials,
+  opts: { name: string; password: string; profile?: string; comment?: string; server?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ip/hotspot/user/add",
+      `=name=${opts.name}`,
+      `=password=${opts.password}`,
+      `=profile=${opts.profile ?? "default"}`,
+    ];
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    if (opts.server)  params.push(`=server=${opts.server}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removeHotspotUser(creds: RouterCredentials, name: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    /* Find the user by name first, then remove by .id */
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ip/hotspot/user/remove", `=.id=${id}`]), ms);
+  });
+}
+
+export async function updateHotspotUser(
+  creds: RouterCredentials,
+  name: string,
+  fields: { password?: string; profile?: string; disabled?: boolean; comment?: string }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`Hotspot user '${name}' not found`);
+    const params: string[] = ["/ip/hotspot/user/set", `=.id=${id}`];
+    if (fields.password !== undefined) params.push(`=password=${fields.password}`);
+    if (fields.profile  !== undefined) params.push(`=profile=${fields.profile}`);
+    if (fields.disabled !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
+    if (fields.comment  !== undefined) params.push(`=comment=${fields.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
 /* ─── Wireless interfaces ────────────────────────────────────────────────── */
 
 export interface WirelessInterface {
