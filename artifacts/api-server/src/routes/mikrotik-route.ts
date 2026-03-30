@@ -739,13 +739,26 @@ router.post("/router/test-raw", async (req, res): Promise<void> => {
     res.status(400).json({ error: "host and username are required" });
     return;
   }
+
+  /* Auto-resolve VPN tunnel IP from the OpenVPN status file.
+     If bridgeIp is already a VPN IP (10.8.x.x) use it as-is.
+     Otherwise look up the tunnel IP by the router's WAN/host IP so
+     withConn() can try the VPN path first (avoids 6-second WAN timeout). */
+  const isVpnAddr = (ip: string) => /^10\.8\./.test(ip);
+  let resolvedBridgeIp = bridgeIp?.trim() || undefined;
+  if (!resolvedBridgeIp || !isVpnAddr(resolvedBridgeIp)) {
+    const vpnClients = readVpnClients();
+    const found = vpnIpFor(host.trim(), vpnClients);
+    if (found) resolvedBridgeIp = found;
+  }
+
   const creds: RouterCredentials = {
     host:     host.trim(),
     port:     port ?? 8728,
     username: username.trim(),
     password: password ?? "",
     useSSL:   (port ?? 8728) === 8729,
-    bridgeIp: bridgeIp?.trim() || undefined,
+    bridgeIp: resolvedBridgeIp,
   };
   try {
     const result = await testConnection(creds);

@@ -271,6 +271,12 @@ async function connectWithRetry(
     throw new Error("No host or bridge IP configured for this router");
   }
 
+  /* VPN tunnel IPs (10.8.x.x) are always reachable from the VPS server.
+     Public/WAN IPs are often firewalled against direct API access.
+     Sort VPN candidates to the front so we reach the router immediately
+     instead of burning the full probe timeout on an unreachable WAN IP first. */
+  hosts.sort((a, b) => (b.isVpn ? 1 : 0) - (a.isVpn ? 1 : 0));
+
   let lastErr: Error = new Error("No connection attempts made");
   let lastProbe: PortProbeResult = { host: "", port: creds.port, reachable: false, latencyMs: 0 };
 
