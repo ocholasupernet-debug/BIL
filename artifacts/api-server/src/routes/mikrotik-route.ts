@@ -730,6 +730,31 @@ router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
   }
 });
 
+/* ─── POST /api/router/test-raw — test raw credentials before saving ───── */
+router.post("/router/test-raw", async (req, res): Promise<void> => {
+  const { host, port, username, password, bridgeIp } = req.body as {
+    host: string; port?: number; username: string; password: string; bridgeIp?: string;
+  };
+  if (!host || !username) {
+    res.status(400).json({ error: "host and username are required" });
+    return;
+  }
+  const creds: RouterCredentials = {
+    host:     host.trim(),
+    port:     port ?? 8728,
+    username: username.trim(),
+    password: password ?? "",
+    useSSL:   (port ?? 8728) === 8729,
+    bridgeIp: bridgeIp?.trim() || undefined,
+  };
+  try {
+    const result = await testConnection(creds);
+    res.status(result.ok ? 200 : 503).json(result);
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
+});
+
 /* ══════════════════════ PPP Secrets ════════════════════════════════════════ */
 
 /* GET /api/router/:id/ppp/secrets */

@@ -23,14 +23,23 @@ function _getStoredAdminId(): number {
 
 export let ADMIN_ID: number = _getStoredAdminId();
 
-export function setAdminAuth(id: number, username: string, name: string) {
+export function setAdminAuth(id: number, username: string, name: string, role?: string) {
   ADMIN_ID = id;
   try {
     localStorage.setItem("ochola_admin_id", String(id));
     localStorage.setItem("ochola_admin_username", username);
     localStorage.setItem("ochola_admin_name", name);
+    if (role) localStorage.setItem("ochola_admin_role", role);
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id } }));
   } catch {}
+}
+
+export function getAdminRole(): string {
+  try { return localStorage.getItem("ochola_admin_role") || "isp_admin"; } catch { return "isp_admin"; }
+}
+
+export function isSuperAdmin(): boolean {
+  return getAdminRole() === "superadmin";
 }
 
 export function clearAdminAuth() {

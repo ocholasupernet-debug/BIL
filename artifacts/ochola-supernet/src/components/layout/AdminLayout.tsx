@@ -90,10 +90,11 @@ const navItems: NavItem[] = [
       { name: "Routers",     href: "/admin/network/routers"    },
       { name: "Add Router",  href: "/admin/network/add-router" },
       { name: "PPPoE",       href: "/admin/network/pppoe"      },
-      { name: "PPP",         href: "/admin/network/ppp"        },
-      { name: "Wireless",    href: "/admin/network/wireless"   },
+      { name: "PPP",            href: "/admin/network/ppp"               },
+      { name: "Wireless",       href: "/admin/network/wireless"          },
       { name: "Queues",      href: "/admin/network/queues"     },
-      { name: "IP Pools",    href: "/admin/network/ip-pools"   },
+      { name: "IP Pools",    href: "/admin/network/ip-pools"              },
+      { name: "API Config",  href: "/admin/network/router-api-config"    },
     ]
   },
   {

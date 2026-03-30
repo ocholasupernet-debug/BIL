@@ -85,7 +85,7 @@ export default function AdminLogin() {
         return;
       }
 
-      setAdminAuth(data.id, data.username, data.name || data.username);
+      setAdminAuth(data.id, data.username, data.name || data.username, data.role ?? undefined);
 
       if (data.password === "admin") {
         setLocation("/admin/set-password");
