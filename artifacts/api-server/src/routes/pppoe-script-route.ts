@@ -43,59 +43,76 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+/* ══════════════════════════ IP helpers ══════════════════════════ */
+function deriveNet(ip: string): { gateway: string; network: string; poolStart: string; poolEnd: string } {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return { gateway: ip, network: `${ip}/24`, poolStart: `${ip.replace(/\.\d+$/, ".2")}`, poolEnd: `${ip.replace(/\.\d+$/, ".254")}` };
+  const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
+  return {
+    gateway:   ip,
+    network:   `${prefix}.0/24`,
+    poolStart: `${prefix}.2`,
+    poolEnd:   `${prefix}.254`,
+  };
+}
+
 /* ══════════════════════════ Script generators ══════════════════════════ */
 function genPPPoEOnly(router: DbRouter, companyName: string): string {
-  const secret = router.router_secret ?? "changeme";
+  const secret    = router.router_secret ?? "changeme";
+  const wanIface  = router.wan_interface  ?? "ether1";
+  const rawIp     = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
+  const net       = deriveNet(rawIp);
+  const bridgeName = "bridge-pppoe";
+
   return `# ============================================================
 # ${companyName} — PPPoE Only Configuration
 # Router : ${router.name} (${router.host})
 # Generated: ${new Date().toLocaleString("en-KE")}
+# WAN interface : ${wanIface}
+# PPPoE gateway : ${net.gateway}/24
 # ============================================================
 
-# 1. Clean previous config
-/interface pppoe-server server remove [find]
-/ppp profile remove [find name~"internet"]
-/ip pool remove [find name~"pppoe"]
-/interface bridge remove [find name="bridge-pppoe"]
+# 1. Clean previous PPPoE config
+:do { /interface pppoe-server server remove [find] } on-error={}
+:do { /ppp profile remove [find name~"internet"] } on-error={}
+:do { /ip pool remove [find name~"pppoe-pool"] } on-error={}
+:do { /ip address remove [find interface="${bridgeName}"] } on-error={}
+:do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Create bridge for PPPoE clients
-/interface bridge add name=bridge-pppoe protocol-mode=none fast-forward=no comment="${companyName} PPPoE bridge"
-/interface bridge port add bridge=bridge-pppoe interface=ether2 comment="ether2"
-/interface bridge port add bridge=bridge-pppoe interface=ether3 comment="ether3"
+# 2. Create PPPoE bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
+/interface bridge add name=${bridgeName} protocol-mode=none fast-forward=no comment="${companyName} PPPoE bridge"
+:foreach x in=[/interface ethernet find] do={
+  :local ifname [/interface ethernet get $x name]
+  :if ($ifname != "${wanIface}") do={
+    :do { /interface bridge port remove [find interface=$ifname] } on-error={}
+    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname comment="LAN" } on-error={}
+  }
+}
+:do { /interface bridge port remove [find interface=wlan1] } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 comment="WiFi 2.4GHz" } on-error={}
+:do { /interface bridge port remove [find interface=wlan2] } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 comment="WiFi 5GHz" } on-error={}
 
 # 3. Assign gateway IP to bridge
-/ip address add address=10.10.0.1/24 interface=bridge-pppoe
+/ip address add address=${net.gateway}/24 interface=${bridgeName} comment="${companyName} PPPoE gateway"
 
 # 4. IP Pool for PPPoE clients
-/ip pool add name=pppoe-pool ranges=10.10.0.2-10.10.0.254
+/ip pool add name=pppoe-pool ranges=${net.poolStart}-${net.poolEnd}
 
-# 5. PPP Profile
+# 5. PPP Profile — local authentication (no RADIUS)
 /ppp profile add \\
   name=internet \\
-  local-address=10.10.0.1 \\
+  local-address=${net.gateway} \\
   remote-address=pppoe-pool \\
-  use-radius=yes \\
+  use-radius=no \\
   dns-server=8.8.8.8,1.1.1.1 \\
   change-tcp-mss=yes \\
   comment="${companyName} profile"
 
-# 6. RADIUS Client
-/radius remove [find service=pppoe]
-/radius add \\
-  service=pppoe \\
-  address=YOUR_RADIUS_IP \\
-  secret=${secret} \\
-  authentication-port=1812 \\
-  accounting-port=1813 \\
-  timeout=3000ms
-
-/radius incoming set accept=yes port=3799
-/ppp aaa set use-radius=yes accounting=yes interim-update=1m
-
-# 7. PPPoE Server
+# 6. PPPoE Server
 /interface pppoe-server server add \\
   service-name=internet \\
-  interface=bridge-pppoe \\
+  interface=${bridgeName} \\
   default-profile=internet \\
   authentication=pap,chap,mschap1,mschap2 \\
   enabled=yes \\
@@ -105,115 +122,143 @@ function genPPPoEOnly(router: DbRouter, companyName: string): string {
   keepalive-timeout=30 \\
   comment="${companyName} PPPoE Server"
 
-# 8. NAT masquerade
+# 7. NAT masquerade for PPPoE clients
+:do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
 /ip firewall nat add \\
-  chain=srcnat src-address=10.10.0.0/24 \\
-  action=masquerade out-interface=ether1 \\
+  chain=srcnat src-address=${net.network} \\
+  action=masquerade out-interface=${wanIface} \\
   comment="PPPoE clients masquerade"
+
+# 8. DNS
+/ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
 
 # 9. API access
 /ip service set api address=0.0.0.0/0 disabled=no
+:do { /user remove [find name="${router.router_username}"] } on-error={}
 /user add name=${router.router_username} password=${secret} group=full \\
   comment="${companyName} API user" disabled=no
 
 :log info "${companyName} PPPoE Only config applied"
-:put "Done. PPPoE server running on bridge-pppoe."
+:put "Done. PPPoE server on ${bridgeName} | gateway ${net.gateway}/24 | pool ${net.poolStart}-${net.poolEnd}"
 `;
 }
 
 function genPPPoEOverHotspot(router: DbRouter, companyName: string): string {
-  const secret = router.router_secret ?? "changeme";
+  const secret      = router.router_secret   ?? "changeme";
+  const wanIface    = router.wan_interface   ?? "ether1";
+  const bridgeName  = router.bridge_interface ?? "hotspot-bridge";
+  const dnsName     = router.hotspot_dns_name ?? "hotspot.local";
+  const rawIp       = (router.bridge_ip ?? "192.168.88.1").replace(/\/\d+$/, "");
+  const net         = deriveNet(rawIp);
+  const hsPoolStart = rawIp.replace(/\.\d+$/, ".10");
+  const hsPoolEnd   = rawIp.replace(/\.\d+$/, ".200");
+  const pppPrefix   = "10.20.0";
+
   return `# ============================================================
 # ${companyName} — PPPoE over Hotspot Configuration
 # Router : ${router.name} (${router.host})
 # Generated: ${new Date().toLocaleString("en-KE")}
+# WAN interface : ${wanIface}
+# Bridge / Hotspot IP : ${net.gateway}/24
 # ============================================================
 
 # 1. Clean existing config
-/interface pppoe-server server remove [find]
-/ip hotspot remove [find]
-/ip pool remove [find name~"hs-pool"]
-/ip pool remove [find name~"pppoe-pool"]
-/ppp profile remove [find name~"internet"]
-/interface bridge remove [find name="bridge-shared"]
+:do { /interface pppoe-server server remove [find] } on-error={}
+:do { /ip hotspot remove [find] } on-error={}
+:do { /ip hotspot profile remove [find name="hs-profile"] } on-error={}
+:do { /ip dhcp-server remove [find name="dhcp-hs"] } on-error={}
+:do { /ip dhcp-server network remove [find address="${net.network}"] } on-error={}
+:do { /ip pool remove [find name~"hs-pool"] } on-error={}
+:do { /ip pool remove [find name~"pppoe-pool"] } on-error={}
+:do { /ppp profile remove [find name~"internet"] } on-error={}
+:do { /ip address remove [find interface="${bridgeName}"] } on-error={}
+:do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Create shared bridge
-/interface bridge add name=bridge-shared protocol-mode=none fast-forward=no comment="${companyName} shared bridge"
-/interface bridge port add bridge=bridge-shared interface=ether2 comment="Client LAN"
+# 2. Create shared bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
+/interface bridge add name=${bridgeName} protocol-mode=none fast-forward=no comment="${companyName} Hotspot+PPPoE bridge"
+:foreach x in=[/interface ethernet find] do={
+  :local ifname [/interface ethernet get $x name]
+  :if ($ifname != "${wanIface}") do={
+    :do { /interface bridge port remove [find interface=$ifname] } on-error={}
+    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname comment="LAN" } on-error={}
+  }
+}
+:do { /interface bridge port remove [find interface=wlan1] } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 comment="WiFi 2.4GHz" } on-error={}
+:do { /interface bridge port remove [find interface=wlan2] } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 comment="WiFi 5GHz" } on-error={}
 
-# 3. Bridge IP
-/ip address add address=192.168.88.1/24 interface=bridge-shared
+# 3. Bridge gateway IP
+/ip address add address=${net.gateway}/24 interface=${bridgeName} comment="${companyName} gateway"
 
-# 4. DHCP for hotspot clients
-/ip pool add name=hs-pool ranges=192.168.88.10-192.168.88.200
-/ip dhcp-server add name=dhcp-hs interface=bridge-shared address-pool=hs-pool disabled=no lease-time=10m
-/ip dhcp-server network add address=192.168.88.0/24 gateway=192.168.88.1 dns-server=192.168.88.1
+# 4. DHCP pool for hotspot clients
+/ip pool add name=hs-pool ranges=${hsPoolStart}-${hsPoolEnd}
+/ip dhcp-server add name=dhcp-hs interface=${bridgeName} address-pool=hs-pool disabled=no lease-time=10m
+/ip dhcp-server network add address=${net.network} gateway=${net.gateway} dns-server=${net.gateway}
 
 # 5. DNS
 /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
 
-# 6. Hotspot
+# 6. Hotspot profile & server — local authentication (no RADIUS)
 /ip hotspot profile add \\
   name=hs-profile \\
-  dns-name=hotspot.local \\
-  hotspot-address=192.168.88.1 \\
-  use-radius=yes \\
+  dns-name=${dnsName} \\
+  hotspot-address=${net.gateway} \\
+  use-radius=no \\
   login-by=http-chap,mac \\
   mac-auth-mode=mac-as-username \\
   comment="${companyName} hotspot profile"
 
 /ip hotspot add \\
   name=hotspot1 \\
-  interface=bridge-shared \\
+  interface=${bridgeName} \\
   profile=hs-profile \\
   address-pool=hs-pool \\
   idle-timeout=5m \\
   disabled=no
 
-# 7. RADIUS (hotspot + PPPoE)
-/radius remove [find service=hotspot]
-/radius remove [find service=pppoe]
-/radius add service=hotspot address=YOUR_RADIUS_IP secret=${secret} authentication-port=1812 accounting-port=1813 timeout=3000ms
-/radius add service=pppoe  address=YOUR_RADIUS_IP secret=${secret} authentication-port=1812 accounting-port=1813 timeout=3000ms
-/radius incoming set accept=yes port=3799
+# 7. PPPoE IP pool (separate range so it doesn't conflict with hotspot clients)
+/ip pool add name=pppoe-pool ranges=${pppPrefix}.2-${pppPrefix}.254
 
-# 8. PPPoE pool + profile
-/ip pool add name=pppoe-pool ranges=10.10.0.2-10.10.0.254
+# 8. PPP profile — local authentication (no RADIUS)
 /ppp profile add \\
   name=internet \\
-  local-address=192.168.88.1 \\
+  local-address=${net.gateway} \\
   remote-address=pppoe-pool \\
   dns-server=8.8.8.8,1.1.1.1 \\
-  use-radius=yes \\
+  use-radius=no \\
   use-compression=no \\
-  change-tcp-mss=yes
-
-/ppp aaa set use-radius=yes accounting=yes interim-update=1m
+  change-tcp-mss=yes \\
+  comment="${companyName} PPPoE profile"
 
 # 9. PPPoE server on shared bridge
 /interface pppoe-server server add \\
   service-name=internet \\
-  interface=bridge-shared \\
+  interface=${bridgeName} \\
   default-profile=internet \\
   authentication=pap,chap,mschap1,mschap2 \\
   enabled=yes \\
-  max-mru=1480 max-mtu=1480 \\
+  max-mru=1480 \\
+  max-mtu=1480 \\
   one-session-per-host=yes \\
   comment="${companyName} PPPoE-over-Hotspot"
 
 # 10. NAT masquerade
+:do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
+:do { /ip firewall nat remove [find comment~"Hotspot"] } on-error={}
 /ip firewall nat add \\
-  chain=srcnat src-address=192.168.88.0/24 \\
-  action=masquerade out-interface=ether1 \\
+  chain=srcnat src-address=${net.network} \\
+  action=masquerade out-interface=${wanIface} \\
   comment="PPPoE/Hotspot masquerade"
 
 # 11. API access
 /ip service set api address=0.0.0.0/0 disabled=no
+:do { /user remove [find name="${router.router_username}"] } on-error={}
 /user add name=${router.router_username} password=${secret} group=full \\
   comment="${companyName} API user" disabled=no
 
 :log info "${companyName} PPPoE-over-Hotspot config applied"
-:put "Done. Hotspot: hotspot.local | PPPoE server on bridge-shared."
+:put "Done. Bridge: ${bridgeName} | Hotspot: ${dnsName} | PPPoE pool: ${pppPrefix}.2-${pppPrefix}.254"
 `;
 }
 
