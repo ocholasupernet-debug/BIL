@@ -5,6 +5,14 @@ import { Link } from "wouter";
 import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
 import { Loader2 } from "lucide-react";
 
+/* ─── Shared router-online check (mirrors Routers.tsx) ─── */
+function routerOnline(r: DbRouter): boolean {
+  const statusOk = r.status === "online" || r.status === "connected";
+  if (!r.last_seen) return statusOk;
+  const ms = Date.now() - new Date(r.last_seen).getTime();
+  return statusOk || ms < 15 * 60 * 1000;
+}
+
 /* ─── Supabase fetchers ─── */
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID);
@@ -182,14 +190,7 @@ export default function Dashboard() {
       return t.status === "completed" && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     }).reduce((s, t) => s + t.amount, 0), [transactions]);
 
-  /* Count routers as online only if heartbeat was fresh within 10 min AND
-     the router itself reported its hotspot/service as running (status="online").
-     A stale status in the DB never lights the green indicator. */
-  const STALE_MS = 10 * 60 * 1000;
-  const onlineRouters  = routers.filter(r => {
-    const ms = r.last_seen ? Date.now() - new Date(r.last_seen).getTime() : Infinity;
-    return ms < STALE_MS && r.status === "online";
-  }).length;
+  const onlineRouters  = routers.filter(routerOnline).length;
   const offlineRouters = routers.length - onlineRouters;
 
   /* ─── Real monthly customer signups (current year) ─── */
@@ -216,7 +217,7 @@ export default function Dashboard() {
   /* ─── Router filter options ─── */
   const routerOptions: { key: number | "all"; label: string; online: boolean | null }[] = [
     { key: "all", label: "All Routers", online: null },
-    ...routers.map(r => ({ key: r.id, label: r.name, online: r.status === "online" })),
+    ...routers.map(r => ({ key: r.id, label: r.name, online: routerOnline(r) })),
   ];
 
   const selectedRouterObj = selectedRouter === "all" ? null : routers.find(r => r.id === selectedRouter);
@@ -282,7 +283,7 @@ export default function Dashboard() {
                 No routers registered yet. <Link href="/admin/network"><span style={{ color: "#06b6d4", cursor: "pointer" }}>Add one →</span></Link>
               </div>
             ) : routers.map(router => {
-              const isOnline = router.status === "online";
+              const isOnline = routerOnline(router);
               return (
                 <div key={router.id} style={{ background: "var(--isp-inner-card)", border: `1px solid ${isOnline ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.2)"}`, borderRadius: 8, padding: "0.75rem 1rem", minWidth: 185 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>

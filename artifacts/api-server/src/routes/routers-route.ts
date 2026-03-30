@@ -162,9 +162,12 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
         });
         return { id: row.id, name: row.name, online: true, identity: r.identity, uptime: r.uptime };
       } catch (err) {
-        await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-          status: "offline", updated_at: new Date().toISOString(),
-        });
+        /* Only write "offline" in production — in dev the VPS is the source of truth */
+        if (process.env.NODE_ENV === "production") {
+          await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+            status: "offline", updated_at: new Date().toISOString(),
+          });
+        }
         return { id: row.id, name: row.name, online: false, error: (err as Error).message };
       }
     })
@@ -209,9 +212,13 @@ export async function sweepAllRouters(): Promise<void> {
           });
           logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online");
         } catch (err) {
-          await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-            status: "offline", updated_at: new Date().toISOString(),
-          });
+          /* Only write "offline" in production — dev cannot reach VPN IPs and would
+             overwrite the VPS-set "online" status for routers that are actually up. */
+          if (process.env.NODE_ENV === "production") {
+            await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+              status: "offline", updated_at: new Date().toISOString(),
+            });
+          }
           logger.warn({ id: row.id, name: row.name, err: (err as Error).message }, "[monitor] router offline");
         }
       })

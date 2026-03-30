@@ -107,6 +107,10 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
     setSaving(true);
     try {
       const sharedUsers = sharingAllowed === "yes" ? (parseInt(maxSharedUsers) || 5) : 1;
+      /* Derive speed from the linked bandwidth profile so speed_down/speed_up are always set */
+      const bw = bandwidthId ? bandwidths.find(b => b.id === parseInt(bandwidthId)) : null;
+      const speedDown = bw?.speed_down ?? 0;
+      const speedUp   = bw?.speed_up   ?? 0;
       const payload = {
         admin_id:            ADMIN_ID,
         name,
@@ -115,7 +119,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
         price:               parseFloat(price) || 0,
         validity:            parseInt(validity) || 1,
         validity_unit:       valUnit,
-        validity_days:       0,
+        validity_days:       parseInt(validity) || 1,
+        speed_down:          speedDown,
+        speed_up:            speedUp,
         is_active:           status === "enable",
         client_can_purchase: canBuy === "yes",
         shared_users:        sharedUsers,

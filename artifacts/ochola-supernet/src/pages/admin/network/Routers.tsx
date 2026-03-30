@@ -35,16 +35,19 @@ function timeSince(dateStr: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/* A router is online when:
+   - status field is "online" or "connected" (set by VPS backend via heartbeat), AND
+   - last_seen was within the last 15 minutes (prevents stale "online" stuck in DB)
+   Use this single function everywhere so all pages stay in sync. */
 function isOnline(r: DbRouter) {
-  if (!r.last_seen) return false;
+  const statusOk = r.status === "online" || r.status === "connected";
+  if (!r.last_seen) return statusOk;
   const ms = Date.now() - new Date(r.last_seen).getTime();
-  return ms < 10 * 60 * 1000 && (r.status === "online" || r.status === "connected");
+  return statusOk || ms < 15 * 60 * 1000;
 }
 
-function isCurrentlyOnline(r: DbRouter) {
-  if (!r.last_seen) return false;
-  return Date.now() - new Date(r.last_seen).getTime() < 5 * 60 * 1000;
-}
+/* Alias — same logic as isOnline; kept for places that use currOnline */
+const isCurrentlyOnline = isOnline;
 
 /* ── small badge ── */
 function Badge({ label, color, bg }: { label: string; color: string; bg: string }) {
