@@ -888,23 +888,41 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     bridge: string; addPorts: string[]; removePorts: string[];
     bridgeIp?: string;
   };
-  if (!host || !bridge) { res.status(400).json({ ok: false, error: "host and bridge are required" }); return; }
+
+  /* Accept bridgeIp as a fallback when host is absent */
+  const primaryHost = host || bridgeIp || "";
+  if (!primaryHost || !bridge) {
+    res.status(400).json({ ok: false, logs: ["❌ host/bridgeIp and bridge name are required"], error: "host and bridge are required" });
+    return;
+  }
 
   const logs: string[] = [];
   const log = (m: string) => logs.push(m);
-  let conn = makeConn(host, username, password);
-  let connectedVia = host;
+
+  /* No-op short-circuit — report clearly instead of silently succeeding */
+  if (addPorts.length === 0 && removePorts.length === 0) {
+    log("ℹ️  No port changes needed — the selected ports already match the bridge membership.");
+    log(`   Bridge: ${bridge}`);
+    log("   To add a port: tick it and click Finish. To remove: untick and click Finish.");
+    res.json({ ok: true, logs });
+    return;
+  }
+
+  let conn = makeConn(primaryHost, username, password);
+  let connectedVia = primaryHost;
 
   try {
     try {
       await withTimeout(conn.connect(), 12000);
-      log(`✓ Connected to ${host}`);
+      log(`✓ Connected to ${primaryHost}`);
     } catch (directErr) {
-      if (bridgeIp) {
-        conn = makeConn(bridgeIp, username, password);
+      /* If primaryHost is already the bridgeIp, or bridgeIp is different, try it */
+      const altHost = bridgeIp && bridgeIp !== primaryHost ? bridgeIp : null;
+      if (altHost) {
+        conn = makeConn(altHost, username, password);
         await withTimeout(conn.connect(), 12000);
-        connectedVia = `${bridgeIp} (VPN)`;
-        log(`✓ Connected via VPN tunnel (${bridgeIp})`);
+        connectedVia = `${altHost} (VPN)`;
+        log(`✓ Connected via VPN tunnel (${altHost})`);
       } else {
         throw directErr;
       }
@@ -926,7 +944,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
             log(`✓ Removed ${iface} from ${bridge}`);
           }
         }
-      } catch (e) { log(`  (skip remove ${iface}: ${e})`); }
+      } catch (e) { log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, username)}`); }
     }
 
     /* Add ports */
@@ -939,7 +957,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
           `?interface=${iface}`,
         ]);
         if (Array.isArray(existing) && existing.length > 0) {
-          log(`  ${iface} already in ${bridge} — skipped`);
+          log(`  ℹ ${iface} already in ${bridge} — skipped`);
           continue;
         }
         await conn.write([
@@ -948,7 +966,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
           `=interface=${iface}`,
         ]);
         log(`✓ Added ${iface} → ${bridge}`);
-      } catch (e) { log(`❌ Add ${iface}: ${e}`); }
+      } catch (e) { log(`❌ Add ${iface}: ${enrichPermErr(e, username)}`); }
     }
 
     conn.close();
@@ -956,9 +974,9 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     res.json({ ok: true, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    log(`❌ ${msg}`);
+    log(`❌ ${enrichPermErr(err, username)}`);
     try { conn.close(); } catch { /* ignore */ }
-    res.json({ ok: false, error: connErr(host, msg), logs });
+    res.json({ ok: false, error: connErr(primaryHost, msg), logs });
   }
 });
 
