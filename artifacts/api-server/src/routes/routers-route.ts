@@ -1,7 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client";
-import { pingRouter } from "../lib/mikrotik";
-import { logger } from "../lib/logger";
+import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
+import { pingRouter } from "../lib/mikrotik.js";
+import { logger } from "../lib/logger.js";
+import { logActivity } from "../lib/activity-log.js";
 
 const router: IRouter = Router();
 
@@ -42,6 +43,7 @@ router.post("/routers", async (req, res): Promise<void> => {
     status:           status ?? "offline",
   });
   if (!r) { res.status(500).json({ error: "Failed to create router" }); return; }
+  void logActivity({ adminId: Number(effectiveAdminId), type: "router", action: "added", subject: name, details: { host: host || ipAddress } });
   res.status(201).json(r);
 });
 
@@ -62,12 +64,17 @@ router.patch("/routers/:id", async (req, res): Promise<void> => {
   if (bridge_ip      !== undefined) updates.bridge_ip       = bridge_ip;
   const [r] = await sbUpdate<Record<string, unknown>>("isp_routers", `id=eq.${id}`, updates);
   if (!r) { res.status(404).json({ error: "Router not found" }); return; }
+  const adminIdForLog = req.body?.adminId ?? req.query.adminId ?? 1;
+  void logActivity({ adminId: Number(adminIdForLog), type: "router", action: "updated", subject: String(updates.name ?? id), details: updates });
   res.json(r);
 });
 
 router.delete("/routers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
+  const rows = await sbSelect<{ name: string; admin_id: number }>("isp_routers", `id=eq.${id}&select=name,admin_id&limit=1`);
+  const row = rows[0];
   await sbDelete("isp_routers", `id=eq.${id}`);
+  if (row) void logActivity({ adminId: row.admin_id, type: "router", action: "deleted", subject: row.name });
   res.sendStatus(204);
 });
 

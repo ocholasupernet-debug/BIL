@@ -23,6 +23,7 @@ import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
 import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
 import Webhooks from "./pages/admin/Webhooks";
+import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
 import AdminTransactions from "./pages/admin/Transactions";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
@@ -127,6 +128,7 @@ function Router() {
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/webhooks"          component={Webhooks}         />
+      <Route path="/admin/logs"             component={ActivityLogs}     />
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN Portal — vpn.isplatty.org */}

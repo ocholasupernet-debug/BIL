@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
-import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client";
+import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
+import { logActivity } from "../lib/activity-log.js";
 
 const router: IRouter = Router();
 
@@ -20,8 +21,9 @@ router.post("/customers", async (req, res): Promise<void> => {
     res.status(400).json({ error: "name and phone are required" });
     return;
   }
+  const effectiveAdminId = adminId || ispId || 1;
   const [row] = await sbInsert<Record<string, unknown>>("isp_customers", {
-    admin_id:       adminId || ispId || 1,
+    admin_id:       effectiveAdminId,
     name,
     phone,
     email:          email    ?? null,
@@ -34,12 +36,13 @@ router.post("/customers", async (req, res): Promise<void> => {
     pppoe_username: pppoeUsername ?? null,
   });
   if (!row) { res.status(500).json({ error: "Failed to create customer" }); return; }
+  void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "added", subject: name, details: { phone, type: type ?? "hotspot" } });
   res.status(201).json(row);
 });
 
 router.patch("/customers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
-  const { name, phone, email, planId, type, ipAddress, status, expiryDate } = req.body;
+  const { adminId = 1, ispId, name, phone, email, planId, type, ipAddress, status, expiryDate } = req.body;
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name       !== undefined) updates.name       = name;
   if (phone      !== undefined) updates.phone      = phone;
@@ -51,11 +54,16 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   if (expiryDate !== undefined) updates.expires_at = new Date(expiryDate).toISOString();
   const [row] = await sbUpdate<Record<string, unknown>>("isp_customers", `id=eq.${id}`, updates);
   if (!row) { res.status(404).json({ error: "Customer not found" }); return; }
+  const effectiveAdminId = adminId || ispId || 1;
+  void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "updated", subject: String(updates.name ?? id), details: updates });
   res.json(row);
 });
 
 router.delete("/customers/:id", async (req, res): Promise<void> => {
+  const rows = await sbSelect<{ name: string; admin_id: number }>("isp_customers", `id=eq.${req.params.id}&select=name,admin_id&limit=1`);
+  const row = rows[0];
   await sbDelete("isp_customers", `id=eq.${req.params.id}`);
+  if (row) void logActivity({ adminId: row.admin_id, type: "customer", action: "deleted", subject: row.name });
   res.sendStatus(204);
 });
 
