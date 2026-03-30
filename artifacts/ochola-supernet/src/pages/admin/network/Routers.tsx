@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2,
+  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -98,6 +98,50 @@ export default function Routers() {
   const [deleteState, setDeleteState]   = useState<Record<number, "idle" | "confirm" | "deleting">>({});
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
+
+  /* ── Edit router modal ── */
+  const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", router_username: "", router_secret: "" });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  function openEdit(r: DbRouter) {
+    setEditRouter(r);
+    setEditForm({
+      name:            r.name            ?? "",
+      host:            r.host            ?? "",
+      bridge_ip:       (r as any).bridge_ip        ?? "",
+      router_username: (r as any).router_username  ?? "admin",
+      router_secret:   (r as any).router_secret    ?? "",
+    });
+    setEditError(null);
+  }
+
+  async function saveEdit() {
+    if (!editRouter) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const { error } = await supabase
+        .from("isp_routers")
+        .update({
+          name:            editForm.name.trim()            || editRouter.name,
+          host:            editForm.host.trim()            || editRouter.host,
+          bridge_ip:       editForm.bridge_ip.trim()       || null,
+          router_username: editForm.router_username.trim() || "admin",
+          router_secret:   editForm.router_secret.trim()   || null,
+          updated_at:      new Date().toISOString(),
+        })
+        .eq("id", editRouter.id);
+      if (error) throw error;
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+      setEditRouter(null);
+    } catch (e: any) {
+      setEditError(e.message ?? "Save failed");
+    } finally {
+      setEditSaving(false);
+    }
+  }
 
   /* ping state */
   const [pingState,  setPingState]  = useState<Record<number, "idle" | "pinging" | "online" | "offline">>({});
@@ -510,7 +554,7 @@ export default function Routers() {
                             <Btn
                               label="Edit"
                               icon={<Edit2 size={10} />}
-                              onClick={() => navigate(`/admin/network/add-router?edit=${r.id}`)}
+                              onClick={() => openEdit(r)}
                               color="#60a5fa" bg="rgba(37,99,235,0.15)" border="rgba(37,99,235,0.35)"
                             />
                             {delSt === "confirm" ? (
@@ -642,7 +686,72 @@ export default function Routers() {
 
       </div>
 
-      {/* ── Offline History Modal ── */}
+      {/* ── Edit Router Modal ── */}
+      {editRouter && (
+        <Modal title={`Edit Router — ${editRouter.name}`} onClose={() => setEditRouter(null)}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+            {(["name", "host", "bridge_ip", "router_username", "router_secret"] as const).map((field) => {
+              const labels: Record<string, string> = {
+                name:            "Router Name",
+                host:            "IP Address / Host",
+                bridge_ip:       "VPN IP (10.8.0.x)",
+                router_username: "API Username",
+                router_secret:   "API Password",
+              };
+              const placeholders: Record<string, string> = {
+                name:            "e.g. come1",
+                host:            "e.g. 10.8.0.2",
+                bridge_ip:       "e.g. 10.8.0.2",
+                router_username: "admin",
+                router_secret:   "••••••••",
+              };
+              return (
+                <div key={field}>
+                  <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    {labels[field]}
+                  </label>
+                  <input
+                    type={field === "router_secret" ? "password" : "text"}
+                    value={editForm[field]}
+                    onChange={e => setEditForm(p => ({ ...p, [field]: e.target.value }))}
+                    placeholder={placeholders[field]}
+                    style={{
+                      width: "100%", boxSizing: "border-box",
+                      padding: "0.5rem 0.75rem", borderRadius: 7,
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid var(--isp-border)",
+                      color: "var(--isp-text)", fontSize: "0.84rem",
+                      fontFamily: "inherit", outline: "none",
+                    }}
+                  />
+                </div>
+              );
+            })}
+            {editError && (
+              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", color: "#f87171", fontSize: "0.78rem" }}>
+                {editError}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "0.25rem" }}>
+              <button
+                onClick={() => setEditRouter(null)}
+                style={{ padding: "0.45rem 1rem", borderRadius: 6, background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={editSaving}
+                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.45rem 1.25rem", borderRadius: 6, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontSize: "0.8rem", fontWeight: 700, cursor: editSaving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: editSaving ? 0.7 : 1 }}
+              >
+                {editSaving ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={12} />}
+                {editSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {historyModal && (
         <Modal title={`Offline History — ${historyModal.name}`} onClose={() => setHistoryModal(null)}>
           <div style={{ color: "var(--isp-text-muted)", fontSize: "0.82rem", lineHeight: 1.7 }}>
