@@ -1,8 +1,38 @@
+import * as net from "net";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
-import { pingRouter } from "../lib/mikrotik.js";
+import { pingRouter, isPrivateIp } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
+
+/* ── TCP reachability probe — tries common MikroTik ports ───────────────────
+ * Returns the first port that responds, or null if all fail.
+ * Used as a fallback when the RouterOS API (8728) is unavailable.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const PROBE_PORTS = [8291, 22, 80, 443, 21];   /* Winbox, SSH, HTTP, HTTPS, FTP */
+const PROBE_TIMEOUT_MS = 4_000;
+
+async function tcpProbe(host: string): Promise<number | null> {
+  if (!host || isPrivateIp(host)) return null;
+  const results = await Promise.allSettled(
+    PROBE_PORTS.map(port =>
+      new Promise<number>((resolve, reject) => {
+        const sock = new net.Socket();
+        const timer = setTimeout(() => { sock.destroy(); reject(new Error("timeout")); }, PROBE_TIMEOUT_MS);
+        sock.connect(port, host, () => {
+          clearTimeout(timer);
+          sock.destroy();
+          resolve(port);
+        });
+        sock.on("error", (e) => { clearTimeout(timer); reject(e); });
+      })
+    )
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled") return r.value;
+  }
+  return null;
+}
 
 const router: IRouter = Router();
 
@@ -106,25 +136,33 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
 
   try {
     const result = await pingRouter(creds);
-
+    const now = result.connectedAt;
     await sbUpdate("isp_routers", `id=eq.${id}`, {
-      status:     "online",
-      last_seen:  result.connectedAt,
-      model:      result.board || undefined,
-      ros_version: result.version || undefined,
-      updated_at: result.connectedAt,
+      status: "online", last_seen: now,
+      model: result.board || undefined, ros_version: result.version || undefined,
+      updated_at: now,
     });
-
-    logger.info({ routerId: id, identity: result.identity }, "[router/ping] online");
+    logger.info({ routerId: id, identity: result.identity }, "[router/ping] online via API");
     res.json({ ok: true, ...result });
-  } catch (err) {
-    const error = (err as Error).message;
-    await sbUpdate("isp_routers", `id=eq.${id}`, {
-      status:     "offline",
-      updated_at: new Date().toISOString(),
-    });
-    logger.warn({ routerId: id, error }, "[router/ping] offline");
-    res.json({ ok: false, online: false, error });
+  } catch (apiErr) {
+    /* API failed — try TCP fallback on common ports */
+    const host = row.host?.trim() || row.bridge_ip?.trim() || "";
+    const openPort = await tcpProbe(host);
+    if (openPort !== null) {
+      const now = new Date().toISOString();
+      await sbUpdate("isp_routers", `id=eq.${id}`, {
+        status: "online", last_seen: now, updated_at: now,
+      });
+      logger.info({ routerId: id, host, port: openPort }, "[router/ping] online via TCP fallback");
+      res.json({ ok: true, online: true, via: `tcp:${openPort}`, note: `Router is reachable (port ${openPort} open) but RouterOS API is unavailable. Check API credentials or enable /ip service api.` });
+    } else {
+      const error = (apiErr as Error).message;
+      await sbUpdate("isp_routers", `id=eq.${id}`, {
+        status: "offline", updated_at: new Date().toISOString(),
+      });
+      logger.warn({ routerId: id, error }, "[router/ping] offline");
+      res.json({ ok: false, online: false, error });
+    }
   }
 });
 
@@ -216,20 +254,33 @@ export async function sweepAllRouters(): Promise<void> {
             model: r.board || undefined, ros_version: r.version || undefined,
             updated_at: r.connectedAt,
           });
-          logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online");
-        } catch (err) {
-          const prev = failureCount.get(row.id) ?? 0;
-          const next = prev + 1;
-          failureCount.set(row.id, next);
-          logger.warn({ id: row.id, name: row.name, failures: next, err: (err as Error).message }, "[monitor] router unreachable");
-
-          /* Only write "offline" after OFFLINE_THRESHOLD consecutive failures.
-             In dev mode skip entirely — dev server can't reach VPN IPs. */
-          if (process.env.NODE_ENV === "production" && next >= OFFLINE_THRESHOLD) {
+          logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online via API");
+        } catch (apiErr) {
+          /* API failed — try TCP fallback on common ports before counting as failure */
+          const host = row.host?.trim() || row.bridge_ip?.trim() || "";
+          const openPort = await tcpProbe(host);
+          if (openPort !== null) {
+            /* Host is reachable — reset failures, mark online */
+            failureCount.set(row.id, 0);
+            const now = new Date().toISOString();
             await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-              status: "offline", updated_at: new Date().toISOString(),
+              status: "online", last_seen: now, updated_at: now,
             });
-            logger.warn({ id: row.id, name: row.name }, "[monitor] router marked offline");
+            logger.info({ id: row.id, name: row.name, port: openPort }, "[monitor] router online via TCP fallback");
+          } else {
+            const prev = failureCount.get(row.id) ?? 0;
+            const next = prev + 1;
+            failureCount.set(row.id, next);
+            logger.warn({ id: row.id, name: row.name, failures: next, err: (apiErr as Error).message }, "[monitor] router unreachable");
+
+            /* Only write "offline" after OFFLINE_THRESHOLD consecutive failures.
+               In dev mode skip entirely — dev server can't reach VPN IPs. */
+            if (process.env.NODE_ENV === "production" && next >= OFFLINE_THRESHOLD) {
+              await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+                status: "offline", updated_at: new Date().toISOString(),
+              });
+              logger.warn({ id: row.id, name: row.name }, "[monitor] router marked offline");
+            }
           }
         }
       })
