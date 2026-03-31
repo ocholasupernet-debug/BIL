@@ -135,16 +135,10 @@ function formatUptime(raw: string | null | undefined): string {
   return parts.length ? parts.join(" ") : raw;
 }
 
-/* A router is online when BOTH are true:
-   1. status field is "online" or "connected" (set by VPS backend via heartbeat)
-   2. last_seen was within the last 15 minutes (prevents stale "online" in DB)
-   Both conditions must be met — || was a bug that made any recently-seen router
-   appear green even when the status was "offline". */
+/* Router online check — trusts the status field written by the backend.
+   Ping / sweep endpoints are the source of truth; no stale-time penalty. */
 function isOnline(r: DbRouter) {
-  const statusOk = r.status === "online" || r.status === "connected";
-  if (!r.last_seen) return statusOk;
-  const ms = Date.now() - new Date(r.last_seen).getTime();
-  return statusOk && ms < 15 * 60 * 1000;
+  return r.status === "online" || r.status === "connected";
 }
 
 /* Alias — same logic as isOnline; kept for places that use currOnline */

@@ -5,12 +5,10 @@ import { Link } from "wouter";
 import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
 import { Loader2 } from "lucide-react";
 
-/* ─── Shared router-online check (mirrors Routers.tsx) ─── */
+/* ─── Router online check — trusts the status field written by the backend.
+ * No time-window check: the sweep/ping endpoints are the source of truth. ─── */
 function routerOnline(r: DbRouter): boolean {
-  const statusOk = r.status === "online" || r.status === "connected";
-  if (!r.last_seen) return statusOk;
-  const ms = Date.now() - new Date(r.last_seen).getTime();
-  return statusOk && ms < 15 * 60 * 1000;
+  return r.status === "online" || r.status === "connected";
 }
 
 /* ─── Format last_seen as clock time / day ─── */
