@@ -208,12 +208,12 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const sidebar = {
     bg:         "var(--isp-sidebar)",
     border:     "var(--isp-border)",
-    text:       "var(--isp-nav-text)",
-    textActive: isDark ? "#a5b4fc" : "var(--isp-accent)",
-    activeBg:   isDark ? "rgba(99,102,241,0.12)" : "rgba(79,70,229,0.08)",
-    hoverBg:    isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
-    subText:    isDark ? "#4e5a72" : "#94a3b8",
-    subActive:  isDark ? "#818cf8" : "var(--isp-accent)",
+    text:       isDark ? "#c0cfe0" : "#374151",
+    textActive: isDark ? "#c7d2fe" : "var(--isp-accent)",
+    activeBg:   isDark ? "rgba(99,102,241,0.14)" : "rgba(79,70,229,0.08)",
+    hoverBg:    isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+    subText:    isDark ? "#94a8c0" : "#6b7280",
+    subActive:  isDark ? "#a5b4fc" : "var(--isp-accent)",
   };
 
   return (
@@ -358,7 +358,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                               whiteSpace: "nowrap",
                               background: childActive ? (isDark ? "rgba(99,102,241,0.08)" : "rgba(79,70,229,0.06)") : "transparent",
                             }}
-                            onMouseEnter={e => { if (!childActive) { (e.currentTarget as HTMLElement).style.color = isDark ? "#c7d2fe" : "#4f46e5"; (e.currentTarget as HTMLElement).style.background = sidebar.hoverBg; } }}
+                            onMouseEnter={e => { if (!childActive) { (e.currentTarget as HTMLElement).style.color = isDark ? "#dde6f5" : "#4f46e5"; (e.currentTarget as HTMLElement).style.background = sidebar.hoverBg; } }}
                             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = childActive ? sidebar.subActive : sidebar.subText; (e.currentTarget as HTMLElement).style.background = childActive ? (isDark ? "rgba(99,102,241,0.08)" : "rgba(79,70,229,0.06)") : "transparent"; }}
                           >
                             {child.name}
