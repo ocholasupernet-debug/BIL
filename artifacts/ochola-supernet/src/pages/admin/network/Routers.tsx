@@ -146,27 +146,28 @@ function secondsToUptime(total: number): string {
     .filter(Boolean).join(" ") || "< 1m";
 }
 
-/* ── Persist uptime snapshot in localStorage, keyed by router ID ── */
-const UPTIME_KEY = (id: number) => `router_uptime_${id}`;
-function saveUptimeSnapshot(id: number, rawUptime: string, atMs: number) {
-  try { localStorage.setItem(UPTIME_KEY(id), JSON.stringify({ raw: rawUptime, at: atMs })); } catch {}
-}
-function loadUptimeSnapshot(id: number): { raw: string; at: number } | null {
-  try {
-    const s = localStorage.getItem(UPTIME_KEY(id));
-    return s ? JSON.parse(s) : null;
-  } catch { return null; }
-}
-
-/* ── Compute live uptime from a stored snapshot ── */
-function liveUptime(id: number, pingUptime?: string): string {
-  /* Prefer in-memory ping result for freshest data */
-  const snap = pingUptime
-    ? { raw: pingUptime, at: Date.now() }   /* just pinged → use now as base */
-    : loadUptimeSnapshot(id);
-  if (!snap) return "—";
-  const elapsedSec = Math.max(0, Math.floor((Date.now() - snap.at) / 1000));
-  return secondsToUptime(uptimeToSeconds(snap.raw) + elapsedSec);
+/* ── Compute live uptime from DB values, with optional in-memory ping override ──
+ * Priority: freshest in-memory ping result → DB snapshot from last ping.
+ * Both paths add elapsed seconds since the measurement was taken.
+ * ─────────────────────────────────────────────────────────────────────────── */
+function liveUptime(
+  dbUptime:   string | null | undefined,
+  dbUptimeAt: string | null | undefined,
+  pingUptime?: string,
+  pingAt?:     number,
+): string {
+  if (pingUptime && pingAt) {
+    const elapsed = Math.max(0, Math.floor((Date.now() - pingAt) / 1000));
+    return secondsToUptime(uptimeToSeconds(pingUptime) + elapsed);
+  }
+  if (dbUptime && dbUptimeAt) {
+    const at = new Date(dbUptimeAt).getTime();
+    if (!isNaN(at)) {
+      const elapsed = Math.max(0, Math.floor((Date.now() - at) / 1000));
+      return secondsToUptime(uptimeToSeconds(dbUptime) + elapsed);
+    }
+  }
+  return "—";
 }
 
 /* Router online check — trusts the status field written by the backend.
@@ -300,7 +301,7 @@ export default function Routers() {
 
   /* ping state */
   const [pingState,  setPingState]  = useState<Record<number, "idle" | "pinging" | "online" | "offline">>({});
-  const [pingResult, setPingResult] = useState<Record<number, { identity?: string; uptime?: string; error?: string }>>({});
+  const [pingResult, setPingResult] = useState<Record<number, { identity?: string; uptime?: string; pingAt?: number; error?: string }>>({});
   const [pingingAll, setPingingAll] = useState(false);
 
   /* ping a single router */
@@ -310,9 +311,9 @@ export default function Routers() {
     try {
       const res = await fetch(`/api/routers/${r.id}/ping`, { method: "POST" });
       const data = await res.json() as { ok: boolean; identity?: string; uptime?: string; error?: string };
+      const pingAt = data.ok && data.uptime ? Date.now() : undefined;
       setPingState(p => ({ ...p, [r.id]: data.ok ? "online" : "offline" }));
-      setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, error: data.error } }));
-      if (data.ok && data.uptime) saveUptimeSnapshot(r.id, data.uptime, Date.now());
+      setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, pingAt, error: data.error } }));
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
     } catch (e) {
       setPingState(p => ({ ...p, [r.id]: "offline" }));
@@ -380,14 +381,13 @@ export default function Routers() {
         /* Immediately reflect online routers in pingState so STATE column updates */
         if (data.results) {
           const stateUpdate: Record<number, "online" | "offline"> = {};
-          const resUpdate:   Record<number, { identity?: string; uptime?: string }> = {};
+          const resUpdate:   Record<number, { identity?: string; uptime?: string; pingAt?: number }> = {};
           const now = Date.now();
           for (const r of data.results) {
             if (r.matched) {
               stateUpdate[r.routerId] = r.pingOk ? "online" : "offline";
               if (r.pingOk) {
-                resUpdate[r.routerId] = { identity: r.identity, uptime: r.uptime };
-                if (r.uptime) saveUptimeSnapshot(r.routerId, r.uptime, now);
+                resUpdate[r.routerId] = { identity: r.identity, uptime: r.uptime, pingAt: r.uptime ? now : undefined };
               }
             }
           }
@@ -700,9 +700,11 @@ export default function Routers() {
                           }
                         </td>
 
-                        {/* UPTIME — live: stored snapshot + elapsed since ping */}
+                        {/* UPTIME — live: DB snapshot + elapsed since recorded, overridden by fresh in-memory ping */}
                         <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: currOnline ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
-                          {currOnline ? liveUptime(r.id, pingResult[r.id]?.uptime || undefined) : "—"}
+                          {currOnline
+                            ? liveUptime(r.router_uptime, r.uptime_at, pingResult[r.id]?.uptime, pingResult[r.id]?.pingAt)
+                            : "—"}
                         </td>
 
                         {/* MODEL */}

@@ -141,6 +141,7 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
       status: "online", last_seen: now,
       model: result.board || undefined, ros_version: result.version || undefined,
       updated_at: now,
+      ...(result.uptime ? { router_uptime: result.uptime, uptime_at: now } : {}),
     });
     logger.info({ routerId: id, identity: result.identity }, "[router/ping] online via API");
     res.json({ ok: true, ...result });
@@ -197,6 +198,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
           status: "online", last_seen: r.connectedAt,
           model: r.board || undefined, ros_version: r.version || undefined,
           updated_at: r.connectedAt,
+          ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),
         });
         return { id: row.id, name: row.name, online: true, identity: r.identity, uptime: r.uptime };
       } catch (err) {
@@ -253,6 +255,7 @@ export async function sweepAllRouters(): Promise<void> {
             status: "online", last_seen: r.connectedAt,
             model: r.board || undefined, ros_version: r.version || undefined,
             updated_at: r.connectedAt,
+            ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),
           });
           logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online via API");
         } catch (apiErr) {
