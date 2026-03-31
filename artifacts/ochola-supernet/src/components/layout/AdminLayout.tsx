@@ -37,8 +37,9 @@ const navItems: NavItem[] = [
   {
     name: "Activation", icon: CheckSquare, badge: "New",
     children: [
-      { name: "Pending", href: "/admin/activation" },
-      { name: "Approved", href: "/admin/activation?status=approved" },
+      { name: "Pending",       href: "/admin/activation" },
+      { name: "Approved",      href: "/admin/activation?status=approved" },
+      { name: "Prepaid Users", href: "/admin/activation/prepaid-users" },
     ]
   },
   {

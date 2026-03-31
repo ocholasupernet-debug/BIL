@@ -31,6 +31,7 @@ import HotspotSettings from "./pages/admin/HotspotSettings";
 import PPPoESettings from "./pages/admin/PPPoESettings";
 import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
+import PrepaidUsers from "./pages/admin/PrepaidUsers";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
@@ -125,6 +126,7 @@ function Router() {
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
+      <Route path="/admin/activation/prepaid-users" component={PrepaidUsers} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/webhooks"          component={Webhooks}         />
