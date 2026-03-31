@@ -181,6 +181,63 @@ function BillingTab() {
   });
   const [gatewaySaved, setGatewaySaved] = useState(false);
 
+  /* ── M-Pesa state ── */
+  const [mp, setMp] = useState({
+    shortcode:      "",
+    consumerKey:    "",
+    consumerSecret: "",
+    passkey:        "",
+    callbackUrl:    "",
+    env:            "sandbox" as "sandbox" | "production",
+  });
+  const [mpConfigured, setMpConfigured] = useState(false);
+  const [mpLoading,    setMpLoading]    = useState(true);
+  const [mpSaving,     setMpSaving]     = useState(false);
+  const [mpSaved,      setMpSaved]      = useState(false);
+  const [mpError,      setMpError]      = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/settings/mpesa")
+      .then(r => r.json())
+      .then((d: { ok: boolean; configured: boolean; settings: Record<string, string> }) => {
+        if (d.ok) {
+          setMpConfigured(d.configured);
+          setMp(prev => ({
+            ...prev,
+            shortcode:   d.settings.shortcode   || "",
+            callbackUrl: d.settings.callbackUrl  || "",
+            env:         (d.settings.env as "sandbox" | "production") || "sandbox",
+          }));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setMpLoading(false));
+  }, []);
+
+  const saveMpesa = async () => {
+    setMpSaving(true);
+    setMpError(null);
+    try {
+      const res = await fetch("/api/settings/mpesa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(mp),
+      });
+      const d = await res.json() as { ok: boolean; configured: boolean; error?: string };
+      if (d.ok) {
+        setMpConfigured(d.configured);
+        setMpSaved(true);
+        setTimeout(() => setMpSaved(false), 2500);
+      } else {
+        setMpError(d.error ?? "Failed to save");
+      }
+    } catch {
+      setMpError("Could not reach server");
+    } finally {
+      setMpSaving(false);
+    }
+  };
+
   const saveGateway = () => {
     try { localStorage.setItem("ochola_payment_gateway", gateway); } catch {}
     setGatewaySaved(true);
@@ -212,23 +269,83 @@ function BillingTab() {
         </Row>
       </Card>
 
-      <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments">
+      <Card
+        title="M-Pesa Integration"
+        desc="Safaricom Daraja API credentials for STK push and C2B payments"
+      >
+        {/* Status badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          {mpLoading ? (
+            <span style={{ fontSize: "0.72rem", color: C.muted }}>Loading…</span>
+          ) : mpConfigured ? (
+            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.72rem", color: "#10b981", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 99, padding: "3px 10px" }}>
+              <Check size={11} /> Active — STK push ready
+            </span>
+          ) : (
+            <span style={{ fontSize: "0.72rem", color: "#f59e0b", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 99, padding: "3px 10px" }}>
+              ⚠ Not configured — portal payments are disabled
+            </span>
+          )}
+        </div>
+
         <Grid2>
-          <Field label="Paybill / Business Short Code"><Input defaultValue="174379" /></Field>
-          <Field label="Consumer Key"><Input placeholder="xxxxxxxxxxxxxxxxxx" /></Field>
-          <Field label="Consumer Secret"><Input type="password" placeholder="••••••••••••" /></Field>
-          <Field label="Passkey"><Input type="password" placeholder="••••••••••••" /></Field>
-          <Field label="Callback URL" hint="Receives payment confirmations from Safaricom">
-            <Input defaultValue="https://api.isplatty.org/mpesa/callback" />
+          <Field label="Paybill / Business Short Code">
+            <Input
+              value={mp.shortcode}
+              onChange={e => setMp(p => ({ ...p, shortcode: e.target.value }))}
+              placeholder="174379"
+            />
           </Field>
           <Field label="Environment">
-            <Select defaultValue="production">
+            <Select value={mp.env} onChange={e => setMp(p => ({ ...p, env: e.target.value as "sandbox" | "production" }))}>
               <option value="sandbox">Sandbox (Testing)</option>
               <option value="production">Production (Live)</option>
             </Select>
           </Field>
+          <Field label="Consumer Key" hint="From your Daraja app">
+            <Input
+              value={mp.consumerKey}
+              onChange={e => setMp(p => ({ ...p, consumerKey: e.target.value }))}
+              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Consumer Key"}
+            />
+          </Field>
+          <Field label="Consumer Secret">
+            <Input
+              type="password"
+              value={mp.consumerSecret}
+              onChange={e => setMp(p => ({ ...p, consumerSecret: e.target.value }))}
+              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Consumer Secret"}
+            />
+          </Field>
+          <Field label="Passkey" hint="Lipa Na M-Pesa Online passkey">
+            <Input
+              type="password"
+              value={mp.passkey}
+              onChange={e => setMp(p => ({ ...p, passkey: e.target.value }))}
+              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Passkey"}
+            />
+          </Field>
+          <Field label="Callback URL" hint="Receives payment confirmations from Safaricom">
+            <Input
+              value={mp.callbackUrl}
+              onChange={e => setMp(p => ({ ...p, callbackUrl: e.target.value }))}
+              placeholder="https://yourdomain.com/api/webhooks/mpesa"
+            />
+          </Field>
         </Grid2>
-        <Row><SaveBtn label="Save M-Pesa Settings" /></Row>
+
+        {mpError && (
+          <p style={{ fontSize: "0.75rem", color: "#f87171", margin: "0 0 10px" }}>⚠ {mpError}</p>
+        )}
+
+        <Row>
+          <button
+            onClick={saveMpesa}
+            disabled={mpSaving}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: mpSaved ? "#10b981" : C.cyan, border: "none", cursor: mpSaving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s", opacity: mpSaving ? 0.7 : 1 }}>
+            {mpSaved ? <><Check size={13} /> Saved!</> : mpSaving ? "Saving…" : <><Save size={13} /> Save M-Pesa Settings</>}
+          </button>
+        </Row>
       </Card>
 
       <Card title="Billing Preferences" desc="Currency, VAT, grace periods, and invoice configuration">

@@ -16,6 +16,7 @@ import webhookRouter from "./webhook-route";
 import logsRouter from "./logs-route.js";
 import bridgeRouter from "./bridge-route.js";
 import mpesaRouter from "./mpesa-route.js";
+import settingsRouter from "./settings-route.js";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(webhookRouter);
 router.use(logsRouter);
 router.use(bridgeRouter);
 router.use(mpesaRouter);
+router.use(settingsRouter);
 
 export default router;
