@@ -6,8 +6,89 @@ import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle,
-  ChevronDown, Check, Network, Plug, Wifi, Shield,
+  ChevronDown, Check, Network, Plug, Wifi, Shield, Copy,
 } from "lucide-react";
+
+/* ── Smart error panel ─────────────────────────────────────────── */
+function RouterErrorPanel({ error }: { error: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (txt: string) => {
+    navigator.clipboard.writeText(txt).then(() => {
+      setCopied(txt); setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
+  const e = error.toLowerCase();
+
+  /* Classify the failure */
+  const isRefused   = e.includes("refused") || e.includes("econnrefused");
+  const isTimeout   = e.includes("timed out") || e.includes("etimedout") || e.includes("did not respond");
+  const isAuthFail  = e.includes("login failed") || e.includes("authentication") || e.includes("wrong credentials") || e.includes("bad password");
+  const isNoVpn     = e.includes("routing failure") || e.includes("ehostunreach") || e.includes("enetunreach") || e.includes("no host");
+
+  let title  = "Router API Not Reachable";
+  let reason = error;
+  let hint   = "";
+  let cmds: string[] = [];
+
+  if (isAuthFail) {
+    title  = "Authentication Failed";
+    reason = "The router API is reachable but rejected the username or password.";
+    hint   = "Check the router credentials saved in the Routers page and ensure the API user has full access:";
+    cmds   = ["/ip service enable api", "/user add name=admin group=full"];
+  } else if (isRefused) {
+    title  = "API Service Disabled";
+    reason = "Port 8728 is reachable on the router (VPN tunnel is up ✓) but the RouterOS API service is turned off.";
+    hint   = "Open Winbox → New Terminal and run this single command:";
+    cmds   = ["/ip service enable api"];
+  } else if (isTimeout) {
+    title  = "Port 8728 Blocked by Firewall";
+    reason = "The router is reachable but port 8728 is being dropped by a firewall rule.";
+    hint   = "Open Winbox → New Terminal and run these two commands:";
+    cmds   = [
+      "/ip service enable api",
+      "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+    ];
+  } else if (isNoVpn) {
+    title  = "Router Not Reachable (VPN Down?)";
+    reason = "The server cannot reach the router's IP at all. The OpenVPN tunnel may have dropped.";
+    hint   = "Re-run the install script on the router to reconnect the VPN, or open Winbox → New Terminal:";
+    cmds   = ["/interface ovpn-client enable ovpn-out1"];
+  } else {
+    hint = "Run these commands in Winbox → New Terminal to enable the API:";
+    cmds = [
+      "/ip service enable api",
+      "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+    ];
+  }
+
+  return (
+    <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 10, padding: "1rem 1.25rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#f87171", fontWeight: 700, marginBottom: "0.5rem" }}>
+        <AlertTriangle size={15} /> {title}
+      </div>
+      <p style={{ color: "#fca5a5", margin: "0 0 0.875rem", fontSize: "0.82rem", lineHeight: 1.6 }}>{reason}</p>
+      {cmds.length > 0 && (
+        <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "0.75rem 1rem" }}>
+          <div style={{ color: "#4ade80", fontSize: "0.72rem", fontWeight: 700, marginBottom: "0.5rem" }}>{hint}</div>
+          {cmds.map((cmd) => (
+            <div key={cmd} style={{ display: "flex", gap: "0.5rem", marginBottom: "0.375rem", alignItems: "center" }}>
+              <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.75rem", color: "#67e8f9", background: "rgba(0,0,0,0.35)", padding: "0.3rem 0.6rem", borderRadius: 5, wordBreak: "break-all" }}>{cmd}</code>
+              <button onClick={() => copy(cmd)} style={{ background: copied === cmd ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.06)", border: `1px solid ${copied === cmd ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.1)"}`, borderRadius: 5, color: copied === cmd ? "#4ade80" : "#94a3b8", cursor: "pointer", fontSize: "0.65rem", padding: "0.25rem 0.55rem", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "0.2rem" }}>
+                <Copy size={10} /> {copied === cmd ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {isRefused && (
+        <div style={{ marginTop: "0.625rem", fontSize: "0.74rem", color: "#64748b", lineHeight: 1.55 }}>
+          💡 <strong style={{ color: "#94a3b8" }}>Good news:</strong> the VPN tunnel is up — your router is connected. You only need to enable the API service. After running the command above, click <strong style={{ color: "#94a3b8" }}>Refresh</strong>.
+        </div>
+      )}
+    </div>
+  );
+}
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 const DEFAULT_VPN_PASSWORD = "ocholasupernet";
@@ -370,31 +451,7 @@ export default function BridgePorts() {
           )}
 
           {/* Load error */}
-          {loadError && !loading && (
-            <div style={{
-              background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.3)",
-              borderRadius: 10, padding: "1rem 1.25rem",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#f87171", fontWeight: 700, marginBottom: "0.625rem" }}>
-                <AlertTriangle size={15} /> Router API Not Reachable
-              </div>
-              <p style={{ color: "#fca5a5", margin: "0 0 0.875rem", fontSize: "0.82rem", lineHeight: 1.6 }}>
-                {loadError}
-              </p>
-              <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "0.75rem 1rem" }}>
-                <div style={{ color: "#4ade80", fontSize: "0.72rem", fontWeight: 700, marginBottom: "0.5rem" }}>Run these in your router terminal to enable API:</div>
-                {[
-                  "/ip service enable api",
-                  "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
-                ].map((cmd, i) => (
-                  <div key={i} style={{ display: "flex", gap: "0.5rem", marginBottom: "0.375rem", alignItems: "center" }}>
-                    <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.75rem", color: "#67e8f9", background: "rgba(0,0,0,0.35)", padding: "0.3rem 0.6rem", borderRadius: 5, wordBreak: "break-all" }}>{cmd}</code>
-                    <button onClick={() => navigator.clipboard.writeText(cmd)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, color: "#94a3b8", cursor: "pointer", fontSize: "0.65rem", padding: "0.2rem 0.5rem", fontFamily: "inherit" }}>copy</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {loadError && !loading && <RouterErrorPanel error={loadError} />}
 
           {/* No router selected yet */}
           {!activeRouter && !loading && routers.length === 0 && (
@@ -731,14 +788,7 @@ export default function BridgePorts() {
           </div>
         )}
 
-        {loadError && !loading && (
-          <div style={{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 10, padding: "1rem 1.25rem" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#f87171", fontWeight: 700, marginBottom: "0.5rem" }}>
-              <AlertTriangle size={15} /> Error Loading Ports
-            </div>
-            <div style={{ color: "#fca5a5", fontSize: "0.82rem", lineHeight: 1.6 }}>{loadError}</div>
-          </div>
-        )}
+        {loadError && !loading && <RouterErrorPanel error={loadError} />}
 
         {payload && !loading && (
           <>
