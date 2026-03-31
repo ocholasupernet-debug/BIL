@@ -15,15 +15,37 @@ interface DbAdmin { id: number; name: string; subdomain: string | null; }
 /* ─── Constants ──────────────────────────────────────────────────── */
 const BASE_DOMAIN = "isplatty.org";
 const STALE_MS    = 12 * 60 * 1000;
+const ONLINE_STATUSES = new Set(["online", "connected", "active"]);
 
 /* ─── Helpers ─────────────────────────────────────────────────────── */
 function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
+
+/* A router is "installed" if its status is online/connected/active,
+   OR if it has pinged within the stale window. */
 function isInstalled(r: DbRouter) {
+  if (ONLINE_STATUSES.has(r.status ?? "")) return true;
   if (!r.last_seen) return false;
-  return (Date.now() - new Date(r.last_seen).getTime() < STALE_MS)
-    && (r.status === "online" || r.status === "connected");
+  return Date.now() - new Date(r.last_seen).getTime() < STALE_MS;
+}
+
+/* Human-readable label for the router's current status */
+function routerStatusLabel(r: DbRouter): string {
+  const s = (r.status ?? "").toLowerCase();
+  if (s === "online"    || s === "connected") return "✓ online";
+  if (s === "active")                          return "✓ active";
+  if (s === "offline")                         return "offline";
+  if (!r.last_seen)                            return "pending";
+  const ageMin = Math.floor((Date.now() - new Date(r.last_seen).getTime()) / 60_000);
+  return ageMin < 60 ? `seen ${ageMin}m ago` : "inactive";
+}
+
+function routerStatusColor(r: DbRouter): string {
+  const s = (r.status ?? "").toLowerCase();
+  if (ONLINE_STATUSES.has(s)) return "#22c55e";
+  if (s === "offline")        return "#f87171";
+  return "#64748b";
 }
 
 /* ─── Copy button ─────────────────────────────────────────────────── */
@@ -291,20 +313,27 @@ export default function SelfInstall() {
                 <div style={{ padding: "0.625rem 1rem", background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--isp-border)", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   Existing routers ({routers.length})
                 </div>
-                {routers.map((r, i) => (
-                  <div key={r.id} style={{
-                    display: "flex", alignItems: "center", gap: "0.625rem",
-                    padding: "0.6rem 1rem",
-                    borderBottom: i < routers.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
-                  }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: isInstalled(r) ? "#22c55e" : "#f87171" }} />
-                    <span style={{ fontSize: "0.8rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
-                    <code style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: "monospace" }}>{slugify(r.name)}.rsc</code>
-                    <span style={{ marginLeft: "auto", fontSize: "0.68rem", color: isInstalled(r) ? "#22c55e" : "#64748b", fontWeight: 600 }}>
-                      {isInstalled(r) ? "✓ installed" : "pending"}
-                    </span>
-                  </div>
-                ))}
+                {routers.map((r, i) => {
+                  const colour = routerStatusColor(r);
+                  const label  = routerStatusLabel(r);
+                  return (
+                    <div key={r.id} style={{
+                      display: "flex", alignItems: "center", gap: "0.625rem",
+                      padding: "0.6rem 1rem",
+                      borderBottom: i < routers.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
+                    }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: colour }} />
+                      <span style={{ fontSize: "0.8rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
+                      <code style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: "monospace" }}>{slugify(r.name)}.rsc</code>
+                      {r.host && (
+                        <code style={{ fontSize: "0.7rem", color: "#475569", fontFamily: "monospace" }}>{r.host}</code>
+                      )}
+                      <span style={{ marginLeft: "auto", fontSize: "0.68rem", color: colour, fontWeight: 600 }}>
+                        {label}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>
