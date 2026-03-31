@@ -54,6 +54,45 @@ router.patch("/vouchers/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
+/*
+ * POST /api/vouchers/redeem
+ * Looks up a voucher by code, validates it is unused, marks it used.
+ * Body: { code, adminId?, usedBy? }
+ */
+router.post("/vouchers/redeem", async (req, res): Promise<void> => {
+  const { code, adminId, usedBy } = req.body ?? {};
+  if (!code) {
+    res.status(400).json({ error: "code is required" });
+    return;
+  }
+  const idFilter = adminId ? `admin_id=eq.${adminId}&` : "";
+  const rows = await sbSelect<Record<string, unknown>>(
+    "isp_vouchers",
+    `${idFilter}code=eq.${encodeURIComponent(String(code).toUpperCase())}&select=*&limit=1`,
+  );
+  const voucher = rows[0];
+  if (!voucher) {
+    res.status(404).json({ error: "Voucher not found. Check the code and try again." });
+    return;
+  }
+  if (voucher.status === "used") {
+    res.status(409).json({ error: "This voucher has already been used." });
+    return;
+  }
+  if (voucher.status === "expired") {
+    res.status(410).json({ error: "This voucher has expired." });
+    return;
+  }
+  const updates: Record<string, unknown> = {
+    status:     "used",
+    used_at:    new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (usedBy) updates.used_by = usedBy;
+  const [updated] = await sbUpdate<Record<string, unknown>>("isp_vouchers", `id=eq.${voucher.id}`, updates);
+  res.json({ ok: true, voucher: updated ?? { ...voucher, ...updates } });
+});
+
 router.delete("/vouchers/:id", async (req, res): Promise<void> => {
   await sbDelete("isp_vouchers", `id=eq.${req.params.id}`);
   res.sendStatus(204);

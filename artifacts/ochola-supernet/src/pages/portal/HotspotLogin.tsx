@@ -1,29 +1,158 @@
-import React, { useState } from "react";
-import { Link } from "wouter";
-import { Wifi, Phone, Lock, ArrowRight, Zap, CheckCircle2, Ticket } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Wifi, Phone, Lock, Zap, CheckCircle2, Ticket, AlertCircle, User, Loader2 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
+import { ADMIN_ID } from "@/lib/supabase";
+
+interface Plan {
+  id: number;
+  name: string;
+  price: number;
+  validity: number;
+  validity_unit: string;
+  validity_days: number;
+  speed_down: number;
+  speed_up: number;
+  description: string | null;
+  plan_type?: string;
+  type?: string;
+}
+
+type Tab = "plans" | "login" | "voucher";
+
+const PLAN_COLORS = [
+  "from-pink-500 to-rose-600",
+  "from-purple-500 to-indigo-600",
+  "from-cyan-500 to-blue-600",
+  "from-emerald-500 to-teal-600",
+  "from-amber-500 to-orange-600",
+  "from-violet-500 to-purple-600",
+];
+
+function formatValidity(plan: Plan): string {
+  const days = plan.validity_days ?? plan.validity ?? 0;
+  const unit = plan.validity_unit ?? "days";
+  if (unit === "hours" || days === 0) return `${plan.validity ?? 1} ${unit}`;
+  if (days < 1) return `${Math.round(days * 24)} hours`;
+  if (days === 1) return "1 day";
+  if (days < 7) return `${days} days`;
+  if (days === 7) return "1 week";
+  if (days === 30 || days === 31) return "1 month";
+  if (days === 365) return "1 year";
+  return `${days} days`;
+}
 
 export default function HotspotLogin() {
   const brand = useBrand();
-  const [activeTab, setActiveTab] = useState<'plans' | 'login' | 'voucher'>('plans');
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>("plans");
+
+  // Derive adminId from URL query param or fallback to stored ADMIN_ID
+  const adminId = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qId = params.get("adminId") ?? params.get("ispId");
+      return qId ? parseInt(qId) : ADMIN_ID;
+    } catch {
+      return ADMIN_ID;
+    }
+  })();
+
+  // ── Plans ──────────────────────────────────────────────────────────────
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const [phone, setPhone] = useState("");
+  const [payLoading, setPayLoading] = useState(false);
   const [stkSent, setStkSent] = useState(false);
 
-  const MOCK_H_PLANS = [
-    { name: "1 Hour", price: 20, time: "Unlimited", color: "from-pink-500 to-rose-600" },
-    { name: "24 Hours", price: 50, time: "Unlimited", color: "from-purple-500 to-indigo-600" },
-    { name: "7 Days", price: 250, time: "Unlimited", color: "from-cyan-500 to-blue-600" },
-    { name: "30 Days", price: 800, time: "Unlimited", color: "from-emerald-500 to-teal-600" },
-  ];
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`/api/plans?adminId=${adminId}`);
+        const data: Plan[] = await res.json();
+        const hotspot = data.filter(
+          (p) =>
+            !p.type || p.type === "hotspot" || p.plan_type === "hotspot",
+        );
+        setPlans(hotspot.length > 0 ? hotspot : data);
+      } catch {
+        setPlans([]);
+      } finally {
+        setPlansLoading(false);
+      }
+    })();
+  }, [adminId]);
 
-  const handlePay = (e: React.FormEvent) => {
+  const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      setStkSent(true);
-    }, 1500);
+    if (!selectedPlan) return;
+    setPayLoading(true);
+    // Simulate STK push (real Daraja integration requires server-side credentials)
+    await new Promise((r) => setTimeout(r, 1500));
+    setPayLoading(false);
+    setStkSent(true);
+  };
+
+  // ── Member Login ───────────────────────────────────────────────────────
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [loginSuccess, setLoginSuccess] = useState(false);
+  const [loggedInName, setLoggedInName] = useState("");
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoginLoading(true);
+    try {
+      const res = await fetch("/api/customers/hotspot-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId, username: loginUsername, password: loginPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLoginError(data.error ?? "Login failed");
+      } else {
+        setLoggedInName(data.customer?.name || loginUsername);
+        setLoginSuccess(true);
+      }
+    } catch {
+      setLoginError("Could not reach the server. Please try again.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // ── Voucher ────────────────────────────────────────────────────────────
+  const [voucherCode, setVoucherCode] = useState("");
+  const [voucherLoading, setVoucherLoading] = useState(false);
+  const [voucherError, setVoucherError] = useState("");
+  const [voucherSuccess, setVoucherSuccess] = useState(false);
+  const [voucherInfo, setVoucherInfo] = useState<Record<string, unknown> | null>(null);
+
+  const handleVoucher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVoucherError("");
+    setVoucherLoading(true);
+    try {
+      const res = await fetch("/api/vouchers/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId, code: voucherCode.trim().toUpperCase() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setVoucherError(data.error ?? "Voucher redemption failed");
+      } else {
+        setVoucherInfo(data.voucher);
+        setVoucherSuccess(true);
+      }
+    } catch {
+      setVoucherError("Could not reach the server. Please try again.");
+    } finally {
+      setVoucherLoading(false);
+    }
   };
 
   return (
@@ -50,79 +179,115 @@ export default function HotspotLogin() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main */}
       <main className="relative z-10 max-w-5xl mx-auto px-4 pt-12 pb-24">
-        
         <div className="text-center mb-12">
           <h2 className="text-4xl md:text-5xl font-black mb-4 tracking-tight">
-            Connect to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-fuchsia-400">Fast Internet</span>
+            Connect to{" "}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-fuchsia-400">
+              Fast Internet
+            </span>
           </h2>
-          <p className="text-purple-200/70 max-w-lg mx-auto">Pay via M-Pesa and get connected instantly. No data caps, just reliable high-speed Wi-Fi.</p>
+          <p className="text-purple-200/70 max-w-lg mx-auto">
+            Pay via M-Pesa and get connected instantly. No data caps, just reliable high-speed Wi-Fi.
+          </p>
         </div>
 
         {/* Tab Toggle */}
         <div className="flex justify-center mb-10">
           <div className="bg-white/5 backdrop-blur-md p-1.5 rounded-2xl border border-white/10 inline-flex">
-            <button 
-              onClick={() => setActiveTab('plans')}
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'plans' ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' : 'text-purple-200 hover:text-white'}`}
-            >
-              Buy Package
-            </button>
-            <button 
-              onClick={() => setActiveTab('login')}
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'login' ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' : 'text-purple-200 hover:text-white'}`}
-            >
-              Member Login
-            </button>
-            <button 
-              onClick={() => setActiveTab('voucher')}
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'voucher' ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/25' : 'text-purple-200 hover:text-white'}`}
-            >
-              Redeem Voucher
-            </button>
+            {(["plans", "login", "voucher"] as Tab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === tab
+                    ? "bg-purple-500 text-white shadow-lg shadow-purple-500/25"
+                    : "text-purple-200 hover:text-white"
+                }`}
+              >
+                {tab === "plans" ? "Buy Package" : tab === "login" ? "Member Login" : "Redeem Voucher"}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Dynamic Content */}
         <div className="max-w-xl mx-auto">
-          {activeTab === 'plans' && (
+
+          {/* ── Buy Package ── */}
+          {activeTab === "plans" && (
             <div className="space-y-8">
               {!stkSent ? (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
-                    {MOCK_H_PLANS.map((plan, i) => (
-                      <button key={i} className="text-left bg-white/5 border border-white/10 rounded-2xl p-5 hover:-translate-y-1 transition-all hover:bg-white/10 hover:border-purple-500/50 group relative overflow-hidden">
-                        <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${plan.color} opacity-50 group-hover:opacity-100 transition-opacity`} />
-                        <h3 className="font-bold text-lg mb-1">{plan.name}</h3>
-                        <p className="text-3xl font-black mb-3">Ksh {plan.price}</p>
-                        <p className="text-xs text-purple-300 font-medium flex items-center gap-1"><Zap className="w-3 h-3" /> {plan.time}</p>
-                      </button>
-                    ))}
-                  </div>
+                  {plansLoading ? (
+                    <div className="flex justify-center py-12">
+                      <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+                    </div>
+                  ) : plans.length === 0 ? (
+                    <p className="text-center text-purple-300/60 py-8">No hotspot plans available yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-4">
+                      {plans.map((plan, i) => (
+                        <button
+                          key={plan.id}
+                          onClick={() => setSelectedPlan(plan)}
+                          className={`text-left bg-white/5 border rounded-2xl p-5 hover:-translate-y-1 transition-all hover:bg-white/10 group relative overflow-hidden ${
+                            selectedPlan?.id === plan.id
+                              ? "border-purple-500 bg-purple-500/10"
+                              : "border-white/10 hover:border-purple-500/50"
+                          }`}
+                        >
+                          <div
+                            className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${PLAN_COLORS[i % PLAN_COLORS.length]} ${
+                              selectedPlan?.id === plan.id ? "opacity-100" : "opacity-50 group-hover:opacity-100"
+                            } transition-opacity`}
+                          />
+                          <h3 className="font-bold text-lg mb-1">{plan.name}</h3>
+                          <p className="text-3xl font-black mb-3">Ksh {plan.price}</p>
+                          <p className="text-xs text-purple-300 font-medium flex items-center gap-1">
+                            <Zap className="w-3 h-3" /> {formatValidity(plan)}
+                          </p>
+                          {plan.speed_down > 0 && (
+                            <p className="text-xs text-purple-400/60 mt-1">{plan.speed_down}Mbps</p>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="bg-[#1a0f2e] border border-purple-500/30 rounded-3xl p-6 md:p-8 shadow-2xl">
+                    {selectedPlan && (
+                      <div className="mb-4 p-3 rounded-xl bg-purple-500/10 border border-purple-500/20 text-sm text-purple-200">
+                        Selected: <span className="font-bold text-white">{selectedPlan.name}</span> — Ksh {selectedPlan.price} for {formatValidity(selectedPlan)}
+                      </div>
+                    )}
                     <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                       <Phone className="text-emerald-400" /> Pay with M-Pesa
                     </h3>
                     <form onSubmit={handlePay} className="space-y-4">
                       <div>
                         <label className="block text-xs font-bold text-purple-300 uppercase mb-2">Phone Number</label>
-                        <input 
-                          type="tel" 
-                          placeholder="07XX XXX XXX" 
+                        <input
+                          type="tel"
+                          placeholder="07XX XXX XXX"
                           required
-                          value={phoneNumber}
-                          onChange={(e) => setPhoneNumber(e.target.value)}
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
                           className="w-full bg-black/40 border border-purple-500/20 rounded-xl px-4 py-4 text-lg font-bold text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all"
                         />
                       </div>
-                      <button 
-                        type="submit" 
-                        disabled={isLoading}
-                        className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-bold text-lg shadow-lg shadow-emerald-500/25 hover:shadow-emerald-500/40 transition-all disabled:opacity-70 flex justify-center items-center gap-2"
+                      <button
+                        type="submit"
+                        disabled={payLoading || !selectedPlan}
+                        className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-bold text-lg shadow-lg shadow-emerald-500/25 hover:shadow-emerald-500/40 transition-all disabled:opacity-50 flex justify-center items-center gap-2"
                       >
-                        {isLoading ? "Sending prompt..." : "Send STK Push"}
+                        {payLoading ? (
+                          <><Loader2 className="w-5 h-5 animate-spin" /> Sending prompt...</>
+                        ) : !selectedPlan ? (
+                          "Select a plan above"
+                        ) : (
+                          "Send STK Push"
+                        )}
                       </button>
                     </form>
                   </div>
@@ -133,51 +298,150 @@ export default function HotspotLogin() {
                     <CheckCircle2 className="w-10 h-10 text-emerald-400" />
                   </div>
                   <h3 className="text-2xl font-bold text-white mb-3">STK Push Sent!</h3>
-                  <p className="text-purple-200 mb-8">Check your phone and enter your M-Pesa PIN to complete the payment. You will be connected automatically.</p>
-                  <button onClick={() => setStkSent(false)} className="text-sm font-bold text-emerald-400 hover:text-emerald-300">Start over</button>
+                  <p className="text-purple-200 mb-8">
+                    Check your phone and enter your M-Pesa PIN to complete the payment. You will be connected automatically.
+                  </p>
+                  <button onClick={() => { setStkSent(false); setSelectedPlan(null); }} className="text-sm font-bold text-emerald-400 hover:text-emerald-300">
+                    Start over
+                  </button>
                 </div>
               )}
             </div>
           )}
 
-          {activeTab === 'login' && (
+          {/* ── Member Login ── */}
+          {activeTab === "login" && (
             <div className="bg-[#1a0f2e] border border-white/10 rounded-3xl p-6 md:p-10 shadow-2xl">
-              <h3 className="text-2xl font-bold mb-6 text-center">Welcome Back</h3>
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-xs font-bold text-purple-300 uppercase mb-2">Username</label>
-                  <input type="text" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-purple-500 transition-all" />
+              {loginSuccess ? (
+                <div className="text-center py-4">
+                  <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-white mb-2">Welcome, {loggedInName}!</h3>
+                  <p className="text-purple-200 mb-6">You are now connected to the network.</p>
+                  <button
+                    onClick={() => { setLoginSuccess(false); setLoginUsername(""); setLoginPassword(""); }}
+                    className="text-sm font-bold text-purple-400 hover:text-purple-300"
+                  >
+                    Sign out
+                  </button>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-purple-300 uppercase mb-2">Password</label>
-                  <input type="password" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-purple-500 transition-all" />
-                </div>
-                <button className="w-full py-4 rounded-xl bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white font-bold text-lg shadow-lg shadow-purple-500/25 mt-4">
-                  Connect
-                </button>
-              </div>
+              ) : (
+                <>
+                  <h3 className="text-2xl font-bold mb-6 text-center flex items-center justify-center gap-2">
+                    <User className="text-purple-400" /> Welcome Back
+                  </h3>
+                  {loginError && (
+                    <div className="mb-4 flex items-start gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                      {loginError}
+                    </div>
+                  )}
+                  <form onSubmit={handleLogin} className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-bold text-purple-300 uppercase mb-2">Username</label>
+                      <input
+                        type="text"
+                        required
+                        value={loginUsername}
+                        onChange={(e) => setLoginUsername(e.target.value)}
+                        placeholder="your-username"
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-purple-500 focus:outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-purple-300 uppercase mb-2">Password</label>
+                      <input
+                        type="password"
+                        required
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3.5 text-white focus:border-purple-500 focus:outline-none transition-all"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={loginLoading}
+                      className="w-full py-4 rounded-xl bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white font-bold text-lg shadow-lg shadow-purple-500/25 mt-4 flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {loginLoading ? (
+                        <><Loader2 className="w-5 h-5 animate-spin" /> Verifying...</>
+                      ) : (
+                        <><Lock className="w-4 h-4" /> Connect</>
+                      )}
+                    </button>
+                  </form>
+                </>
+              )}
             </div>
           )}
 
-          {activeTab === 'voucher' && (
+          {/* ── Redeem Voucher ── */}
+          {activeTab === "voucher" && (
             <div className="bg-[#1a0f2e] border border-amber-500/20 rounded-3xl p-6 md:p-10 shadow-2xl">
-              <div className="text-center mb-6">
-                <div className="w-12 h-12 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Ticket className="w-6 h-6 text-amber-400" />
+              {voucherSuccess ? (
+                <div className="text-center py-4">
+                  <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-white mb-2">Voucher Activated!</h3>
+                  {voucherInfo?.plan_name && (
+                    <p className="text-purple-200 mb-2">
+                      Plan: <span className="text-white font-bold">{String(voucherInfo.plan_name)}</span>
+                    </p>
+                  )}
+                  {voucherInfo?.duration && (
+                    <p className="text-purple-200 mb-6">
+                      Duration: <span className="text-white font-bold">{String(voucherInfo.duration)}</span>
+                    </p>
+                  )}
+                  <p className="text-sm text-emerald-400 font-medium">You are now connected.</p>
+                  <button
+                    onClick={() => { setVoucherSuccess(false); setVoucherCode(""); setVoucherInfo(null); }}
+                    className="mt-6 text-sm font-bold text-purple-400 hover:text-purple-300"
+                  >
+                    Redeem another
+                  </button>
                 </div>
-                <h3 className="text-2xl font-bold mb-2">Redeem Voucher</h3>
-                <p className="text-sm text-purple-200/70">Enter your printed code to get online.</p>
-              </div>
-              <div className="space-y-5">
-                <input 
-                  type="text" 
-                  placeholder="XXXX-XXXX-XXXX" 
-                  className="w-full bg-black/40 border border-amber-500/30 rounded-xl px-4 py-4 text-center font-mono text-xl tracking-widest text-amber-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 transition-all" 
-                />
-                <button className="w-full py-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-bold text-lg shadow-lg shadow-amber-500/25">
-                  Activate Voucher
-                </button>
-              </div>
+              ) : (
+                <>
+                  <div className="text-center mb-6">
+                    <div className="w-12 h-12 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Ticket className="w-6 h-6 text-amber-400" />
+                    </div>
+                    <h3 className="text-2xl font-bold mb-2">Redeem Voucher</h3>
+                    <p className="text-sm text-purple-200/70">Enter your printed code to get online.</p>
+                  </div>
+                  {voucherError && (
+                    <div className="mb-4 flex items-start gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                      {voucherError}
+                    </div>
+                  )}
+                  <form onSubmit={handleVoucher} className="space-y-5">
+                    <input
+                      type="text"
+                      placeholder="XXXX-XXXX-XXXX"
+                      required
+                      value={voucherCode}
+                      onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
+                      className="w-full bg-black/40 border border-amber-500/30 rounded-xl px-4 py-4 text-center font-mono text-xl tracking-widest text-amber-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 focus:outline-none transition-all"
+                    />
+                    <button
+                      type="submit"
+                      disabled={voucherLoading}
+                      className="w-full py-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-bold text-lg shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {voucherLoading ? (
+                        <><Loader2 className="w-5 h-5 animate-spin" /> Validating...</>
+                      ) : (
+                        "Activate Voucher"
+                      )}
+                    </button>
+                  </form>
+                </>
+              )}
             </div>
           )}
         </div>

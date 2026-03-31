@@ -59,6 +59,44 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
+/*
+ * POST /api/customers/hotspot-login
+ * Validates a hotspot customer's username + password.
+ * Returns the customer row (without password) on success.
+ */
+router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
+  const { adminId, username, password } = req.body ?? {};
+  if (!username || !password) {
+    res.status(400).json({ error: "username and password are required" });
+    return;
+  }
+  const idFilter = adminId ? `admin_id=eq.${adminId}&` : "";
+  const rows = await sbSelect<Record<string, unknown>>(
+    "isp_customers",
+    `${idFilter}username=eq.${encodeURIComponent(String(username))}&select=*&limit=1`,
+  );
+  const customer = rows[0];
+  if (!customer) {
+    res.status(401).json({ error: "Invalid username or password" });
+    return;
+  }
+  if (customer.password !== String(password)) {
+    res.status(401).json({ error: "Invalid username or password" });
+    return;
+  }
+  if (customer.status === "suspended") {
+    res.status(403).json({ error: "Account is suspended. Contact support." });
+    return;
+  }
+  if (customer.status === "expired") {
+    res.status(403).json({ error: "Account has expired. Please renew your plan." });
+    return;
+  }
+  // Return customer without exposing password
+  const { password: _pw, ...safe } = customer;
+  res.json({ ok: true, customer: safe });
+});
+
 router.delete("/customers/:id", async (req, res): Promise<void> => {
   const rows = await sbSelect<{ name: string; admin_id: number }>("isp_customers", `id=eq.${req.params.id}&select=name,admin_id&limit=1`);
   const row = rows[0];
