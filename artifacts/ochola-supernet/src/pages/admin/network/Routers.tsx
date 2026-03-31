@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
@@ -245,6 +245,25 @@ export default function Routers() {
     }
   };
 
+  /* auto-check all offline routers once after initial data load */
+  const autoCheckedRef = useRef(false);
+  const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ["isp_routers"],
+    queryFn: fetchRouters,
+    refetchInterval: 30_000,
+  });
+
+  useEffect(() => {
+    if (!routers.length || autoCheckedRef.current) return;
+    autoCheckedRef.current = true;
+    const offline = routers.filter(r => !isOnline(r));
+    offline.forEach((r, i) => {
+      /* stagger by 600ms per router to avoid hammering the server */
+      setTimeout(() => pingOneRouter(r), i * 600);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routers]);
+
   /* auto-fix VPN IPs */
   const [autoFixing,     setAutoFixing]     = useState(false);
   const [autoFixResults, setAutoFixResults] = useState<null | {
@@ -281,12 +300,6 @@ export default function Routers() {
       setAutoFixing(false);
     }
   };
-
-  const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ["isp_routers"],
-    queryFn: fetchRouters,
-    refetchInterval: 30_000,
-  });
 
   /* filtered list */
   const filtered = useMemo(() => {
@@ -564,10 +577,22 @@ export default function Routers() {
                         </td>
 
                         {/* STATE */}
-                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                        <td style={{ padding: "0.65rem 0.75rem", verticalAlign: "top" }}>
                           {online
                             ? <Badge label="Online"  color="#fff" bg="#166534" />
-                            : <Badge label="Offline" color="#fff" bg="#7f1d1d" />}
+                            : pingSt === "pinging"
+                              ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.68rem", color: "#22d3ee" }}><Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…</span>
+                              : pingSt === "online"
+                                ? <Badge label="Online ✓" color="#fff" bg="#166534" />
+                                : <>
+                                    <Badge label="Offline" color="#fff" bg="#7f1d1d" />
+                                    {pingSt === "offline" && pingRes.error && (
+                                      <div style={{ marginTop: "0.4rem" }}>
+                                        <PingErrorHint error={pingRes.error} />
+                                      </div>
+                                    )}
+                                  </>
+                          }
                         </td>
 
                         {/* UPTIME */}
@@ -652,30 +677,30 @@ export default function Routers() {
                             )}
                             {pingSt === "pinging" ? (
                               <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#06b6d4" }}>
-                                <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Pinging…
+                                <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
                               </span>
                             ) : pingSt === "online" ? (
-                              <span
-                                title={`${pingRes.identity ?? ""}${pingRes.uptime ? ` · up ${pingRes.uptime}` : ""}`}
-                                style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#4ade80", cursor: "pointer" }}
-                                onClick={() => pingOneRouter(r)}
-                              >
-                                <CheckCircle size={10} /> Online
-                              </span>
-                            ) : pingSt === "offline" ? (
-                              <span
-                                title={pingRes.error ?? "Unreachable"}
-                                style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#f87171", cursor: "pointer" }}
-                                onClick={() => pingOneRouter(r)}
-                              >
-                                <AlertCircle size={10} /> Offline
-                              </span>
-                            ) : (
                               <Btn
-                                label="Ping"
+                                label="Re-check"
                                 icon={<Radio size={10} />}
                                 onClick={() => pingOneRouter(r)}
-                                color="#06b6d4" bg="rgba(6,182,212,0.08)" border="rgba(6,182,212,0.3)"
+                                color="#4ade80" bg="rgba(34,197,94,0.08)" border="rgba(34,197,94,0.3)"
+                              />
+                            ) : pingSt === "offline" ? (
+                              <Btn
+                                label="Re-check"
+                                icon={<RefreshCw size={10} />}
+                                onClick={() => pingOneRouter(r)}
+                                color="#f87171" bg="rgba(248,113,113,0.12)" border="rgba(248,113,113,0.35)"
+                              />
+                            ) : (
+                              <Btn
+                                label={online ? "Ping" : "Re-check"}
+                                icon={online ? <Radio size={10} /> : <RefreshCw size={10} />}
+                                onClick={() => pingOneRouter(r)}
+                                color={online ? "#06b6d4" : "#f87171"}
+                                bg={online ? "rgba(6,182,212,0.08)" : "rgba(248,113,113,0.12)"}
+                                border={online ? "rgba(6,182,212,0.3)" : "rgba(248,113,113,0.35)"}
                               />
                             )}
                             <Btn
