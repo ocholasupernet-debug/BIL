@@ -4,19 +4,19 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
-  Check, Copy, Wifi, Loader2, Router as RouterIcon,
-  Zap, Settings2, ArrowRight, Terminal, ChevronRight,
+  Check, Copy, Loader2, Settings, ArrowRight, Terminal,
+  ChevronRight, Info, HelpCircle, AlertTriangle,
 } from "lucide-react";
 
-/* ─── Types ──────────────────────────────────────────────────── */
+/* ─── Types ─────────────────────────────────────────────────────── */
 interface FullRouter extends DbRouter { router_secret: string | null; }
 interface DbAdmin { id: number; name: string; subdomain: string | null; }
 
-/* ─── Constants ─────────────────────────────────────────────── */
+/* ─── Constants ──────────────────────────────────────────────────── */
 const BASE_DOMAIN = "isplatty.org";
 const STALE_MS    = 12 * 60 * 1000;
 
-/* ─── Helpers ────────────────────────────────────────────────── */
+/* ─── Helpers ─────────────────────────────────────────────────────── */
 function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
@@ -26,7 +26,7 @@ function isInstalled(r: DbRouter) {
     && (r.status === "online" || r.status === "connected");
 }
 
-/* ─── Copy button ────────────────────────────────────────────── */
+/* ─── Copy button ─────────────────────────────────────────────────── */
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -36,64 +36,58 @@ function CopyBtn({ text }: { text: string }) {
       })}
       style={{
         display: "inline-flex", alignItems: "center", gap: "0.35rem",
-        padding: "0.35rem 0.875rem", borderRadius: 6,
-        background: copied ? "rgba(34,197,94,0.15)" : "rgba(99,102,241,0.18)",
-        border: `1px solid ${copied ? "rgba(34,197,94,0.4)" : "rgba(99,102,241,0.4)"}`,
-        color: copied ? "#4ade80" : "#a5b4fc",
-        fontSize: "0.74rem", fontWeight: 700, cursor: "pointer",
-        fontFamily: "inherit", transition: "all 0.15s",
+        padding: "0.3rem 0.75rem", borderRadius: 5,
+        background: copied ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.08)",
+        border: `1px solid ${copied ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.12)"}`,
+        color: copied ? "#4ade80" : "#94a3b8",
+        fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+        fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0,
       }}
     >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? <Check size={11} /> : <Copy size={11} />}
       {copied ? "Copied!" : "Copy"}
     </button>
   );
 }
 
-/* ─── Command block ──────────────────────────────────────────── */
+/* ─── Command block ───────────────────────────────────────────────── */
 function CmdBlock({ step, title, cmd }: { step: number; title: string; cmd: string }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
         <span style={{
-          width: 22, height: 22, borderRadius: "50%",
-          background: "linear-gradient(135deg,#06b6d4,#0284c7)",
+          width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+          background: "linear-gradient(135deg,#14b8a6,#0d9488)",
           color: "white", fontSize: "0.68rem", fontWeight: 800,
-          display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
         }}>{step}</span>
         <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>{title}</span>
       </div>
       <div style={{
-        background: "#060b12",
-        border: "1px solid rgba(255,255,255,0.08)",
+        background: "#0a0f1a", border: "1px solid rgba(255,255,255,0.07)",
         borderRadius: 8, padding: "0.875rem 1rem",
         display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem",
       }}>
-        <code style={{
-          fontFamily: "monospace", fontSize: "0.8rem", color: "#c7d2fe",
-          wordBreak: "break-all", lineHeight: 1.7, flex: 1,
-        }}>
+        <code style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#7dd3fc", wordBreak: "break-all", lineHeight: 1.7, flex: 1 }}>
           {cmd}
         </code>
-        <div style={{ flexShrink: 0, paddingTop: "0.1rem" }}>
-          <CopyBtn text={cmd} />
-        </div>
+        <CopyBtn text={cmd} />
       </div>
     </div>
   );
 }
 
-/* ═════════════════════════════ PAGE ════════════════════════════ */
+/* ═══════════════════════════ PAGE ═══════════════════════════════ */
 export default function SelfInstall() {
   const qc = useQueryClient();
 
-  /* URL params */
   const params        = new URLSearchParams(window.location.search);
   const reconfigureId = params.get("reconfigure") ? Number(params.get("reconfigure")) : null;
 
-  /* Phase: idle → generated */
-  const [phase, setPhase]             = useState<"idle" | "generated">(reconfigureId ? "generated" : "idle");
+  const [phase, setPhase]               = useState<"idle" | "generated">(reconfigureId ? "generated" : "idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
+  const [generating, setGenerating]     = useState(false);
+  const [showHelp, setShowHelp]         = useState(false);
 
   /* Admin */
   const { data: adminData } = useQuery<DbAdmin>({
@@ -107,7 +101,7 @@ export default function SelfInstall() {
     staleTime: 60_000,
   });
 
-  /* Routers — poll every 8 s so Next button gets the routerId once record appears */
+  /* Routers */
   const { data: routers = [], isLoading: routersLoading } = useQuery<FullRouter[]>({
     queryKey: ["isp_routers_si4", ADMIN_ID],
     queryFn: async () => {
@@ -128,42 +122,36 @@ export default function SelfInstall() {
     ? `https://${adminSubdomain}.${BASE_DOMAIN}`
     : window.location.origin;
 
-  const installedCount = routers.filter(isInstalled).length;
-  const nextNumber     = routers.length + 1;
-  const nextName       = `${nameBase}${nextNumber}`;
-  const nextSlug       = slugify(nextName);
+  const nextNumber = routers.length + 1;
+  const nextName   = `${nameBase}${nextNumber}`;
+  const nextSlug   = slugify(nextName);
 
-  /* The router whose config is being shown */
-  const activeRouter = activeRouterId
-    ? (routers.find(r => r.id === activeRouterId) ?? null)
-    : null;
+  const activeRouter  = activeRouterId ? (routers.find(r => r.id === activeRouterId) ?? null) : null;
+  const displayName   = activeRouter?.name ?? nextName;
+  const displaySlug   = activeRouter ? slugify(activeRouter.name) : nextSlug;
+  const profileFile   = `${displaySlug}.ovpn`;
+  const scriptFile    = `${displaySlug}.rsc`;
+  const fetchCmd      = `/tool fetch url="${scriptHost}/api/scripts/${scriptFile}" dst-path=${scriptFile} mode=https`;
+  const importCmd     = `/import ${scriptFile}`;
 
-  const displayName = activeRouter?.name ?? nextName;
-  const displaySlug = activeRouter ? slugify(activeRouter.name) : nextSlug;
-  const scriptFile  = `${displaySlug}.rsc`;
-  const fetchCmd    = `/tool fetch url="${scriptHost}/api/scripts/${scriptFile}" dst-path=${scriptFile} mode=https`;
-  const importCmd   = `/import ${scriptFile}`;
+  const isReconfigure   = !!reconfigureId;
+  const routerIdForNext = activeRouterId ?? null;
 
-  /* When reconfiguring, pre-set activeRouterId from URL param */
   useEffect(() => {
     if (reconfigureId && routers.length > 0 && !activeRouterId) {
       setActiveRouterId(reconfigureId);
     }
   }, [reconfigureId, routers.length]);
 
-  /* After generate: poll for the router record to appear (for the Next button routerId) */
   useEffect(() => {
     if (phase !== "generated" || activeRouterId || !routers.length) return;
     const match = routers.find(r => slugify(r.name) === nextSlug);
     if (match) setActiveRouterId(match.id);
   }, [routers, phase, nextSlug, activeRouterId]);
 
-  /* ── Generate: show commands + create router record via server endpoint ── */
   const handleGenerate = async () => {
-    /* Show commands immediately so the UI is responsive */
+    setGenerating(true);
     setPhase("generated");
-
-    /* Call the server-side ensure endpoint (bypasses Supabase RLS) */
     try {
       const res = await fetch("/api/admin/router/ensure", {
         method:  "POST",
@@ -171,18 +159,13 @@ export default function SelfInstall() {
         body:    JSON.stringify({ adminId: ADMIN_ID, routerName: nextName }),
       });
       const json = await res.json() as { ok: boolean; router?: { id: number } };
-      if (json.ok && json.router?.id) {
-        setActiveRouterId(json.router.id);
-      }
-    } catch {
-      /* If the endpoint fails, the scripts-route will auto-create when MikroTik fetches */
-    } finally {
+      if (json.ok && json.router?.id) setActiveRouterId(json.router.id);
+    } catch { /* auto-create on script fetch */ }
+    finally {
+      setGenerating(false);
       qc.invalidateQueries({ queryKey: ["isp_routers_si4", ADMIN_ID] });
     }
   };
-
-  const isReconfigure = !!reconfigureId;
-  const routerIdForNext = activeRouterId ?? pendingRouter?.id ?? null;
 
   return (
     <AdminLayout>
@@ -190,145 +173,163 @@ export default function SelfInstall() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1.125rem", maxWidth: 820 }}>
 
-        {/* ── Header ── */}
+        {/* ── Page title ── */}
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap", marginBottom: "0.2rem" }}>
-            <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>
-              {isReconfigure ? "Reconfigure Router" : "Add Router"}
-            </h1>
-            {adminSubdomain && (
-              <span style={{
-                display: "inline-flex", alignItems: "center", gap: "0.35rem",
-                background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.28)",
-                borderRadius: 20, padding: "0.18rem 0.7rem",
-                fontSize: "0.72rem", color: "#06b6d4", fontWeight: 600,
-              }}>
-                <Wifi size={11} />{adminSubdomain}.{BASE_DOMAIN}
-              </span>
-            )}
-          </div>
+          <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--isp-text)", margin: "0 0 0.15rem" }}>
+            {isReconfigure ? "Reconfigure Router" : "Self install"}
+          </h1>
           <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", margin: 0 }}>
             {isReconfigure
               ? "Re-apply the setup script on an existing router."
-              : `${installedCount} of ${routers.length} router${routers.length !== 1 ? "s" : ""} installed`}
+              : `Set up a new MikroTik router with VPN, hotspot, and PPPoE`}
           </p>
         </div>
 
         <NetworkTabs active="add-router" />
 
-        {/* ═══ IDLE: name card + generate button ═══ */}
-        {phase === "idle" && !isReconfigure && (
-          <div style={{
-            background: "var(--isp-card)",
-            border: "1px solid var(--isp-border-subtle)",
-            borderRadius: 14, overflow: "hidden",
-          }}>
-            {/* Router name banner */}
-            <div style={{
-              padding: "1rem 1.375rem",
-              background: "rgba(6,182,212,0.05)",
-              borderBottom: "1px solid rgba(6,182,212,0.12)",
-              display: "flex", alignItems: "center", gap: "0.875rem",
-            }}>
-              <div style={{ width: 36, height: 36, borderRadius: 9, background: "rgba(6,182,212,0.12)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <RouterIcon size={18} style={{ color: "#06b6d4" }} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.18rem" }}>
-                  Next router to add
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                  {routersLoading
-                    ? <Loader2 size={14} style={{ color: "#64748b", animation: "spin 1s linear infinite" }} />
-                    : <span style={{ fontWeight: 800, fontSize: "1.05rem", color: "var(--isp-text)" }}>{nextName}</span>
-                  }
-                  <span style={{
-                    fontSize: "0.68rem", fontWeight: 700,
-                    color: "#06b6d4",
-                    background: "rgba(6,182,212,0.1)",
-                    border: "1px solid rgba(6,182,212,0.28)",
-                    borderRadius: 5, padding: "0.1rem 0.45rem",
-                  }}>
-                    router {nextNumber}
-                  </span>
-                </div>
-              </div>
-            </div>
+        {/* ── Blue profile banner ── */}
+        <div style={{
+          background: "linear-gradient(135deg,#1e40af 0%,#2563eb 60%,#1d4ed8 100%)",
+          borderRadius: 10, padding: "0.875rem 1.25rem",
+          display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap",
+        }}>
+          <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 800, fontSize: "1rem", color: "white", whiteSpace: "nowrap" }}>
+              Self Install — Profile:
+            </span>
+            {routersLoading && phase === "idle" ? (
+              <Loader2 size={14} style={{ color: "#93c5fd", animation: "spin 1s linear infinite" }} />
+            ) : (
+              <span style={{
+                fontFamily: "monospace", fontWeight: 800, fontSize: "0.9rem",
+                background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.25)",
+                padding: "0.2rem 0.75rem", borderRadius: 5, color: "#e0f2fe", whiteSpace: "nowrap",
+              }}>
+                {phase === "generated" || isReconfigure ? profileFile : `${nextSlug}.ovpn`}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setShowHelp(v => !v)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.4rem",
+              padding: "0.4rem 1rem", borderRadius: 6,
+              background: showHelp ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.15)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              color: "white", fontWeight: 700, fontSize: "0.8rem",
+              cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            <HelpCircle size={13} /> Need Help?
+          </button>
+        </div>
 
-            {/* Generate button area */}
-            <div style={{ padding: "1.375rem 1.5rem" }}>
-              <p style={{ margin: "0 0 1.125rem", fontSize: "0.84rem", color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
-                Click the button below to generate the MikroTik setup commands for{" "}
-                <strong style={{ color: "#06b6d4" }}>{nextName}</strong>.
-                Copy the commands and paste them into your router's terminal.
-              </p>
-              <button
-                onClick={handleGenerate}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "0.5rem",
-                  padding: "0.7rem 2rem", borderRadius: 9,
-                  background: "linear-gradient(135deg,#06b6d4,#0284c7)",
-                  border: "none", color: "white",
-                  fontWeight: 700, fontSize: "0.95rem",
-                  cursor: "pointer", fontFamily: "inherit",
-                  boxShadow: "0 4px 18px rgba(6,182,212,0.4)",
-                }}
-              >
-                <Zap size={16} /> Generate Configuration
-              </button>
-
-              {/* Compact router list */}
-              {routers.length > 0 && (
-                <div style={{ marginTop: "1.375rem" }}>
-                  <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.45rem" }}>
-                    Existing routers
-                  </div>
-                  {routers.map((r, i) => (
-                    <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.35rem 0.5rem", borderRadius: 6, marginBottom: "0.2rem", background: "rgba(255,255,255,0.02)" }}>
-                      <span style={{ fontSize: "0.55rem", color: isInstalled(r) ? "#22c55e" : "#f87171" }}>●</span>
-                      <span style={{ fontSize: "0.77rem", color: "var(--isp-text)", fontWeight: 600 }}>{i + 1}. {r.name}</span>
-                      <span style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", fontFamily: "monospace" }}>{slugify(r.name)}.rsc</span>
-                      <span style={{ marginLeft: "auto", fontSize: "0.67rem", color: isInstalled(r) ? "#22c55e" : "#64748b" }}>
-                        {isInstalled(r) ? "installed" : "pending"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+        {/* ── Help panel ── */}
+        {showHelp && (
+          <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 10, padding: "0.875rem 1rem", fontSize: "0.8rem", color: "#fbbf24", lineHeight: 1.75 }}>
+            <strong>Quick Guide:</strong><br />
+            1. Reset your MikroTik router to factory defaults (System → Reset Configuration, keep defaults).<br />
+            2. Plug in the WAN cable and verify internet: open a terminal and run <code style={{ fontFamily: "monospace" }}>ping 8.8.8.8</code>.<br />
+            3. Go to <strong>System → Certificates</strong> and delete any existing certificates.<br />
+            4. Open <strong>Winbox → New Terminal</strong>, paste Step 1, then Step 2 from the commands below.<br />
+            5. Wait ~30 s — the router will reboot and connect automatically.
           </div>
         )}
 
-        {/* ═══ GENERATED: commands + next button ═══ */}
+        {/* ═══ IDLE: info box + generate button ═══ */}
+        {phase === "idle" && !isReconfigure && (
+          <>
+            {/* Info box */}
+            <div style={{
+              background: "rgba(59,130,246,0.07)",
+              border: "1px solid rgba(59,130,246,0.22)",
+              borderRadius: 10, padding: "1rem 1.125rem",
+              display: "flex", alignItems: "flex-start", gap: "0.75rem",
+            }}>
+              <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: "0.05rem" }} />
+              <p style={{ margin: 0, fontSize: "0.84rem", color: "var(--isp-text-muted)", lineHeight: 1.75 }}>
+                No configuration profile exists yet. Click the button below to generate the configuration files,
+                which will include VPN, hotspot, PPPoE, and user settings for your MikroTik router.
+                We advise resetting your router, giving it internet, then in a new terminal run{" "}
+                <code style={{ fontFamily: "monospace", color: "#93c5fd", fontSize: "0.82rem" }}>"ping 8.8.8.8"</code>{" "}
+                to confirm internet before generating.{" "}
+                <strong style={{ color: "var(--isp-text)" }}>Important:</strong> go to System → Certificates
+                and delete any certificates there before running the installation script.
+              </p>
+            </div>
+
+            {/* Generate button */}
+            <div>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.6rem",
+                  padding: "0.75rem 2.25rem", borderRadius: 9,
+                  background: generating
+                    ? "rgba(20,184,166,0.4)"
+                    : "linear-gradient(135deg,#14b8a6,#0d9488)",
+                  border: "none", color: "white",
+                  fontWeight: 700, fontSize: "0.95rem",
+                  cursor: generating ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  boxShadow: generating ? "none" : "0 4px 18px rgba(20,184,166,0.4)",
+                  transition: "all 0.2s",
+                }}
+              >
+                {generating
+                  ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
+                  : <Settings size={16} />
+                }
+                {generating ? "Generating…" : "Generate configuration files"}
+              </button>
+            </div>
+
+            {/* Existing routers list */}
+            {routers.length > 0 && (
+              <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ padding: "0.625rem 1rem", background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--isp-border)", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Existing routers ({routers.length})
+                </div>
+                {routers.map((r, i) => (
+                  <div key={r.id} style={{
+                    display: "flex", alignItems: "center", gap: "0.625rem",
+                    padding: "0.6rem 1rem",
+                    borderBottom: i < routers.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
+                  }}>
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: isInstalled(r) ? "#22c55e" : "#f87171" }} />
+                    <span style={{ fontSize: "0.8rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
+                    <code style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: "monospace" }}>{slugify(r.name)}.rsc</code>
+                    <span style={{ marginLeft: "auto", fontSize: "0.68rem", color: isInstalled(r) ? "#22c55e" : "#64748b", fontWeight: 600 }}>
+                      {isInstalled(r) ? "✓ installed" : "pending"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══ GENERATED / RECONFIGURE ═══ */}
         {(phase === "generated" || isReconfigure) && (
           <>
             {/* Reconfigure banner */}
             {isReconfigure && activeRouter && (
               <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 10, padding: "0.75rem 1rem", fontSize: "0.82rem", color: "#fbbf24", lineHeight: 1.6, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Settings2 size={14} />
+                <AlertTriangle size={14} />
                 <span>Reconfiguring <strong>{activeRouter.name}</strong> — re-applying settings without creating a duplicate.</span>
               </div>
             )}
 
-            {/* Router name strip */}
+            {/* Generated for banner */}
             {!isReconfigure && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: "0.875rem",
-                padding: "0.875rem 1.25rem",
-                background: "rgba(34,197,94,0.05)", border: "1px solid rgba(34,197,94,0.2)",
-                borderRadius: 10,
-              }}>
-                <RouterIcon size={17} style={{ color: "#22c55e" }} />
+              <div style={{ background: "rgba(20,184,166,0.06)", border: "1px solid rgba(20,184,166,0.22)", borderRadius: 10, padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.1rem" }}>
+                  <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.15rem" }}>
                     Configuration generated for
                   </div>
-                  <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>
-                    {displayName}
-                  </span>
-                  <span style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "#64748b", marginLeft: "0.5rem" }}>
-                    ({scriptFile})
-                  </span>
+                  <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>{displayName}</span>
+                  <code style={{ fontFamily: "monospace", fontSize: "0.73rem", color: "#64748b", marginLeft: "0.5rem" }}>({scriptFile})</code>
                 </div>
                 <button
                   onClick={() => { setPhase("idle"); setActiveRouterId(null); }}
@@ -339,42 +340,37 @@ export default function SelfInstall() {
               </div>
             )}
 
-            {/* ── Commands ── */}
-            <div style={{
-              background: "var(--isp-card)",
-              border: "1px solid rgba(6,182,212,0.2)",
-              borderRadius: 14, overflow: "hidden",
-            }}>
-              <div style={{ padding: "0.875rem 1.25rem", background: "rgba(6,182,212,0.05)", borderBottom: "1px solid rgba(6,182,212,0.12)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Terminal size={14} style={{ color: "#06b6d4" }} />
+            {/* Commands card */}
+            <div style={{ background: "var(--isp-card)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "0.875rem 1.25rem", background: "rgba(20,184,166,0.05)", borderBottom: "1px solid rgba(20,184,166,0.12)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Terminal size={14} style={{ color: "#14b8a6" }} />
                 <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>
                   Paste in Winbox → Terminal
                 </span>
               </div>
-
-              <div style={{ padding: "1.375rem 1.5rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div style={{ padding: "1.375rem 1.5rem", display: "flex", flexDirection: "column", gap: "1.125rem" }}>
                 <CmdBlock step={1} title="Download configuration" cmd={fetchCmd} />
                 <CmdBlock step={2} title="Run configuration"      cmd={importCmd} />
               </div>
             </div>
 
-            {/* ── Next → Ports button (shown for both Add Router and Reconfigure) ── */}
+            {/* Next → Ports */}
             <div style={{
               display: "flex", alignItems: "center", justifyContent: "space-between",
               gap: "1rem", flexWrap: "wrap",
-              background: "var(--isp-card)",
-              border: "1px solid rgba(6,182,212,0.22)",
+              background: "var(--isp-card)", border: "1px solid rgba(20,184,166,0.2)",
               borderRadius: 12, padding: "1.125rem 1.5rem",
             }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: "0.87rem", color: "var(--isp-text)", marginBottom: "0.2rem" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontWeight: 700, fontSize: "0.87rem", color: "var(--isp-text)", marginBottom: "0.25rem" }}>
                   {isReconfigure ? "Reassign Bridge Ports" : "Load Router Ports"}
                 </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
+                <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.55 }}>
                   {isReconfigure
                     ? "After re-running the script, click Next to verify and reassign the bridge ports."
-                    : <>After running the commands above the router connects via OpenVPN.
-                        Click <strong style={{ color: "var(--isp-text)" }}>Next</strong> to load its physical ports and assign them to the hotspot bridge.</>
+                    : <>After running the commands above the router connects via OpenVPN. Click{" "}
+                        <strong style={{ color: "var(--isp-text)" }}>Next</strong> to load its physical ports
+                        and assign them to the hotspot bridge.</>
                   }
                 </div>
               </div>
@@ -388,18 +384,18 @@ export default function SelfInstall() {
                   display: "inline-flex", alignItems: "center", gap: "0.5rem",
                   padding: "0.65rem 1.875rem", borderRadius: 9,
                   background: (routerIdForNext || (isReconfigure && reconfigureId))
-                    ? "linear-gradient(135deg,#06b6d4,#0284c7)"
+                    ? "linear-gradient(135deg,#14b8a6,#0d9488)"
                     : "rgba(255,255,255,0.07)",
-                  border: (routerIdForNext || (isReconfigure && reconfigureId)) ? "none" : "1px solid rgba(255,255,255,0.1)",
+                  border: "none",
                   color: (routerIdForNext || (isReconfigure && reconfigureId)) ? "white" : "var(--isp-text-muted)",
                   fontWeight: 700, fontSize: "0.9rem",
                   cursor: (routerIdForNext || (isReconfigure && reconfigureId)) ? "pointer" : "not-allowed",
                   fontFamily: "inherit",
-                  boxShadow: (routerIdForNext || (isReconfigure && reconfigureId)) ? "0 4px 16px rgba(6,182,212,0.35)" : "none",
+                  boxShadow: (routerIdForNext || (isReconfigure && reconfigureId)) ? "0 4px 16px rgba(20,184,166,0.35)" : "none",
                   transition: "all 0.2s", whiteSpace: "nowrap",
                 }}
               >
-                <>Next <ArrowRight size={15} /></>
+                Next <ArrowRight size={15} />
               </button>
             </div>
 
@@ -412,24 +408,24 @@ export default function SelfInstall() {
                 { label: "Next → Ports", done: false },
               ].map((s, i, arr) => (
                 <div key={i} style={{
-                  flex: 1, minWidth: 100, padding: "0.7rem 0.875rem",
-                  display: "flex", alignItems: "center", gap: "0.45rem",
+                  flex: 1, minWidth: 80, padding: "0.7rem 0.75rem",
+                  display: "flex", alignItems: "center", gap: "0.4rem",
                   borderRight: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none",
-                  background: s.done ? "rgba(6,182,212,0.05)" : "transparent",
+                  background: s.done ? "rgba(20,184,166,0.05)" : "transparent",
                 }}>
                   <span style={{
                     width: 19, height: 19, borderRadius: "50%", flexShrink: 0,
                     display: "inline-flex", alignItems: "center", justifyContent: "center",
                     fontSize: "0.62rem", fontWeight: 800,
-                    background: s.done ? "#06b6d4" : "rgba(255,255,255,0.07)",
+                    background: s.done ? "#14b8a6" : "rgba(255,255,255,0.07)",
                     color: s.done ? "white" : "var(--isp-text-muted)",
                   }}>
                     {s.done ? <Check size={10} /> : i + 1}
                   </span>
-                  <span style={{ fontSize: "0.72rem", color: s.done ? "#06b6d4" : "var(--isp-text-muted)", fontWeight: s.done ? 700 : 400 }}>
+                  <span style={{ fontSize: "0.71rem", color: s.done ? "#14b8a6" : "var(--isp-text-muted)", fontWeight: s.done ? 700 : 400, lineHeight: 1.3 }}>
                     {s.label}
                   </span>
-                  {i < arr.length - 1 && <ChevronRight size={11} style={{ color: "rgba(255,255,255,0.13)", marginLeft: "auto" }} />}
+                  {i < arr.length - 1 && <ChevronRight size={10} style={{ color: "rgba(255,255,255,0.13)", marginLeft: "auto", flexShrink: 0 }} />}
                 </div>
               ))}
             </div>
@@ -437,10 +433,12 @@ export default function SelfInstall() {
         )}
 
         {/* Note */}
-        <div style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.18)", borderRadius: 8, padding: "0.7rem 1rem", fontSize: "0.77rem", color: "#fbbf24", lineHeight: 1.65 }}>
+        <div style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.15)", borderRadius: 8, padding: "0.7rem 1rem", fontSize: "0.77rem", color: "#fbbf24", lineHeight: 1.65 }}>
           <strong>Note:</strong> The MikroTik must have internet access to reach{" "}
-          <code style={{ fontFamily: "monospace" }}>{adminSubdomain ? `${adminSubdomain}.${BASE_DOMAIN}` : window.location.host}</code> before running Step 1.
-          Re-running the script updates its config — no duplicate is created.
+          <code style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>
+            {adminSubdomain ? `${adminSubdomain}.${BASE_DOMAIN}` : window.location.host}
+          </code>{" "}
+          before running Step 1. Re-running the script updates its config — no duplicate is created.
         </div>
 
       </div>
