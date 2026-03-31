@@ -82,20 +82,28 @@ function deriveNet(ip: string): { gateway: string; network: string; poolStart: s
 }
 
 /* ══════════════════════════ Script generators ══════════════════════════ */
+
+/* Strip characters that RouterOS treats as special inside quoted strings.
+   # is a line-comment delimiter even mid-line; " would break string delimiters. */
+function rosStr(s: string): string {
+  return s.replace(/#/g, "").replace(/"/g, "'").trim();
+}
+
 function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): string {
-  const secret    = router.router_secret ?? "changeme";
-  const wanIface  = router.wan_interface  ?? "ether1";
-  const rawIp     = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
-  const net       = deriveNet(rawIp);
+  const co         = rosStr(companyName);
+  const secret     = router.router_secret ?? "ocholasupernet";
+  const wanIface   = router.wan_interface  ?? "ether1";
+  const apiUser    = rosStr(router.router_username || router.name || "admin");
+  const rawIp      = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
+  const net        = deriveNet(rawIp);
   const bridgeName = "bridge-pppoe";
 
   return `# ============================================================
-# ${companyName} — PPPoE Only Configuration
-# Router : ${router.name} (${router.host})
-# Generated: ${new Date().toLocaleString("en-KE")}
-# Target : RouterOS ${ros}
-# WAN interface : ${wanIface}
-# PPPoE gateway : ${net.gateway}/24
+# ${co} - PPPoE Only
+# Router  : ${router.name} (${router.host})
+# ROS     : ${ros}
+# WAN     : ${wanIface}
+# Gateway : ${net.gateway}/24
 # ============================================================
 
 # 1. Clean previous PPPoE config
@@ -105,99 +113,80 @@ function genPPPoEOnly(router: DbRouter, companyName: string, ros: number): strin
 :do { /ip address remove [find interface="${bridgeName}"] } on-error={}
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Create PPPoE bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
-# Bridge is created first, then optional params applied separately so old ROS never aborts.
-:do { /interface bridge add name=${bridgeName} comment="${companyName} PPPoE bridge" } on-error={}
+# 2. Bridge - created first, optional params set separately (ROS 6 compat)
+:do { /interface bridge add name=${bridgeName} } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] protocol-mode=none } on-error={}
+
+# 3. Add all LAN ethernet ports (skip WAN)
 :foreach x in=[/interface ethernet find] do={
   :local ifname [/interface ethernet get $x name]
   :if ($ifname != "${wanIface}") do={
     :do { /interface bridge port remove [find interface=$ifname] } on-error={}
-    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname comment="LAN" } on-error={}
+    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname } on-error={}
   }
 }
 :do { /interface bridge port remove [find interface=wlan1] } on-error={}
-:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 comment="WiFi 2.4GHz" } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 } on-error={}
 :do { /interface bridge port remove [find interface=wlan2] } on-error={}
-:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 comment="WiFi 5GHz" } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 } on-error={}
 
-# 3. Assign gateway IP to bridge
-/ip address add address=${net.gateway}/24 interface=${bridgeName} comment="${companyName} PPPoE gateway"
+# 4. Gateway IP
+:do { /ip address add address=${net.gateway}/24 interface=${bridgeName} } on-error={}
 
-# 4. IP Pool for PPPoE clients
-/ip pool add name=pppoe-pool ranges=${net.poolStart}-${net.poolEnd}
+# 5. IP pool
+:do { /ip pool add name=pppoe-pool ranges=${net.poolStart}-${net.poolEnd} } on-error={}
 
-# 5. PPP Profile — local authentication (no RADIUS)
-/ppp profile add \\
-  name=internet \\
-  local-address=${net.gateway} \\
-  remote-address=pppoe-pool \\
-  use-radius=no \\
-  dns-server=8.8.8.8,1.1.1.1 \\
-  change-tcp-mss=yes
+# 6. PPP profile (no comment= - not supported on all ROS 6 builds)
+:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool use-radius=no dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
-# 6. PPPoE Server
-/interface pppoe-server server add \\
-  service-name=internet \\
-  interface=${bridgeName} \\
-  default-profile=internet \\
-  authentication=pap,chap,mschap1,mschap2 \\
-  enabled=yes \\
-  max-mru=1480 \\
-  max-mtu=1480 \\
-  one-session-per-host=yes \\
-  keepalive-timeout=30 \\
-  comment="${companyName} PPPoE Server"
+# 7. PPPoE server (no comment= on server add - causes parse error on some ROS 6 builds)
+:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet authentication=pap,chap,mschap1,mschap2 enabled=yes max-mru=1480 max-mtu=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
 
-# 7. NAT masquerade for PPPoE clients
+# 8. NAT
 :do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
-/ip firewall nat add \\
-  chain=srcnat src-address=${net.network} \\
-  action=masquerade out-interface=${wanIface} \\
-  comment="PPPoE clients masquerade"
+:do { /ip firewall nat add chain=srcnat src-address=${net.network} action=masquerade out-interface=${wanIface} comment="PPPoE masquerade" } on-error={}
 
-# 8. DNS
-/ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
+# 9. DNS
+:do { /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes } on-error={}
 
-# 9. API access
-/ip service set api address=0.0.0.0/0 disabled=no
-:do { /user remove [find name="${router.router_username}"] } on-error={}
-/user add name=${router.router_username} password=${secret} group=full \\
-  comment="${companyName} API user" disabled=no
-# Allow port 8728 from VPN subnet and LAN (place-before=0 with fallback for empty chain)
-:do { /ip firewall filter remove [find comment="${companyName} - allow API"] } on-error={}
-:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" } on-error={} }
-:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" } on-error={} }
+# 10. API service + user
+:do { /ip service set api address=0.0.0.0/0 disabled=no } on-error={}
+:do { /user remove [find name="${apiUser}"] } on-error={}
+:do { /user add name="${apiUser}" password="${secret}" group=full disabled=no } on-error={}
 
-:log info "${companyName} PPPoE Only config applied"
-:put "Done. PPPoE server on ${bridgeName} | gateway ${net.gateway}/24 | pool ${net.poolStart}-${net.poolEnd}"
+# 11. Port 8728 firewall (place-before=0 with on-error fallback for empty chain)
+:do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
+
+:log info "${co} PPPoE-Only applied"
+:put "Done. PPPoE on ${bridgeName} | GW ${net.gateway}/24 | pool ${net.poolStart}-${net.poolEnd}"
 `;
 }
 
 function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number): string {
-  const secret      = router.router_secret   ?? "changeme";
+  const co          = rosStr(companyName);
+  const secret      = router.router_secret   ?? "ocholasupernet";
   const wanIface    = router.wan_interface   ?? "ether1";
   const bridgeName  = router.bridge_interface ?? "hotspot-bridge";
   const dnsName     = router.hotspot_dns_name ?? "hotspot.local";
+  const apiUser     = rosStr(router.router_username || router.name || "admin");
   const rawIp       = (router.bridge_ip ?? "192.168.88.1").replace(/\/\d+$/, "");
   const net         = deriveNet(rawIp);
   const hsPoolStart = rawIp.replace(/\.\d+$/, ".10");
   const hsPoolEnd   = rawIp.replace(/\.\d+$/, ".200");
   const pppPrefix   = "10.20.0";
 
-  /* ROS-version-specific hotspot profile params */
-  const hsProfileExtras = ros >= 7
-    ? ` use-radius=no mac-auth-mode=mac-as-username`
-    : ``;
+  /* mac-auth-mode only exists on ROS 7 */
+  const hsProfileExtras = ros >= 7 ? ` mac-auth-mode=mac-as-username` : ``;
 
   return `# ============================================================
-# ${companyName} — PPPoE over Hotspot Configuration
-# Router : ${router.name} (${router.host})
-# Generated: ${new Date().toLocaleString("en-KE")}
-# Target : RouterOS ${ros}
-# WAN interface : ${wanIface}
-# Bridge / Hotspot IP : ${net.gateway}/24
+# ${co} - PPPoE over Hotspot
+# Router  : ${router.name} (${router.host})
+# ROS     : ${ros}
+# WAN     : ${wanIface}
+# Bridge  : ${bridgeName}  GW: ${net.gateway}/24
 # ============================================================
 
 # 1. Clean existing config
@@ -212,85 +201,65 @@ function genPPPoEOverHotspot(router: DbRouter, companyName: string, ros: number)
 :do { /ip address remove [find interface="${bridgeName}"] } on-error={}
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Create shared bridge and add all LAN ports (skip WAN). Works on ROS 6 & 7.
-# Bridge created first; fast-forward and protocol-mode applied separately for ROS 6 compat.
-# fast-forward=no is critical — without it the hotspot never intercepts packets for redirect.
-:do { /interface bridge add name=${bridgeName} comment="${companyName} Hotspot+PPPoE bridge" } on-error={}
+# 2. Bridge - fast-forward=no is CRITICAL for hotspot redirect to work
+:do { /interface bridge add name=${bridgeName} } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] protocol-mode=none } on-error={}
+
+# 3. Add all LAN ethernet ports (skip WAN)
 :foreach x in=[/interface ethernet find] do={
   :local ifname [/interface ethernet get $x name]
   :if ($ifname != "${wanIface}") do={
     :do { /interface bridge port remove [find interface=$ifname] } on-error={}
-    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname comment="LAN" } on-error={}
+    :do { /interface bridge port add bridge=${bridgeName} interface=$ifname } on-error={}
   }
 }
 :do { /interface bridge port remove [find interface=wlan1] } on-error={}
-:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 comment="WiFi 2.4GHz" } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan1 } on-error={}
 :do { /interface bridge port remove [find interface=wlan2] } on-error={}
-:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 comment="WiFi 5GHz" } on-error={}
+:do { /interface bridge port add bridge=${bridgeName} interface=wlan2 } on-error={}
 
-# 3. Bridge gateway IP
-/ip address add address=${net.gateway}/24 interface=${bridgeName} comment="${companyName} gateway"
-
-# 4. IP pool for hotspot clients
-# Note: hotspot uses address-pool=hs-pool for its own built-in DHCP — no separate DHCP
-# server is needed. Having both causes duplicate DHCP responses that prevent redirect.
-/ip pool add name=hs-pool ranges=${hsPoolStart}-${hsPoolEnd}
+# 4. Gateway IP
+:do { /ip address add address=${net.gateway}/24 interface=${bridgeName} } on-error={}
 
 # 5. DNS
-/ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes
+:do { /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes } on-error={}
 
-# 6. Hotspot profile & server
-/ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac${hsProfileExtras}
+# 6. Hotspot pool (hotspot's built-in DHCP - no separate dhcp-server needed)
+:do { /ip pool add name=hs-pool ranges=${hsPoolStart}-${hsPoolEnd} } on-error={}
 
-/ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=5m disabled=no
+# 7. Hotspot profile (no comment= - not supported on all ROS 6 builds)
+:do { /ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,mac use-radius=no${hsProfileExtras} } on-error={}
 
-# 7. PPPoE IP pool (separate range so it doesn't conflict with hotspot clients)
-/ip pool add name=pppoe-pool ranges=${pppPrefix}.2-${pppPrefix}.254
+# 8. Hotspot server
+:do { /ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=none disabled=no } on-error={}
 
-# 8. PPP profile — local authentication (no RADIUS)
-/ppp profile add \\
-  name=internet \\
-  local-address=${net.gateway} \\
-  remote-address=pppoe-pool \\
-  dns-server=8.8.8.8,1.1.1.1 \\
-  use-radius=no \\
-  use-compression=no \\
-  change-tcp-mss=yes
+# 9. PPPoE pool (10.20.0.x - separate range, no conflict with hotspot clients)
+:do { /ip pool add name=pppoe-pool ranges=${pppPrefix}.2-${pppPrefix}.254 } on-error={}
 
-# 9. PPPoE server on shared bridge
-/interface pppoe-server server add \\
-  service-name=internet \\
-  interface=${bridgeName} \\
-  default-profile=internet \\
-  authentication=pap,chap,mschap1,mschap2 \\
-  enabled=yes \\
-  max-mru=1480 \\
-  max-mtu=1480 \\
-  one-session-per-host=yes \\
-  comment="${companyName} PPPoE-over-Hotspot"
+# 10. PPP profile (no comment= - not supported on all ROS 6 builds)
+:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool use-radius=no dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
-# 10. NAT masquerade
+# 11. PPPoE server (no comment= on server add - causes parse error on some ROS 6 builds)
+:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet authentication=pap,chap,mschap1,mschap2 enabled=yes max-mru=1480 max-mtu=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
+
+# 12. NAT
 :do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
 :do { /ip firewall nat remove [find comment~"Hotspot"] } on-error={}
-/ip firewall nat add \\
-  chain=srcnat src-address=${net.network} \\
-  action=masquerade out-interface=${wanIface} \\
-  comment="PPPoE/Hotspot masquerade"
+:do { /ip firewall nat add chain=srcnat src-address=${net.network} action=masquerade out-interface=${wanIface} comment="PPPoE-Hotspot masquerade" } on-error={}
 
-# 11. API access
-/ip service set api address=0.0.0.0/0 disabled=no
-:do { /user remove [find name="${router.router_username}"] } on-error={}
-/user add name=${router.router_username} password=${secret} group=full \\
-  comment="${companyName} API user" disabled=no
-# Allow port 8728 from VPN subnet and LAN (place-before=0 with fallback for empty chain)
-:do { /ip firewall filter remove [find comment="${companyName} - allow API"] } on-error={}
-:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" } on-error={} }
-:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="${companyName} - allow API" } on-error={} }
+# 13. API service + user
+:do { /ip service set api address=0.0.0.0/0 disabled=no } on-error={}
+:do { /user remove [find name="${apiUser}"] } on-error={}
+:do { /user add name="${apiUser}" password="${secret}" group=full disabled=no } on-error={}
 
-:log info "${companyName} PPPoE-over-Hotspot config applied"
-:put "Done. Bridge: ${bridgeName} | Hotspot: ${dnsName} | PPPoE pool: ${pppPrefix}.2-${pppPrefix}.254"
+# 14. Port 8728 firewall (place-before=0 with on-error fallback for empty chain)
+:do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
+
+:log info "${co} PPPoE-over-Hotspot applied"
+:put "Done. Bridge: ${bridgeName} | Hotspot: ${dnsName} | PPPoE pool: ${pppPrefix}.2-254"
 `;
 }
 
