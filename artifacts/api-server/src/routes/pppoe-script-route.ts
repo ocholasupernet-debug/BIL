@@ -174,8 +174,8 @@ function genPPPoEOnly(
 :put "[4] Creating PPPoE pool ${net.poolStart}-${net.poolEnd}..."
 :do { /ip pool add name=pppoe-pool ranges=${net.poolStart}-${net.poolEnd} } on-error={}
 
-# 6. PPP profile (no comment= - not supported on all ROS 6 builds)
-:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool use-radius=no dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
+# 6. PPP profile (no comment= or use-radius= - not supported on all ROS 6 builds)
+:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
 # 7. PPPoE server
 :put "[5] Starting PPPoE server on ${bridgeName}..."
@@ -322,8 +322,8 @@ function genPPPoEOverHotspot(
 :put "[5] Creating PPPoE pool ${pppPrefix}.10-${pppPrefix}.254..."
 :do { /ip pool add name=pppoe-pool ranges=${pppPrefix}.10-${pppPrefix}.254 } on-error={}
 
-# 10. PPP profile
-:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool use-radius=no dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
+# 10. PPP profile (no use-radius= — not supported on all ROS 6 builds; default is already no)
+:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
 # 11. PPPoE server
 :put "[6] Starting PPPoE server on ${bridgeName}..."
