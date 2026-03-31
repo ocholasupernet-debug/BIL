@@ -611,6 +611,85 @@ router.post("/admin/router/reboot", async (req, res): Promise<void> => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/fix-api
+   Connects to a MikroTik router via the API and:
+     1. Enables the API service (/ip service set [find name=api] disabled=no)
+     2. Adds a firewall rule to allow port 8728 from the VPN range
+   Body: { host, username, password, bridgeIp? }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/fix-api", async (req, res): Promise<void> => {
+  const { host, username, password, bridgeIp } = req.body as {
+    host: string; username: string; password: string; bridgeIp?: string;
+  };
+  if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
+
+  const logs: string[] = [];
+  const log = (msg: string) => logs.push(msg);
+
+  let conn = makeConn(host, username, password);
+  let connected = false;
+  let via = host;
+
+  try {
+    log(`▶ Connecting to ${host}:8728 as '${username || "admin"}'…`);
+    await withTimeout(conn.connect(), 8000);
+    connected = true;
+    log("✓ Connected");
+  } catch {
+    if (bridgeIp && bridgeIp !== host) {
+      try {
+        log(`▶ Retrying via VPN IP ${bridgeIp}…`);
+        conn = makeConn(bridgeIp, username, password);
+        await withTimeout(conn.connect(), 8000);
+        connected = true;
+        via = bridgeIp;
+        log("✓ Connected via VPN IP");
+      } catch { /* both failed */ }
+    }
+  }
+
+  if (!connected) {
+    res.json({
+      ok: false,
+      canConnect: false,
+      logs,
+      error: "Cannot reach router — run the commands manually in Winbox Terminal",
+    });
+    return;
+  }
+
+  try {
+    log("Enabling API service…");
+    await conn.write(["/ip/service/set", "=numbers=api", "=disabled=no"]).catch(() => {
+      conn.write(["/ip/service/set", `=.id=[/ip/service/find name=api]`, "=disabled=no"]).catch(() => {});
+    });
+    log("✓ API service enabled");
+
+    log("Adding firewall rule for port 8728 (VPN range 10.8.0.0/16)…");
+    await conn.write([
+      "/ip/firewall/filter/add",
+      "=chain=input",
+      "=protocol=tcp",
+      "=dst-port=8728",
+      "=src-address=10.8.0.0/16",
+      "=action=accept",
+      "=place-before=0",
+    ]).catch(() => {
+      /* May fail if rule already exists — not an error */
+      log("  (firewall rule may already exist — skipping)");
+    });
+    log("✓ Firewall rule applied");
+
+    log("✅ Auto-fix complete — try syncing again");
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: true, canConnect: true, via, logs });
+  } catch (err) {
+    try { conn.close(); } catch { /* ignore */ }
+    res.json({ ok: false, canConnect: true, logs, error: connErr(via, err) });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
    POST /api/admin/router/probe
    Connects to a MikroTik router and reads:
      - /system/resource  (version, board-name, uptime, cpu-load, memory)

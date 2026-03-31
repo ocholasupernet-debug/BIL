@@ -3,8 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
-  ChevronDown, ChevronUp, Copy, Check, Wifi, WifiOff,
-  ShieldAlert, KeyRound, Terminal,
+  ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check,
 } from "lucide-react";
 
 interface DbRouterMin {
@@ -12,189 +11,254 @@ interface DbRouterMin {
   router_username: string; router_secret: string | null;
 }
 
-/* ── Copy button ── */
+/* ── Tiny copy button (only used in the manual-fallback) ── */
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       onClick={() => navigator.clipboard.writeText(text).then(() => {
-        setCopied(true); setTimeout(() => setCopied(false), 2200);
+        setCopied(true); setTimeout(() => setCopied(false), 2000);
       })}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "0.3rem",
-        padding: "0.25rem 0.65rem", borderRadius: 5,
+        display: "inline-flex", alignItems: "center", gap: "0.25rem",
+        padding: "0.2rem 0.55rem", borderRadius: 4,
         background: copied ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.07)",
-        border: `1px solid ${copied ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.12)"}`,
-        color: copied ? "#4ade80" : "#a5b4fc",
-        fontSize: "0.7rem", fontWeight: 700, cursor: "pointer",
-        fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0,
+        border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.1)"}`,
+        color: copied ? "#4ade80" : "#94a3b8",
+        fontSize: "0.67rem", fontWeight: 700, cursor: "pointer",
+        fontFamily: "inherit", transition: "all 0.14s", flexShrink: 0,
       }}
     >
-      {copied ? <Check size={10} /> : <Copy size={10} />}
-      {copied ? "Copied!" : "Copy"}
+      {copied ? <Check size={9} /> : <Copy size={9} />}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
 
-/* ── Command row ── */
-function CmdRow({ cmd }: { cmd: string }) {
+/* ── Log panel (shared by sync / auto-fix / reboot) ── */
+function LogPanel({
+  logs, ok, onClose,
+}: {
+  logs: string[]; ok: boolean | null; onClose: () => void;
+}) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs]);
+  const color = ok === null ? "#22d3ee" : ok ? "#4ade80" : "#f87171";
   return (
     <div style={{
-      display: "flex", alignItems: "flex-start", justifyContent: "space-between",
-      gap: "0.625rem", background: "#040810",
-      border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6,
-      padding: "0.45rem 0.75rem",
+      marginTop: "0.5rem",
+      border: `1px solid ${ok === null ? "rgba(34,211,238,0.2)" : ok ? "rgba(74,222,128,0.2)" : "rgba(248,113,113,0.2)"}`,
+      borderRadius: 9, overflow: "hidden",
     }}>
-      <code style={{
-        fontFamily: "monospace", fontSize: "0.75rem", color: "#c7d2fe",
-        wordBreak: "break-all", lineHeight: 1.6, flex: 1,
-      }}>{cmd}</code>
-      <CopyBtn text={cmd} />
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0.45rem 0.875rem",
+        background: ok === null ? "rgba(34,211,238,0.05)" : ok ? "rgba(74,222,128,0.05)" : "rgba(248,113,113,0.05)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          {ok === null && <Loader2 size={12} style={{ color, animation: "spin 1s linear infinite" }} />}
+          {ok === true && <CheckCircle2 size={12} style={{ color }} />}
+          {ok === false && <AlertTriangle size={12} style={{ color }} />}
+          <span style={{ fontSize: "0.75rem", fontWeight: 700, color }}>
+            {ok === null ? "Working…" : ok ? "Done" : "Failed"}
+          </span>
+        </div>
+        <button onClick={onClose} style={{ fontSize: "0.67rem", color: "#64748b", background: "none", border: "none", cursor: "pointer" }}>
+          ✕
+        </button>
+      </div>
+      <div style={{ padding: "0.5rem 0.875rem", background: "#060a0f", maxHeight: 160, overflow: "auto", fontFamily: "monospace", fontSize: "0.7rem", lineHeight: 1.8 }}>
+        {logs.map((line, i) => {
+          const c = line.startsWith("✅") ? "#4ade80"
+            : line.startsWith("❌") ? "#f87171"
+            : line.startsWith("✓") ? "#a3e635"
+            : line.startsWith("▶") ? "#22d3ee"
+            : "#64748b";
+          return <div key={i} style={{ color: c }}>{line || " "}</div>;
+        })}
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
 
-/* ── Error classifier → returns the right fix UI ── */
-type ErrKind = "firewall" | "api_disabled" | "auth" | "vpn_down" | "unknown";
-
-function classifyError(err: string): ErrKind {
-  const e = err.toLowerCase();
-  if (/ehostunreach|enetunreach|no route|unreachable|vpn|routing failure/i.test(e))
-    return "vpn_down";
-  if (/timed out|etimedout|timeout/i.test(e))
-    return "firewall";
-  if (/econnrefused|refused/i.test(e))
-    return "api_disabled";
-  if (/login failed|auth|wrong password|credentials|not authorized|permission/i.test(e))
-    return "auth";
-  return "unknown";
-}
-
-function SyncErrorHint({
-  error, host, username, onRetry,
+/* ── Error action bar shown after a failed sync ── */
+function SyncFailedActions({
+  error, host, bridgeIp, username, password, onRetry,
 }: {
-  error: string; host: string; username: string; onRetry: () => void;
+  error: string; host: string; bridgeIp?: string;
+  username: string; password: string; onRetry: () => void;
 }) {
-  const kind = classifyError(error);
+  const [fixing,  setFixing]  = useState(false);
+  const [rebooting, setRebooting] = useState(false);
+  const [fixResult,    setFixResult]    = useState<{ ok: boolean; logs: string[]; canConnect?: boolean } | null>(null);
+  const [rebootResult, setRebootResult] = useState<{ ok: boolean; message?: string } | null>(null);
 
-  type Fix = { icon: React.ReactNode; title: string; subtitle: string; color: string; border: string; cmds?: string[]; note?: string };
+  const body = { host, bridgeIp, username, password };
 
-  const fixes: Record<ErrKind, Fix> = {
-    firewall: {
-      icon: <ShieldAlert size={15} />,
-      title: "Port 8728 blocked by firewall",
-      subtitle: "Run both commands in Winbox → Terminal, then click Try Again",
-      color: "#f97316", border: "rgba(249,115,22,0.35)",
-      cmds: [
-        "/ip service enable api",
-        `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0`,
-      ],
-    },
-    api_disabled: {
-      icon: <Wifi size={15} />,
-      title: "MikroTik API service is disabled",
-      subtitle: "Run in Winbox → Terminal, then click Try Again",
-      color: "#f97316", border: "rgba(249,115,22,0.35)",
-      cmds: ["/ip service enable api"],
-    },
-    auth: {
-      icon: <KeyRound size={15} />,
-      title: "Authentication failed — wrong credentials",
-      subtitle: `The app is connecting as "${username}". Check the username and password in Routers settings.`,
-      color: "#a78bfa", border: "rgba(167,139,250,0.35)",
-      note: `Verify in Winbox: /user print — ensure "${username}" exists with group=full`,
-    },
-    vpn_down: {
-      icon: <WifiOff size={15} />,
-      title: "VPN tunnel is down — can't reach router",
-      subtitle: `${host} is not reachable. Check the OpenVPN/WireGuard tunnel is connected.`,
-      color: "#f87171", border: "rgba(248,113,113,0.35)",
-      note: "Run: ping 10.8.0.1 from the server — if it fails, the VPN needs to be restarted.",
-    },
-    unknown: {
-      icon: <Terminal size={15} />,
-      title: "Connection failed",
-      subtitle: "Unexpected error — see raw detail below",
-      color: "#f87171", border: "rgba(248,113,113,0.35)",
-    },
-  };
+  async function handleAutoFix() {
+    setFixing(true); setFixResult(null); setRebootResult(null);
+    try {
+      const res  = await fetch("/api/admin/router/fix-api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json() as { ok: boolean; logs: string[]; canConnect?: boolean; error?: string };
+      setFixResult({ ok: data.ok, logs: data.logs ?? [], canConnect: data.canConnect });
+    } catch (e) {
+      setFixResult({ ok: false, logs: [`❌ ${String(e)}`], canConnect: false });
+    } finally { setFixing(false); }
+  }
 
-  const fix = fixes[kind];
+  async function handleReboot() {
+    setRebooting(true); setRebootResult(null); setFixResult(null);
+    try {
+      const res  = await fetch("/api/admin/router/reboot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json() as { ok: boolean; message?: string; error?: string };
+      setRebootResult({ ok: data.ok, message: data.ok ? (data.message ?? "Reboot command sent") : (data.error ?? "Failed") });
+    } catch (e) {
+      setRebootResult({ ok: false, message: String(e) });
+    } finally { setRebooting(false); }
+  }
+
+  /* Compact one-line error label */
+  const isTimeout  = /timed out|etimedout|timeout/i.test(error);
+  const isRefused  = /econnrefused|refused/i.test(error) && !isTimeout;
+  const isAuth     = /login|auth|password|permission/i.test(error);
+  const isVpn      = /ehostunreach|enetunreach|no route|unreachable/i.test(error);
+
+  const errLabel = isTimeout  ? "Port 8728 blocked by firewall"
+    : isRefused  ? "API service disabled on router"
+    : isAuth     ? "Authentication failed"
+    : isVpn      ? "VPN / routing unreachable"
+    : "Connection failed";
+
+  /* Manual fallback commands — shown only when auto-fix can't connect */
+  const showFallback = fixResult && !fixResult.ok && fixResult.canConnect === false;
+  const fallbackCmds = [
+    "/ip service enable api",
+    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+  ];
 
   return (
     <div style={{
-      background: "rgba(15,18,28,0.95)",
-      border: `1px solid ${fix.border}`,
-      borderRadius: 10, overflow: "hidden", margin: "0.625rem 0",
+      marginTop: "0.625rem",
+      background: "rgba(248,113,113,0.04)",
+      border: "1px solid rgba(248,113,113,0.2)",
+      borderRadius: 10, padding: "0.625rem 0.875rem",
     }}>
-      {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: "0.5rem",
-        padding: "0.6rem 0.875rem",
-        background: `color-mix(in srgb, ${fix.color} 10%, transparent)`,
-        borderBottom: `1px solid ${fix.border}`,
-      }}>
-        <span style={{ color: fix.color, flexShrink: 0 }}>{fix.icon}</span>
-        <div style={{ flex: 1 }}>
-          <p style={{ margin: 0, fontWeight: 700, fontSize: "0.8rem", color: fix.color }}>
-            ✕ {fix.title}
-          </p>
-          <p style={{ margin: 0, fontSize: "0.71rem", color: "var(--isp-text-muted)", lineHeight: 1.4, marginTop: "0.15rem" }}>
-            {fix.subtitle}
-          </p>
-        </div>
-      </div>
-
-      {/* Commands or note */}
-      {(fix.cmds || fix.note) && (
-        <div style={{ padding: "0.625rem 0.875rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-          {fix.cmds && (
-            <>
-              <p style={{ margin: "0 0 0.3rem", fontSize: "0.7rem", fontWeight: 700, color: "#94a3b8" }}>
-                Run in Winbox → Terminal:
-              </p>
-              {fix.cmds.map(cmd => <CmdRow key={cmd} cmd={cmd} />)}
-            </>
-          )}
-          {fix.note && (
-            <p style={{ margin: "0.35rem 0 0", fontSize: "0.72rem", color: "#94a3b8", fontFamily: "monospace" }}>
-              {fix.note}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Try Again */}
-      <div style={{
-        padding: "0.5rem 0.875rem",
-        borderTop: `1px solid rgba(255,255,255,0.05)`,
-        display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem",
-      }}>
-        <span style={{ fontSize: "0.69rem", color: "#475569" }}>
-          After running the commands above, click Try Again
+      {/* Error label + action buttons on one line */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
+        <AlertTriangle size={13} style={{ color: "#f87171", flexShrink: 0 }} />
+        <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "#f87171", flex: 1 }}>
+          {errLabel}
         </span>
+
+        <button
+          onClick={handleAutoFix}
+          disabled={fixing || rebooting}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: "0.3rem",
+            padding: "0.3rem 0.875rem", borderRadius: 7,
+            background: fixing ? "rgba(6,182,212,0.08)" : "rgba(6,182,212,0.15)",
+            border: "1px solid rgba(6,182,212,0.4)",
+            color: "#22d3ee", fontWeight: 700, fontSize: "0.76rem",
+            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            fontFamily: "inherit", transition: "all 0.15s",
+          }}
+        >
+          {fixing
+            ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Fixing…</>
+            : <><Wrench size={11} /> Auto-fix</>
+          }
+        </button>
+
+        <button
+          onClick={handleReboot}
+          disabled={fixing || rebooting}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: "0.3rem",
+            padding: "0.3rem 0.875rem", borderRadius: 7,
+            background: rebooting ? "rgba(249,115,22,0.08)" : "rgba(249,115,22,0.12)",
+            border: "1px solid rgba(249,115,22,0.35)",
+            color: "#fb923c", fontWeight: 700, fontSize: "0.76rem",
+            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            fontFamily: "inherit", transition: "all 0.15s",
+          }}
+        >
+          {rebooting
+            ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Rebooting…</>
+            : <><PowerOff size={11} /> Reboot</>
+          }
+        </button>
+
         <button
           onClick={onRetry}
+          disabled={fixing || rebooting}
           style={{
-            display: "inline-flex", alignItems: "center", gap: "0.35rem",
+            display: "inline-flex", alignItems: "center", gap: "0.3rem",
             padding: "0.3rem 0.875rem", borderRadius: 7,
-            background: "linear-gradient(135deg,rgba(6,182,212,0.2),rgba(2,132,199,0.2))",
-            border: "1px solid rgba(6,182,212,0.4)",
-            color: "#22d3ee", fontWeight: 700, fontSize: "0.75rem",
-            cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            color: "#94a3b8", fontWeight: 700, fontSize: "0.76rem",
+            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            fontFamily: "inherit", transition: "all 0.15s",
           }}
         >
           <RefreshCw size={11} /> Try Again
         </button>
       </div>
+
+      {/* Auto-fix result log */}
+      {(fixing || fixResult) && (
+        <LogPanel
+          logs={fixResult?.logs ?? (fixing ? ["▶ Connecting to router…"] : [])}
+          ok={fixResult ? fixResult.ok : null}
+          onClose={() => setFixResult(null)}
+        />
+      )}
+
+      {/* Manual fallback — only shown when auto-fix can't reach the router */}
+      {showFallback && (
+        <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
+          <p style={{ margin: "0 0 0.4rem", fontSize: "0.69rem", color: "#64748b", fontWeight: 600 }}>
+            Router unreachable — run in Winbox Terminal instead:
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            {fallbackCmds.map(cmd => (
+              <div key={cmd} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", background: "#040810", borderRadius: 5, padding: "0.35rem 0.625rem" }}>
+                <code style={{ fontFamily: "monospace", fontSize: "0.71rem", color: "#c7d2fe", flex: 1, wordBreak: "break-all", lineHeight: 1.5 }}>{cmd}</code>
+                <CopyBtn text={cmd} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Reboot result */}
+      {rebootResult && (
+        <div style={{
+          marginTop: "0.5rem", padding: "0.4rem 0.75rem", borderRadius: 7,
+          background: rebootResult.ok ? "rgba(74,222,128,0.06)" : "rgba(248,113,113,0.06)",
+          border: `1px solid ${rebootResult.ok ? "rgba(74,222,128,0.2)" : "rgba(248,113,113,0.2)"}`,
+          fontSize: "0.74rem", fontWeight: 600,
+          color: rebootResult.ok ? "#4ade80" : "#f87171",
+        }}>
+          {rebootResult.ok ? "✓" : "✕"} {rebootResult.message}
+          {rebootResult.ok && (
+            <span style={{ color: "#64748b", fontWeight: 400, fontSize: "0.69rem", marginLeft: "0.5rem" }}>
+              — wait ~30s then Try Again
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-/* ─── Log panel ─── */
-function LogPanel({ logs, ok, error, host, username, onClose, onRetry }: {
+/* ─── Log panel for main sync ─── */
+function SyncLogPanel({
+  logs, ok, error, host, bridgeIp, username, password, onClose, onRetry,
+}: {
   logs: string[]; ok: boolean | null; error?: string;
-  host: string; username: string;
+  host: string; bridgeIp?: string; username: string; password: string;
   onClose: () => void; onRetry: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -219,15 +283,8 @@ function LogPanel({ logs, ok, error, host, username, onClose, onRetry }: {
         </button>
       </div>
 
-      {/* Smart error panel — only when sync failed */}
-      {ok === false && error && (
-        <div style={{ padding: "0 0.75rem" }}>
-          <SyncErrorHint error={error} host={host} username={username} onRetry={onRetry} />
-        </div>
-      )}
-
       {/* Raw log lines */}
-      <div style={{ padding: "0.625rem 1rem", background: "#080c10", maxHeight: 200, overflow: "auto", fontFamily: "monospace", fontSize: "0.72rem", lineHeight: 1.75 }}>
+      <div style={{ padding: "0.625rem 1rem", background: "#080c10", maxHeight: 180, overflow: "auto", fontFamily: "monospace", fontSize: "0.72rem", lineHeight: 1.75 }}>
         {logs.map((line, i) => {
           const c = line.startsWith("✅") ? "#4ade80"
             : line.startsWith("❌") ? "#f87171"
@@ -239,6 +296,20 @@ function LogPanel({ logs, ok, error, host, username, onClose, onRetry }: {
         })}
         <div ref={bottomRef} />
       </div>
+
+      {/* Action bar — only shown on failure */}
+      {ok === false && error && (
+        <div style={{ padding: "0 0.75rem 0.75rem" }}>
+          <SyncFailedActions
+            error={error}
+            host={host}
+            bridgeIp={bridgeIp}
+            username={username}
+            password={password}
+            onRetry={onRetry}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -352,16 +423,16 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         </button>
       </div>
 
-      {/* No host warning */}
+      {/* Warnings */}
       {selectedRouter && !selectedRouter.host && !selectedRouter.bridge_ip && (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8, fontSize: "0.75rem", color: "#fbbf24" }}>
           <AlertTriangle size={13} />
-          <span>No IP address found for this router. Make sure it has sent a heartbeat (VPN IP auto-detected) or go to <strong>Routers</strong> and save its IP manually.</span>
+          <span>No IP found for this router. Go to <strong>Routers</strong> to save its IP or wait for a heartbeat.</span>
         </div>
       )}
       {selectedRouter && !selectedRouter.host && selectedRouter.bridge_ip && (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 8, fontSize: "0.75rem", color: "#22d3ee" }}>
-          <span>Using VPN tunnel IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.bridge_ip}</strong> to reach this router.</span>
+          <span>Using VPN tunnel IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.bridge_ip}</strong></span>
         </div>
       )}
 
@@ -390,14 +461,16 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         </div>
       )}
 
-      {/* Log panel */}
+      {/* Sync log panel */}
       {(syncing || result) && (
-        <LogPanel
+        <SyncLogPanel
           logs={result?.logs ?? (syncing ? ["▶ Connecting…"] : [])}
           ok={result ? result.ok : null}
           error={result?.error}
-          host={selectedRouter?.host || selectedRouter?.bridge_ip || "router"}
+          host={selectedRouter?.host || selectedRouter?.bridge_ip || ""}
+          bridgeIp={selectedRouter?.bridge_ip ?? undefined}
           username={selectedRouter?.router_username || "admin"}
+          password={selectedRouter?.router_secret || ""}
           onClose={() => setResult(null)}
           onRetry={handleSync}
         />
