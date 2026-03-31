@@ -3,8 +3,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2 } from "lucide-react";
+import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
+
+interface DbPool { id: number; name: string; range_start: string; range_end: string; router_id: number | null; }
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
@@ -34,6 +36,15 @@ async function fetchRouters(): Promise<DbRouter[]> {
     .order("name", { ascending: true });
   if (error) throw error;
   return (data ?? []) as DbRouter[];
+}
+
+async function fetchPools(): Promise<DbPool[]> {
+  const { data } = await supabase
+    .from("isp_ip_pools")
+    .select("id,name,range_start,range_end,router_id")
+    .eq("admin_id", ADMIN_ID)
+    .order("name");
+  return (data ?? []) as DbPool[];
 }
 
 /* ─── Display helpers ─── */
@@ -69,11 +80,12 @@ interface ServicePlanFormProps {
   initialData?: DbPlan | null;
   bandwidths: DbBandwidth[];
   routers: DbRouter[];
+  pools: DbPool[];
   onCancel: () => void;
   onSaved: () => void;
 }
 
-function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCancel, onSaved }: ServicePlanFormProps) {
+function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools, onCancel, onSaved }: ServicePlanFormProps) {
   const isEdit   = !!initialData;
   const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
@@ -98,6 +110,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
   const [expiredPool,   setExpiredPool]   = useState(initialData?.expired_ip_pool ?? "");
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
+  const [customActive,  setCustomActive]  = useState(false);
+  const [customExpired, setCustomExpired] = useState(false);
 
   /* ── Data cap (for Limited plans) ── */
   const initDataUnit = (() => {
@@ -340,10 +354,62 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
 
         {isPppoe && (
           <div style={ROW}>
-            <span style={LBL_CYAN}>Active IP Pool</span>
+            <span style={LBL_CYAN}>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                <Database size={13} /> Active IP Pool
+              </span>
+            </span>
             <div style={{ flex: 1 }}>
-              <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. hs-pool-3 or pppoe-pool" />
-              <p style={HINT}>Pool name as defined in MikroTik → IP → Pool.</p>
+              {pools.length > 0 ? (
+                <>
+                  {!customActive ? (
+                    <select
+                      style={{ ...SELECT, width: "100%" }}
+                      value={activePool}
+                      onChange={e => {
+                        if (e.target.value === "__custom__") { setCustomActive(true); setActivePool(""); }
+                        else setActivePool(e.target.value);
+                      }}
+                    >
+                      <option value="">— Select IP Pool —</option>
+                      {(routerId
+                        ? pools.filter(p => p.router_id === parseInt(routerId) || p.router_id === null)
+                        : pools
+                      ).map(p => (
+                        <option key={p.id} value={p.name}>
+                          {p.name} ({p.range_start}–{p.range_end})
+                        </option>
+                      ))}
+                      <option value="__custom__">✏ Enter manually…</option>
+                    </select>
+                  ) : (
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      <input
+                        style={{ ...INPUT, flex: 1 }}
+                        value={activePool}
+                        onChange={e => setActivePool(e.target.value)}
+                        placeholder="e.g. pppoe-pool"
+                        autoFocus
+                      />
+                      <button type="button" onClick={() => { setCustomActive(false); setActivePool(""); }}
+                        style={{ padding: "0.45rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "0.78rem" }}>
+                        ← List
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. pppoe-pool" />
+                  <p style={{ ...HINT, color: "#fbbf24" }}>
+                    No IP pools found. <a href="/admin/network/ip-pools" style={{ color: "#06b6d4" }}>Create one on the IP Pools page →</a>
+                  </p>
+                </>
+              )}
+              <p style={HINT}>
+                Pool assigned to active subscribers. Defined in{" "}
+                <a href="/admin/network/ip-pools" style={{ color: "#06b6d4" }}>IP Pools</a>.
+              </p>
             </div>
           </div>
         )}
@@ -352,8 +418,48 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, onCanc
           <div style={ROW}>
             <span style={LBL}>Expired IP Pool</span>
             <div style={{ flex: 1 }}>
-              <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired-pool" />
-              <p style={HINT}>Customers assigned here after plan expires.</p>
+              {pools.length > 0 ? (
+                <>
+                  {!customExpired ? (
+                    <select
+                      style={{ ...SELECT, width: "100%" }}
+                      value={expiredPool}
+                      onChange={e => {
+                        if (e.target.value === "__custom__") { setCustomExpired(true); setExpiredPool(""); }
+                        else setExpiredPool(e.target.value);
+                      }}
+                    >
+                      <option value="">— None (optional) —</option>
+                      {(routerId
+                        ? pools.filter(p => p.router_id === parseInt(routerId) || p.router_id === null)
+                        : pools
+                      ).map(p => (
+                        <option key={p.id} value={p.name}>
+                          {p.name} ({p.range_start}–{p.range_end})
+                        </option>
+                      ))}
+                      <option value="__custom__">✏ Enter manually…</option>
+                    </select>
+                  ) : (
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      <input
+                        style={{ ...INPUT, flex: 1 }}
+                        value={expiredPool}
+                        onChange={e => setExpiredPool(e.target.value)}
+                        placeholder="e.g. expired-pool"
+                        autoFocus
+                      />
+                      <button type="button" onClick={() => { setCustomExpired(false); setExpiredPool(""); }}
+                        style={{ padding: "0.45rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "0.78rem" }}>
+                        ← List
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired-pool" />
+              )}
+              <p style={HINT}>Customers are moved to this pool after their plan expires (optional).</p>
             </div>
           </div>
         )}
@@ -653,6 +759,12 @@ export default function Plans() {
     queryFn:  fetchRouters,
   });
 
+  const { data: pools = [] } = useQuery<DbPool[]>({
+    queryKey: ["isp_ip_pools_plans", ADMIN_ID],
+    queryFn:  fetchPools,
+    staleTime: 30_000,
+  });
+
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
       const { error } = await supabase.from("isp_plans").delete().eq("id", id);
@@ -744,6 +856,7 @@ export default function Plans() {
             initialData={editingPlan}
             bandwidths={bandwidths}
             routers={routers}
+            pools={pools}
             onCancel={closeForm}
             onSaved={onSaved}
           />
