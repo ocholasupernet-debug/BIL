@@ -388,7 +388,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
                         style={{ ...INPUT, flex: 1 }}
                         value={activePool}
                         onChange={e => setActivePool(e.target.value)}
-                        placeholder="e.g. pppoe-pool"
+                        placeholder="e.g. active"
                         autoFocus
                       />
                       <button type="button" onClick={() => { setCustomActive(false); setActivePool(""); }}
@@ -400,7 +400,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
                 </>
               ) : (
                 <>
-                  <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. pppoe-pool" />
+                  <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. active" />
                   <p style={{ ...HINT, color: "#fbbf24" }}>
                     No IP pools found. <a href="/admin/network/ip-pools" style={{ color: "#06b6d4" }}>Create one on the IP Pools page →</a>
                   </p>
@@ -446,7 +446,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
                         style={{ ...INPUT, flex: 1 }}
                         value={expiredPool}
                         onChange={e => setExpiredPool(e.target.value)}
-                        placeholder="e.g. expired-pool"
+                        placeholder="e.g. expired"
                         autoFocus
                       />
                       <button type="button" onClick={() => { setCustomExpired(false); setExpiredPool(""); }}
@@ -457,7 +457,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
                   )}
                 </>
               ) : (
-                <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired-pool" />
+                <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired" />
               )}
               <p style={HINT}>Customers are moved to this pool after their plan expires (optional).</p>
             </div>

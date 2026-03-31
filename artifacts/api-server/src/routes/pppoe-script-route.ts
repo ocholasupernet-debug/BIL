@@ -427,19 +427,18 @@ async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
     res.send(script);
 
     /* ── Auto-register pool(s) in isp_ip_pools — fire-and-forget ── */
+    /* Auto-register the active pool only — one "active" pool per router.
+       Expired pool is configured manually by the admin in the IP Pools page. */
     const adminId  = router.admin_id;
     const routerPk = router.id;
     if (mode === "pppoe_only") {
       const rawIp = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
       const net   = deriveNet(rawIp);
-      autoUpsertPool(adminId, routerPk, "pppoe-pool", net.poolStart, net.poolEnd).catch(() => {});
+      autoUpsertPool(adminId, routerPk, "active", net.poolStart, net.poolEnd).catch(() => {});
     } else {
-      const rawIp       = (router.bridge_ip ?? "192.168.88.1").replace(/\/\d+$/, "");
-      const hsPoolStart = rawIp.replace(/\.\d+$/, ".10");
-      const hsPoolEnd   = rawIp.replace(/\.\d+$/, ".200");
-      const pppPrefix   = "10.20.0";
-      autoUpsertPool(adminId, routerPk, "hs-pool",    hsPoolStart,          hsPoolEnd          ).catch(() => {});
-      autoUpsertPool(adminId, routerPk, "pppoe-pool", `${pppPrefix}.10`, `${pppPrefix}.254`).catch(() => {});
+      /* PPPoE-over-hotspot: the PPPoE range is the active (subscriber) pool */
+      const pppPrefix = "10.20.0";
+      autoUpsertPool(adminId, routerPk, "active", `${pppPrefix}.10`, `${pppPrefix}.254`).catch(() => {});
     }
 
   } catch (err) {
