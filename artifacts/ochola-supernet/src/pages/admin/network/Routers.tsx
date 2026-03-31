@@ -120,6 +120,21 @@ function timeSince(dateStr: string | null): string {
   return `${dateLabel} ${timeStr}`;
 }
 
+/* ── Format RouterOS uptime string ("1w2d3h40m5s") to readable "1w 2d 3h 40m" ── */
+function formatUptime(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const m = raw.match(/(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!m) return raw;
+  const [, w, d, h, min] = m;
+  const parts = [
+    w   && `${w}w`,
+    d   && `${d}d`,
+    h   && `${h}h`,
+    min && `${min}m`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" ") : raw;
+}
+
 /* A router is online when BOTH are true:
    1. status field is "online" or "connected" (set by VPS backend via heartbeat)
    2. last_seen was within the last 15 minutes (prevents stale "online" in DB)
@@ -331,7 +346,22 @@ export default function Routers() {
         data = { ok: false, error: `Server returned unexpected response (HTTP ${res.status}): ${preview || text.slice(0, 200)}` };
       }
       setAutoFixResults(data);
-      if (data?.ok) qc.invalidateQueries({ queryKey: ["isp_routers"] });
+      if (data?.ok) {
+        qc.invalidateQueries({ queryKey: ["isp_routers"] });
+        /* Immediately reflect online routers in pingState so STATE column updates */
+        if (data.results) {
+          const stateUpdate: Record<number, "online" | "offline"> = {};
+          const resUpdate:   Record<number, { identity?: string; uptime?: string }> = {};
+          for (const r of data.results) {
+            if (r.matched) {
+              stateUpdate[r.routerId] = r.pingOk ? "online" : "offline";
+              if (r.pingOk) resUpdate[r.routerId] = { identity: r.identity, uptime: r.uptime };
+            }
+          }
+          setPingState(p => ({ ...p, ...stateUpdate }));
+          setPingResult(p => ({ ...p, ...resUpdate }));
+        }
+      }
     } catch (e) {
       setAutoFixResults({ ok: false, error: (e as Error).message });
     } finally {
@@ -637,7 +667,7 @@ export default function Routers() {
 
                         {/* UPTIME */}
                         <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
-                          {r.ros_version ? "—" : "—"}
+                          {formatUptime(pingResult[r.id]?.uptime)}
                         </td>
 
                         {/* MODEL */}
@@ -1053,7 +1083,7 @@ export default function Routers() {
                             {" → "}
                             <code style={{ fontFamily: "monospace", color: "#06b6d4" }}>{r.newIp}</code>
                             {r.pingOk
-                              ? <span style={{ color: "#4ade80" }}> · Online ✓ {r.identity && `(${r.identity})`} {r.uptime && `up ${r.uptime}`}</span>
+                              ? <span style={{ color: "#4ade80" }}> · Online ✓ {r.identity && `(${r.identity})`} {r.uptime && `· up ${formatUptime(r.uptime)}`}</span>
                               : r.pingError ? <PingErrorHint error={r.pingError} /> : null}
                           </p>
                         ) : (
