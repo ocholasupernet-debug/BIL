@@ -1559,38 +1559,58 @@ export async function assignBridgePorts(
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const logs: string[] = [];
 
-    /* Fetch current bridge port rows so we know their .id values */
+    /* Fetch ALL bridge port rows (across every bridge) so we have global .id mapping */
     const existing = (await withTimeout(
       conn.write(["/interface/bridge/port/print"]),
       ms
     )) as Record<string, string>[];
 
-    const portIdMap: Record<string, string> = {};
+    /* globalPortMap: interface name → { id, bridge } for every assigned port */
+    const globalPortMap: Record<string, { id: string; bridge: string }> = {};
     (Array.isArray(existing) ? existing : []).forEach(r => {
-      if (r.bridge === bridgeName && r.interface && r[".id"]) {
-        portIdMap[r.interface] = r[".id"];
+      if (r.interface && r[".id"]) {
+        globalPortMap[r.interface] = { id: r[".id"], bridge: r.bridge ?? "" };
       }
     });
 
+    /* ── Remove ports from the target bridge ── */
     for (const iface of removePorts) {
-      const rowId = portIdMap[iface];
-      if (!rowId) {
-        logs.push(`⚠ ${iface}: not currently in ${bridgeName}, skipping`);
+      const entry = globalPortMap[iface];
+      if (!entry || entry.bridge !== bridgeName) {
+        logs.push(`⚠ ${iface}: not in ${bridgeName}, skipping remove`);
         continue;
       }
       try {
-        await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${rowId}`]), ms);
+        await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${entry.id}`]), ms);
         logs.push(`✓ Removed ${iface} from ${bridgeName}`);
+        delete globalPortMap[iface]; // keep map in sync for the add step
       } catch (e) {
         logs.push(`✗ Failed to remove ${iface}: ${(e as Error).message}`);
       }
     }
 
+    /* ── Add ports to the target bridge ── */
     for (const iface of addPorts) {
-      if (portIdMap[iface]) {
-        logs.push(`⚠ ${iface}: already a member of ${bridgeName}, skipping`);
+      const entry = globalPortMap[iface];
+
+      /* Already in this bridge — nothing to do */
+      if (entry && entry.bridge === bridgeName) {
+        logs.push(`⚠ ${iface}: already in ${bridgeName}, skipping`);
         continue;
       }
+
+      /* Port is a member of a DIFFERENT bridge — remove it first */
+      if (entry && entry.bridge && entry.bridge !== bridgeName) {
+        try {
+          await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${entry.id}`]), ms);
+          logs.push(`  ↩ Moved ${iface} out of ${entry.bridge}`);
+        } catch (e) {
+          logs.push(`✗ Could not remove ${iface} from ${entry.bridge}: ${(e as Error).message}`);
+          continue; // skip add if we couldn't remove
+        }
+      }
+
+      /* Add to target bridge */
       try {
         await withTimeout(
           conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${iface}`]),
