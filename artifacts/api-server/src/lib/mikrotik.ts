@@ -1481,3 +1481,128 @@ ${enableApiSsl ? "/ip service enable api-ssl" : "# /ip service enable api-ssl  (
 # :log info "Firewall rules applied. API restricted to ${vpsIp} only."
 `;
 }
+
+/* ═══════════════════════ Bridge port management ═══════════════════════════ */
+
+export interface BridgeEntry {
+  name: string;
+  running: boolean;
+}
+
+export interface BridgePortEntry {
+  id: string;
+  bridge: string;
+  interface: string;
+}
+
+export interface BridgePortLayout {
+  interfaces: RouterInterface[];
+  bridges: BridgeEntry[];
+  bridgePorts: BridgePortEntry[];
+  connectedVia: string;
+}
+
+/**
+ * Fetch all interfaces, bridge objects, and bridge port memberships.
+ * Used by the Bridge Ports admin page.
+ */
+export async function fetchBridgePortLayout(
+  creds: RouterCredentials
+): Promise<BridgePortLayout> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    const [ifaceRows, bridgeRows, bpRows] = await Promise.all([
+      withTimeout(conn.write(["/interface/print"]),             ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/print"]),      ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+
+    const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
+      id:         r[".id"]         ?? "",
+      name:       r.name           ?? "",
+      type:       r.type           ?? "",
+      running:    parseBool(r.running),
+      disabled:   parseBool(r.disabled),
+      macAddress: r["mac-address"] ?? "",
+      comment:    r.comment        ?? "",
+      txBps:      parseBytes(r["tx-byte"]),
+      rxBps:      parseBytes(r["rx-byte"]),
+    }));
+
+    const bridges: BridgeEntry[] = (Array.isArray(bridgeRows) ? bridgeRows : []).map(r => ({
+      name:    r.name    ?? "",
+      running: parseBool(r.running),
+    }));
+
+    const bridgePorts: BridgePortEntry[] = (Array.isArray(bpRows) ? bpRows : []).map(r => ({
+      id:        r[".id"]    ?? "",
+      bridge:    r.bridge    ?? "",
+      interface: r.interface ?? "",
+    }));
+
+    return { interfaces, bridges, bridgePorts, connectedVia: connectedHost };
+  });
+}
+
+/**
+ * Add or remove interfaces from a MikroTik bridge.
+ * Returns an array of human-readable log lines.
+ */
+export async function assignBridgePorts(
+  creds: RouterCredentials,
+  bridgeName: string,
+  addPorts: string[],
+  removePorts: string[]
+): Promise<string[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const logs: string[] = [];
+
+    /* Fetch current bridge port rows so we know their .id values */
+    const existing = (await withTimeout(
+      conn.write(["/interface/bridge/port/print"]),
+      ms
+    )) as Record<string, string>[];
+
+    const portIdMap: Record<string, string> = {};
+    (Array.isArray(existing) ? existing : []).forEach(r => {
+      if (r.bridge === bridgeName && r.interface && r[".id"]) {
+        portIdMap[r.interface] = r[".id"];
+      }
+    });
+
+    for (const iface of removePorts) {
+      const rowId = portIdMap[iface];
+      if (!rowId) {
+        logs.push(`⚠ ${iface}: not currently in ${bridgeName}, skipping`);
+        continue;
+      }
+      try {
+        await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${rowId}`]), ms);
+        logs.push(`✓ Removed ${iface} from ${bridgeName}`);
+      } catch (e) {
+        logs.push(`✗ Failed to remove ${iface}: ${(e as Error).message}`);
+      }
+    }
+
+    for (const iface of addPorts) {
+      if (portIdMap[iface]) {
+        logs.push(`⚠ ${iface}: already a member of ${bridgeName}, skipping`);
+        continue;
+      }
+      try {
+        await withTimeout(
+          conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${iface}`]),
+          ms
+        );
+        logs.push(`✓ Added ${iface} → ${bridgeName}`);
+      } catch (e) {
+        logs.push(`✗ Failed to add ${iface}: ${(e as Error).message}`);
+      }
+    }
+
+    if (logs.length === 0) logs.push("No changes made.");
+    return logs;
+  });
+}

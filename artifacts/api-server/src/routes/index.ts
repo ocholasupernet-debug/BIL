@@ -14,6 +14,7 @@ import mikrotikRouter from "./mikrotik-route";
 import pppoeScriptRouter from "./pppoe-script-route";
 import webhookRouter from "./webhook-route";
 import logsRouter from "./logs-route.js";
+import bridgeRouter from "./bridge-route.js";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(mikrotikRouter);
 router.use(pppoeScriptRouter);
 router.use(webhookRouter);
 router.use(logsRouter);
+router.use(bridgeRouter);
 
 export default router;
