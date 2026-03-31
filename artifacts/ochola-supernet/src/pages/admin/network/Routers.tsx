@@ -99,14 +99,25 @@ function PingErrorHint({ error }: { error: string }) {
 
 function timeSince(dateStr: string | null): string {
   if (!dateStr) return "—";
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60)  return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60)  return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24)  return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  const d    = new Date(dateStr);
+  const now  = new Date();
+  const diff = now.getTime() - d.getTime();
+
+  /* Format clock time: "9:31am" / "2:05pm" */
+  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
+    .toLowerCase().replace(" ", "");
+
+  /* Today → just the time */
+  if (diff < 86_400_000 && d.getDate() === now.getDate()) return timeStr;
+
+  /* Yesterday */
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.getDate() === yesterday.getDate() && diff < 172_800_000) return `Yesterday ${timeStr}`;
+
+  /* Older → "Jan 15 9:31am" */
+  const dateLabel = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dateLabel} ${timeStr}`;
 }
 
 /* A router is online when BOTH are true:
