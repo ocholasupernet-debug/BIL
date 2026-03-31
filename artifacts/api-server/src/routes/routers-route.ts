@@ -1,7 +1,7 @@
 import * as net from "net";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
-import { pingRouter, isPrivateIp } from "../lib/mikrotik.js";
+import { pingRouter } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 
@@ -13,7 +13,7 @@ const PROBE_PORTS = [8291, 22, 80, 443, 21];   /* Winbox, SSH, HTTP, HTTPS, FTP 
 const PROBE_TIMEOUT_MS = 4_000;
 
 async function tcpProbe(host: string): Promise<number | null> {
-  if (!host || isPrivateIp(host)) return null;
+  if (!host) return null;
   const results = await Promise.allSettled(
     PROBE_PORTS.map(port =>
       new Promise<number>((resolve, reject) => {
