@@ -97,27 +97,19 @@ function PingErrorHint({ error }: { error: string }) {
   );
 }
 
-function timeSince(dateStr: string | null): string {
+function timeSince(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
-  const d    = new Date(dateStr);
-  const now  = new Date();
-  const diff = now.getTime() - d.getTime();
-
-  /* Format clock time: "9:31am" / "2:05pm" */
-  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
-    .toLowerCase().replace(" ", "");
-
-  /* Today → just the time */
-  if (diff < 86_400_000 && d.getDate() === now.getDate()) return timeStr;
-
-  /* Yesterday */
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "—";
+  const now = new Date();
+  const timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  /* Compare full calendar date strings in local timezone */
+  if (d.toDateString() === now.toDateString()) return timeStr;
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
-  if (d.getDate() === yesterday.getDate() && diff < 172_800_000) return `Yesterday ${timeStr}`;
-
-  /* Older → "Jan 15 9:31am" */
-  const dateLabel = d.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `${dateLabel} ${timeStr}`;
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${timeStr}`;
+  /* Older → "Mar 31, 14:30" */
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /* ── Format RouterOS uptime string ("1w2d3h40m5s") to readable "1w 2d 3h 40m" ── */
@@ -645,7 +637,7 @@ export default function Routers() {
                                 <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
                               </span>
                             : pingSt === "online"
-                              ? <StatusDot online={true} sub={timeSince(r.last_seen)} />
+                              ? <StatusDot online={true} />
                               : pingSt === "offline"
                                 ? <>
                                     <StatusDot online={false} sub={timeSince(r.last_seen)} />
@@ -655,7 +647,9 @@ export default function Routers() {
                                       </div>
                                     )}
                                   </>
-                                : <StatusDot online={online} sub={timeSince(r.last_seen)} />
+                                : online
+                                  ? <StatusDot online={true} />
+                                  : <StatusDot online={false} sub={timeSince(r.last_seen)} />
                           }
                         </td>
 
@@ -671,9 +665,12 @@ export default function Routers() {
 
                         {/* LAST SEEN */}
                         <td style={{ padding: "0.65rem 0.75rem" }}>
-                          <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: currOnline ? "#4ade80" : "var(--isp-text-muted)" }}>
-                            {timeSince(r.last_seen)}
-                          </span>
+                          {currOnline
+                            ? <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "#4ade80" }}>Active</span>
+                            : <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+                                {timeSince(r.last_seen)}
+                              </span>
+                          }
                         </td>
 
                         {/* REBOOT */}

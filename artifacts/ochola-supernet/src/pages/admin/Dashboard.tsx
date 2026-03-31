@@ -11,17 +11,18 @@ function routerOnline(r: DbRouter): boolean {
   return r.status === "online" || r.status === "connected";
 }
 
-/* ─── Format last_seen as clock time / day ─── */
+/* ─── Format last_seen timestamp in local time ─── */
 function fmtSince(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
   const now = new Date();
-  const hhmm = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const sameDay = d.toDateString() === now.toDateString();
-  const yesterday = d.toDateString() === new Date(now.getTime() - 864e5).toDateString();
-  if (sameDay) return hhmm;
-  if (yesterday) return `Yesterday ${hhmm}`;
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hhmm}`;
+  const timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return timeStr;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${timeStr}`;
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /* ─── Supabase fetchers ─── */
