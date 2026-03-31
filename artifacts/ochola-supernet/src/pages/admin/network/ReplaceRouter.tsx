@@ -103,12 +103,18 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
 
   const handleSave = async () => {
     setSaving(true);
+    const now = new Date();
+    const fmtDate = now.toLocaleString("en-KE", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true,
+    });
     try {
       await supabase.from("isp_routers").update({
         host:             host.trim(),
         router_username:  user.trim() || "admin",
         router_secret:    pass,
-        updated_at:       new Date().toISOString(),
+        description:      `Replaced on ${fmtDate}`,
+        updated_at:       now.toISOString(),
       }).eq("id", router.id);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);

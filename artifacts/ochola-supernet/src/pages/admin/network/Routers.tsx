@@ -666,10 +666,41 @@ export default function Routers() {
                         </td>
 
                         {/* DESCRIPTION */}
-                        <td style={{ padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)", maxWidth: 180 }}>
-                          <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {r.description || "—"}
-                          </span>
+                        <td style={{ padding: "0.65rem 0.75rem", maxWidth: 200 }}>
+                          {(() => {
+                            const desc = r.description || "";
+                            if (!desc) return <span style={{ color: "var(--isp-text-muted)" }}>—</span>;
+                            const lower = desc.toLowerCase();
+                            if (lower.startsWith("replaced on")) {
+                              const when = desc.slice("Replaced on ".length);
+                              return (
+                                <span title={desc} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "0.7rem", fontWeight: 700, color: "#fb923c", background: "rgba(251,146,60,0.1)", border: "1px solid rgba(251,146,60,0.3)", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                                  🔄 Replaced on <span style={{ fontWeight: 500 }}>{when}</span>
+                                </span>
+                              );
+                            }
+                            if (lower.startsWith("manually installed on")) {
+                              const when = desc.slice("Manually installed on ".length);
+                              return (
+                                <span title={desc} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "0.7rem", fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                                  ✚ Installed on <span style={{ fontWeight: 500 }}>{when}</span>
+                                </span>
+                              );
+                            }
+                            if (lower.startsWith("installed on")) {
+                              const when = desc.slice("Installed on ".length);
+                              return (
+                                <span title={desc} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "0.7rem", fontWeight: 700, color: "#34d399", background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" }}>
+                                  ✚ Installed on <span style={{ fontWeight: 500 }}>{when}</span>
+                                </span>
+                              );
+                            }
+                            return (
+                              <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--isp-text-muted)", fontSize: "0.78rem" }} title={desc}>
+                                {desc}
+                              </span>
+                            );
+                          })()}
                         </td>
 
                         {/* STATUS */}

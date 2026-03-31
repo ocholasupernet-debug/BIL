@@ -220,6 +220,15 @@ function RouterForm({
     if (!form.router_username.trim()) { setSaveErr("API username is required."); return; }
     setSaving(true); setSaveErr("");
     try {
+      const now = new Date();
+      const fmtDate = now.toLocaleString("en-KE", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: true,
+      });
+
+      const userDesc = form.description.trim();
+      const autoDesc = `Manually installed on ${fmtDate}`;
+
       const payload = {
         admin_id:         ADMIN_ID,
         name:             form.name.trim(),
@@ -227,15 +236,20 @@ function RouterForm({
         bridge_ip:        form.bridge_ip.trim() || null,
         router_username:  form.router_username.trim(),
         router_secret:    form.router_secret,
-        description:      form.description.trim() || null,
-        updated_at:       new Date().toISOString(),
+        description:      userDesc || null,
+        updated_at:       now.toISOString(),
       };
 
       let err;
       if (routerId) {
         ({ error: err } = await supabase.from("isp_routers").update(payload).eq("id", routerId));
       } else {
-        ({ error: err } = await supabase.from("isp_routers").insert({ ...payload, status: "unknown", created_at: new Date().toISOString() }));
+        ({ error: err } = await supabase.from("isp_routers").insert({
+          ...payload,
+          description: userDesc || autoDesc,
+          status:      "unknown",
+          created_at:  now.toISOString(),
+        }));
       }
       if (err) throw new Error(err.message);
       onSaved();
