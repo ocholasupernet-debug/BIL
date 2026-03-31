@@ -12,6 +12,15 @@ import { useLocation } from "wouter";
 
 const PAGE_SIZE = 10;
 
+/* ── Live clock — forces re-render every `interval` ms so timeSince stays fresh ── */
+function useTicker(interval = 10_000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), interval);
+    return () => clearInterval(id);
+  }, [interval]);
+}
+
 /* ── helpers ── */
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data, error } = await supabase
@@ -175,6 +184,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 export default function Routers() {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
+  useTicker(10_000); /* re-render every 10 s so "last seen" stays live */
 
   const [search, setSearch]           = useState("");
   const [searchInput, setSearchInput] = useState("");
