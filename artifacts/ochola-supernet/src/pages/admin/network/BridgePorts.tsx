@@ -66,6 +66,40 @@ function IfaceIcon({ type, running }: { type: string; running: boolean }) {
   return <Plug size={14} style={{ color }} />;
 }
 
+/* ── Classify a bridge name into a readable type ── */
+function bridgeType(bridgeName: string): "hotspot" | "pppoe" | "unknown" {
+  const n = bridgeName.toLowerCase();
+  if (n.includes("hotspot") || n.includes("hs-bridge") || n.includes("hsbridge")) return "hotspot";
+  if (n.includes("pppoe")   || n.includes("ppp"))                                   return "pppoe";
+  return "unknown";
+}
+
+/* ── Badge shown beside the port name ── */
+function BridgeBadge({ bridge }: { bridge: string | null }) {
+  if (!bridge) return null;
+  const type = bridgeType(bridge);
+  const cfg: Record<string, { bg: string; border: string; color: string; label: string }> = {
+    hotspot: { bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.3)",  color: "#4ade80", label: "Hotspot Bridge" },
+    pppoe:   { bg: "rgba(6,182,212,0.12)",  border: "rgba(6,182,212,0.3)",  color: "#22d3ee", label: "PPPoE Bridge"   },
+    unknown: { bg: "rgba(251,191,36,0.10)", border: "rgba(251,191,36,0.3)", color: "#fbbf24", label: "Unknown Bridge"  },
+  };
+  const { bg, border, color, label } = cfg[type];
+  return (
+    <span style={{
+      fontSize: "0.63rem", fontWeight: 700, padding: "0.18rem 0.55rem", borderRadius: 4,
+      background: bg, border: `1px solid ${border}`, color,
+      whiteSpace: "nowrap", flexShrink: 0,
+    }}>
+      {label}
+    </span>
+  );
+}
+
+/* Returns the bridge a port is currently member of (from live bridgePorts list) */
+function portCurrentBridge(portName: string, bridgePorts: BridgePort[]): string | null {
+  return bridgePorts.find(bp => bp.interface === portName)?.bridge ?? null;
+}
+
 /* ════════════════════════════════════════════════════════
    Main page
 ════════════════════════════════════════════════════════ */
@@ -458,11 +492,10 @@ export default function BridgePorts() {
                         color: "var(--isp-text)", flex: 1,
                       }}>
                         {iface.name}
-                        {" "}
-                        <span style={{ color: inBridge ? "#06b6d4" : "var(--isp-text-muted)", fontWeight: 600 }}>
-                          — {bridgeLabel}
-                        </span>
                       </span>
+
+                      {/* Bridge type badge */}
+                      <BridgeBadge bridge={portCurrentBridge(iface.name, payload!.bridgePorts)} />
 
                       {/* Running dot */}
                       <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569", flexShrink: 0 }} />
@@ -745,12 +778,8 @@ export default function BridgePorts() {
                       {iface.comment && <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>— {iface.comment}</span>}
                     </div>
                     <span style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", padding: "0.15rem 0.5rem", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "var(--isp-text-muted)" }}>{iface.type || "ether"}</span>
+                    <BridgeBadge bridge={portCurrentBridge(iface.name, payload!.bridgePorts)} />
                     <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569" }} />
-                    {inBridge && (
-                      <span style={{ fontSize: "0.65rem", fontWeight: 700, padding: "0.2rem 0.5rem", borderRadius: 4, background: "rgba(6,182,212,0.15)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4" }}>
-                        In bridge
-                      </span>
-                    )}
                   </div>
                 );
               })}
