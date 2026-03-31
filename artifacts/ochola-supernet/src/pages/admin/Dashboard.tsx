@@ -13,6 +13,19 @@ function routerOnline(r: DbRouter): boolean {
   return statusOk && ms < 15 * 60 * 1000;
 }
 
+/* ─── Format last_seen as clock time / day ─── */
+function fmtSince(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const hhmm = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const sameDay = d.toDateString() === now.toDateString();
+  const yesterday = d.toDateString() === new Date(now.getTime() - 864e5).toDateString();
+  if (sameDay) return hhmm;
+  if (yesterday) return `Yesterday ${hhmm}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hhmm}`;
+}
+
 /* ─── Supabase fetchers ─── */
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID);
@@ -160,7 +173,7 @@ export default function Dashboard() {
   const { data: routers = [], isLoading: routersLoading } = useQuery({
     queryKey: ["isp_routers", ADMIN_ID],
     queryFn: fetchRouters,
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
 
   const { data: customers = [], isLoading: customersLoading } = useQuery({
@@ -285,12 +298,15 @@ export default function Dashboard() {
             ) : routers.map(router => {
               const isOnline = routerOnline(router);
               return (
-                <div key={router.id} style={{ background: "var(--isp-inner-card)", border: `1px solid ${isOnline ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.2)"}`, borderRadius: 8, padding: "0.75rem 1rem", minWidth: 185 }}>
+                <div key={router.id} style={{ background: "var(--isp-inner-card)", border: `1px solid ${isOnline ? "rgba(34,197,94,0.18)" : "rgba(100,116,139,0.2)"}`, borderRadius: 8, padding: "0.75rem 1rem", minWidth: 185 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
                     <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{router.name}</span>
-                    <span style={{ fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: 20, background: isOnline ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.15)", color: isOnline ? "#22c55e" : "#f87171", fontWeight: 700 }}>
-                      {isOnline ? "Online" : "Offline"}
-                    </span>
+                    {isOnline
+                      ? <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "#22c55e" }}>Online</span>
+                      : <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>
+                          {router.last_seen ? `Since ${fmtSince(router.last_seen)}` : "Offline"}
+                        </span>
+                    }
                   </div>
                   <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginBottom: "0.25rem", fontFamily: "monospace" }}>{router.host}</div>
                   <div style={{ fontSize: "0.7rem", color: "var(--isp-text-sub)" }}>{router.model ?? "MikroTik"} {router.ros_version ? `· ROS v${router.ros_version}` : ""}</div>
