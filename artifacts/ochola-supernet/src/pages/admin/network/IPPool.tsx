@@ -5,10 +5,12 @@ import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle, X,
-  Edit2, ChevronDown, ChevronUp, Wifi, WifiOff,
+  Search, Plus, Trash2, Edit2, HelpCircle,
+  ChevronDown, Server,
 } from "lucide-react";
 
-const API = import.meta.env.VITE_API_BASE ?? "";
+const API      = import.meta.env.VITE_API_BASE ?? "";
+const PAGE_SIZE = 15;
 
 /* ── Types ── */
 interface DbPool {
@@ -30,19 +32,13 @@ interface DbRouter {
   status: string;
 }
 
-interface RouterPools {
-  router:  DbRouter;
-  active:  DbPool | null;   /* pool name = "active"  */
-  pppoe:   DbPool | null;   /* pool name = "pppoe"   */
-  expired: DbPool | null;   /* pool name = "expired" */
-}
-
 /* ── Supabase helpers ── */
 async function fetchPools(): Promise<DbPool[]> {
   const { data } = await supabase
     .from("isp_ip_pools")
     .select("id,name,range_start,range_end,router_id,created_at")
-    .eq("admin_id", ADMIN_ID);
+    .eq("admin_id", ADMIN_ID)
+    .order("id", { ascending: false });
   return (data ?? []) as DbPool[];
 }
 
@@ -55,50 +51,20 @@ async function fetchRouters(): Promise<DbRouter[]> {
   return (data ?? []) as DbRouter[];
 }
 
-type PoolSlot = "active" | "pppoe" | "expired";
-
-async function upsertPool(
-  adminId: number, routerId: number, poolName: PoolSlot,
-  rangeStart: string, rangeEnd: string, existingId?: number
-): Promise<{ error: string | null }> {
-  const now = new Date().toISOString();
-  if (existingId) {
-    const { error } = await supabase
-      .from("isp_ip_pools")
-      .update({ name: poolName, range_start: rangeStart, range_end: rangeEnd, updated_at: now })
-      .eq("id", existingId);
-    return { error: error?.message ?? null };
-  }
-  const { error } = await supabase
-    .from("isp_ip_pools")
-    .insert({ admin_id: adminId, router_id: routerId, name: poolName,
-              range_start: rangeStart, range_end: rangeEnd, created_at: now, updated_at: now });
-  return { error: error?.message ?? null };
-}
-
-async function deletePool(id: number): Promise<void> {
-  await supabase.from("isp_ip_pools").delete().eq("id", id);
-}
-
-/* ── Sync pools to a router ── */
-async function syncRouter(
-  router: DbRouter, active: DbPool | null, pppoe: DbPool | null, expired: DbPool | null,
-  log: (m: string) => void
+/* ── Sync one router's pools ── */
+async function syncRouterPools(
+  router: DbRouter, pools: DbPool[], log: (m: string) => void
 ): Promise<boolean> {
+  const rPools = pools.filter(p => p.router_id === router.id);
+  if (!rPools.length) { log(`  ℹ No pools assigned to ${router.name}`); return true; }
   const host = router.host || router.bridge_ip || "";
   if (!host) { log(`  ⚠ ${router.name} has no IP — skipped`); return false; }
-  if (!active && !pppoe && !expired) { log(`  ℹ ${router.name} has no pools — skipped`); return true; }
-  log(`\n▶ Syncing ${router.name} (${host})`);
-  const poolsList = [
-    ...(active  ? [{ name: "active",  rangeStart: active.range_start,  rangeEnd: active.range_end  }] : []),
-    ...(pppoe   ? [{ name: "pppoe",   rangeStart: pppoe.range_start,   rangeEnd: pppoe.range_end   }] : []),
-    ...(expired ? [{ name: "expired", rangeStart: expired.range_start, rangeEnd: expired.range_end }] : []),
-  ];
+  log(`\n▶ ${router.name} (${host})`);
   const payload = {
     host, bridgeIp: router.bridge_ip || undefined,
     username: router.router_username || "admin",
     password: router.router_secret || "",
-    pools: poolsList,
+    pools: rPools.map(p => ({ name: p.name, rangeStart: p.range_start, rangeEnd: p.range_end })),
   };
   try {
     const res  = await fetch(`${API}/api/admin/sync/ip-pools`, {
@@ -109,7 +75,7 @@ async function syncRouter(
     (data.logs ?? []).forEach((l: string) => log(l));
     return data.ok;
   } catch (e) {
-    log(`  ✗ Network error: ${e instanceof Error ? e.message : e}`);
+    log(`  ✗ ${e instanceof Error ? e.message : e}`);
     return false;
   }
 }
@@ -123,182 +89,216 @@ export default function IPPool() {
     queryFn:  fetchPools,
     staleTime: 10_000,
   });
-  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
+  const { data: routers = [] } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_pools", ADMIN_ID],
     queryFn:  fetchRouters,
     staleTime: 15_000,
   });
 
-  /* Map pool records to routers — active / pppoe / expired per router */
-  const routerPools = useMemo((): RouterPools[] => {
-    const byRouter: Record<number, { active: DbPool | null; pppoe: DbPool | null; expired: DbPool | null }> = {};
-    for (const r of routers) byRouter[r.id] = { active: null, pppoe: null, expired: null };
-    for (const p of pools) {
-      if (p.router_id === null) continue;
-      if (!byRouter[p.router_id]) byRouter[p.router_id] = { active: null, pppoe: null, expired: null };
-      if (p.name === "active"  && !byRouter[p.router_id].active)  byRouter[p.router_id].active  = p;
-      if (p.name === "pppoe"   && !byRouter[p.router_id].pppoe)   byRouter[p.router_id].pppoe   = p;
-      if (p.name === "expired" && !byRouter[p.router_id].expired)  byRouter[p.router_id].expired = p;
-    }
-    return routers.map(r => ({ router: r, ...byRouter[r.id] }));
-  }, [routers, pools]);
+  const routerMap = useMemo(() =>
+    Object.fromEntries(routers.map(r => [r.id, r])), [routers]);
 
-  /* ── Edit modal state ── */
-  const [editRouter,    setEditRouter]    = useState<RouterPools | null>(null);
-  const [fActiveStart,  setFActiveStart]  = useState("");
-  const [fActiveEnd,    setFActiveEnd]    = useState("");
-  const [fPppoeStart,   setFPppoeStart]   = useState("");
-  const [fPppoeEnd,     setFPppoeEnd]     = useState("");
-  const [fExpiredStart, setFExpiredStart] = useState("");
-  const [fExpiredEnd,   setFExpiredEnd]   = useState("");
-  const [saving,        setSaving]        = useState(false);
-  const [saveErr,       setSaveErr]       = useState<string | null>(null);
+  /* ── UI state ── */
+  const [search,  setSearch]  = useState("");
+  const [page,    setPage]    = useState(1);
+  const [showHelp, setShowHelp] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
 
-  function openEdit(rp: RouterPools) {
-    setEditRouter(rp);
-    setFActiveStart(rp.active?.range_start   ?? "");
-    setFActiveEnd(rp.active?.range_end       ?? "");
-    setFPppoeStart(rp.pppoe?.range_start     ?? "");
-    setFPppoeEnd(rp.pppoe?.range_end         ?? "");
-    setFExpiredStart(rp.expired?.range_start ?? "");
-    setFExpiredEnd(rp.expired?.range_end     ?? "");
-    setSaveErr(null);
+  /* Sync state */
+  const [syncingAll,       setSyncingAll]       = useState(false);
+  const [syncingRouter,    setSyncingRouter]     = useState(false);
+  const [showRouterPicker, setShowRouterPicker]  = useState(false);
+  const [pickedRouter,     setPickedRouter]      = useState("");
+  const [syncLogs,         setSyncLogs]          = useState<string[] | null>(null);
+  const [syncOk,           setSyncOk]            = useState<boolean | null>(null);
+
+  /* Add / Edit modal */
+  const [showForm, setShowForm] = useState(false);
+  const [editPool, setEditPool] = useState<DbPool | null>(null);
+  const [fName,      setFName]      = useState("");
+  const [fStart,     setFStart]     = useState("");
+  const [fEnd,       setFEnd]       = useState("");
+  const [fRouterId,  setFRouterId]  = useState("");
+  const [saving,     setSaving]     = useState(false);
+  const [saveErr,    setSaveErr]    = useState<string | null>(null);
+
+  /* ── Filtered + paginated ── */
+  const filtered = useMemo(() =>
+    pools.filter(p =>
+      !search ||
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      `${p.range_start}-${p.range_end}`.includes(search)
+    ), [pools, search]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pagePools  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  /* ── CRUD ── */
+  function openAdd() {
+    setEditPool(null);
+    setFName(""); setFStart(""); setFEnd(""); setFRouterId("");
+    setSaveErr(null); setShowForm(true);
   }
-
-  async function handleSave() {
-    if (!editRouter) return;
+  function openEdit(p: DbPool) {
+    setEditPool(p);
+    setFName(p.name); setFStart(p.range_start); setFEnd(p.range_end);
+    setFRouterId(p.router_id ? String(p.router_id) : "");
+    setSaveErr(null); setShowForm(true);
+  }
+  async function savePool() {
+    if (!fName.trim() || !fStart.trim() || !fEnd.trim()) {
+      setSaveErr("Pool name and IP range are required."); return;
+    }
     setSaving(true); setSaveErr(null);
-    const rid = editRouter.router.id;
-
-    const save = async (slot: PoolSlot, start: string, end: string, existing: DbPool | null) => {
-      if (start.trim() && end.trim()) {
-        const { error } = await upsertPool(ADMIN_ID, rid, slot, start.trim(), end.trim(), existing?.id);
-        if (error) throw new Error(error);
-      } else if (existing) {
-        await deletePool(existing.id);
-      }
+    const row = {
+      admin_id:    ADMIN_ID,
+      name:        fName.trim(),
+      range_start: fStart.trim(),
+      range_end:   fEnd.trim(),
+      router_id:   fRouterId ? Number(fRouterId) : null,
+      updated_at:  new Date().toISOString(),
     };
-
-    try {
-      await save("active",  fActiveStart,  fActiveEnd,  editRouter.active);
-      await save("pppoe",   fPppoeStart,   fPppoeEnd,   editRouter.pppoe);
-      await save("expired", fExpiredStart, fExpiredEnd, editRouter.expired);
-      qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
-      setEditRouter(null);
-    } catch (e) {
-      setSaveErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
+    const { error } = editPool
+      ? await supabase.from("isp_ip_pools").update(row).eq("id", editPool.id)
+      : await supabase.from("isp_ip_pools").insert({ ...row, created_at: new Date().toISOString() });
+    if (error) { setSaveErr(error.message); setSaving(false); return; }
+    qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+    setShowForm(false); setSaving(false);
+  }
+  async function deletePool(id: number) {
+    setDeleting(id);
+    await supabase.from("isp_ip_pools").delete().eq("id", id);
+    qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+    setDeleting(null);
   }
 
-  /* ── Sync state ── */
-  const [syncLogs,    setSyncLogs]    = useState<string[] | null>(null);
-  const [syncOk,      setSyncOk]      = useState<boolean | null>(null);
-  const [syncingId,   setSyncingId]   = useState<number | null>(null);
-  const [syncingAll,  setSyncingAll]  = useState(false);
-  const [expandSync,  setExpandSync]  = useState(false);
-
-  async function handleSyncOne(rp: RouterPools) {
-    setSyncingId(rp.router.id);
-    setSyncLogs([]); setSyncOk(null); setExpandSync(true);
-    const logs: string[] = [];
-    const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
-    const ok = await syncRouter(rp.router, rp.active, rp.pppoe, rp.expired, log);
-    log(ok ? "\n✅ Sync complete." : "\n⚠ Sync had errors.");
-    setSyncOk(ok);
-    setSyncingId(null);
-  }
-
+  /* ── Sync handlers ── */
   async function handleSyncAll() {
-    setSyncingAll(true); setSyncLogs([]); setSyncOk(null); setExpandSync(true);
+    setSyncingAll(true); setSyncLogs([]); setSyncOk(null);
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
     log("Syncing all routers…");
+    const rids = [...new Set(pools.filter(p => p.router_id).map(p => p.router_id!))];
+    if (!rids.length) { log("No pools assigned to any router."); setSyncOk(true); setSyncingAll(false); return; }
     let ok = true;
-    for (const rp of routerPools) {
-      if (!rp.active && !rp.pppoe && !rp.expired) continue;
-      const r2 = await syncRouter(rp.router, rp.active, rp.pppoe, rp.expired, log);
-      if (!r2) ok = false;
+    for (const rid of rids) {
+      const r = routerMap[rid];
+      if (r) { const r2 = await syncRouterPools(r, pools, log); if (!r2) ok = false; }
     }
     log(ok ? "\n✅ All synced." : "\n⚠ Some routers had errors.");
-    setSyncOk(ok);
-    setSyncingAll(false);
+    setSyncOk(ok); setSyncingAll(false);
   }
 
-  /* ── Shared styles ── */
-  const S = {
-    btn: (bg: string, color = "white") => ({
-      display: "inline-flex" as const, alignItems: "center" as const, gap: "0.35rem",
-      padding: "0.42rem 0.9rem", borderRadius: 7, border: "none", background: bg,
-      color, fontWeight: 700, fontSize: "0.78rem", cursor: "pointer", fontFamily: "inherit",
-      whiteSpace: "nowrap" as const,
-    }),
-    input: {
-      background: "var(--isp-input-bg,rgba(255,255,255,0.05))",
-      border: "1px solid var(--isp-border)", borderRadius: 7,
-      padding: "0.42rem 0.65rem", color: "var(--isp-text)", fontSize: "0.8rem",
-      fontFamily: "inherit", outline: "none", width: "100%",
-    } as React.CSSProperties,
-    lbl: { fontSize: "0.67rem", fontWeight: 600, color: "var(--isp-text-muted)", marginBottom: "0.2rem", display: "block" as const },
-    notSet: {
-      display: "inline-block", fontSize: "0.7rem", color: "var(--isp-text-muted)",
-      fontStyle: "italic", background: "rgba(255,255,255,0.03)",
-      border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4,
-      padding: "0.15rem 0.45rem",
-    } as React.CSSProperties,
+  async function handleSyncByRouter() {
+    if (!pickedRouter) return;
+    setSyncingRouter(true); setSyncLogs([]); setSyncOk(null);
+    const logs: string[] = [];
+    const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
+    const r = routerMap[Number(pickedRouter)];
+    if (!r) { log("Router not found."); setSyncOk(false); setSyncingRouter(false); return; }
+    const ok = await syncRouterPools(r, pools, log);
+    log(ok ? "\n✅ Done." : "\n⚠ Errors (see above).");
+    setSyncOk(ok); setSyncingRouter(false); setShowRouterPicker(false);
+  }
+
+  /* ── Styles ── */
+  const btn = (bg: string, color = "#fff") => ({
+    display: "inline-flex" as const, alignItems: "center" as const, gap: "0.35rem",
+    padding: "0.42rem 1rem", borderRadius: 6, border: "none", background: bg,
+    color, fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit",
+    whiteSpace: "nowrap" as const,
+  });
+  const INPUT: React.CSSProperties = {
+    background: "var(--isp-input-bg,rgba(255,255,255,0.05))",
+    border: "1px solid var(--isp-border)", borderRadius: 6,
+    padding: "0.45rem 0.75rem", color: "var(--isp-text)", fontSize: "0.84rem",
+    fontFamily: "inherit", outline: "none", width: "100%",
   };
+  const LBL: React.CSSProperties = { fontSize: "0.72rem", fontWeight: 600, color: "var(--isp-text-muted)", marginBottom: "0.25rem", display: "block" };
 
-  const PoolValue = ({ pool, color }: { pool: DbPool | null; color: string }) =>
-    pool ? (
-      <div style={{ fontFamily: "monospace", fontSize: "0.78rem", color, fontWeight: 600, lineHeight: 1.5 }}>
-        {pool.range_start}<br />
-        <span style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem" }}>–</span>{" "}
-        {pool.range_end}
-      </div>
-    ) : <span style={S.notSet}>not set</span>;
-
-  const isLoading = poolsLoading || routersLoading;
+  const TH: React.CSSProperties = {
+    padding: "0.6rem 0.875rem", fontSize: "0.72rem", fontWeight: 800,
+    color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em",
+    textAlign: "left", background: "rgba(255,255,255,0.025)",
+    borderBottom: "1px solid var(--isp-border)",
+  };
+  const TD: React.CSSProperties = {
+    padding: "0.65rem 0.875rem", fontSize: "0.83rem", color: "var(--isp-text)",
+    borderBottom: "1px solid rgba(255,255,255,0.04)", verticalAlign: "middle",
+  };
 
   return (
     <AdminLayout>
       <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-      <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 1100 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", maxWidth: 1100 }}>
 
         {/* ── Header ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
-          <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--isp-text)", margin: 0, flex: 1 }}>
-            IP Pools
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+          <h1 style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--isp-text)", margin: 0, flex: 1 }}>
+            IP Pool
           </h1>
-          <button
-            onClick={handleSyncAll}
-            disabled={syncingAll || routerPools.every(rp => !rp.active && !rp.pppoe && !rp.expired)}
-            style={{ ...S.btn("linear-gradient(135deg,#f59e0b,#d97706)"), opacity: syncingAll ? 0.7 : 1 }}
-          >
-            {syncingAll
-              ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
-              : <RefreshCw size={13} />}
+
+          {/* Sync All */}
+          <button onClick={handleSyncAll} disabled={syncingAll || pools.length === 0}
+            style={{ ...btn("linear-gradient(135deg,#f43f5e,#e11d48)"), opacity: syncingAll ? 0.7 : 1 }}>
+            {syncingAll ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={13} />}
             Sync All
+          </button>
+
+          {/* Sync by Router */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setShowRouterPicker(v => !v)} disabled={syncingRouter}
+              style={btn("linear-gradient(135deg,#3b82f6,#2563eb)")}>
+              {syncingRouter ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Server size={13} />}
+              Sync by Router
+              <ChevronDown size={12} />
+            </button>
+            {showRouterPicker && (
+              <div style={{
+                position: "absolute", top: "110%", right: 0, zIndex: 50,
+                background: "var(--isp-card)", border: "1px solid var(--isp-border)",
+                borderRadius: 10, padding: "0.875rem", minWidth: 230,
+                boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+              }}>
+                <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.5rem" }}>
+                  Select router to sync
+                </div>
+                <select value={pickedRouter} onChange={e => setPickedRouter(e.target.value)}
+                  style={{ ...INPUT, marginBottom: "0.5rem" }}>
+                  <option value="">— choose router —</option>
+                  {routers.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} {r.status === "online" ? "🟢" : "🔴"}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={handleSyncByRouter} disabled={!pickedRouter || syncingRouter}
+                  style={{ ...btn(pickedRouter ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
+                  {syncingRouter ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={13} />}
+                  Sync
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Need Help */}
+          <button onClick={() => setShowHelp(v => !v)}
+            style={btn("linear-gradient(135deg,#22c55e,#16a34a)")}>
+            <HelpCircle size={13} /> Need Help?
           </button>
         </div>
 
         <NetworkTabs active="ip-pools" />
 
-        {/* ── Info banner ── */}
-        <div style={{
-          background: "rgba(6,182,212,0.04)", border: "1px solid rgba(6,182,212,0.15)",
-          borderRadius: 10, padding: "0.65rem 1rem", fontSize: "0.76rem",
-          color: "var(--isp-text-muted)", lineHeight: 1.65,
-        }}>
-          Each router supports three pools —{" "}
-          <strong style={{ color: "#22c55e" }}>Active</strong> (hotspot / general clients),{" "}
-          <strong style={{ color: "#06b6d4" }}>PPPoE</strong> (PPPoE subscribers), and{" "}
-          <strong style={{ color: "#f59e0b" }}>Expired</strong> (lapsed customers).
-          Click <strong>Edit</strong> to set IP ranges. Plans reference these pools as{" "}
-          <code style={{ fontFamily: "monospace", fontSize: "0.72rem" }}>active</code>,{" "}
-          <code style={{ fontFamily: "monospace", fontSize: "0.72rem" }}>pppoe</code>, or{" "}
-          <code style={{ fontFamily: "monospace", fontSize: "0.72rem" }}>expired</code>.
-        </div>
+        {/* ── Help panel ── */}
+        {showHelp && (
+          <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 10, padding: "0.875rem 1rem", fontSize: "0.79rem", color: "#4ade80", lineHeight: 1.75 }}>
+            <strong>IP Pool Guide</strong><br />
+            • Pool names <code style={{ fontFamily: "monospace" }}>active</code>, <code style={{ fontFamily: "monospace" }}>pppoe</code>, <code style={{ fontFamily: "monospace" }}>expired</code> are synced to RouterOS as-is.<br />
+            • <strong>Active</strong> — hotspot / general DHCP clients. <strong>PPPoE</strong> — PPPoE subscriber IPs. <strong>Expired</strong> — lapsed customers.<br />
+            • Assign each pool to a router, then click <strong>Sync All</strong> or <strong>Sync by Router</strong>.
+          </div>
+        )}
 
         {/* ── Sync log ── */}
         {syncLogs && (
@@ -307,218 +307,218 @@ export default function IPPool() {
             border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(6,182,212,0.2)"}`,
             borderRadius: 10, padding: "0.75rem 1rem",
           }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 700, fontSize: "0.8rem", color: syncOk === false ? "#f87171" : "#06b6d4" }}>
                 {syncOk === false ? <AlertTriangle size={13} /> : syncOk ? <CheckCircle2 size={13} /> : <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
                 Sync Log
               </div>
-              <div style={{ display: "flex", gap: "0.375rem" }}>
-                <button onClick={() => setExpandSync(v => !v)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
-                  {expandSync ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-                <button onClick={() => setSyncLogs(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
-                  <X size={14} />
-                </button>
-              </div>
+              <button onClick={() => setSyncLogs(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
+                <X size={14} />
+              </button>
             </div>
-            {expandSync && (
-              <div style={{ fontFamily: "monospace", fontSize: "0.73rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.1rem", maxHeight: 170, overflowY: "auto" }}>
-                {syncLogs.map((l, i) => <span key={i}>{l}</span>)}
-              </div>
-            )}
+            <div style={{ fontFamily: "monospace", fontSize: "0.73rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.1rem", maxHeight: 180, overflowY: "auto" }}>
+              {syncLogs.map((l, i) => <span key={i}>{l}</span>)}
+            </div>
           </div>
         )}
 
-        {/* ── Table header ── */}
-        {!isLoading && routerPools.length > 0 && (
-          <div style={{
-            display: "grid", gridTemplateColumns: "180px 1fr 1fr 1fr 140px",
-            padding: "0.45rem 1.125rem",
-            fontSize: "0.66rem", fontWeight: 800, color: "var(--isp-text-muted)",
-            textTransform: "uppercase", letterSpacing: "0.07em",
-          }}>
-            <div>Router</div>
-            <div style={{ color: "#22c55e" }}>Active Pool</div>
-            <div style={{ color: "#06b6d4" }}>PPPoE Pool</div>
-            <div style={{ color: "#f59e0b" }}>Expired Pool</div>
-            <div />
+        {/* ── Search + New Pool ── */}
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "stretch", flexWrap: "wrap" }}>
+          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <Search size={14} style={{ position: "absolute", left: "0.75rem", top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-muted)", pointerEvents: "none" }} />
+            <input
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search by Name…"
+              style={{ ...INPUT, paddingLeft: "2.25rem" }}
+            />
           </div>
-        )}
+          <button onClick={openAdd} style={btn("linear-gradient(135deg,#06b6d4,#0284c7)")}>
+            <Plus size={14} /> New Pool
+          </button>
+        </div>
 
-        {/* ── Router rows ── */}
-        {isLoading ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.625rem", padding: "4rem", color: "var(--isp-text-muted)" }}>
-            <Loader2 size={20} style={{ animation: "spin 1s linear infinite", color: "#06b6d4" }} />
-            Loading…
-          </div>
-        ) : routerPools.length === 0 ? (
-          <div style={{ padding: "3rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.85rem" }}>
-            No routers found. Add a router first.
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            {routerPools.map((rp, idx) => {
-              const online  = rp.router.status === "online";
-              const syncing = syncingId === rp.router.id;
-              const hasAny  = !!(rp.active || rp.pppoe || rp.expired);
-              return (
-                <div
-                  key={rp.router.id}
-                  style={{
-                    background: "var(--isp-card)", border: "1px solid var(--isp-border)",
-                    borderRadius: 11, padding: "0.875rem 1.125rem",
-                    display: "grid", gridTemplateColumns: "180px 1fr 1fr 1fr 140px",
-                    alignItems: "center", gap: "1rem",
-                    borderLeft: `3px solid ${online ? "#22c55e" : "#334155"}`,
-                  }}
-                >
-                  {/* Router name */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", minWidth: 0 }}>
-                    {online
-                      ? <Wifi size={14} style={{ color: "#22c55e", flexShrink: 0 }} />
-                      : <WifiOff size={14} style={{ color: "#475569", flexShrink: 0 }} />}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "var(--isp-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {rp.router.name}
-                      </div>
-                      <div style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", fontFamily: "monospace", marginTop: "0.1rem" }}>
-                        {rp.router.host || rp.router.bridge_ip || "no IP"}
-                      </div>
+        {/* ── Table ── */}
+        <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={TH}>Name Pool</th>
+                <th style={TH}>Range IP</th>
+                <th style={TH}>Routers</th>
+                <th style={TH}>Manage</th>
+                <th style={{ ...TH, textAlign: "right" }}>ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {poolsLoading ? (
+                <tr>
+                  <td colSpan={5} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.625rem", color: "var(--isp-text-muted)" }}>
+                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#06b6d4" }} /> Loading…
                     </div>
-                  </div>
-
-                  {/* Active pool */}
-                  <PoolValue pool={rp.active}  color="#22c55e" />
-
-                  {/* PPPoE pool */}
-                  <PoolValue pool={rp.pppoe}   color="#06b6d4" />
-
-                  {/* Expired pool */}
-                  <PoolValue pool={rp.expired} color="#f59e0b" />
-
-                  {/* Actions */}
-                  <div style={{ display: "flex", gap: "0.375rem", justifyContent: "flex-end" }}>
-                    <button onClick={() => openEdit(rp)} style={S.btn("linear-gradient(135deg,#06b6d4,#0284c7)")}>
-                      <Edit2 size={12} /> Edit
-                    </button>
-                    <button
-                      onClick={() => handleSyncOne(rp)}
-                      disabled={syncing || !hasAny}
-                      style={{ ...S.btn("linear-gradient(135deg,#f59e0b,#d97706)"), opacity: syncing || !hasAny ? 0.5 : 1 }}
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
+                    {search ? "No pools match your search." : "No IP pools yet — click + New Pool to create one."}
+                  </td>
+                </tr>
+              ) : (
+                pagePools.map(pool => {
+                  const router = pool.router_id ? routerMap[pool.router_id] : null;
+                  /* Color-code by pool name */
+                  const nameColor =
+                    pool.name === "active"  ? "#22c55e" :
+                    pool.name === "pppoe"   ? "#06b6d4" :
+                    pool.name === "expired" ? "#f59e0b" :
+                    "var(--isp-text)";
+                  return (
+                    <tr key={pool.id}
+                      style={{ transition: "background 0.1s" }}
+                      onMouseOver={e => (e.currentTarget as HTMLTableRowElement).style.background = "rgba(255,255,255,0.02)"}
+                      onMouseOut={e  => (e.currentTarget as HTMLTableRowElement).style.background = "transparent"}
                     >
-                      {syncing
-                        ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
-                        : <RefreshCw size={12} />}
-                      Sync
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                      <td style={{ ...TD, fontWeight: 700, color: nameColor, fontFamily: "monospace", textTransform: "uppercase" }}>
+                        {pool.name}
+                      </td>
+                      <td style={{ ...TD, fontFamily: "monospace", color: "#06b6d4", fontWeight: 600 }}>
+                        {pool.range_start}–{pool.range_end}
+                      </td>
+                      <td style={TD}>
+                        {router ? (
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: "0.3rem",
+                            fontSize: "0.75rem", fontWeight: 700,
+                            background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)",
+                            color: "#06b6d4", borderRadius: 5, padding: "0.18rem 0.55rem",
+                          }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: router.status === "online" ? "#22c55e" : "#475569" }} />
+                            {router.name}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", fontStyle: "italic" }}>— unassigned —</span>
+                        )}
+                      </td>
+                      <td style={TD}>
+                        <div style={{ display: "flex", gap: "0.35rem" }}>
+                          <button onClick={() => openEdit(pool)}
+                            style={{ ...btn("linear-gradient(135deg,#22c55e,#16a34a)"), padding: "0.32rem 0.75rem", fontSize: "0.75rem" }}>
+                            <Edit2 size={11} /> Edit
+                          </button>
+                          <button onClick={() => deletePool(pool.id)} disabled={deleting === pool.id}
+                            style={{ ...btn("linear-gradient(135deg,#ef4444,#dc2626)"), padding: "0.32rem 0.6rem", fontSize: "0.75rem" }}>
+                            {deleting === pool.id
+                              ? <Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} />
+                              : <Trash2 size={11} />}
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ ...TD, textAlign: "right", fontSize: "0.72rem", color: "var(--isp-text-muted)", fontFamily: "monospace" }}>
+                        {pool.id}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── Pagination ── */}
+        {totalPages > 1 && (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap" }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+              <button key={p} onClick={() => setPage(p)}
+                style={{
+                  ...btn(p === page ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.05)", p === page ? "white" : "var(--isp-text-muted)"),
+                  border: `1px solid ${p === page ? "transparent" : "var(--isp-border)"}`,
+                  padding: "0.32rem 0.7rem", minWidth: 32,
+                }}>
+                {p}
+              </button>
+            ))}
+            <span style={{ fontSize: "0.71rem", color: "var(--isp-text-muted)", marginLeft: "0.25rem" }}>
+              {filtered.length} pool{filtered.length !== 1 ? "s" : ""}
+            </span>
           </div>
         )}
       </div>
 
-      {/* ══════════════════════ Edit Modal ══════════════════════ */}
-      {editRouter && (
+      {/* ══════════════════════ Add / Edit Modal ══════════════════════ */}
+      {showForm && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
-          onClick={e => { if (e.target === e.currentTarget) setEditRouter(null); }}
+          onClick={e => { if (e.target === e.currentTarget) setShowForm(false); }}
         >
-          <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "1.5rem", width: "100%", maxWidth: 500, boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
-
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.125rem" }}>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: "1rem", color: "var(--isp-text)" }}>
-                  {editRouter.router.name} — IP Pools
-                </div>
-                <div style={{ fontSize: "0.71rem", color: "var(--isp-text-muted)", marginTop: "0.15rem" }}>
-                  Leave a range blank to remove that pool from this router.
-                </div>
+          <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "1.5rem", width: "100%", maxWidth: 460, boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem" }}>
+              <div style={{ fontWeight: 800, fontSize: "1rem", color: "var(--isp-text)" }}>
+                {editPool ? "Edit Pool" : "New IP Pool"}
               </div>
-              <button onClick={() => setEditRouter(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
+              <button onClick={() => setShowForm(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
                 <X size={18} />
               </button>
             </div>
 
-            {/* Active pool */}
-            <PoolSection
-              label="Active Pool" sublabel="Hotspot / general clients" color="#22c55e" bg="rgba(34,197,94,0.04)" border="rgba(34,197,94,0.15)"
-              startVal={fActiveStart} endVal={fActiveEnd}
-              onStart={setFActiveStart} onEnd={setFActiveEnd}
-              startPH="e.g. 192.168.0.10" endPH="e.g. 192.168.0.200"
-              inp={S.input} lbl={S.lbl}
-            />
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+              <div>
+                <label style={LBL}>Pool Name</label>
+                <select value={fName} onChange={e => setFName(e.target.value)} style={{ ...INPUT, cursor: "pointer" }}>
+                  <option value="">— select type —</option>
+                  <option value="active">active — hotspot / general clients</option>
+                  <option value="pppoe">pppoe — PPPoE subscriber IPs</option>
+                  <option value="expired">expired — lapsed customers</option>
+                  <option value="__custom">Custom name…</option>
+                </select>
+                {fName === "__custom" && (
+                  <input style={{ ...INPUT, marginTop: "0.4rem" }} placeholder="Enter pool name" onChange={e => setFName(e.target.value)} autoFocus />
+                )}
+              </div>
 
-            {/* PPPoE pool */}
-            <PoolSection
-              label="PPPoE Pool" sublabel="PPPoE subscriber IPs" color="#06b6d4" bg="rgba(6,182,212,0.04)" border="rgba(6,182,212,0.15)"
-              startVal={fPppoeStart} endVal={fPppoeEnd}
-              onStart={setFPppoeStart} onEnd={setFPppoeEnd}
-              startPH="e.g. 10.20.0.10" endPH="e.g. 10.20.0.254"
-              inp={S.input} lbl={S.lbl}
-            />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.625rem" }}>
+                <div>
+                  <label style={LBL}>Start IP</label>
+                  <input style={INPUT} value={fStart} onChange={e => setFStart(e.target.value)} placeholder="e.g. 10.10.0.10" />
+                </div>
+                <div>
+                  <label style={LBL}>End IP</label>
+                  <input style={INPUT} value={fEnd} onChange={e => setFEnd(e.target.value)} placeholder="e.g. 10.10.0.254" />
+                </div>
+              </div>
 
-            {/* Expired pool */}
-            <PoolSection
-              label="Expired Pool" sublabel="Lapsed / unpaid customers" color="#f59e0b" bg="rgba(245,158,11,0.04)" border="rgba(245,158,11,0.15)"
-              startVal={fExpiredStart} endVal={fExpiredEnd}
-              onStart={setFExpiredStart} onEnd={setFExpiredEnd}
-              startPH="e.g. 10.10.1.10" endPH="e.g. 10.10.1.254"
-              inp={S.input} lbl={S.lbl}
-            />
+              <div>
+                <label style={LBL}>Assign to Router</label>
+                <select value={fRouterId} onChange={e => setFRouterId(e.target.value)} style={{ ...INPUT, cursor: "pointer" }}>
+                  <option value="">— unassigned —</option>
+                  {routers.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} {r.status === "online" ? "🟢" : "🔴"} — {r.host || r.bridge_ip || "no IP"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {saveErr && (
-              <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 8, padding: "0.5rem 0.75rem", fontSize: "0.77rem", color: "#f87171", marginBottom: "0.75rem" }}>
+              <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 8, padding: "0.5rem 0.75rem", fontSize: "0.78rem", color: "#f87171", marginTop: "0.75rem" }}>
                 {saveErr}
               </div>
             )}
 
-            <div style={{ display: "flex", gap: "0.625rem", justifyContent: "flex-end", marginTop: "0.25rem" }}>
-              <button onClick={() => setEditRouter(null)} style={S.btn("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>
+            <div style={{ display: "flex", gap: "0.625rem", justifyContent: "flex-end", marginTop: "1.25rem" }}>
+              <button onClick={() => setShowForm(false)} style={btn("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>
                 Cancel
               </button>
-              <button onClick={handleSave} disabled={saving} style={{ ...S.btn("linear-gradient(135deg,#06b6d4,#0284c7)"), opacity: saving ? 0.7 : 1 }}>
+              <button onClick={savePool} disabled={saving} style={{ ...btn("linear-gradient(135deg,#06b6d4,#0284c7)"), opacity: saving ? 0.7 : 1 }}>
                 {saving ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <CheckCircle2 size={13} />}
-                Save Pools
+                {editPool ? "Update Pool" : "Save Pool"}
               </button>
             </div>
           </div>
         </div>
       )}
     </AdminLayout>
-  );
-}
-
-/* ── Reusable pool section in the edit modal ── */
-function PoolSection({
-  label, sublabel, color, bg, border,
-  startVal, endVal, onStart, onEnd,
-  startPH, endPH, inp, lbl,
-}: {
-  label: string; sublabel: string; color: string; bg: string; border: string;
-  startVal: string; endVal: string;
-  onStart: (v: string) => void; onEnd: (v: string) => void;
-  startPH: string; endPH: string;
-  inp: React.CSSProperties; lbl: React.CSSProperties;
-}) {
-  return (
-    <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: "0.8rem 1rem", marginBottom: "0.625rem" }}>
-      <div style={{ fontWeight: 700, fontSize: "0.78rem", color, marginBottom: "0.55rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block" }} />
-        {label}
-        <span style={{ fontWeight: 400, color: "var(--isp-text-muted)", fontSize: "0.68rem" }}>— {sublabel}</span>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-        <div>
-          <label style={lbl}>Start IP</label>
-          <input style={inp} value={startVal} onChange={e => onStart(e.target.value)} placeholder={startPH} />
-        </div>
-        <div>
-          <label style={lbl}>End IP</label>
-          <input style={inp} value={endVal} onChange={e => onEnd(e.target.value)} placeholder={endPH} />
-        </div>
-      </div>
-    </div>
   );
 }
