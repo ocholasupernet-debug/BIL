@@ -284,108 +284,128 @@ function bestMatch(routerName: string, clients: string[]): string | null {
 }
 
 router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<void> => {
-  const adminId = req.body?.adminId ?? req.query.adminId ?? "1";
+  try {
+    const adminId = req.body?.adminId ?? req.query.adminId ?? "1";
 
-  /* 1. Read VPN IP map */
-  const ipp    = readIppFile();
-  const status = readStatusLog();
+    /* 1. Read VPN IP map */
+    const ipp    = readIppFile();
+    const status = readStatusLog();
 
-  const clientMap = new Map<string, string>();
-  for (const [name, ip] of ipp)    clientMap.set(name, ip);
-  for (const [name, info] of status) clientMap.set(name, info.ip);
+    const clientMap = new Map<string, string>();
+    for (const [name, ip] of ipp)      clientMap.set(name, ip);
+    for (const [name, info] of status) clientMap.set(name, info.ip);
 
-  if (clientMap.size === 0) {
-    res.json({
-      ok:    false,
-      error: "No VPN client IP data found on this server. Check that OpenVPN is running and ipp.txt exists.",
-      searched: [...IPP_PATHS, ...STATUS_PATHS],
-    });
-    return;
-  }
-
-  /* 2. Load all routers */
-  const routers = await sbSelect<{
-    id: number; name: string; host: string; bridge_ip: string | null;
-    router_username: string; router_secret: string | null;
-  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret`);
-
-  const clientNames = [...clientMap.keys()];
-  const results: {
-    routerId: number; routerName: string; matched: boolean;
-    clientName?: string; oldIp?: string; newIp?: string;
-    pingOk?: boolean; pingError?: string; identity?: string; uptime?: string;
-  }[] = [];
-
-  /* 3. For each router, find matching VPN client and update */
-  await Promise.allSettled(
-    routers.map(async (row) => {
-      const match = bestMatch(row.name, clientNames);
-
-      if (!match) {
-        results.push({ routerId: row.id, routerName: row.name, matched: false });
-        return;
-      }
-
-      const newIp  = clientMap.get(match)!;
-      const oldIp  = row.bridge_ip || row.host;
-
-      /* Update Supabase */
-      await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-        bridge_ip:  newIp,
-        host:       newIp,
-        updated_at: new Date().toISOString(),
+    if (clientMap.size === 0) {
+      res.json({
+        ok:       false,
+        error:    "No VPN client IP data found on this server. Check that OpenVPN is running and ipp.txt exists.",
+        searched: [...IPP_PATHS, ...STATUS_PATHS],
       });
+      return;
+    }
 
-      logger.info({ routerId: row.id, name: row.name, match, newIp }, "[vpn/auto-fix] IP updated");
+    /* 2. Load all routers */
+    let routers: {
+      id: number; name: string; host: string; bridge_ip: string | null;
+      router_username: string; router_secret: string | null;
+    }[] = [];
+    try {
+      routers = await sbSelect<{
+        id: number; name: string; host: string; bridge_ip: string | null;
+        router_username: string; router_secret: string | null;
+      }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret`);
+    } catch (dbErr) {
+      res.json({
+        ok:    false,
+        error: `Failed to load routers from database: ${(dbErr as Error).message}`,
+      });
+      return;
+    }
 
-      /* Immediately ping the router with the new IP */
-      const creds = {
-        host:     newIp,
-        port:     8728,
-        username: row.router_username || "admin",
-        password: row.router_secret   || "",
-        useSSL:   false,
-        connectTimeoutMs: 8000,
-        requestTimeoutMs: 8000,
-      };
+    const clientNames = [...clientMap.keys()];
+    const results: {
+      routerId: number; routerName: string; matched: boolean;
+      clientName?: string; oldIp?: string; newIp?: string;
+      pingOk?: boolean; pingError?: string; identity?: string; uptime?: string;
+    }[] = [];
 
-      try {
-        const ping = await pingRouter(creds);
+    /* 3. For each router, find matching VPN client and update */
+    await Promise.allSettled(
+      routers.map(async (row) => {
+        const match = bestMatch(row.name, clientNames);
+
+        if (!match) {
+          results.push({ routerId: row.id, routerName: row.name, matched: false });
+          return;
+        }
+
+        const newIp = clientMap.get(match)!;
+        const oldIp = row.bridge_ip || row.host;
+
+        /* Update Supabase */
         await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-          status:     "online",
-          last_seen:  ping.connectedAt,
-          model:      ping.board     || undefined,
-          ros_version: ping.version  || undefined,
-          updated_at: ping.connectedAt,
+          bridge_ip:  newIp,
+          host:       newIp,
+          updated_at: new Date().toISOString(),
         });
-        results.push({
-          routerId: row.id, routerName: row.name, matched: true,
-          clientName: match, oldIp, newIp,
-          pingOk: true, identity: ping.identity, uptime: ping.uptime,
-        });
-      } catch (err) {
-        await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-          status: "offline", updated_at: new Date().toISOString(),
-        });
-        results.push({
-          routerId: row.id, routerName: row.name, matched: true,
-          clientName: match, oldIp, newIp,
-          pingOk: false, pingError: (err as Error).message,
-        });
-      }
-    })
-  );
 
-  const updated  = results.filter(r => r.matched).length;
-  const online   = results.filter(r => r.pingOk).length;
-  const unmatched = results.filter(r => !r.matched).length;
+        logger.info({ routerId: row.id, name: row.name, match, newIp }, "[vpn/auto-fix] IP updated");
 
-  res.json({
-    ok: true,
-    summary: { total: routers.length, updated, online, unmatched },
-    results,
-    vpnClients: Object.fromEntries(clientMap),
-  });
+        /* Immediately ping the router with the new IP */
+        const creds = {
+          host:             newIp,
+          port:             8728,
+          username:         row.router_username || "admin",
+          password:         row.router_secret   || "",
+          useSSL:           false,
+          connectTimeoutMs: 8000,
+          requestTimeoutMs: 8000,
+        };
+
+        try {
+          const ping = await pingRouter(creds);
+          await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+            status:      "online",
+            last_seen:   ping.connectedAt,
+            model:       ping.board    || undefined,
+            ros_version: ping.version  || undefined,
+            updated_at:  ping.connectedAt,
+          });
+          results.push({
+            routerId: row.id, routerName: row.name, matched: true,
+            clientName: match, oldIp, newIp,
+            pingOk: true, identity: ping.identity, uptime: ping.uptime,
+          });
+        } catch (err) {
+          await sbUpdate("isp_routers", `id=eq.${row.id}`, {
+            status: "offline", updated_at: new Date().toISOString(),
+          });
+          results.push({
+            routerId: row.id, routerName: row.name, matched: true,
+            clientName: match, oldIp, newIp,
+            pingOk: false, pingError: (err as Error).message,
+          });
+        }
+      })
+    );
+
+    const updated   = results.filter(r => r.matched).length;
+    const online    = results.filter(r => r.pingOk).length;
+    const unmatched = results.filter(r => !r.matched).length;
+
+    res.json({
+      ok: true,
+      summary: { total: routers.length, updated, online, unmatched },
+      results,
+      vpnClients: Object.fromEntries(clientMap),
+    });
+  } catch (err) {
+    logger.error({ err }, "[vpn/auto-fix-ips] unhandled error");
+    res.status(500).json({
+      ok:    false,
+      error: `Server error: ${(err as Error).message}`,
+    });
+  }
 });
 
 /* ══════════════════════════════════════════════════════════════════════════

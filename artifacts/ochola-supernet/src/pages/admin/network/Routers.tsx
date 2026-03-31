@@ -199,9 +199,17 @@ export default function Routers() {
     setAutoFixResults(null);
     try {
       const res  = await fetch(`/api/vpn/auto-fix-ips?adminId=${ADMIN_ID}`, { method: "POST" });
-      const data = await res.json();
+      const text = await res.text();
+      let data: typeof autoFixResults;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        /* Server returned non-JSON (HTML error page) — surface the raw text */
+        const preview = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+        data = { ok: false, error: `Server returned unexpected response (HTTP ${res.status}): ${preview || text.slice(0, 200)}` };
+      }
       setAutoFixResults(data);
-      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+      if (data?.ok) qc.invalidateQueries({ queryKey: ["isp_routers"] });
     } catch (e) {
       setAutoFixResults({ ok: false, error: (e as Error).message });
     } finally {
