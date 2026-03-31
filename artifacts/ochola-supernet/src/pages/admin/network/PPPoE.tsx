@@ -3,14 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
-import {
-  Shield, Wifi, Copy, Check, Loader2,
-  Zap, Terminal, Download,
-} from "lucide-react";
+import { Copy, Check, Loader2, RefreshCw, HelpCircle, Info } from "lucide-react";
 
 const BASE_DOMAIN = "isplatty.org";
 
-/* ══════════════════════════ Types ══════════════════════════ */
 interface DbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null; ros_version: string;
@@ -20,15 +16,20 @@ interface DbRouter {
   pppoe_configured_at: string | null; token: string;
 }
 
-type Mode = "pppoe_only" | "pppoe_over_hotspot";
+type Mode = "pppoe_only" | "pppoe_vlan";
+type RosVer = "6" | "7";
 
-/* ══════════════════════════ Helpers ══════════════════════════ */
 function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
-/* ══════════════════════════ Copy button ══════════════════════════ */
-function CopyBtn({ text }: { text: string }) {
+function detectMajor(ver: string | null | undefined): RosVer {
+  const m = (ver ?? "").match(/^(\d+)/);
+  return m && parseInt(m[1]) >= 7 ? "7" : "6";
+}
+
+/* ── Copy button ── */
+function CopyBtn({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -36,70 +37,78 @@ function CopyBtn({ text }: { text: string }) {
         setCopied(true); setTimeout(() => setCopied(false), 2200);
       })}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "0.35rem",
-        padding: "0.35rem 0.875rem", borderRadius: 6,
-        background: copied ? "rgba(34,197,94,0.15)" : "rgba(99,102,241,0.18)",
-        border: `1px solid ${copied ? "rgba(34,197,94,0.4)" : "rgba(99,102,241,0.4)"}`,
-        color: copied ? "#4ade80" : "#a5b4fc",
-        fontSize: "0.74rem", fontWeight: 700, cursor: "pointer",
+        display: "inline-flex", alignItems: "center", gap: "0.3rem",
+        padding: "0.3rem 0.75rem", borderRadius: 5,
+        background: copied ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.08)",
+        border: `1px solid ${copied ? "rgba(34,197,94,0.4)" : "rgba(255,255,255,0.15)"}`,
+        color: copied ? "#4ade80" : "#c7d2fe",
+        fontSize: "0.73rem", fontWeight: 700, cursor: "pointer",
         fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0,
       }}
     >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? "Copied!" : "Copy"}
+      {copied ? <Check size={11} /> : <Copy size={11} />}
+      {copied ? "Copied!" : label}
     </button>
   );
 }
 
-/* ══════════════════════════ Command block ══════════════════════════ */
-function CmdBlock({ step, title, cmd, note }: { step: number; title: string; cmd: string; note?: string }) {
+/* ── Step command panel (orange style from reference) ── */
+function StepPanel({ step, title, cmd, filePath }: {
+  step: number; title: string; cmd: string; filePath?: string;
+}) {
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+    <div style={{
+      background: "rgba(234,88,12,0.06)",
+      border: "1px solid rgba(234,88,12,0.25)",
+      borderRadius: 10, overflow: "hidden",
+    }}>
+      <div style={{
+        background: "rgba(234,88,12,0.12)",
+        borderBottom: "1px solid rgba(234,88,12,0.2)",
+        padding: "0.55rem 1rem",
+        display: "flex", alignItems: "center", gap: "0.5rem",
+      }}>
         <span style={{
-          width: 22, height: 22, borderRadius: "50%",
-          background: "linear-gradient(135deg,#06b6d4,#0284c7)",
-          color: "white", fontSize: "0.68rem", fontWeight: 800,
+          width: 20, height: 20, borderRadius: "50%",
+          background: "linear-gradient(135deg,#f97316,#ea580c)",
+          color: "white", fontSize: "0.65rem", fontWeight: 800,
           display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         }}>{step}</span>
-        <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>{title}</span>
+        <span style={{ fontWeight: 700, fontSize: "0.82rem", color: "#fb923c" }}>{title}</span>
       </div>
-      {note && (
-        <p style={{ margin: "0 0 0.5rem 1.875rem", fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
-          {note}
-        </p>
-      )}
-      <div style={{
-        background: "#060b12",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 8, padding: "0.875rem 1rem",
-        display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem",
-      }}>
-        <code style={{
-          fontFamily: "monospace", fontSize: "0.8rem", color: "#c7d2fe",
-          wordBreak: "break-all", lineHeight: 1.7, flex: 1,
+      <div style={{ padding: "0.75rem 1rem" }}>
+        <div style={{
+          background: "#060b12",
+          border: "1px solid rgba(255,255,255,0.07)",
+          borderRadius: 7, padding: "0.65rem 0.875rem",
+          display: "flex", alignItems: "flex-start",
+          justifyContent: "space-between", gap: "0.75rem",
         }}>
-          {cmd}
-        </code>
-        <CopyBtn text={cmd} />
+          <code style={{
+            fontFamily: "monospace", fontSize: "0.78rem", color: "#c7d2fe",
+            wordBreak: "break-all", lineHeight: 1.7, flex: 1,
+          }}>{cmd}</code>
+          <CopyBtn text={cmd} />
+        </div>
+        {filePath && (
+          <p style={{ margin: "0.5rem 0 0", fontSize: "0.72rem", color: "#fb923c", fontFamily: "monospace" }}>
+            Target file path: {filePath}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
-/* ══════════════════════════ Main Page ══════════════════════════ */
-type RosVer = "6" | "7";
-
-function detectMajor(ver: string | null | undefined): RosVer {
-  const m = (ver ?? "").match(/^(\d+)/);
-  return m && parseInt(m[1]) >= 7 ? "7" : "6";
-}
-
 export default function PPPoE() {
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [mode, setMode] = useState<Mode>("pppoe_only");
-  const [generated, setGenerated] = useState(false);
   const [rosVer, setRosVer] = useState<RosVer>("6");
+  const [vlanId, setVlanId] = useState("200");
+  const [baseBridge, setBaseBridge] = useState("hotspot-bridge");
+  const [loadingIfaces, setLoadingIfaces] = useState(false);
+  const [ifaceMsg, setIfaceMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [regen, setRegen] = useState(0);
 
   const { data: adminInfo } = useQuery({
     queryKey: ["admin_info_pppoe", ADMIN_ID],
@@ -137,62 +146,167 @@ export default function PPPoE() {
     [routers, selectedRouterId],
   );
 
-  /* Derived filenames & commands */
-  const slug         = router ? slugify(router.name) : "router";
-  const configFile   = mode === "pppoe_only" ? `pppoe-only-${slug}.rsc` : `pppoe-hotspot-${slug}.rsc`;
-  const fetchCmd     = router
-    ? `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/${mode}/${rosVer}" dst-path=${configFile} mode=https check-certificate=no`
-    : "";
-  const importCmd    = `/import ${configFile}`;
-  const downloadUrl  = router
-    ? `/api/pppoe-script/${router.id}/${mode}/${rosVer}`
+  /* Derived commands */
+  const slug = router ? slugify(router.name) : "router";
+
+  const fetchCmd = useMemo(() => {
+    if (!router) return "";
+    if (mode === "pppoe_only") {
+      const file = `pppoe/pppoeonly-${slug}.rsc`;
+      return `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/pppoe_only/${rosVer}" mode=https dst-path=${file} check-certificate=no`;
+    } else {
+      const vid  = vlanId.trim() || "200";
+      const bb   = baseBridge.trim() || "hotspot-bridge";
+      const file = `pppoe/vlanpppoe-${slug}.rsc`;
+      return `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/pppoe_vlan/${rosVer}/${vid}/${bb}" mode=https dst-path=${file} check-certificate=no`;
+    }
+  }, [router, mode, rosVer, vlanId, baseBridge, scriptHost, slug, regen]);
+
+  const { importCmd, targetFile } = useMemo(() => {
+    if (mode === "pppoe_only") {
+      const f = `pppoe/pppoeonly-${slug}.rsc`;
+      return { importCmd: `/import file-name=${f}`, targetFile: f };
+    } else {
+      const f = `pppoe/vlanpppoe-${slug}.rsc`;
+      return { importCmd: `/import file-name=${f}`, targetFile: f };
+    }
+  }, [mode, slug, regen]);
+
+  const downloadUrl = router
+    ? mode === "pppoe_only"
+      ? `/api/pppoe-script/${router.id}/pppoe_only/${rosVer}`
+      : `/api/pppoe-script/${router.id}/pppoe_vlan/${rosVer}/${vlanId.trim() || "200"}/${baseBridge.trim() || "hotspot-bridge"}`
     : "#";
 
-  const MODES: { id: Mode; label: string; sub: string; icon: React.ReactNode; color: string; border: string }[] = [
-    {
-      id: "pppoe_only",
-      label: "PPPoE Only",
-      sub: "Pure PPPoE dial-up. Clients authenticate via username & password. Best for fiber/cable subscribers.",
-      icon: <Shield size={22} style={{ color: "#06b6d4" }} />,
-      color: "rgba(6,182,212,0.08)", border: "rgba(6,182,212,0.35)",
-    },
-    {
-      id: "pppoe_over_hotspot",
-      label: "PPPoE over Hotspot",
-      sub: "Combines a hotspot captive portal with a PPPoE server on the same bridge. Supports both auth methods simultaneously.",
-      icon: <Wifi size={22} style={{ color: "#a78bfa" }} />,
-      color: "rgba(139,92,246,0.08)", border: "rgba(139,92,246,0.35)",
-    },
-  ];
+  /* Load Interfaces — pings the router's API to confirm bridge state */
+  async function handleLoadInterfaces() {
+    if (!router) return;
+    setLoadingIfaces(true);
+    setIfaceMsg(null);
+    try {
+      const res = await fetch(`/api/bridge-ports/${router.id}`, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = await res.json();
+        const ports: string[] = Array.isArray(data?.ports) ? data.ports : [];
+        const bridgeOk = mode === "pppoe_only"
+          ? data?.bridge === "bridge-pppoe" || ports.length > 0
+          : data?.bridge === baseBridge.trim() || ports.length > 0;
+        setIfaceMsg({
+          ok: bridgeOk,
+          text: bridgeOk
+            ? `Interfaces loaded — ${ports.length} port(s) found`
+            : "Bridge not yet configured on router",
+        });
+      } else {
+        setIfaceMsg({ ok: false, text: "Could not reach router API — check firewall / VPN" });
+      }
+    } catch {
+      setIfaceMsg({ ok: false, text: "Router unreachable — run the fetch+import commands first" });
+    } finally {
+      setLoadingIfaces(false);
+    }
+  }
 
   return (
     <AdminLayout>
-      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}} @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      <style>{`
+        @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        .ppoe-radio:hover{background:rgba(255,255,255,0.05)!important}
+        .ppoe-btn-load:hover{background:rgba(6,182,212,0.18)!important}
+        .ppoe-btn-regen:hover{filter:brightness(1.1)}
+        .ppoe-btn-help:hover{background:rgba(255,255,255,0.15)!important}
+      `}</style>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
         <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>
-          PPPoE Configuration
+          PPPoE Setup Wizard
         </h1>
 
         <NetworkTabs active="pppoe" />
 
-        {/* ── Compact selector card ── */}
+        {/* ── Header banner ── */}
         <div style={{
-          maxWidth: 720,
+          background: "linear-gradient(135deg,rgba(6,182,212,0.18),rgba(2,132,199,0.22))",
+          border: "1px solid rgba(6,182,212,0.35)",
+          borderRadius: 12, padding: "0.875rem 1.25rem",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem",
+        }}>
+          <div>
+            <p style={{ margin: 0, fontWeight: 700, fontSize: "0.95rem", color: "#67e8f9" }}>
+              PPPoE Sign In — Show Expiry Page When PPPoE Account Expires
+            </p>
+          </div>
+          <a
+            href="https://isplatty.org/docs/pppoe"
+            target="_blank"
+            rel="noreferrer"
+            className="ppoe-btn-help"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.35rem",
+              padding: "0.35rem 0.875rem", borderRadius: 7,
+              background: "rgba(255,255,255,0.1)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              color: "white", fontWeight: 700, fontSize: "0.75rem",
+              textDecoration: "none", whiteSpace: "nowrap", transition: "all 0.15s",
+              flexShrink: 0,
+            }}
+          >
+            <HelpCircle size={13} /> Need Help?
+          </a>
+        </div>
+
+        {/* ── Info box ── */}
+        <div style={{
+          background: "rgba(234,179,8,0.06)",
+          border: "1px solid rgba(234,179,8,0.22)",
+          borderRadius: 10, padding: "0.875rem 1.1rem",
+          display: "flex", gap: "0.75rem",
+        }}>
+          <Info size={16} style={{ color: "#facc15", flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
+            <strong style={{ color: "var(--isp-text)" }}>How it works:</strong>{" "}
+            Pick a router, click <span style={{ color: "#facc15", fontWeight: 700 }}>"Load Interfaces"</span> to create
+            pppoe_bridge (if needed) and list ports. Choose{" "}
+            <span style={{ color: "#facc15", fontWeight: 700 }}>Mode A</span>{" "}
+            (you will assign a new bridge just to deal with PPPoE) or{" "}
+            <span style={{ color: "#facc15", fontWeight: 700 }}>Mode B</span>{" "}
+            (use Hotspot and PPPoE on the same port via VLAN).
+            Choose Mode B even if your router doesn't have the VLAN option — it will still work.
+            <br />
+            <span style={{ color: "#a3e635" }}>• Mode A</span>{" — "}
+            <strong style={{ color: "var(--isp-text)" }}>pppoe_bridge</strong>{" "}
+            (Dedicated ports for PPPoE only — don't want to mix hotspot and PPPoE)
+            <br />
+            <span style={{ color: "#a3e635" }}>• Mode B</span>{" — "}
+            <strong style={{ color: "var(--isp-text)" }}>Share hotspot and PPPoE on the same port</strong>{" "}
+            (The port for PPPoE and hotspot is always named hotspot-bridge in our system)
+            <br />
+            <span style={{ color: "#a3e635" }}>• PPPoE Packages</span>{" — "}
+            Go to <strong style={{ color: "#67e8f9" }}>Packages › PPPoE Plans</strong>{" "}
+            (click edit and under expired pool choose the new pool named{" "}
+            <code style={{ color: "#fb923c", fontSize: "0.73rem" }}>expired_pppoe_pool</code>{" "}
+            to finalise the settings)
+          </div>
+        </div>
+
+        {/* ── Main card ── */}
+        <div style={{
+          maxWidth: 780,
           background: "var(--isp-section)",
           border: "1px solid var(--isp-border)",
           borderRadius: 14, overflow: "hidden",
         }}>
 
-          {/* Router picker */}
+          {/* Router row */}
           <div style={{
-            display: "flex", alignItems: "center", gap: "0.875rem",
+            display: "flex", alignItems: "center", gap: "0.75rem",
             padding: "0.875rem 1.25rem",
             borderBottom: "1px solid var(--isp-border-subtle)",
           }}>
             <span style={{
-              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
+              fontSize: "0.72rem", fontWeight: 700, color: "#facc15",
               textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
             }}>Router</span>
             <select
@@ -200,7 +314,7 @@ export default function PPPoE() {
               onChange={e => {
                 const id = Number(e.target.value);
                 setSelectedRouterId(id);
-                setGenerated(false);
+                setIfaceMsg(null);
                 const r = routers.find(x => x.id === id);
                 if (r) setRosVer(detectMajor(r.ros_version));
               }}
@@ -208,7 +322,7 @@ export default function PPPoE() {
               style={{
                 flex: 1, background: "var(--isp-inner-card)",
                 border: "1px solid var(--isp-border)", borderRadius: 8,
-                padding: "0.45rem 0.75rem", color: "var(--isp-text)",
+                padding: "0.4rem 0.75rem", color: "var(--isp-text)",
                 fontSize: "0.8125rem", fontFamily: "inherit", outline: "none", cursor: "pointer",
               }}
             >
@@ -220,33 +334,164 @@ export default function PPPoE() {
                 </option>
               ))}
             </select>
-            {router && (
-              <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                ROS {router.ros_version || "—"}
-              </span>
-            )}
+
+            <button
+              onClick={handleLoadInterfaces}
+              disabled={!router || loadingIfaces}
+              className="ppoe-btn-load"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                padding: "0.4rem 0.875rem", borderRadius: 7,
+                background: "rgba(6,182,212,0.1)",
+                border: "1px solid rgba(6,182,212,0.35)",
+                color: "#22d3ee", fontWeight: 700, fontSize: "0.75rem",
+                cursor: router ? "pointer" : "not-allowed",
+                fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap",
+                opacity: !router ? 0.5 : 1,
+              }}
+            >
+              {loadingIfaces
+                ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Loading…</>
+                : "Load Interfaces"
+              }
+            </button>
+
+            <span style={{
+              fontSize: "0.7rem", fontWeight: 700, color: "#facc15",
+              textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap",
+            }}>Setup Mode</span>
           </div>
 
-          {/* ROS version selector */}
+          {/* Interface load result */}
+          {ifaceMsg && (
+            <div style={{
+              padding: "0.5rem 1.25rem",
+              borderBottom: "1px solid var(--isp-border-subtle)",
+              background: ifaceMsg.ok ? "rgba(74,222,128,0.05)" : "rgba(248,113,113,0.05)",
+              fontSize: "0.75rem", fontWeight: 600,
+              color: ifaceMsg.ok ? "#4ade80" : "#f87171",
+            }}>
+              {ifaceMsg.ok ? "✓" : "✗"} {ifaceMsg.text}
+            </div>
+          )}
+
+          {/* Mode A / B radios */}
           <div style={{
-            display: "flex", alignItems: "center", gap: "0.875rem",
-            padding: "0.75rem 1.25rem",
+            padding: "0.875rem 1.25rem",
             borderBottom: "1px solid var(--isp-border-subtle)",
           }}>
-            <span style={{
-              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
-              textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
-            }}>ROS Version</span>
-            <div style={{ display: "flex", gap: "0.4rem" }}>
+            <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+              {[
+                { id: "pppoe_only" as Mode, label: "A) Normal bridge (pppoe_bridge)" },
+                { id: "pppoe_vlan"  as Mode, label: "B) VLAN under hotspot-bridge" },
+              ].map(opt => {
+                const active = mode === opt.id;
+                return (
+                  <label
+                    key={opt.id}
+                    className="ppoe-radio"
+                    style={{
+                      display: "flex", alignItems: "center", gap: "0.5rem",
+                      padding: "0.45rem 0.875rem", borderRadius: 8, cursor: "pointer",
+                      background: active ? "rgba(6,182,212,0.1)" : "transparent",
+                      border: `1px solid ${active ? "rgba(6,182,212,0.4)" : "transparent"}`,
+                      transition: "all 0.14s",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="pppoe_mode"
+                      value={opt.id}
+                      checked={active}
+                      onChange={() => { setMode(opt.id); setIfaceMsg(null); }}
+                      style={{ accentColor: "#06b6d4", width: 14, height: 14, cursor: "pointer" }}
+                    />
+                    <span style={{
+                      fontSize: "0.82rem", fontWeight: active ? 700 : 500,
+                      color: active ? "#06b6d4" : "var(--isp-text)",
+                    }}>{opt.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* VLAN Details — only for Mode B */}
+          {mode === "pppoe_vlan" && (
+            <div style={{
+              padding: "0.875rem 1.25rem",
+              borderBottom: "1px solid var(--isp-border-subtle)",
+              background: "rgba(139,92,246,0.04)",
+              animation: "fadeIn 0.18s ease",
+            }}>
+              <p style={{
+                margin: "0 0 0.625rem", fontSize: "0.7rem", fontWeight: 700,
+                color: "#facc15", textTransform: "uppercase", letterSpacing: "0.06em",
+              }}>VLAN Details</p>
+              <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                <div style={{ flex: "0 0 120px" }}>
+                  <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
+                    VLAN ID
+                  </label>
+                  <input
+                    type="number"
+                    value={vlanId}
+                    min={1} max={4094}
+                    onChange={e => setVlanId(e.target.value)}
+                    style={{
+                      width: "100%", background: "var(--isp-inner-card)",
+                      border: "1px solid var(--isp-border)", borderRadius: 7,
+                      padding: "0.4rem 0.625rem", color: "var(--isp-text)",
+                      fontSize: "0.85rem", fontFamily: "monospace", outline: "none",
+                    }}
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
+                    Base Bridge
+                  </label>
+                  <input
+                    type="text"
+                    value={baseBridge}
+                    onChange={e => setBaseBridge(e.target.value)}
+                    placeholder="hotspot-bridge"
+                    style={{
+                      width: "100%", background: "var(--isp-inner-card)",
+                      border: "1px solid var(--isp-border)", borderRadius: 7,
+                      padding: "0.4rem 0.625rem", color: "var(--isp-text)",
+                      fontSize: "0.85rem", fontFamily: "monospace", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+              </div>
+              <p style={{ margin: "0.5rem 0 0", fontSize: "0.73rem", color: "var(--isp-text-muted)" }}>
+                PPPoE runs on a VLAN on{" "}
+                <span style={{ color: "#a78bfa", fontWeight: 600 }}>
+                  {baseBridge.trim() || "hotspot-bridge"}
+                </span>
+              </p>
+            </div>
+          )}
+
+          {/* ROS version row */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.75rem",
+            padding: "0.65rem 1.25rem",
+            borderBottom: "1px solid var(--isp-border-subtle)",
+          }}>
+            <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+              ROS Version
+            </span>
+            <div style={{ display: "flex", gap: "0.35rem" }}>
               {(["6", "7"] as RosVer[]).map(v => {
                 const active = rosVer === v;
                 return (
                   <button
                     key={v}
-                    onClick={() => { setRosVer(v); setGenerated(false); }}
+                    onClick={() => setRosVer(v)}
                     style={{
-                      padding: "0.3rem 0.875rem", borderRadius: 7, fontFamily: "inherit",
-                      fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", transition: "all 0.14s",
+                      padding: "0.25rem 0.75rem", borderRadius: 6, fontFamily: "inherit",
+                      fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", transition: "all 0.14s",
                       background: active ? "rgba(6,182,212,0.15)" : "var(--isp-inner-card)",
                       border: `1px solid ${active ? "rgba(6,182,212,0.5)" : "var(--isp-border)"}`,
                       color: active ? "#06b6d4" : "var(--isp-text-muted)",
@@ -257,196 +502,104 @@ export default function PPPoE() {
                 );
               })}
             </div>
-            <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginLeft: "auto" }}>
-              {rosVer === "7"
-                ? "Includes use-radius, mac-auth-mode"
-                : "Compatible with RouterOS 6.x"}
-            </span>
+            {router && (
+              <span style={{ fontSize: "0.71rem", color: "var(--isp-text-muted)", marginLeft: "auto", fontFamily: "monospace" }}>
+                Router reports: {router.ros_version || "—"}
+              </span>
+            )}
           </div>
 
-          {/* Mode selection + generate */}
-          <div style={{ padding: "1.125rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <span style={{
-              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
-              textTransform: "uppercase", letterSpacing: "0.06em",
-            }}>Select type</span>
+          {/* Steps */}
+          <div style={{ padding: "1.125rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+            {router ? (
+              <>
+                <StepPanel
+                  step={1}
+                  title="Download configuration script"
+                  cmd={fetchCmd}
+                />
+                <StepPanel
+                  step={2}
+                  title="Import configuration"
+                  cmd={importCmd}
+                  filePath={targetFile}
+                />
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-              {MODES.map(m => {
-                const active = mode === m.id;
-                return (
+                {/* Download link + Regenerate */}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", paddingTop: "0.25rem" }}>
                   <button
-                    key={m.id}
-                    onClick={() => { setMode(m.id); setGenerated(false); }}
+                    onClick={() => setRegen(r => r + 1)}
+                    className="ppoe-btn-regen"
                     style={{
-                      display: "flex", flexDirection: "column", alignItems: "flex-start",
-                      gap: "0.5rem", padding: "1rem 1.125rem",
-                      background: active ? m.color : "var(--isp-inner-card)",
-                      border: `${active ? "2px" : "1px"} solid ${active ? m.border : "var(--isp-border)"}`,
-                      borderRadius: 10, cursor: "pointer", textAlign: "left",
-                      fontFamily: "inherit", transition: "all 0.15s",
-                      boxShadow: active ? `0 0 0 3px ${m.color}` : "none",
+                      display: "inline-flex", alignItems: "center", gap: "0.4rem",
+                      padding: "0.5rem 1.1rem", borderRadius: 8,
+                      background: "linear-gradient(135deg,#f97316,#ea580c)",
+                      border: "none", color: "white",
+                      fontWeight: 700, fontSize: "0.8rem",
+                      cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", width: "100%" }}>
-                      {m.icon}
-                      <span style={{ fontWeight: 700, fontSize: "0.875rem", color: "var(--isp-text)" }}>
-                        {m.label}
-                      </span>
-                      {active && (
-                        <span style={{
-                          marginLeft: "auto", fontSize: "0.65rem", fontWeight: 700,
-                          color: mode === "pppoe_only" ? "#06b6d4" : "#a78bfa",
-                          background: mode === "pppoe_only" ? "rgba(6,182,212,0.12)" : "rgba(139,92,246,0.12)",
-                          border: `1px solid ${mode === "pppoe_only" ? "rgba(6,182,212,0.3)" : "rgba(139,92,246,0.3)"}`,
-                          borderRadius: 4, padding: "0.1rem 0.45rem",
-                        }}>Selected</span>
-                      )}
-                    </div>
-                    <p style={{ margin: 0, fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.55 }}>
-                      {m.sub}
-                    </p>
+                    <RefreshCw size={13} /> Regenerate RSC Files
                   </button>
-                );
-              })}
-            </div>
 
-            {/* Generate button */}
-            <button
-              onClick={() => router && setGenerated(true)}
-              disabled={!router}
-              style={{
-                marginTop: "0.25rem",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
-                padding: "0.7rem 1.5rem", borderRadius: 9,
-                background: router
-                  ? "linear-gradient(135deg,#06b6d4,#0284c7)"
-                  : "rgba(255,255,255,0.06)",
-                border: "none",
-                color: router ? "white" : "var(--isp-text-muted)",
-                fontWeight: 700, fontSize: "0.9rem", cursor: router ? "pointer" : "not-allowed",
-                fontFamily: "inherit",
-                boxShadow: router ? "0 4px 18px rgba(6,182,212,0.35)" : "none",
-                transition: "all 0.2s",
-              }}
-            >
-              {router
-                ? <><Zap size={15} /> Generate Commands</>
-                : <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Select a router first</>
-              }
-            </button>
+                  <a
+                    href={downloadUrl}
+                    download
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                      padding: "0.45rem 0.875rem", borderRadius: 7,
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      color: "var(--isp-text-muted)",
+                      fontWeight: 600, fontSize: "0.75rem", textDecoration: "none",
+                    }}
+                  >
+                    Download .rsc
+                  </a>
+                </div>
 
-            {!router && !loadingRouters && routers.length === 0 && (
-              <p style={{ margin: 0, fontSize: "0.78rem", color: "#f87171", textAlign: "center" }}>
-                No routers found.{" "}
-                <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600 }}>
-                  Add a router first →
-                </a>
-              </p>
+                {/* Verify commands */}
+                <div style={{
+                  background: "rgba(74,222,128,0.04)",
+                  border: "1px solid rgba(74,222,128,0.13)",
+                  borderRadius: 9, padding: "0.75rem 0.875rem",
+                }}>
+                  <p style={{ margin: "0 0 0.5rem", fontSize: "0.73rem", fontWeight: 700, color: "#4ade80" }}>
+                    Step 3 — Verify (run in Winbox Terminal)
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                    {[
+                      "/interface pppoe-server server print",
+                      "/ppp profile print",
+                      mode === "pppoe_vlan" ? "/interface vlan print" : "/ip pool print",
+                    ].map(cmd => (
+                      <div key={cmd} style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        background: "#060b12", borderRadius: 6, padding: "0.45rem 0.75rem", gap: "0.75rem",
+                      }}>
+                        <code style={{ fontFamily: "monospace", fontSize: "0.76rem", color: "#86efac", flex: 1 }}>
+                          {cmd}
+                        </code>
+                        <CopyBtn text={cmd} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ padding: "1.5rem 0", textAlign: "center" }}>
+                <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>
+                  {loadingRouters ? "Loading routers…" : "Select a router above to generate commands"}
+                </p>
+                {!loadingRouters && routers.length === 0 && (
+                  <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600, fontSize: "0.8rem" }}>
+                    Add a router first →
+                  </a>
+                )}
+              </div>
             )}
           </div>
         </div>
-
-        {/* ── Command steps (shown after generate) ── */}
-        {generated && router && (
-          <div style={{
-            maxWidth: 720,
-            background: "var(--isp-card)",
-            border: "1px solid var(--isp-border-subtle)",
-            borderRadius: 14, overflow: "hidden",
-            animation: "fadeIn 0.2s ease",
-          }}>
-
-            {/* Header */}
-            <div style={{
-              padding: "0.875rem 1.375rem",
-              background: "rgba(6,182,212,0.05)",
-              borderBottom: "1px solid rgba(6,182,212,0.12)",
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-                <Terminal size={16} style={{ color: "#06b6d4" }} />
-                <span style={{ fontWeight: 700, fontSize: "0.9rem", color: "var(--isp-text)" }}>
-                  MikroTik Terminal Commands
-                </span>
-                <span style={{
-                  fontSize: "0.68rem", fontWeight: 700, color: "#06b6d4",
-                  background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.28)",
-                  borderRadius: 5, padding: "0.1rem 0.45rem",
-                }}>
-                  {router.name}
-                </span>
-                <span style={{
-                  fontSize: "0.68rem", fontWeight: 700, color: "#a78bfa",
-                  background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.28)",
-                  borderRadius: 5, padding: "0.1rem 0.45rem",
-                }}>
-                  ROS {rosVer}
-                </span>
-              </div>
-              {/* Download config file directly */}
-              <a
-                href={downloadUrl}
-                download={configFile}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "0.35rem",
-                  padding: "0.35rem 0.875rem", borderRadius: 7,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  color: "var(--isp-text-muted)",
-                  fontWeight: 600, fontSize: "0.74rem",
-                  textDecoration: "none", transition: "all 0.15s",
-                }}
-              >
-                <Download size={12} /> Download .rsc
-              </a>
-            </div>
-
-            {/* Steps */}
-            <div style={{ padding: "1.25rem 1.375rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-              <CmdBlock
-                step={1}
-                title="Fetch the configuration script onto the router"
-                note="Open the MikroTik terminal (Winbox → New Terminal) and paste this command. The router will download the config file from the server."
-                cmd={fetchCmd}
-              />
-              <CmdBlock
-                step={2}
-                title="Import and apply the configuration"
-                note="After the file is downloaded, run this to apply it. You will see 'Script file loaded and executed successfully' when done."
-                cmd={importCmd}
-              />
-
-              {/* Verify section */}
-              <div style={{
-                background: "rgba(74,222,128,0.05)",
-                border: "1px solid rgba(74,222,128,0.15)",
-                borderRadius: 10, padding: "0.875rem 1rem",
-              }}>
-                <p style={{ margin: "0 0 0.625rem", fontSize: "0.78rem", fontWeight: 700, color: "#4ade80" }}>
-                  Step 3 — Verify
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
-                  {[
-                    "/interface pppoe-server server print",
-                    "/ppp profile print",
-                    mode === "pppoe_over_hotspot" ? "/ip hotspot print" : "/ip pool print",
-                  ].map(cmd => (
-                    <div key={cmd} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      background: "#060b12", borderRadius: 7, padding: "0.5rem 0.875rem", gap: "0.75rem",
-                    }}>
-                      <code style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#86efac", flex: 1 }}>
-                        {cmd}
-                      </code>
-                      <CopyBtn text={cmd} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
       </div>
     </AdminLayout>

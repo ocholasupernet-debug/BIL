@@ -371,18 +371,134 @@ function genPPPoEOverHotspot(
 }
 
 /* ══════════════════════════════════════════════════════════════
-   GET /api/pppoe-script/:routerId/:mode/:rosVersion?
+   VLAN PPPoE script generator
+   Creates a VLAN interface on baseBridge and runs PPPoE server on it.
+   vlanId     = numeric VLAN ID (e.g. 200)
+   baseBridge = bridge interface the VLAN lives on (e.g. hotspot-bridge)
+══════════════════════════════════════════════════════════════ */
+function genPPPoEVlan(
+  router: DbRouter, companyName: string, ros: number,
+  adminSubdomain: string, vlanId: number, baseBridge: string
+): string {
+  const co          = rosStr(companyName);
+  const secret      = router.router_secret   ?? "ocholasupernet";
+  const wanIface    = router.wan_interface   ?? "ether1";
+  const apiUser     = rosStr(router.router_username || router.name || "admin");
+  const rawIp       = (router.bridge_ip ?? "10.30.0.1").replace(/\/\d+$/, "");
+  const net         = deriveNet(rawIp);
+  const vlanIface   = `vlan${vlanId}`;
+  const slug        = slugify(router.name);
+  const configFile  = `pppoe/vlanpppoe-${slug}.rsc`;
+  const scriptBase  = `https://${adminSubdomain}.${BASE_DOMAIN}/api/pppoe-script/${router.id}/pppoe_vlan/${ros}/${vlanId}/${baseBridge}`;
+  const heartbeatUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api/isp/router/heartbeat/${secret}`;
+
+  return `# ============================================================
+# ${co} - PPPoE over VLAN (VLAN ${vlanId} on ${baseBridge})
+# Router  : ${router.name} (${router.host || "no IP"})
+# ROS     : ${ros}
+# WAN     : ${wanIface}
+# VLAN    : ${vlanId}  Base bridge: ${baseBridge}
+# GW/VLAN : ${net.gateway}/24
+# Pool    : ${net.poolStart} - ${net.poolEnd}
+# Generated: ${new Date().toISOString()}
+# ============================================================
+
+:put "======================================================"
+:put " ${co} PPPoE VLAN Setup — ${router.name}"
+:put " VLAN ${vlanId} on ${baseBridge}"
+:put "======================================================"
+
+:local rosVer "unknown"
+:do { :set rosVer [/system package get [find name=routeros] version] } on-error={}
+:put ("      RouterOS v" . $rosVer)
+
+# 1. Clean previous VLAN PPPoE config
+:put "[1] Cleaning old VLAN PPPoE config..."
+:do { /interface pppoe-server server remove [find service-name=internet] } on-error={}
+:do { /ppp profile remove [find name~"internet"] } on-error={}
+:do { /ip pool remove [find name~"pppoe-pool"] } on-error={}
+:do { /ip address remove [find interface="${vlanIface}"] } on-error={}
+:do { /interface vlan remove [find name="${vlanIface}"] } on-error={}
+
+# 2. Create VLAN interface on base bridge
+:put "[2] Creating VLAN ${vlanId} on ${baseBridge}..."
+:do { /interface vlan add name=${vlanIface} vlan-id=${vlanId} interface=${baseBridge} } on-error={}
+
+# 3. Assign gateway IP to VLAN interface
+:put "[3] Setting gateway ${net.gateway}/24 on ${vlanIface}..."
+:do { /ip address add address=${net.gateway}/24 interface=${vlanIface} } on-error={}
+
+# 4. IP pool
+:put "[4] Creating PPPoE pool ${net.poolStart}-${net.poolEnd}..."
+:do { /ip pool add name=pppoe-pool ranges=${net.poolStart}-${net.poolEnd} } on-error={}
+
+# 5. PPP profile
+:do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
+
+# 6. PPPoE server on VLAN interface — split add + set for ROS 6 compat
+:put "[5] Starting PPPoE server on ${vlanIface}..."
+:do { /interface pppoe-server server add service-name=internet interface=${vlanIface} default-profile=internet disabled=no } on-error={}
+:do { /interface pppoe-server server set [find service-name=internet] authentication=pap,chap,mschap1,mschap2 max-mtu=1480 max-mru=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
+
+# 7. NAT masquerade
+:do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
+:do { /ip firewall nat add chain=srcnat src-address=${net.network} action=masquerade out-interface=${wanIface} comment="PPPoE VLAN masquerade" } on-error={}
+
+# 8. DNS
+:do { /ip dns set servers=8.8.8.8,1.1.1.1 allow-remote-requests=yes } on-error={}
+
+# 9. API service + user
+:put "[6] Creating API user '${apiUser}'..."
+:do { /ip service set api address=0.0.0.0/0 disabled=no } on-error={}
+:do { /user remove [find name="${apiUser}"] } on-error={}
+:do { /user add name="${apiUser}" password="${secret}" group=full disabled=no } on-error={}
+
+# 10. Port 8728 firewall
+:do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
+
+# 11. System identity
+:do { /system identity set name="${co}-${router.name}" } on-error={}
+
+# 12. Heartbeat scheduler
+:put "[7] Setting up heartbeat..."
+:do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
+:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
+:do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
+:do { /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${co} heartbeat" } on-error={}
+
+# 13. Config auto-update (daily)
+:do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
+:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} mode=https check-certificate=no; /import ${configFile}" comment="${co} auto-update" } on-error={}
+
+:log info "${co} PPPoE-VLAN${vlanId} applied"
+:put "======================================================"
+:put " Done! ${co} PPPoE VLAN configured."
+:put " VLAN ${vlanId} on ${baseBridge}  GW: ${net.gateway}/24"
+:put " Pool: ${net.poolStart}-${net.poolEnd}"
+:put " Heartbeat every 5 min — check dashboard for green indicator."
+:put "======================================================"
+`;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   GET /api/pppoe-script/:routerId/:mode/:rosVersion?/:vlanId?/:baseBridge?
    Serves the PPPoE .rsc config file so the router can fetch it
    with /tool fetch (no ? in the URL — RouterOS terminal eats it).
-   mode       = "pppoe_only" | "pppoe_over_hotspot"
+   mode       = "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan"
    rosVersion = "6" | "7"  (defaults to "6" if omitted)
+   vlanId     = VLAN ID number (only for pppoe_vlan, embedded in path)
+   baseBridge = base bridge name (only for pppoe_vlan, embedded in path)
 ══════════════════════════════════════════════════════════════ */
 async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
   const routerId   = parseInt(req.params.routerId ?? "", 10);
-  const mode       = req.params.mode as "pppoe_only" | "pppoe_over_hotspot";
+  const mode       = req.params.mode as "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan";
   const rosVersion = parseInt(req.params.rosVersion ?? "6", 10) || 6;
+  const vlanId     = parseInt(req.params.vlanId ?? "200", 10) || 200;
+  const baseBridge = req.params.baseBridge ?? "hotspot-bridge";
 
-  if (isNaN(routerId) || !["pppoe_only", "pppoe_over_hotspot"].includes(mode)) {
+  if (isNaN(routerId) || !["pppoe_only", "pppoe_over_hotspot", "pppoe_vlan"].includes(mode)) {
     res.status(400).send("# Error: invalid routerId or mode");
     return;
   }
@@ -415,11 +531,15 @@ async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
     const slug     = slugify(router.name);
     const filename = mode === "pppoe_only"
       ? `pppoe-only-${slug}.rsc`
-      : `pppoe-hotspot-${slug}.rsc`;
+      : mode === "pppoe_vlan"
+        ? `vlanpppoe-${slug}.rsc`
+        : `pppoe-hotspot-${slug}.rsc`;
 
     const script = mode === "pppoe_only"
       ? genPPPoEOnly(router, companyName, rosVersion, adminSubdomain)
-      : genPPPoEOverHotspot(router, companyName, rosVersion, adminSubdomain);
+      : mode === "pppoe_vlan"
+        ? genPPPoEVlan(router, companyName, rosVersion, adminSubdomain, vlanId, baseBridge)
+        : genPPPoEOverHotspot(router, companyName, rosVersion, adminSubdomain);
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -452,8 +572,10 @@ async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
   }
 }
 
-/* Register both with and without rosVersion segment (Express 5 doesn't support :param?) */
-router.get("/pppoe-script/:routerId/:mode/:rosVersion", handlePPPoEScript);
-router.get("/pppoe-script/:routerId/:mode",             handlePPPoEScript);
+/* Register all variants (Express 5 doesn't support optional :param?) */
+router.get("/pppoe-script/:routerId/:mode/:rosVersion/:vlanId/:baseBridge", handlePPPoEScript);
+router.get("/pppoe-script/:routerId/:mode/:rosVersion/:vlanId",             handlePPPoEScript);
+router.get("/pppoe-script/:routerId/:mode/:rosVersion",                     handlePPPoEScript);
+router.get("/pppoe-script/:routerId/:mode",                                 handlePPPoEScript);
 
 export default router;
