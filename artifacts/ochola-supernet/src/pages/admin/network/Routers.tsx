@@ -127,17 +127,21 @@ function Badge({ label, color, bg }: { label: string; color: string; bg: string 
   );
 }
 
-/* ── Classic status dot ─ solid circle + label, no animation ── */
-function StatusDot({ online, label, sub }: { online: boolean; label?: string; sub?: string }) {
-  const color  = online ? "#22c55e" : "#ef4444";
-  const text   = label ?? (online ? "Online" : "Offline");
+/* ── Classic status dot ─ pure green/red circle, no text, no animation ── */
+function StatusDot({ online, sub }: { online: boolean; label?: string; sub?: string }) {
+  const color = online ? "#22c55e" : "#ef4444";
   return (
-    <span style={{ display: "inline-flex", flexDirection: "column", gap: 1 }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
-        <span style={{ fontSize: "0.78rem", fontWeight: 700, color }}>{text}</span>
-      </span>
-      {sub && <span style={{ fontSize: "0.65rem", color: "var(--isp-text-muted)", paddingLeft: "1.1rem", lineHeight: 1.3 }}>{sub}</span>}
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+      <span
+        title={online ? "Online" : "Offline"}
+        style={{
+          width: 10, height: 10, borderRadius: "50%",
+          background: color,
+          boxShadow: `0 0 0 2px ${color}33`,
+          flexShrink: 0, display: "inline-block",
+        }}
+      />
+      {sub && <span style={{ fontSize: "0.65rem", color: "var(--isp-text-muted)", lineHeight: 1.3 }}>{sub}</span>}
     </span>
   );
 }
