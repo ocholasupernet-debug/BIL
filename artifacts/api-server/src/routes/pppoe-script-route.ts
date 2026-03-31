@@ -177,9 +177,10 @@ function genPPPoEOnly(
 # 6. PPP profile (no comment= or use-radius= - not supported on all ROS 6 builds)
 :do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
-# 7. PPPoE server
+# 7. PPPoE server — split add + set for ROS 6 compat (fewer params per command)
 :put "[5] Starting PPPoE server on ${bridgeName}..."
-:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet authentication=pap,chap,mschap1,mschap2 enabled=yes max-mru=1480 max-mtu=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
+:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet disabled=no } on-error={}
+:do { /interface pppoe-server server set [find service-name=internet] authentication=pap,chap,mschap1,mschap2 max-mtu=1480 max-mru=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
 
 # 8. NAT masquerade
 :do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
@@ -244,9 +245,6 @@ function genPPPoEOverHotspot(
   const scriptBase  = `https://${adminSubdomain}.${BASE_DOMAIN}/api/pppoe-script/${router.id}/pppoe_over_hotspot`;
   const heartbeatUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api/isp/router/heartbeat/${secret}`;
 
-  /* mac-auth-mode only exists on ROS 7 */
-  const hsProfileExtras = ros >= 7 ? ` mac-auth-mode=mac-as-username` : ``;
-
   return `# ============================================================
 # ${co} - PPPoE over Hotspot
 # Router  : ${router.name} (${router.host || "no IP"})
@@ -310,8 +308,10 @@ function genPPPoEOverHotspot(
 :put "[4] Creating hotspot pool ${hsPoolStart}-${hsPoolEnd}..."
 :do { /ip pool add name=hs-pool ranges=${hsPoolStart}-${hsPoolEnd} } on-error={}
 
-# 7. Hotspot profile
-:do { /ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} login-by=http-chap,http-pap use-radius=no${hsProfileExtras} } on-error={}
+# 7. Hotspot profile — minimal add, then set optional params (ROS 6 compat)
+:do { /ip hotspot profile add name=hs-profile hotspot-address=${net.gateway} dns-name=${dnsName} } on-error={}
+:do { /ip hotspot profile set [find name=hs-profile] login-by=http-chap,http-pap } on-error={}
+:do { /ip hotspot profile set [find name=hs-profile] mac-auth-mode=mac-as-username } on-error={}
 
 # 8. Hotspot server
 :do { /ip hotspot add name=hotspot1 interface=${bridgeName} profile=hs-profile address-pool=hs-pool idle-timeout=none disabled=no } on-error={}
@@ -325,9 +325,10 @@ function genPPPoEOverHotspot(
 # 10. PPP profile (no use-radius= — not supported on all ROS 6 builds; default is already no)
 :do { /ppp profile add name=internet local-address=${net.gateway} remote-address=pppoe-pool dns-server=8.8.8.8,1.1.1.1 change-tcp-mss=yes } on-error={}
 
-# 11. PPPoE server
+# 11. PPPoE server — split add + set for ROS 6 compat
 :put "[6] Starting PPPoE server on ${bridgeName}..."
-:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet authentication=pap,chap,mschap1,mschap2 enabled=yes max-mru=1480 max-mtu=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
+:do { /interface pppoe-server server add service-name=internet interface=${bridgeName} default-profile=internet disabled=no } on-error={}
+:do { /interface pppoe-server server set [find service-name=internet] authentication=pap,chap,mschap1,mschap2 max-mtu=1480 max-mru=1480 one-session-per-host=yes keepalive-timeout=30 } on-error={}
 
 # 12. NAT masquerade
 :do { /ip firewall nat remove [find comment~"PPPoE"] } on-error={}
