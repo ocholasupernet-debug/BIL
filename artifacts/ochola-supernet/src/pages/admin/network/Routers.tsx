@@ -127,6 +127,48 @@ function formatUptime(raw: string | null | undefined): string {
   return parts.length ? parts.join(" ") : raw;
 }
 
+/* ── RouterOS uptime string → total seconds ── */
+function uptimeToSeconds(raw: string): number {
+  const m = raw.match(/(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!m) return 0;
+  const [, w, d, h, min, s] = m;
+  return (+(w||0))*604800 + (+(d||0))*86400 + (+(h||0))*3600 + (+(min||0))*60 + (+(s||0));
+}
+
+/* ── Total seconds → "Xw Xd Xh Xm" ── */
+function secondsToUptime(total: number): string {
+  if (total <= 0) return "—";
+  const w   = Math.floor(total / 604800); total %= 604800;
+  const d   = Math.floor(total / 86400);  total %= 86400;
+  const h   = Math.floor(total / 3600);   total %= 3600;
+  const min = Math.floor(total / 60);
+  return [w && `${w}w`, d && `${d}d`, h && `${h}h`, min && `${min}m`]
+    .filter(Boolean).join(" ") || "< 1m";
+}
+
+/* ── Persist uptime snapshot in localStorage, keyed by router ID ── */
+const UPTIME_KEY = (id: number) => `router_uptime_${id}`;
+function saveUptimeSnapshot(id: number, rawUptime: string, atMs: number) {
+  try { localStorage.setItem(UPTIME_KEY(id), JSON.stringify({ raw: rawUptime, at: atMs })); } catch {}
+}
+function loadUptimeSnapshot(id: number): { raw: string; at: number } | null {
+  try {
+    const s = localStorage.getItem(UPTIME_KEY(id));
+    return s ? JSON.parse(s) : null;
+  } catch { return null; }
+}
+
+/* ── Compute live uptime from a stored snapshot ── */
+function liveUptime(id: number, pingUptime?: string): string {
+  /* Prefer in-memory ping result for freshest data */
+  const snap = pingUptime
+    ? { raw: pingUptime, at: Date.now() }   /* just pinged → use now as base */
+    : loadUptimeSnapshot(id);
+  if (!snap) return "—";
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - snap.at) / 1000));
+  return secondsToUptime(uptimeToSeconds(snap.raw) + elapsedSec);
+}
+
 /* Router online check — trusts the status field written by the backend.
    Ping / sweep endpoints are the source of truth; no stale-time penalty. */
 function isOnline(r: DbRouter) {
@@ -270,6 +312,7 @@ export default function Routers() {
       const data = await res.json() as { ok: boolean; identity?: string; uptime?: string; error?: string };
       setPingState(p => ({ ...p, [r.id]: data.ok ? "online" : "offline" }));
       setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, error: data.error } }));
+      if (data.ok && data.uptime) saveUptimeSnapshot(r.id, data.uptime, Date.now());
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
     } catch (e) {
       setPingState(p => ({ ...p, [r.id]: "offline" }));
@@ -338,10 +381,14 @@ export default function Routers() {
         if (data.results) {
           const stateUpdate: Record<number, "online" | "offline"> = {};
           const resUpdate:   Record<number, { identity?: string; uptime?: string }> = {};
+          const now = Date.now();
           for (const r of data.results) {
             if (r.matched) {
               stateUpdate[r.routerId] = r.pingOk ? "online" : "offline";
-              if (r.pingOk) resUpdate[r.routerId] = { identity: r.identity, uptime: r.uptime };
+              if (r.pingOk) {
+                resUpdate[r.routerId] = { identity: r.identity, uptime: r.uptime };
+                if (r.uptime) saveUptimeSnapshot(r.routerId, r.uptime, now);
+              }
             }
           }
           setPingState(p => ({ ...p, ...stateUpdate }));
@@ -653,9 +700,9 @@ export default function Routers() {
                           }
                         </td>
 
-                        {/* UPTIME */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
-                          {formatUptime(pingResult[r.id]?.uptime)}
+                        {/* UPTIME — live: stored snapshot + elapsed since ping */}
+                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: currOnline ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
+                          {currOnline ? liveUptime(r.id, pingResult[r.id]?.uptime || undefined) : "—"}
                         </td>
 
                         {/* MODEL */}
