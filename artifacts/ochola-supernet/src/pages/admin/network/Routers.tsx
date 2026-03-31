@@ -100,15 +100,16 @@ function timeSince(dateStr: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-/* A router is online when:
-   - status field is "online" or "connected" (set by VPS backend via heartbeat), AND
-   - last_seen was within the last 15 minutes (prevents stale "online" stuck in DB)
-   Use this single function everywhere so all pages stay in sync. */
+/* A router is online when BOTH are true:
+   1. status field is "online" or "connected" (set by VPS backend via heartbeat)
+   2. last_seen was within the last 15 minutes (prevents stale "online" in DB)
+   Both conditions must be met — || was a bug that made any recently-seen router
+   appear green even when the status was "offline". */
 function isOnline(r: DbRouter) {
   const statusOk = r.status === "online" || r.status === "connected";
   if (!r.last_seen) return statusOk;
   const ms = Date.now() - new Date(r.last_seen).getTime();
-  return statusOk || ms < 15 * 60 * 1000;
+  return statusOk && ms < 15 * 60 * 1000;
 }
 
 /* Alias — same logic as isOnline; kept for places that use currOnline */
@@ -122,6 +123,21 @@ function Badge({ label, color, bg }: { label: string; color: string; bg: string 
       fontSize: "0.7rem", fontWeight: 700, color, background: bg, whiteSpace: "nowrap",
     }}>
       {label}
+    </span>
+  );
+}
+
+/* ── Classic status dot ─ solid circle + label, no animation ── */
+function StatusDot({ online, label, sub }: { online: boolean; label?: string; sub?: string }) {
+  const color  = online ? "#22c55e" : "#ef4444";
+  const text   = label ?? (online ? "Online" : "Offline");
+  return (
+    <span style={{ display: "inline-flex", flexDirection: "column", gap: 1 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+        <span style={{ fontSize: "0.78rem", fontWeight: 700, color }}>{text}</span>
+      </span>
+      {sub && <span style={{ fontSize: "0.65rem", color: "var(--isp-text-muted)", paddingLeft: "1.1rem", lineHeight: 1.3 }}>{sub}</span>}
     </span>
   );
 }
@@ -250,17 +266,13 @@ export default function Routers() {
   const { data: routers = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["isp_routers"],
     queryFn: fetchRouters,
-    refetchInterval: 30_000,
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
     if (!routers.length || autoCheckedRef.current) return;
     autoCheckedRef.current = true;
-    const offline = routers.filter(r => !isOnline(r));
-    offline.forEach((r, i) => {
-      /* stagger by 600ms per router to avoid hammering the server */
-      setTimeout(() => pingOneRouter(r), i * 600);
-    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routers]);
 
@@ -578,20 +590,22 @@ export default function Routers() {
 
                         {/* STATE */}
                         <td style={{ padding: "0.65rem 0.75rem", verticalAlign: "top" }}>
-                          {online
-                            ? <Badge label="Online"  color="#fff" bg="#166534" />
-                            : pingSt === "pinging"
-                              ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.68rem", color: "#22d3ee" }}><Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…</span>
-                              : pingSt === "online"
-                                ? <Badge label="Online ✓" color="#fff" bg="#166534" />
-                                : <>
-                                    <Badge label="Offline" color="#fff" bg="#7f1d1d" />
-                                    {pingSt === "offline" && pingRes.error && (
-                                      <div style={{ marginTop: "0.4rem" }}>
+                          {pingSt === "pinging"
+                            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.72rem", color: "#22d3ee" }}>
+                                <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
+                              </span>
+                            : pingSt === "online"
+                              ? <StatusDot online={true} sub={timeSince(r.last_seen)} />
+                              : pingSt === "offline"
+                                ? <>
+                                    <StatusDot online={false} sub={timeSince(r.last_seen)} />
+                                    {pingRes.error && (
+                                      <div style={{ marginTop: "0.35rem" }}>
                                         <PingErrorHint error={pingRes.error} />
                                       </div>
                                     )}
                                   </>
+                                : <StatusDot online={online} sub={timeSince(r.last_seen)} />
                           }
                         </td>
 
@@ -607,9 +621,9 @@ export default function Routers() {
 
                         {/* LAST SEEN */}
                         <td style={{ padding: "0.65rem 0.75rem" }}>
-                          {currOnline
-                            ? <Badge label="Currently Online" color="#fff" bg="#166534" />
-                            : <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>{timeSince(r.last_seen)}</span>}
+                          <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: currOnline ? "#4ade80" : "var(--isp-text-muted)" }}>
+                            {timeSince(r.last_seen)}
+                          </span>
                         </td>
 
                         {/* REBOOT */}

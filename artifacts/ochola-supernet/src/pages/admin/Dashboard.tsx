@@ -10,7 +10,7 @@ function routerOnline(r: DbRouter): boolean {
   const statusOk = r.status === "online" || r.status === "connected";
   if (!r.last_seen) return statusOk;
   const ms = Date.now() - new Date(r.last_seen).getTime();
-  return statusOk || ms < 15 * 60 * 1000;
+  return statusOk && ms < 15 * 60 * 1000;
 }
 
 /* ─── Supabase fetchers ─── */

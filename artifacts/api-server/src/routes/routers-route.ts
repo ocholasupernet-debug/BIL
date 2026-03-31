@@ -181,6 +181,10 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
   res.json({ ok: true, results: mapped, total: mapped.length, online, offline });
 });
 
+/* ── Hysteresis: only write "offline" after OFFLINE_THRESHOLD consecutive failures ── */
+const OFFLINE_THRESHOLD = 2;
+const failureCount = new Map<number, number>();
+
 /* ══ Exported helper for background monitor ════════════════════════════════ */
 export async function sweepAllRouters(): Promise<void> {
   try {
@@ -205,6 +209,8 @@ export async function sweepAllRouters(): Promise<void> {
         };
         try {
           const r = await pingRouter(creds);
+          /* Reset failure counter on success */
+          failureCount.set(row.id, 0);
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
             status: "online", last_seen: r.connectedAt,
             model: r.board || undefined, ros_version: r.version || undefined,
@@ -212,14 +218,19 @@ export async function sweepAllRouters(): Promise<void> {
           });
           logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online");
         } catch (err) {
-          /* Only write "offline" in production — dev cannot reach VPN IPs and would
-             overwrite the VPS-set "online" status for routers that are actually up. */
-          if (process.env.NODE_ENV === "production") {
+          const prev = failureCount.get(row.id) ?? 0;
+          const next = prev + 1;
+          failureCount.set(row.id, next);
+          logger.warn({ id: row.id, name: row.name, failures: next, err: (err as Error).message }, "[monitor] router unreachable");
+
+          /* Only write "offline" after OFFLINE_THRESHOLD consecutive failures.
+             In dev mode skip entirely — dev server can't reach VPN IPs. */
+          if (process.env.NODE_ENV === "production" && next >= OFFLINE_THRESHOLD) {
             await sbUpdate("isp_routers", `id=eq.${row.id}`, {
               status: "offline", updated_at: new Date().toISOString(),
             });
+            logger.warn({ id: row.id, name: row.name }, "[monitor] router marked offline");
           }
-          logger.warn({ id: row.id, name: row.name, err: (err as Error).message }, "[monitor] router offline");
         }
       })
     );

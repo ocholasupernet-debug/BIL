@@ -396,7 +396,7 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         >
           <option value="" disabled>Select router…</option>
           {routers.map(r => (
-            <option key={r.id} value={r.id}>{r.name} — {r.host} {r.status === "online" ? "🟢" : "🔴"}</option>
+            <option key={r.id} value={r.id}>{r.name} — {r.host || r.bridge_ip || "?"} [{r.status === "online" || r.status === "connected" ? "online" : "offline"}]</option>
           ))}
         </select>
 
