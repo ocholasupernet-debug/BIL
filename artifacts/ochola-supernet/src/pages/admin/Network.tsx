@@ -170,7 +170,7 @@ function SelfInstallTab() {
           {[
             { key: "hotspotIp",      label: "Hotspot IP Address",  placeholder: "192.168.1.1"          },
             { key: "dnsName",        label: "DNS / Portal Name",   placeholder: "hotspot.isplatty.org" },
-            { key: "bridgeInterface",label: "Bridge Interface",    placeholder: "bridge1"               },
+            { key: "bridgeInterface",label: "Hotspot Bridge Interface", placeholder: "hotspot-bridge"        },
             { key: "poolStart",      label: "IP Pool Start",       placeholder: "192.168.2.2"           },
             { key: "poolEnd",        label: "IP Pool End",         placeholder: "192.168.2.254"         },
             { key: "profileName",    label: "Profile Name",        placeholder: "hsprof1"               },

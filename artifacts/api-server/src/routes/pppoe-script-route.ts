@@ -147,7 +147,7 @@ function genPPPoEOnly(
 :do { /ip address remove [find interface="${bridgeName}"] } on-error={}
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Bridge - created first, optional params set separately (ROS 6 compat)
+# 2. Hotspot Bridge - created first, optional params set separately (ROS 6 compat)
 :put "[2] Creating bridge ${bridgeName}..."
 :do { /interface bridge add name=${bridgeName} } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}
@@ -278,7 +278,7 @@ function genPPPoEOverHotspot(
 :do { /ip address remove [find interface="${bridgeName}"] } on-error={}
 :do { /interface bridge remove [find name="${bridgeName}"] } on-error={}
 
-# 2. Bridge — fast-forward=no is CRITICAL for hotspot redirect to work
+# 2. Hotspot Bridge — fast-forward=no is CRITICAL for hotspot redirect to work
 :put "[2] Creating bridge ${bridgeName}..."
 :do { /interface bridge add name=${bridgeName} } on-error={}
 :do { /interface bridge set [find name=${bridgeName}] fast-forward=no } on-error={}

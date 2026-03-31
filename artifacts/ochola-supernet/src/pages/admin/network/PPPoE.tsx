@@ -448,7 +448,7 @@ export default function PPPoE() {
                 </div>
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
-                    Base Bridge
+                    Hotspot Bridge
                   </label>
                   <input
                     type="text"
