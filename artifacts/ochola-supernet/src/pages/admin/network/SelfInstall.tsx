@@ -129,9 +129,8 @@ export default function SelfInstall() {
     : window.location.origin;
 
   const installedCount = routers.filter(isInstalled).length;
-  const pendingRouter  = routers.find(r => !isInstalled(r)) ?? null;
   const nextNumber     = routers.length + 1;
-  const nextName       = pendingRouter ? pendingRouter.name : `${nameBase}${nextNumber}`;
+  const nextName       = `${nameBase}${nextNumber}`;
   const nextSlug       = slugify(nextName);
 
   /* The router whose config is being shown */
@@ -161,13 +160,6 @@ export default function SelfInstall() {
 
   /* ── Generate: show commands + create router record via server endpoint ── */
   const handleGenerate = async () => {
-    /* If a pending router already exists, just use it immediately */
-    if (pendingRouter) {
-      setActiveRouterId(pendingRouter.id);
-      setPhase("generated");
-      return;
-    }
-
     /* Show commands immediately so the UI is responsive */
     setPhase("generated");
 
@@ -243,7 +235,7 @@ export default function SelfInstall() {
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.18rem" }}>
-                  {pendingRouter ? "Router to configure" : "Next router to add"}
+                  Next router to add
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                   {routersLoading
@@ -252,12 +244,12 @@ export default function SelfInstall() {
                   }
                   <span style={{
                     fontSize: "0.68rem", fontWeight: 700,
-                    color: pendingRouter ? "#fbbf24" : "#06b6d4",
-                    background: pendingRouter ? "rgba(251,191,36,0.1)" : "rgba(6,182,212,0.1)",
-                    border: `1px solid ${pendingRouter ? "rgba(251,191,36,0.3)" : "rgba(6,182,212,0.28)"}`,
+                    color: "#06b6d4",
+                    background: "rgba(6,182,212,0.1)",
+                    border: "1px solid rgba(6,182,212,0.28)",
                     borderRadius: 5, padding: "0.1rem 0.45rem",
                   }}>
-                    {pendingRouter ? "pending" : `router ${nextNumber}`}
+                    router {nextNumber}
                   </span>
                 </div>
               </div>

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, isSuperAdmin, getAdminName } from "@/lib/supabase";
+import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Server, RotateCcw, Network, Loader2, WifiOff,
   CheckCircle2, AlertCircle, Settings, Eye, EyeOff,
@@ -78,10 +78,7 @@ const inp: React.CSSProperties = {
 const DEFAULT_PASSWORD = "ocholasupernet";
 
 function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }) {
-  const superAdmin = isSuperAdmin();
-  const adminName  = getAdminName();
-
-  const defaultUser = router.router_username || adminName || "admin";
+  const defaultUser = router.router_username || router.name || "admin";
   const defaultPass = router.router_secret   || DEFAULT_PASSWORD;
 
   const [host,     setHost]     = useState(router.host || router.bridge_ip || "");
@@ -97,7 +94,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
   /* Reset fields if router prop changes */
   useEffect(() => {
     setHost(router.host || router.bridge_ip || "");
-    setUser(router.router_username || adminName || "admin");
+    setUser(router.router_username || router.name || "admin");
     setPass(router.router_secret   || DEFAULT_PASSWORD);
     setProbe(null);
   }, [router.id]);
@@ -154,14 +151,6 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
     }
   };
 
-  /* locked input style for non-superadmin */
-  const inpLocked: React.CSSProperties = {
-    ...inp,
-    opacity: 0.55,
-    cursor: "not-allowed",
-    userSelect: "none",
-  };
-
   return (
     <div style={{
       borderTop: "1px solid rgba(255,255,255,0.06)",
@@ -169,22 +158,16 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       background: "rgba(6,182,212,0.025)",
       borderRadius: "0 0 10px 10px",
     }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.875rem", flexWrap: "wrap", gap: "0.5rem" }}>
+      <div style={{ marginBottom: "0.875rem" }}>
         <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.07em" }}>
           API Connection Settings — port 8728
         </div>
-        {!superAdmin && (
-          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 6, padding: "0.25rem 0.6rem" }}>
-            <Key size={11} style={{ color: "#a78bfa" }} />
-            <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "#a78bfa" }}>Credentials managed by SuperAdmin</span>
-          </div>
-        )}
       </div>
 
       {/* Fields */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "0.875rem" }}>
 
-        {/* Host — editable by all */}
+        {/* Host */}
         <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
           <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             IP / Hostname
@@ -199,37 +182,35 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
           />
         </label>
 
-        {/* Username — superadmin only */}
+        {/* Username */}
         <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
           <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            API Username {!superAdmin && <span style={{ color: "#a78bfa", marginLeft: 3 }}>🔒</span>}
+            API Username
           </span>
           <input
-            style={superAdmin ? inp : inpLocked}
+            style={inp}
             value={user}
-            onChange={e => superAdmin && setUser(e.target.value)}
-            readOnly={!superAdmin}
-            placeholder="admin"
-            onFocus={e => superAdmin && (e.target.style.borderColor = "#06b6d4")}
-            onBlur={e  => superAdmin && (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
+            onChange={e => setUser(e.target.value)}
+            placeholder={router.name || "admin"}
+            onFocus={e => (e.target.style.borderColor = "#06b6d4")}
+            onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
           />
         </label>
 
-        {/* Password — superadmin only */}
+        {/* Password */}
         <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
           <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            API Password {!superAdmin && <span style={{ color: "#a78bfa", marginLeft: 3 }}>🔒</span>}
+            API Password
           </span>
           <div style={{ position: "relative" }}>
             <input
               type={showPass ? "text" : "password"}
-              style={{ ...(superAdmin ? inp : inpLocked), paddingRight: "2.25rem" }}
+              style={{ ...inp, paddingRight: "2.25rem" }}
               value={pass}
-              onChange={e => superAdmin && setPass(e.target.value)}
-              readOnly={!superAdmin}
-              placeholder="router password"
-              onFocus={e => superAdmin && (e.target.style.borderColor = "#06b6d4")}
-              onBlur={e  => superAdmin && (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
+              onChange={e => setPass(e.target.value)}
+              placeholder="ocholasupernet"
+              onFocus={e => (e.target.style.borderColor = "#06b6d4")}
+              onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
             />
             <button
               onClick={() => setShowPass(s => !s)}
@@ -244,7 +225,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       {/* Action buttons */}
       <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
 
-        {/* Test Connection — available to all */}
+        {/* Test Connection */}
         <button
           onClick={handleTest}
           disabled={testing}
@@ -264,22 +245,20 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
             : <><PlugZap size={13} /> Test Connection</>}
         </button>
 
-        {/* Save — superadmin can save any field; regular admin can only save host changes */}
+        {/* Save */}
         <button
           onClick={handleSave}
-          disabled={saving || !dirty || (!superAdmin && host === (router.host || ""))}
+          disabled={saving || !dirty}
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.375rem",
             padding: "0.45rem 1rem", borderRadius: 7,
-            background: saved ? "rgba(34,197,94,0.15)"
-              : (dirty && (superAdmin || host !== (router.host || ""))) ? "linear-gradient(135deg,#06b6d4,#0284c7)"
-              : "rgba(255,255,255,0.05)",
+            background: saved ? "rgba(34,197,94,0.15)" : dirty ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.05)",
             border: saved ? "1px solid rgba(34,197,94,0.4)" : "none",
-            color: saved ? "#4ade80" : (dirty && (superAdmin || host !== (router.host || ""))) ? "white" : "var(--isp-text-muted)",
+            color: saved ? "#4ade80" : dirty ? "white" : "var(--isp-text-muted)",
             fontWeight: 700, fontSize: "0.8rem",
-            cursor: (saving || !dirty || (!superAdmin && host === (router.host || ""))) ? "not-allowed" : "pointer",
+            cursor: (saving || !dirty) ? "not-allowed" : "pointer",
             fontFamily: "inherit",
-            boxShadow: (dirty && (superAdmin || host !== (router.host || ""))) && !saved ? "0 3px 10px rgba(6,182,212,0.3)" : "none",
+            boxShadow: dirty && !saved ? "0 3px 10px rgba(6,182,212,0.3)" : "none",
           }}
         >
           {saving   ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Saving…</>
