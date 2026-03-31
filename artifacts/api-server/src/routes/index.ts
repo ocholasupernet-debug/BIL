@@ -15,6 +15,7 @@ import pppoeScriptRouter from "./pppoe-script-route";
 import webhookRouter from "./webhook-route";
 import logsRouter from "./logs-route.js";
 import bridgeRouter from "./bridge-route.js";
+import mpesaRouter from "./mpesa-route.js";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(pppoeScriptRouter);
 router.use(webhookRouter);
 router.use(logsRouter);
 router.use(bridgeRouter);
+router.use(mpesaRouter);
 
 export default router;

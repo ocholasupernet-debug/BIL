@@ -141,8 +141,11 @@ function Router() {
       <Route path="/vpn/tutorials" component={VpnTutorials} />
       <Route path="/vpn/settings" component={VpnSettings} />
 
-      {/* Portals */}
+      {/* Portals — multiple aliases so MikroTik redirect URLs all work */}
       <Route path="/hotspot-login" component={HotspotLogin} />
+      <Route path="/portal/hotspot" component={HotspotLogin} />
+      <Route path="/portal" component={HotspotLogin} />
+      <Route path="/hotspot" component={HotspotLogin} />
       <Route path="/admin/register" component={AdminRegister} />
       <Route path="/admin/set-password" component={AdminSetPassword} />
       <Route path="/isp-register"    component={AdminRegister} />

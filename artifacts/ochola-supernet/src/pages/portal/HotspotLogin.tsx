@@ -82,14 +82,36 @@ export default function HotspotLogin() {
     })();
   }, [adminId]);
 
+  const [payError, setPayError] = useState<string | null>(null);
+
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPlan) return;
+    if (!selectedPlan || !phone.trim()) return;
     setPayLoading(true);
-    // Simulate STK push (real Daraja integration requires server-side credentials)
-    await new Promise((r) => setTimeout(r, 1500));
-    setPayLoading(false);
-    setStkSent(true);
+    setPayError(null);
+    try {
+      const res = await fetch("/api/mpesa/stk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone:       phone.trim(),
+          amount:      selectedPlan.price,
+          plan_id:     selectedPlan.id,
+          adminId,
+          account_ref: "ISPlatty",
+        }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string; demo?: boolean; CheckoutRequestID?: string };
+      if (!res.ok || !data.ok) {
+        setPayError(data.error ?? "Failed to send STK push. Please try again.");
+      } else {
+        setStkSent(true);
+      }
+    } catch {
+      setPayError("Could not reach the payment server. Please try again.");
+    } finally {
+      setPayLoading(false);
+    }
   };
 
   // ── Member Login ───────────────────────────────────────────────────────
@@ -276,6 +298,12 @@ export default function HotspotLogin() {
                           className="w-full bg-black/40 border border-purple-500/20 rounded-xl px-4 py-4 text-lg font-bold text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all"
                         />
                       </div>
+                      {payError && (
+                        <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                          <span>{payError}</span>
+                        </div>
+                      )}
                       <button
                         type="submit"
                         disabled={payLoading || !selectedPlan}
