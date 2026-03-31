@@ -6,13 +6,13 @@ import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Users, Activity, Layers, Search, Plus, Trash2, Edit2,
   Eye, EyeOff, RefreshCw, Loader2, Check, X, AlertTriangle,
-  Zap, Clock, ArrowDownUp, WifiOff,
+  Zap, Clock, ArrowDownUp, WifiOff, Wrench, PowerOff, Copy,
 } from "lucide-react";
 
 /* ══════════════════════ Types ══════════════════════════════════ */
 interface DbRouter {
   id: number; name: string; host: string; bridge_ip: string | null;
-  status: string;
+  status: string; router_username: string; router_secret: string | null;
 }
 interface PPPSecret {
   id: string; name: string; password: string; service: string;
@@ -51,7 +51,7 @@ function fmtBytes(b: number): string {
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data } = await supabase
     .from("isp_routers")
-    .select("id,name,host,bridge_ip,status")
+    .select("id,name,host,bridge_ip,status,router_username,router_secret")
     .eq("admin_id", ADMIN_ID)
     .order("name");
   return (data ?? []) as DbRouter[];
@@ -94,6 +94,117 @@ function PwInput({ value, onChange, placeholder }: { value: string; onChange: (v
         style={{ position: "absolute", right: "0.625rem", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)", padding: 0, display: "flex" }}>
         {show ? <EyeOff size={14} /> : <Eye size={14} />}
       </button>
+    </div>
+  );
+}
+
+/* ══════════════════════ Router error action bar ════════════════ */
+function RouterErrorActions({
+  host, bridgeIp, username, password, errMsg, onRetry,
+}: {
+  host: string; bridgeIp?: string; username: string; password: string;
+  errMsg: string; onRetry: () => void;
+}) {
+  const [fixing,    setFixing]    = useState(false);
+  const [rebooting, setRebooting] = useState(false);
+  const [fixLog,    setFixLog]    = useState<string[]>([]);
+  const [fixOk,     setFixOk]     = useState<boolean | null>(null);
+  const [rebootMsg, setRebootMsg] = useState<string | null>(null);
+  const [copied,    setCopied]    = useState<number | null>(null);
+
+  const isTimeout = /timed out|etimedout|timeout/i.test(errMsg);
+  const isRefused = /econnrefused|refused/i.test(errMsg) && !isTimeout;
+  const isVpn     = /ehostunreach|enetunreach|no route|unreachable/i.test(errMsg);
+
+  const errLabel = isVpn    ? "VPN / routing unreachable"
+    : isTimeout  ? "Port 8728 blocked by firewall"
+    : isRefused  ? "API service disabled"
+    : "Connection failed";
+
+  const fallbackCmds = [
+    "/ip service enable api",
+    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+  ];
+
+  async function handleFix() {
+    setFixing(true); setFixLog([]); setFixOk(null); setRebootMsg(null);
+    try {
+      const res  = await fetch("/api/admin/router/fix-api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host, bridgeIp, username, password }) });
+      const data = await res.json() as { ok: boolean; logs: string[]; canConnect?: boolean };
+      setFixLog(data.logs ?? []);
+      setFixOk(data.ok);
+      if (data.ok) { setTimeout(onRetry, 1500); }
+    } catch (e) { setFixLog([`❌ ${String(e)}`]); setFixOk(false); }
+    finally { setFixing(false); }
+  }
+
+  async function handleReboot() {
+    setRebooting(true); setRebootMsg(null); setFixLog([]); setFixOk(null);
+    try {
+      const res  = await fetch("/api/admin/router/reboot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host, bridgeIp, username, password }) });
+      const data = await res.json() as { ok: boolean; message?: string; error?: string };
+      setRebootMsg(data.ok ? (data.message ?? "Reboot sent") : (data.error ?? "Failed"));
+    } catch (e) { setRebootMsg(String(e)); }
+    finally { setRebooting(false); }
+  }
+
+  function copyCmd(cmd: string, idx: number) {
+    navigator.clipboard.writeText(cmd).then(() => { setCopied(idx); setTimeout(() => setCopied(null), 2000); });
+  }
+
+  const showFallback = fixOk === false && fixLog.some(l => /cannot reach|unreachable/i.test(l));
+
+  return (
+    <div style={{ background: "rgba(248,113,113,0.05)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10, padding: "10px 14px" }}>
+      {/* one-liner: label + buttons */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <AlertTriangle size={13} style={{ color: "#f87171", flexShrink: 0 }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#f87171", flex: 1 }}>{errLabel}</span>
+
+        <button onClick={handleFix} disabled={fixing || rebooting} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 7, background: "rgba(6,182,212,0.15)", border: "1px solid rgba(6,182,212,0.4)", color: "#22d3ee", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+          {fixing ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Fixing…</> : <><Wrench size={11} /> Auto-fix</>}
+        </button>
+
+        <button onClick={handleReboot} disabled={fixing || rebooting} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 7, background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.35)", color: "#fb923c", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+          {rebooting ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Rebooting…</> : <><PowerOff size={11} /> Reboot</>}
+        </button>
+
+        <button onClick={onRetry} disabled={fixing || rebooting} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 7, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", color: "#94a3b8", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+          <RefreshCw size={11} /> Retry
+        </button>
+      </div>
+
+      {/* Fix log */}
+      {(fixing || fixLog.length > 0) && (
+        <div style={{ marginTop: 8, background: "#040810", borderRadius: 7, padding: "6px 10px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.8, maxHeight: 120, overflow: "auto" }}>
+          {(fixing && fixLog.length === 0 ? ["▶ Connecting…"] : fixLog).map((l, i) => (
+            <div key={i} style={{ color: l.startsWith("✅") ? "#4ade80" : l.startsWith("✓") ? "#a3e635" : l.startsWith("▶") ? "#22d3ee" : l.startsWith("❌") ? "#f87171" : "#64748b" }}>{l}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Manual fallback — only if auto-fix truly can't connect */}
+      {showFallback && (
+        <div style={{ marginTop: 8 }}>
+          <p style={{ margin: "0 0 4px", fontSize: 11, color: "#64748b", fontWeight: 600 }}>Run in Winbox Terminal instead:</p>
+          {fallbackCmds.map((cmd, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, background: "#040810", borderRadius: 5, padding: "4px 8px", marginBottom: 4 }}>
+              <code style={{ flex: 1, fontFamily: "monospace", fontSize: 11, color: "#c7d2fe", wordBreak: "break-all", lineHeight: 1.5 }}>{cmd}</code>
+              <button onClick={() => copyCmd(cmd, i)} style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 4, background: copied === i ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.07)", border: `1px solid ${copied === i ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.1)"}`, color: copied === i ? "#4ade80" : "#94a3b8", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                {copied === i ? <Check size={9} /> : <Copy size={9} />} {copied === i ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Reboot result */}
+      {rebootMsg && (
+        <div style={{ marginTop: 8, padding: "4px 10px", borderRadius: 6, background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.25)", fontSize: 12, color: "#fb923c", fontWeight: 600 }}>
+          {rebootMsg}
+          {/sent|success/i.test(rebootMsg) && <span style={{ color: "#64748b", fontWeight: 400 }}> — wait ~30s then click Retry</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -329,6 +440,8 @@ export default function NetworkPPP() {
   const isError   = tab === "secrets" ? secretsQ.isError   : tab === "active" ? activeQ.isError   : profilesQ.isError;
   const errMsg    = (tab === "secrets" ? secretsQ.error : tab === "active" ? activeQ.error : profilesQ.error) as Error | null;
 
+  const selectedRouter = routers.find(r => r.id === rid) ?? null;
+
   /* ── Table header style ── */
   const TH: React.CSSProperties = {
     padding: "10px 14px", fontSize: 11, fontWeight: 700,
@@ -455,13 +568,14 @@ export default function NetworkPPP() {
             Loading…
           </div>
         ) : isError ? (
-          <div style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 10, padding: "16px 20px", display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <AlertTriangle size={16} style={{ color: "#f87171", flexShrink: 0, marginTop: 1 }} />
-            <div>
-              <p style={{ fontWeight: 700, color: "#f87171", margin: 0 }}>Connection failed</p>
-              <p style={{ fontSize: 12, color: "#94a3b8", margin: "4px 0 0" }}>{errMsg?.message ?? "Cannot reach router. Ensure the API port (8728) is open from the VPN range."}</p>
-            </div>
-          </div>
+          <RouterErrorActions
+            host={selectedRouter?.host || selectedRouter?.bridge_ip || ""}
+            bridgeIp={selectedRouter?.bridge_ip ?? undefined}
+            username={selectedRouter?.router_username || "admin"}
+            password={selectedRouter?.router_secret || ""}
+            errMsg={errMsg?.message ?? "Connection failed"}
+            onRetry={refetchCurrent}
+          />
         ) : (
           <>
             {/* ════ SECRETS TAB ════ */}
