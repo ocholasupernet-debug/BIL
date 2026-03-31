@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save,
+  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -21,6 +21,71 @@ async function fetchRouters(): Promise<DbRouter[]> {
     .order("id", { ascending: false });
   if (error) throw error;
   return data ?? [];
+}
+
+/* Classify a router ping error and return a short label + fix commands */
+function pingErrorInfo(err: string): { label: string; cmds: string[]; hint: string } {
+  const e = err.toLowerCase();
+  if (e.includes("refused") || e.includes("econnrefused")) {
+    return {
+      label: "API service disabled",
+      hint:  "Run in Winbox → Terminal:",
+      cmds:  ["/ip service enable api"],
+    };
+  }
+  if (e.includes("timed out") || e.includes("etimedout") || e.includes("did not respond")) {
+    return {
+      label: "Port 8728 blocked by firewall",
+      hint:  "Run both commands in Winbox → Terminal:",
+      cmds:  [
+        "/ip service enable api",
+        "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+      ],
+    };
+  }
+  if (e.includes("login failed") || e.includes("authentication") || e.includes("bad password")) {
+    return {
+      label: "Wrong API credentials",
+      hint:  "Check the router's username/password, or reset:",
+      cmds:  ["/user set admin password=yourpassword"],
+    };
+  }
+  if (e.includes("ehostunreach") || e.includes("enetunreach") || e.includes("routing failure")) {
+    return {
+      label: "VPN tunnel not reachable",
+      hint:  "Re-run the install script or restart the VPN client:",
+      cmds:  ["/interface ovpn-client enable ovpn-out1"],
+    };
+  }
+  return { label: "Unreachable", hint: "", cmds: [] };
+}
+
+function PingErrorHint({ error }: { error: string }) {
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const { label, hint, cmds } = pingErrorInfo(error);
+  const copy = (txt: string) => {
+    navigator.clipboard.writeText(txt).then(() => {
+      setCopied(txt); setTimeout(() => setCopied(null), 2000);
+    });
+  };
+  return (
+    <span style={{ display: "block", marginTop: "0.375rem" }}>
+      <span style={{ color: "#f87171", fontWeight: 600 }}>✗ {label}</span>
+      {cmds.length > 0 && (
+        <span style={{ display: "block", marginTop: "0.3rem", background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.18)", borderRadius: 7, padding: "0.4rem 0.6rem" }}>
+          <span style={{ display: "block", fontSize: "0.68rem", color: "#4ade80", fontWeight: 700, marginBottom: "0.25rem" }}>{hint}</span>
+          {cmds.map(cmd => (
+            <span key={cmd} style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginBottom: "0.2rem" }}>
+              <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.68rem", color: "#67e8f9", background: "rgba(0,0,0,0.3)", padding: "0.15rem 0.4rem", borderRadius: 4, wordBreak: "break-all" }}>{cmd}</code>
+              <button onClick={() => copy(cmd)} style={{ flexShrink: 0, background: copied === cmd ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${copied === cmd ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 4, color: copied === cmd ? "#4ade80" : "#64748b", cursor: "pointer", fontSize: "0.6rem", padding: "0.15rem 0.35rem", display: "flex", alignItems: "center", gap: "0.15rem", fontFamily: "inherit" }}>
+                <Copy size={8} />{copied === cmd ? "✓" : "copy"}
+              </button>
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function timeSince(dateStr: string | null): string {
@@ -924,7 +989,7 @@ export default function Routers() {
                             <code style={{ fontFamily: "monospace", color: "#06b6d4" }}>{r.newIp}</code>
                             {r.pingOk
                               ? <span style={{ color: "#4ade80" }}> · Online ✓ {r.identity && `(${r.identity})`} {r.uptime && `up ${r.uptime}`}</span>
-                              : <span style={{ color: "#f87171" }}> · Still unreachable — {r.pingError}</span>}
+                              : r.pingError ? <PingErrorHint error={r.pingError} /> : null}
                           </p>
                         ) : (
                           <p style={{ margin: 0, fontSize: "0.72rem", color: "#64748b" }}>
