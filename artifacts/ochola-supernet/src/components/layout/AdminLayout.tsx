@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
@@ -184,6 +184,23 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     queryClient.clear();
     setLocation("/admin/login");
   };
+
+  useEffect(() => {
+    const id = localStorage.getItem("ochola_admin_id");
+    if (!id) {
+      setLocation("/admin/login");
+      return;
+    }
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "ochola_admin_id" && !e.newValue) {
+        clearAdminAuth();
+        queryClient.clear();
+        setLocation("/admin/login");
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   const handleExitImpersonation = () => {
     stopImpersonation();

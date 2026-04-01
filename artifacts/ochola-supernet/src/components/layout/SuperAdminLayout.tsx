@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
 import { useTheme } from "@/hooks/use-theme";
@@ -94,10 +94,33 @@ const NAV: NavSection[] = [
 ];
 
 export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
-  const [location]  = useLocation();
+  const [location, setLocation]  = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const { isDark, toggle } = useTheme();
   const S = isDark ? DARK : LIGHT;
+
+  const superAdminName = localStorage.getItem("ochola_superadmin_name") || "Super Admin";
+
+  useEffect(() => {
+    const token = localStorage.getItem("ochola_superadmin_token");
+    if (!token) {
+      setLocation("/super-admin/login");
+      return;
+    }
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "ochola_superadmin_token" && !e.newValue) {
+        setLocation("/super-admin/login");
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("ochola_superadmin_token");
+    localStorage.removeItem("ochola_superadmin_name");
+    setLocation("/super-admin/login");
+  };
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", background: S.bg, color: S.text, fontFamily: "system-ui, sans-serif" }}>
@@ -142,8 +165,10 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
               {section.items.map(item => {
                 const active = location === item.href || location.startsWith(item.href + "/");
                 return (
-                  <Link key={item.href} href={item.href}>
-                    <a style={{
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    style={{
                       display: "flex", alignItems: "center", gap: 10,
                       padding: collapsed ? "10px 14px" : "9px 12px",
                       borderRadius: 8, marginBottom: 2, textDecoration: "none",
@@ -156,14 +181,13 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
                       cursor: "pointer",
                       justifyContent: collapsed ? "center" : "flex-start",
                     }}
-                    onMouseEnter={e => { if (!active) { e.currentTarget.style.background = S.navHover; e.currentTarget.style.color = S.text; }}}
-                    onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = S.muted; }}}
+                    onMouseEnter={(e: React.MouseEvent<HTMLAnchorElement>) => { if (!active) { e.currentTarget.style.background = S.navHover; e.currentTarget.style.color = S.text; }}}
+                    onMouseLeave={(e: React.MouseEvent<HTMLAnchorElement>) => { if (!active) { e.currentTarget.style.background = active ? S.navActive : "transparent"; e.currentTarget.style.color = active ? S.navActiveText : S.muted; }}}
                     title={collapsed ? item.name : undefined}
-                    >
-                      <item.icon size={15} style={{ flexShrink: 0 }} />
-                      {!collapsed && <span style={{ whiteSpace: "nowrap" }}>{item.name}</span>}
-                      {!collapsed && active && <ChevronRight size={12} style={{ marginLeft: "auto", opacity: 0.6 }} />}
-                    </a>
+                  >
+                    <item.icon size={15} style={{ flexShrink: 0 }} />
+                    {!collapsed && <span style={{ whiteSpace: "nowrap" }}>{item.name}</span>}
+                    {!collapsed && active && <ChevronRight size={12} style={{ marginLeft: "auto", opacity: 0.6 }} />}
                   </Link>
                 );
               })}
@@ -179,23 +203,24 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
                 <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "white" }}>SA</span>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: "0.78rem", fontWeight: 700, color: S.text, margin: 0 }}>Super Admin</p>
+                <p style={{ fontSize: "0.78rem", fontWeight: 700, color: S.text, margin: 0 }}>{superAdminName}</p>
                 <p style={{ fontSize: "0.65rem", color: S.accent, margin: 0 }}>Platform Owner</p>
               </div>
             </div>
           )}
-          <Link href="/admin/login">
-            <a style={{
+          <button
+            onClick={handleLogout}
+            style={{
               display: "flex", alignItems: "center", gap: 8,
               justifyContent: collapsed ? "center" : "flex-start",
-              padding: "8px 10px", borderRadius: 8, textDecoration: "none",
+              width: "100%", padding: "8px 10px", borderRadius: 8,
               background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)",
               color: "#f87171", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer",
-            }}>
-              <LogOut size={14} />
-              {!collapsed && "Sign Out"}
-            </a>
-          </Link>
+            }}
+          >
+            <LogOut size={14} />
+            {!collapsed && "Sign Out"}
+          </button>
         </div>
       </aside>
 
