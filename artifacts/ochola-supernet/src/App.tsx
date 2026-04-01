@@ -35,6 +35,7 @@ import PrepaidUsers from "./pages/admin/PrepaidUsers";
 
 import HotspotLogin from "./pages/portal/HotspotLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
+import SuperAdminLogin from "./pages/super-admin/Login";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
 import SuperAdminAdmins from "./pages/super-admin/Admins";
 import SuperAdminRoles from "./pages/super-admin/Roles";
@@ -168,7 +169,7 @@ function Router() {
       <Route path="/super-admin/api"            component={SuperAdminApiIntegrations}  />
       <Route path="/super-admin/limits"         component={SuperAdminSystemLimits}     />
       <Route path="/super-admin/impersonate"    component={SuperAdminImpersonate}      />
-      <Route path="/super-admin/login" component={() => <StubPage title="Super Admin Login" />} />
+      <Route path="/super-admin/login" component={SuperAdminLogin} />
       
       <Route component={NotFound} />
     </Switch>
