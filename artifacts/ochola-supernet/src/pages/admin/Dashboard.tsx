@@ -244,12 +244,57 @@ export default function Dashboard() {
     return k;
   });
 
+  const greeting = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning";
+    if (h < 17) return "Good afternoon";
+    return "Good evening";
+  })();
+
   return (
     <AdminLayout>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes pulse-glow{0%,100%{opacity:0.6}50%{opacity:1}}
+      `}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Dashboard</h1>
+        {/* Page header */}
+        <div style={{
+          display: "flex", alignItems: "flex-end", justifyContent: "space-between",
+          paddingBottom: "1.25rem",
+          borderBottom: "1px solid var(--isp-border-subtle)",
+        }}>
+          <div>
+            <div style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              marginBottom: 6,
+              padding: "3px 12px 3px 8px",
+              borderRadius: 20,
+              background: "rgba(0,196,222,0.07)",
+              border: "1px solid rgba(0,196,222,0.15)",
+            }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#00c4de", display: "inline-block", animation: "pulse-glow 2s infinite", boxShadow: "0 0 6px #00c4de" }} />
+              <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "#00c4de", letterSpacing: "0.08em", textTransform: "uppercase" }}>Live Dashboard</span>
+            </div>
+            <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", margin: 0, letterSpacing: "-0.03em", lineHeight: 1.2 }}>
+              {greeting} 👋
+            </h1>
+            <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>
+              Here's what's happening across your network today.
+            </p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <div style={{
+              padding: "6px 14px", borderRadius: 9,
+              background: "rgba(0,196,222,0.06)",
+              border: "1px solid rgba(0,196,222,0.14)",
+              fontSize: "0.72rem", fontWeight: 700, color: "#00c4de",
+              letterSpacing: "0.03em",
+            }}>
+              {new Date().toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long" })}
+            </div>
+          </div>
+        </div>
 
         {/* Online User Stat Cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>

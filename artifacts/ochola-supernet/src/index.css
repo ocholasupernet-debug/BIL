@@ -56,37 +56,40 @@
   --input:                 222 16% 13%;
   --ring:                  239 84% 67%;
 
-  /* ── ISP design tokens ─────────────────────────────────────────── */
-  --isp-bg:            #090b10;
-  --isp-header:        #0c0f16;
-  --isp-sidebar:       #0c0f16;
-  --isp-section:       #111520;
-  --isp-card:          #111520;
-  --isp-inner-card:    #0d1018;
-  --isp-border:        rgba(255,255,255,0.07);
-  --isp-border-subtle: rgba(255,255,255,0.045);
-  --isp-text:          #f0f4ff;
-  --isp-text-muted:    #b8c4d8;
-  --isp-text-sub:      #8fa3bf;
-  --isp-nav-text:      #c0cfe0;
-  --isp-input-bg:      rgba(255,255,255,0.055);
-  --isp-input-border:  rgba(255,255,255,0.09);
-  --isp-hover:         rgba(255,255,255,0.048);
-  --isp-table-bg:      #0f1320;
-  --isp-table-border:  rgba(255,255,255,0.055);
+  /* ── ISP design tokens — Abyss Chrome ─────────────────────────── */
+  --isp-bg:            #02090f;
+  --isp-header:        rgba(3,11,20,0.94);
+  --isp-sidebar:       #030c18;
+  --isp-section:       #06121e;
+  --isp-card:          #06121e;
+  --isp-inner-card:    #030a14;
+  --isp-border:        rgba(0,196,222,0.1);
+  --isp-border-subtle: rgba(0,196,222,0.055);
+  --isp-text:          #ddeeff;
+  --isp-text-muted:    #7ba8c5;
+  --isp-text-sub:      #4a7a9b;
+  --isp-nav-text:      #8bb8d5;
+  --isp-input-bg:      rgba(0,196,222,0.045);
+  --isp-input-border:  rgba(0,196,222,0.1);
+  --isp-hover:         rgba(0,196,222,0.055);
+  --isp-table-bg:      #04101c;
+  --isp-table-border:  rgba(0,196,222,0.065);
 
-  /* Accent palette */
-  --isp-accent:        #6366f1;
-  --isp-accent-glow:   rgba(99,102,241,0.18);
-  --isp-accent-border: rgba(99,102,241,0.35);
-  --isp-cyan:          #22d3ee;
-  --isp-cyan-glow:     rgba(34,211,238,0.12);
+  /* Accent palette — Electric Cyan */
+  --isp-accent:        #00c4de;
+  --isp-accent-glow:   rgba(0,196,222,0.18);
+  --isp-accent-border: rgba(0,196,222,0.4);
+  --isp-cyan:          #00e5ff;
+  --isp-cyan-glow:     rgba(0,229,255,0.12);
+
+  /* Sidebar gradient strip */
+  --isp-sidebar-strip: linear-gradient(180deg, #00c4de 0%, #7c3aed 50%, #00c4de 100%);
 
   /* Shadow system */
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.4);
-  --shadow-lg: 0 8px 24px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3);
-  --shadow-card: 0 0 0 1px rgba(255,255,255,0.06), 0 4px 16px rgba(0,0,0,0.3);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.45), 0 1px 3px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4);
+  --shadow-card: 0 0 0 1px rgba(0,196,222,0.08), 0 4px 16px rgba(0,0,0,0.4);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
