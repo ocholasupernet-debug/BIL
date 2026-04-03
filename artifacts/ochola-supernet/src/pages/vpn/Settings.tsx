@@ -6,6 +6,7 @@ import {
   Smartphone, Mail, Globe, Clock, Monitor, Sun, Moon,
   ChevronRight, AlertTriangle, CheckCircle2, ToggleLeft,
   Terminal, RefreshCw, LogOut, Download, QrCode,
+  Server, Database, BookOpen,
 } from "lucide-react";
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -603,6 +604,212 @@ function AppearanceTab() {
 
 // ── Main Settings Page ────────────────────────────────────────────────────
 
+/* ── Setup Guide Tab ──────────────────────────────────────────── */
+function CopyBlock({ code, label }: { code: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="relative group">
+      {label && <p className="text-xs font-semibold text-gray-400 mb-1">{label}</p>}
+      <pre className="bg-gray-900 text-green-400 text-xs rounded-lg p-4 overflow-x-auto font-mono leading-relaxed whitespace-pre-wrap break-all">{code}</pre>
+      <button
+        onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
+        className="absolute top-2 right-2 bg-gray-700 hover:bg-gray-600 text-white text-[10px] font-semibold px-2 py-1 rounded transition-colors flex items-center gap-1"
+      >
+        {copied ? <><Check size={10} /> Copied</> : <><Copy size={10} /> Copy</>}
+      </button>
+    </div>
+  );
+}
+
+function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-4">
+      <div className="shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-sm flex items-center justify-center">{n}</div>
+      <div className="flex-1">
+        <p className="font-semibold text-gray-800 mb-2">{title}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const SQL_MIGRATION = `CREATE TABLE IF NOT EXISTS isp_vpn_users (
+  id         serial PRIMARY KEY,
+  admin_id   integer NOT NULL DEFAULT 1,
+  username   varchar(100) NOT NULL UNIQUE,
+  password   varchar(255) NOT NULL,
+  notes      text,
+  is_active  boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz
+);`;
+
+const OPENVPN_INSTALL = `# Ubuntu / Debian VPS
+apt update && apt install -y openvpn easy-rsa
+
+# Create PKI
+mkdir -p /etc/openvpn/easy-rsa
+cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/
+cd /etc/openvpn/easy-rsa
+./easyrsa init-pki
+./easyrsa build-ca nopass       # Creates ca.crt
+./easyrsa gen-req server nopass # Creates server.key + server.req
+./easyrsa sign-req server server
+./easyrsa gen-dh
+
+# Copy certs to /etc/openvpn/
+cp pki/ca.crt pki/issued/server.crt pki/private/server.key /etc/openvpn/
+cp pki/dh.pem /etc/openvpn/dh2048.pem`;
+
+const OPENVPN_SERVER_CONF = `# /etc/openvpn/server.conf
+port 1194
+proto tcp
+dev tun
+ca   /etc/openvpn/ca.crt
+cert /etc/openvpn/server.crt
+key  /etc/openvpn/server.key
+dh   /etc/openvpn/dh2048.pem
+
+server 10.8.0.0 255.255.255.0
+ifconfig-pool-persist /etc/openvpn/ipp.txt
+
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+
+keepalive 10 120
+cipher AES-256-CBC
+auth SHA1
+script-security 2
+
+# User authentication from /etc/openvpn/users.db
+auth-user-pass-verify /etc/openvpn/check-auth.sh via-file
+username-as-common-name
+
+persist-key
+persist-tun
+status /var/log/openvpn-status.log
+log-append /var/log/openvpn.log
+verb 3`;
+
+const AUTH_SCRIPT = `#!/bin/bash
+# /etc/openvpn/check-auth.sh
+# Reads username/password from the temp file OpenVPN passes via via-file
+CREDS="$1"
+USERNAME=$(head -1 "$CREDS")
+PASSWORD=$(tail -1 "$CREDS")
+
+# Check against /etc/openvpn/users.db  (format: username:password per line)
+DB="/etc/openvpn/users.db"
+if grep -qx "\${USERNAME}:\${PASSWORD}" "$DB" 2>/dev/null; then
+  exit 0
+fi
+exit 1`;
+
+const MIKROTIK_CONF = `/ppp import file-name=router-nairobi.ovpn
+# Then: Interfaces > [the imported interface] > Dial Out > User + Password`;
+
+function SetupGuideTab() {
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-1">
+          <Database size={16} className="text-blue-500" /> Step 1 — Supabase SQL Migration
+        </h3>
+        <p className="text-xs text-gray-500 mb-4">Run this SQL once in your Supabase SQL Editor to create the VPN users table.</p>
+        <CopyBlock code={SQL_MIGRATION} label="Supabase SQL Editor → New query → Paste → Run" />
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mt-4 text-xs text-amber-700 flex items-start gap-2">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          <span>This table is required for VPN Users to work. Open <a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="underline font-semibold">supabase.com</a> → SQL Editor → paste → Run.</span>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-6">
+        <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2">
+          <Server size={16} className="text-green-500" /> OpenVPN Server Setup
+        </h3>
+        <p className="text-xs text-gray-500 -mt-1">Complete these steps on your Linux VPS (Ubuntu/Debian). Once done, download .ovpn configs from VPN Users and import into MikroTik or any OpenVPN client.</p>
+
+        <div className="space-y-6 divide-y divide-gray-100">
+          <Step n={1} title="Install OpenVPN and generate certificates">
+            <CopyBlock code={OPENVPN_INSTALL} />
+          </Step>
+          <div className="pt-5">
+            <Step n={2} title="Create the server config">
+              <CopyBlock code={OPENVPN_SERVER_CONF} label="Save as: /etc/openvpn/server.conf" />
+            </Step>
+          </div>
+          <div className="pt-5">
+            <Step n={3} title="Create the auth script">
+              <CopyBlock code={AUTH_SCRIPT} label="Save as: /etc/openvpn/check-auth.sh" />
+              <CopyBlock code={"chmod +x /etc/openvpn/check-auth.sh\ntouch /etc/openvpn/users.db"} label="Make executable + create users database" />
+            </Step>
+          </div>
+          <div className="pt-5">
+            <Step n={4} title="Start OpenVPN and enable IP forwarding">
+              <CopyBlock code={`systemctl enable --now openvpn@server
+
+# Enable IP forwarding (routers can reach internet through VPN)
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE`} />
+            </Step>
+          </div>
+          <div className="pt-5">
+            <Step n={5} title="Set VITE_VPN_HOST environment variable">
+              <p className="text-xs text-gray-500 mb-2">
+                Set the public IP or hostname of your VPS as <span className="font-mono font-bold">VPN_HOST</span> in your API server environment variables. This is embedded in the .ovpn config files.
+              </p>
+              <CopyBlock code={`# In your API server .env or environment variables:
+VPN_HOST=your.vps.ip.address
+# e.g. VPN_HOST=154.12.34.56`} />
+            </Step>
+          </div>
+          <div className="pt-5">
+            <Step n={6} title="Import .ovpn on MikroTik routers">
+              <p className="text-xs text-gray-500 mb-2">
+                Download the .ovpn file from VPN Users, upload it to MikroTik via Winbox Files, then import it.
+              </p>
+              <CopyBlock code={MIKROTIK_CONF} label="RouterOS CLI (or via Files → PPP → Import)" />
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2 text-xs text-blue-700">
+                <p className="font-semibold mb-1">After import on MikroTik:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Go to PPP → Interfaces → find the imported VPN interface</li>
+                  <li>Set <span className="font-mono">Dial Out → User</span> and <span className="font-mono">Password</span> (from VPN Users page)</li>
+                  <li>Enable the interface — the router gets a <span className="font-mono">10.8.0.x</span> IP</li>
+                  <li>Use that IP for Winbox / WebFig / SSH from your admin panel</li>
+                </ul>
+              </div>
+            </Step>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-3">
+          <BookOpen size={16} className="text-purple-500" /> Quick Reference
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          {[
+            { label: "VPN Tunnel subnet",    value: "10.8.0.0/24" },
+            { label: "VPN server IP",        value: "10.8.0.1 (gateway)" },
+            { label: "First client IP",      value: "10.8.0.6 (after .1/.2 reserved)" },
+            { label: "OpenVPN port",         value: "1194 / TCP" },
+            { label: "Auth script path",     value: "/etc/openvpn/check-auth.sh" },
+            { label: "Users DB path",        value: "/etc/openvpn/users.db" },
+            { label: "IP persistence file",  value: "/etc/openvpn/ipp.txt" },
+            { label: "Status log",           value: "/var/log/openvpn-status.log" },
+          ].map(({ label, value }) => (
+            <div key={label} className="flex justify-between gap-2">
+              <span className="text-gray-500 font-medium">{label}</span>
+              <span className="font-mono text-gray-800 text-[11px]">{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
   { id: "profile",      label: "Profile",          icon: User,     badge: null },
   { id: "security",     label: "Security",         icon: Shield,   badge: null },
@@ -610,6 +817,7 @@ const TABS = [
   { id: "ssh",          label: "SSH Keys",         icon: Terminal, badge: "2"  },
   { id: "notifications",label: "Notifications",    icon: Bell,     badge: null },
   { id: "appearance",   label: "Appearance",       icon: Palette,  badge: null },
+  { id: "setup",        label: "Setup Guide",      icon: Server,   badge: "SQL"},
 ];
 
 export default function VpnSettings() {
@@ -651,6 +859,7 @@ export default function VpnSettings() {
             {tab === "ssh"           && <SshKeysTab />}
             {tab === "notifications" && <NotificationsTab />}
             {tab === "appearance"    && <AppearanceTab />}
+            {tab === "setup"         && <SetupGuideTab />}
           </div>
         </div>
       </div>

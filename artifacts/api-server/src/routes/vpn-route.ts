@@ -536,6 +536,60 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
   }
 });
 
+/* ── PATCH /api/vpn/users/:id/toggle ── flip is_active */
+router.patch("/vpn/users/:id/toggle", async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=is_active`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    const rows = await gr.json() as { is_active: boolean }[];
+    if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
+
+    const newState = !rows[0].is_active;
+    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ is_active: newState }),
+    });
+    if (!ur.ok) throw new Error(await ur.text());
+    res.json({ ok: true, is_active: newState });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── POST /api/vpn/users/:id/regenerate ── new password */
+router.post("/vpn/users/:id/regenerate", async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const newPassword: string = req.body?.password ?? Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
+  const url = sbUrl(); const key = sbKey();
+  if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
+
+  try {
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    const rows = await gr.json() as { username: string }[];
+    if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
+
+    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ password: newPassword }),
+    });
+    if (!ur.ok) throw new Error(await ur.text());
+
+    syncUserToDb(rows[0].username, newPassword);
+    res.json({ ok: true, password: newPassword });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ── DELETE /api/vpn/users/:id ── delete a VPN user */
 router.delete("/vpn/users/:id", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;

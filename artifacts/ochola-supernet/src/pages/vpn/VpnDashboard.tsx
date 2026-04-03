@@ -1,9 +1,17 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { VpnHeader } from "./VpnLayout";
 import {
   Bell, Shield, Zap, Lock, Circle, CheckCircle2,
   MonitorPlay, Wifi, Send, Users, ArrowRight,
+  RefreshCw, Server, AlertTriangle, Globe,
 } from "lucide-react";
+
+const API = import.meta.env.VITE_API_BASE ?? "";
+
+function getAdminId() {
+  return localStorage.getItem("ochola_admin_id") ?? "1";
+}
 
 function getGreeting() {
   const h = new Date().getHours();
@@ -12,43 +20,84 @@ function getGreeting() {
   return "Good Evening";
 }
 
-function WomanIllustration() {
-  return (
-    <svg viewBox="0 0 160 160" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="60" y="88" width="80" height="60" rx="4" fill="rgba(255,255,255,0.15)" />
-      <rect x="68" y="96" width="64" height="40" rx="2" fill="rgba(255,255,255,0.25)" />
-      <rect x="72" y="100" width="56" height="30" rx="1" fill="rgba(30,80,200,0.4)" />
-      <line x1="76" y1="104" x2="120" y2="104" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" />
-      <line x1="76" y1="108" x2="114" y2="108" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" />
-      <line x1="76" y1="112" x2="118" y2="112" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" />
-      <line x1="76" y1="116" x2="110" y2="116" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
-      <ellipse cx="38" cy="55" rx="13" ry="13" fill="#FDDCB5" />
-      <path d="M25 42 Q38 30 51 42" fill="#3B1F0A" />
-      <path d="M26 52 Q25 70 20 85 Q30 88 38 88 Q46 88 56 85 Q51 70 50 52" fill="#fff" />
-      <path d="M26 52 Q20 55 18 70 Q22 75 28 73 Q28 65 30 58" fill="#e8e8e8" />
-      <path d="M50 52 Q56 55 58 70 Q54 75 48 73 Q48 65 46 58" fill="#e8e8e8" />
-      <rect x="55" y="95" width="8" height="3" rx="1.5" fill="#FDDCB5" />
-      <rect x="18" y="95" width="8" height="3" rx="1.5" fill="#FDDCB5" />
-      <rect x="25" y="85" width="26" height="12" rx="2" fill="#1a2e6b" />
-    </svg>
-  );
-}
-
-const ANNOUNCEMENTS = [
-  { id: 1, date: "Mar 20, 2026", title: "WireGuard VPN now available", body: "We have upgraded our VPN infrastructure to support WireGuard protocol for faster and more secure connections." },
-  { id: 2, date: "Mar 10, 2026", title: "Scheduled maintenance – Mar 25", body: "VPN servers will undergo maintenance between 2:00 AM – 4:00 AM EAT. Expect brief interruptions." },
-];
+type VpnUser = { id: number; username: string; is_active: boolean; expires_at?: string; created_at: string };
+type IpMapClient = { vpnIp: string; connected: boolean; realAddr?: string; since?: string };
+type IpMapResult = {
+  clients: Record<string, IpMapClient>;
+  total: number;
+  connected: number;
+  ippPath: string | null;
+  statusPath: string | null;
+};
 
 const QUICK_LINKS = [
   { label: "Remote Access",   href: "/vpn/remote-access", icon: Wifi,        color: "bg-green-500 hover:bg-green-600",   desc: "Connect to MikroTik routers via VPN tunnel" },
-  { label: "Create VPN",      href: "/vpn/create",        icon: Send,        color: "bg-amber-500 hover:bg-amber-600",   desc: "Set up a new VPN account" },
-  { label: "VPN Lists",       href: "/vpn/list",          icon: Users,       color: "bg-blue-600 hover:bg-blue-700",     desc: "View and manage all VPN accounts" },
+  { label: "Create VPN",      href: "/vpn/create",        icon: Send,        color: "bg-amber-500 hover:bg-amber-600",   desc: "Add a new VPN user and get the .ovpn file" },
+  { label: "VPN Users",       href: "/vpn/list",          icon: Users,       color: "bg-blue-600 hover:bg-blue-700",     desc: "View and manage all VPN accounts" },
   { label: "Video Tutorials", href: "/vpn/tutorials",     icon: MonitorPlay, color: "bg-green-600 hover:bg-green-700",   desc: "Learn how to configure VPN and MikroTik" },
 ];
 
+const ANNOUNCEMENTS = [
+  { id: 1, date: "Apr 2026", title: "OpenVPN TCP — AES-256 enabled", body: "All VPN connections now use AES-256-CBC cipher with SHA1 auth. Download fresh .ovpn configs from VPN Users." },
+  { id: 2, date: "Mar 2026", title: "Auto IP Sync available", body: "Use 'Remote Access → Auto Fix IPs' to automatically match router names to their VPN tunnel IPs." },
+];
+
+function ConnectedClientRow({ name, info }: { name: string; info: IpMapClient }) {
+  return (
+    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
+      <div className="flex items-center gap-3">
+        <div className={`w-2 h-2 rounded-full ${info.connected ? "bg-green-500" : "bg-gray-300"}`} />
+        <div>
+          <p className="text-sm font-semibold text-gray-800 font-mono">{name}</p>
+          {info.realAddr && <p className="text-xs text-gray-400">Real: {info.realAddr}</p>}
+        </div>
+      </div>
+      <div className="text-right">
+        <p className="text-xs font-mono text-gray-600">{info.vpnIp}</p>
+        <p className={`text-[11px] font-semibold ${info.connected ? "text-green-500" : "text-gray-400"}`}>
+          {info.connected ? "Connected" : "Assigned"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function VpnDashboard() {
-  const userName = "Chrisphine Ochola";
-  const shortName = "Chrisphine Och...";
+  const adminId = getAdminId();
+
+  const { data: users = [], isLoading: usersLoading } = useQuery<VpnUser[]>({
+    queryKey: ["vpn-users-dash", adminId],
+    queryFn: async () => {
+      const r = await fetch(`${API}/api/vpn/users?adminId=${adminId}`);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+  });
+
+  const { data: ipMap, isLoading: ipLoading } = useQuery<IpMapResult>({
+    queryKey: ["vpn-ip-map"],
+    queryFn: async () => {
+      const r = await fetch(`${API}/api/vpn/ip-map`);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    refetchInterval: 30_000,
+  });
+
+  const { data: vpnStatus } = useQuery<{ ca_cert_available: boolean; server_port: number; proto: string }>({
+    queryKey: ["vpn-status"],
+    queryFn: async () => {
+      const r = await fetch(`${API}/api/vpn/status`);
+      return r.json();
+    },
+  });
+
+  const activeUsers   = users.filter(u => u.is_active).length;
+  const connectedNow  = ipMap?.connected ?? 0;
+  const totalKnown    = ipMap?.total ?? 0;
+  const serverReady   = vpnStatus?.ca_cert_available ?? false;
+
+  const clientEntries = Object.entries(ipMap?.clients ?? {}).slice(0, 8);
 
   return (
     <div className="min-h-screen bg-[#eef0f5] font-sans">
@@ -59,51 +108,69 @@ export default function VpnDashboard() {
 
           {/* Page title */}
           <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold text-gray-800">Your Account Information</h1>
+            <h1 className="text-xl font-bold text-gray-800">VPN Management</h1>
+            <div className="flex items-center gap-2">
+              <div className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${serverReady ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                <div className={`w-2 h-2 rounded-full ${serverReady ? "bg-green-500" : "bg-gray-400"}`} />
+                {serverReady ? "VPN Server Ready" : "Server Not Detected"}
+              </div>
+            </div>
           </div>
 
           {/* ── STAT CARDS ───────────────────────────────────────── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
             {/* Greeting Card */}
-            <div className="relative bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl overflow-hidden p-5 flex flex-col justify-between min-h-[150px]">
+            <div className="relative bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl overflow-hidden p-5 flex flex-col justify-between min-h-[130px]">
               <div className="z-10 relative">
-                <p className="text-white font-bold text-lg leading-tight">{getGreeting()},<br />{shortName}</p>
-                <p className="text-blue-100 text-xs mt-1">Welcome to Remote Access</p>
+                <p className="text-white font-bold text-lg leading-tight">{getGreeting()}</p>
+                <p className="text-blue-100 text-xs mt-1">VPN Remote Access Portal</p>
               </div>
-              <div className="absolute bottom-0 right-0 w-32 h-32 opacity-80">
-                <WomanIllustration />
+              <div className="flex items-center gap-1.5 mt-4">
+                <Globe size={14} className="text-blue-200" />
+                <span className="text-blue-200 text-xs font-mono">vpn.isplatty.org</span>
               </div>
             </div>
 
-            {/* VPNs card */}
-            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-3 min-h-[150px]">
-              <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">VPNS</p>
-              <div className="flex items-center gap-3">
-                <span className="text-white font-bold text-sm">No</span>
-                <div className="flex-1 h-8 bg-white rounded-md" />
-              </div>
-              <span className="text-white font-bold text-2xl">0</span>
+            {/* VPN Users card */}
+            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-2 min-h-[130px]">
+              <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">VPN Users</p>
+              {usersLoading
+                ? <div className="animate-pulse flex-1 bg-gray-700 rounded mt-2" />
+                : <>
+                    <span className="text-white font-bold text-3xl">{users.length}</span>
+                    <span className="text-green-400 text-xs font-semibold flex items-center gap-1"><CheckCircle2 size={12} /> {activeUsers} active</span>
+                  </>
+              }
             </div>
 
-            {/* Account Status card */}
-            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-2 min-h-[150px]">
-              <p className="text-gray-400 text-xs font-semibold tracking-wide">Account</p>
-              <p className="text-gray-400 text-xs font-semibold">Status</p>
-              <div className="flex-1 h-8 bg-white rounded-md" />
-              <span className="text-green-400 font-bold text-lg flex items-center gap-1.5">
-                <CheckCircle2 size={16} /> Active
-              </span>
+            {/* VPN Tunnel card */}
+            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-2 min-h-[130px]">
+              <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">Tunnel Clients</p>
+              {ipLoading
+                ? <div className="animate-pulse flex-1 bg-gray-700 rounded mt-2" />
+                : <>
+                    <span className={`font-bold text-3xl ${connectedNow > 0 ? "text-green-400" : "text-gray-400"}`}>{connectedNow}</span>
+                    <span className="text-gray-400 text-xs">of {totalKnown} connected now</span>
+                  </>
+              }
             </div>
 
-            {/* Domain card */}
-            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-2 min-h-[150px]">
-              <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">Domain</p>
-              <p className="text-white font-mono text-sm break-all mt-1">vpn.isplatty.org</p>
-              <div className="mt-auto flex items-center gap-2">
-                <Shield size={14} className="text-green-400" />
-                <span className="text-green-400 text-xs font-medium">Secured</span>
+            {/* Server status card */}
+            <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-2 min-h-[130px]">
+              <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">OpenVPN Server</p>
+              <div className="flex items-center gap-2 mt-1">
+                <div className={`w-3 h-3 rounded-full ${serverReady ? "bg-green-500" : "bg-red-500"}`} />
+                <span className={`font-bold text-sm ${serverReady ? "text-green-400" : "text-red-400"}`}>
+                  {serverReady ? "CA Cert Ready" : "Not Configured"}
+                </span>
               </div>
+              {vpnStatus && (
+                <span className="text-gray-400 text-xs font-mono">Port {vpnStatus.server_port} / {vpnStatus.proto.toUpperCase()}</span>
+              )}
+              {!serverReady && (
+                <Link href="/vpn/settings" className="text-xs text-blue-400 hover:underline mt-1">Setup guide →</Link>
+              )}
             </div>
           </div>
 
@@ -130,26 +197,52 @@ export default function VpnDashboard() {
           {/* ── BOTTOM PANELS ─────────────────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-            {/* Data Usage */}
-            <div className="bg-white rounded-xl p-6 min-h-[180px] border border-gray-200 shadow-sm">
-              <h2 className="font-bold text-gray-800 mb-4 border-b pb-3 flex items-center gap-2">
-                <Zap size={16} className="text-amber-500" />
-                Data Usage
-                <span className="ml-2 text-xs bg-amber-100 text-amber-600 font-semibold px-2 py-0.5 rounded-full">Coming Soon</span>
-              </h2>
-              <div className="flex flex-col items-center justify-center h-28 text-gray-400">
-                <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mb-2">
-                  <Zap size={28} className="text-gray-300" />
-                </div>
-                <p className="text-sm">Data usage tracking coming soon</p>
+            {/* Live Tunnel Map */}
+            <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+              <div className="flex items-center justify-between mb-4 border-b pb-3">
+                <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                  <Server size={15} className="text-blue-500" /> VPN Tunnel Map
+                </h2>
+                {ipLoading && <RefreshCw size={13} className="animate-spin text-gray-400" />}
+                {ipMap && (
+                  <span className="text-xs text-gray-400">{connectedNow}/{totalKnown} connected</span>
+                )}
               </div>
+              {!ipMap && !ipLoading && (
+                <div className="flex flex-col items-center justify-center h-28 text-gray-400 text-center">
+                  <AlertTriangle size={24} className="opacity-30 mb-2" />
+                  <p className="text-sm">No VPN IP data</p>
+                  <p className="text-xs text-gray-400 mt-1">OpenVPN server not configured or <span className="font-mono">ipp.txt</span> not found</p>
+                </div>
+              )}
+              {ipMap && clientEntries.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-28 text-gray-400">
+                  <Lock size={28} className="opacity-20 mb-2" />
+                  <p className="text-sm">No tunnel clients yet</p>
+                  <p className="text-xs mt-1">Clients appear here after connecting via OpenVPN</p>
+                </div>
+              )}
+              {clientEntries.length > 0 && (
+                <div className="divide-y divide-gray-100">
+                  {clientEntries.map(([name, info]) => (
+                    <ConnectedClientRow key={name} name={name} info={info} />
+                  ))}
+                </div>
+              )}
+              {ipMap && Object.keys(ipMap.clients).length > 8 && (
+                <div className="mt-3 text-center">
+                  <Link href="/vpn/remote-access" className="text-xs text-blue-600 hover:underline">
+                    View all {Object.keys(ipMap.clients).length} clients →
+                  </Link>
+                </div>
+              )}
             </div>
 
             {/* Announcements */}
-            <div className="bg-white rounded-xl p-6 min-h-[180px] border border-gray-200 shadow-sm">
+            <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
               <h2 className="font-bold text-gray-800 mb-4 border-b pb-3 flex items-center gap-2">
                 <Bell size={16} className="text-blue-500" />
-                Announcement
+                VPN Announcements
               </h2>
               <div className="space-y-4">
                 {ANNOUNCEMENTS.map(a => (
@@ -160,23 +253,51 @@ export default function VpnDashboard() {
                   </div>
                 ))}
               </div>
+
+              {/* Recent VPN users */}
+              {users.length > 0 && (
+                <div className="mt-5 pt-4 border-t border-gray-100">
+                  <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Recent VPN Users</p>
+                  <div className="space-y-2">
+                    {users.slice(0, 4).map(u => (
+                      <div key={u.id} className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+                            <Shield size={10} className="text-blue-500" />
+                          </div>
+                          <span className="font-mono font-semibold text-gray-700">{u.username}</span>
+                        </div>
+                        <span className={`font-semibold px-1.5 py-0.5 rounded-full ${u.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                          {u.is_active ? "Active" : "Inactive"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Link href="/vpn/list" className="text-xs text-blue-600 hover:underline mt-3 inline-flex items-center gap-1">
+                    All users <ArrowRight size={11} />
+                  </Link>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Recent VPN activity strip */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold text-gray-800 flex items-center gap-2"><Lock size={15} className="text-gray-500" /> Recent VPN Activity</h2>
-              <Link href="/vpn/list" className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1">
-                View all <ArrowRight size={11} />
-              </Link>
+          {/* Setup warning if not configured */}
+          {!serverReady && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 flex items-start gap-3">
+              <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-800">OpenVPN Server Not Configured</p>
+                <p className="text-amber-700 text-sm mt-1">
+                  The VPN user management system is ready, but your VPS does not yet have OpenVPN installed and the CA certificate is not present.
+                  You can still create VPN users and download <span className="font-mono">.ovpn</span> config files —
+                  they will work as soon as you configure OpenVPN on your VPS.
+                </p>
+                <Link href="/vpn/settings" className="text-xs font-semibold text-amber-700 underline mt-2 inline-block">
+                  View OpenVPN Server Setup Guide →
+                </Link>
+              </div>
             </div>
-            <div className="text-center py-8 text-gray-400">
-              <Lock size={32} className="mx-auto mb-2 opacity-20" />
-              <p className="text-sm">No VPN accounts yet.</p>
-              <Link href="/vpn/create" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Create your first VPN →</Link>
-            </div>
-          </div>
+          )}
         </div>
       </main>
     </div>

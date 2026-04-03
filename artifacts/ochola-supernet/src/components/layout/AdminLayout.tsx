@@ -152,6 +152,16 @@ const navItems: NavItem[] = [
     ],
   },
   {
+    name: "VPN & Remote Access", icon: Shield, badge: "New",
+    children: [
+      { name: "VPN Dashboard",  href: "/vpn" },
+      { name: "Remote Access",  href: "/vpn/remote-access" },
+      { name: "VPN Users",      href: "/vpn/list" },
+      { name: "Create VPN",     href: "/vpn/create" },
+      { name: "VPN Settings",   href: "/vpn/settings" },
+    ],
+  },
+  {
     name: "Logs", icon: BookOpen,
     children: [
       { name: "Auth Logs",      href: "/admin/logs" },
