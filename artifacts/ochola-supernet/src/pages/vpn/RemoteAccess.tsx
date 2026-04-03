@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import VpnLayout from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Router, Wifi, Terminal, Globe, Key, Eye, EyeOff, Copy, Check,
   RefreshCw, Circle, AlertTriangle, Plus, Trash2, Download,
@@ -371,7 +371,7 @@ export default function RemoteAccess() {
   const online = routers.filter(r => r.status === "online").length;
 
   return (
-    <VpnLayout breadcrumb="Remote Access">
+    <AdminLayout>
       <div className="max-w-4xl mx-auto space-y-6">
 
         {/* Header */}
@@ -452,6 +452,6 @@ export default function RemoteAccess() {
         {/* VPN Users tab */}
         {tab === "users" && <VpnUsersSection routers={routers} />}
       </div>
-    </VpnLayout>
+    </AdminLayout>
   );
 }

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { VpnHeader } from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Bell, Shield, Zap, Lock, Circle, CheckCircle2,
   MonitorPlay, Wifi, Send, Users, ArrowRight,
@@ -31,10 +31,10 @@ type IpMapResult = {
 };
 
 const QUICK_LINKS = [
-  { label: "Remote Access",   href: "/vpn/remote-access", icon: Wifi,        color: "bg-green-500 hover:bg-green-600",   desc: "Connect to MikroTik routers via VPN tunnel" },
-  { label: "Create VPN",      href: "/vpn/create",        icon: Send,        color: "bg-amber-500 hover:bg-amber-600",   desc: "Add a new VPN user and get the .ovpn file" },
-  { label: "VPN Users",       href: "/vpn/list",          icon: Users,       color: "bg-blue-600 hover:bg-blue-700",     desc: "View and manage all VPN accounts" },
-  { label: "Video Tutorials", href: "/vpn/tutorials",     icon: MonitorPlay, color: "bg-green-600 hover:bg-green-700",   desc: "Learn how to configure VPN and MikroTik" },
+  { label: "Remote Access",   href: "/admin/vpn/remote-access", icon: Wifi,        color: "bg-green-500 hover:bg-green-600",   desc: "Connect to MikroTik routers via VPN tunnel" },
+  { label: "Create VPN",      href: "/admin/vpn/create",        icon: Send,        color: "bg-amber-500 hover:bg-amber-600",   desc: "Add a new VPN user and get the .ovpn file" },
+  { label: "VPN Users",       href: "/admin/vpn/list",          icon: Users,       color: "bg-blue-600 hover:bg-blue-700",     desc: "View and manage all VPN accounts" },
+  { label: "Video Tutorials", href: "/admin/vpn/tutorials",     icon: MonitorPlay, color: "bg-green-600 hover:bg-green-700",   desc: "Learn how to configure VPN and MikroTik" },
 ];
 
 const ANNOUNCEMENTS = [
@@ -100,11 +100,8 @@ export default function VpnDashboard() {
   const clientEntries = Object.entries(ipMap?.clients ?? {}).slice(0, 8);
 
   return (
-    <div className="min-h-screen bg-[#eef0f5] font-sans">
-      <VpnHeader breadcrumb="Dashboard" />
-
-      <main className="px-6 py-6">
-        <div className="max-w-6xl mx-auto space-y-6">
+    <AdminLayout>
+      <div className="max-w-6xl mx-auto space-y-6">
 
           {/* Page title */}
           <div className="flex items-center justify-between">
@@ -169,7 +166,7 @@ export default function VpnDashboard() {
                 <span className="text-gray-400 text-xs font-mono">Port {vpnStatus.server_port} / {vpnStatus.proto.toUpperCase()}</span>
               )}
               {!serverReady && (
-                <Link href="/vpn/settings" className="text-xs text-blue-400 hover:underline mt-1">Setup guide →</Link>
+                <Link href="/admin/vpn/settings" className="text-xs text-blue-400 hover:underline mt-1">Setup guide →</Link>
               )}
             </div>
           </div>
@@ -231,7 +228,7 @@ export default function VpnDashboard() {
               )}
               {ipMap && Object.keys(ipMap.clients).length > 8 && (
                 <div className="mt-3 text-center">
-                  <Link href="/vpn/remote-access" className="text-xs text-blue-600 hover:underline">
+                  <Link href="/admin/vpn/remote-access" className="text-xs text-blue-600 hover:underline">
                     View all {Object.keys(ipMap.clients).length} clients →
                   </Link>
                 </div>
@@ -273,7 +270,7 @@ export default function VpnDashboard() {
                       </div>
                     ))}
                   </div>
-                  <Link href="/vpn/list" className="text-xs text-blue-600 hover:underline mt-3 inline-flex items-center gap-1">
+                  <Link href="/admin/vpn/list" className="text-xs text-blue-600 hover:underline mt-3 inline-flex items-center gap-1">
                     All users <ArrowRight size={11} />
                   </Link>
                 </div>
@@ -292,14 +289,13 @@ export default function VpnDashboard() {
                   You can still create VPN users and download <span className="font-mono">.ovpn</span> config files —
                   they will work as soon as you configure OpenVPN on your VPS.
                 </p>
-                <Link href="/vpn/settings" className="text-xs font-semibold text-amber-700 underline mt-2 inline-block">
+                <Link href="/admin/vpn/settings" className="text-xs font-semibold text-amber-700 underline mt-2 inline-block">
                   View OpenVPN Server Setup Guide →
                 </Link>
               </div>
             </div>
           )}
         </div>
-      </main>
-    </div>
+    </AdminLayout>
   );
 }

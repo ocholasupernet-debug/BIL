@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import VpnLayout from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Lock, Shield, Eye, EyeOff, Copy, Check, Download, Trash2,
   Search, Circle, Key, Wifi, Clock,
@@ -122,7 +122,7 @@ export default function VpnList() {
   const expired  = users.filter(v => isExpired(v.expires_at)).length;
 
   return (
-    <VpnLayout breadcrumb="VPN Users">
+    <AdminLayout>
       <div className="max-w-5xl mx-auto space-y-5">
 
         {/* Title */}
@@ -374,6 +374,6 @@ export default function VpnList() {
           ))}
         </div>
       </div>
-    </VpnLayout>
+    </AdminLayout>
   );
 }

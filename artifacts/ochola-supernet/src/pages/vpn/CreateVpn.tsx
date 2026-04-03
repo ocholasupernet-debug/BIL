@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import VpnLayout from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Shield, Wifi, ChevronRight, Check,
   Send, User, Clock, Server,
@@ -89,7 +89,7 @@ export default function CreateVpn() {
 
   if (created) {
     return (
-      <VpnLayout breadcrumb="Create VPN">
+      <AdminLayout>
         <div className="max-w-lg mx-auto mt-8 text-center">
           <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-5">
             <Check size={36} className="text-green-500" />
@@ -131,17 +131,17 @@ export default function CreateVpn() {
             >
               Create Another
             </button>
-            <Link href="/vpn/list" className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors">
+            <Link href="/admin/vpn/list" className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors">
               View All VPN Users
             </Link>
           </div>
         </div>
-      </VpnLayout>
+      </AdminLayout>
     );
   }
 
   return (
-    <VpnLayout breadcrumb="Create VPN">
+    <AdminLayout>
       <div className="max-w-2xl mx-auto space-y-6">
 
         <div>
@@ -299,6 +299,6 @@ export default function CreateVpn() {
           </div>
         </div>
       </div>
-    </VpnLayout>
+    </AdminLayout>
   );
 }

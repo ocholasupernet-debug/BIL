@@ -134,13 +134,13 @@ function Router() {
       <Route path="/admin/logs"             component={ActivityLogs}     />
       <Route path="/admin/settings" component={AdminSettings} />
       
-      {/* VPN Portal — vpn.isplatty.org */}
-      <Route path="/vpn" component={VpnDashboard} />
-      <Route path="/vpn/remote-access" component={VpnRemoteAccess} />
-      <Route path="/vpn/list" component={VpnList} />
-      <Route path="/vpn/create" component={VpnCreate} />
-      <Route path="/vpn/tutorials" component={VpnTutorials} />
-      <Route path="/vpn/settings" component={VpnSettings} />
+      {/* VPN — inside admin panel */}
+      <Route path="/admin/vpn" component={VpnDashboard} />
+      <Route path="/admin/vpn/remote-access" component={VpnRemoteAccess} />
+      <Route path="/admin/vpn/list" component={VpnList} />
+      <Route path="/admin/vpn/create" component={VpnCreate} />
+      <Route path="/admin/vpn/tutorials" component={VpnTutorials} />
+      <Route path="/admin/vpn/settings" component={VpnSettings} />
 
       {/* Portals — multiple aliases so MikroTik redirect URLs all work */}
       <Route path="/hotspot-login" component={HotspotLogin} />

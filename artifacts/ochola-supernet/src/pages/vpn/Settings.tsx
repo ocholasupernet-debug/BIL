@@ -1,5 +1,5 @@
 import { useState } from "react";
-import VpnLayout from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   User, Lock, Shield, Key, Bell, Palette, Wifi,
   Eye, EyeOff, Copy, Check, Trash2, Plus, Upload,
@@ -825,7 +825,7 @@ export default function VpnSettings() {
   const current = TABS.find(t => t.id === tab)!;
 
   return (
-    <VpnLayout breadcrumb="Settings">
+    <AdminLayout>
       <div className="max-w-5xl mx-auto">
         <div className="mb-5">
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
@@ -863,6 +863,6 @@ export default function VpnSettings() {
           </div>
         </div>
       </div>
-    </VpnLayout>
+    </AdminLayout>
   );
 }

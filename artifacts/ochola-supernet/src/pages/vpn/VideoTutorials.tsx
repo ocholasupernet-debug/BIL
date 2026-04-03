@@ -1,5 +1,5 @@
 import { useState } from "react";
-import VpnLayout from "./VpnLayout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   Play, Clock, Tag, Search, BookOpen, Router, Wifi,
   Smartphone, Terminal, Shield, AlertTriangle, ChevronRight,
@@ -86,7 +86,7 @@ export default function VideoTutorials() {
   });
 
   return (
-    <VpnLayout breadcrumb="Video Tutorials">
+    <AdminLayout>
       <div className="max-w-5xl mx-auto space-y-6">
 
         {/* Header */}
@@ -214,6 +214,6 @@ export default function VideoTutorials() {
           </button>
         </div>
       </div>
-    </VpnLayout>
+    </AdminLayout>
   );
 }
