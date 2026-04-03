@@ -61,25 +61,25 @@ const KPI_ROW2 = [
   {
     label: "Online Now", value: "0",
     link: "View All", href: "/admin/customers",
-    gradient: "linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)",
+    gradient: "linear-gradient(135deg,#0c1445 0%,#1d4ed8 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><circle cx="32" cy="32" r="10"/><path d="M12 32a20 20 0 1 0 40 0A20 20 0 0 0 12 32" fillOpacity="0" stroke="white" strokeWidth="4"/></svg>,
   },
   {
     label: "Vouchers Left", value: "0",
     link: "View All", href: "/admin/vouchers",
-    gradient: "linear-gradient(135deg,#a18cd1 0%,#fbc2eb 100%)",
+    gradient: "linear-gradient(135deg,#3b0764 0%,#a21caf 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="4" y="20" width="56" height="24" rx="4"/><circle cx="20" cy="32" r="4" fill="#ffffff66"/><rect x="28" y="28" width="24" height="4" rx="2" fill="#ffffff66"/></svg>,
   },
   {
     label: "Support Tickets", value: "0",
     link: "View All", href: "/admin/support",
-    gradient: "linear-gradient(135deg,#f093fb 0%,#f5576c 100%)",
+    gradient: "linear-gradient(135deg,#042f2e 0%,#0d9488 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><path d="M8 8h48a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H16L4 60V12a4 4 0 0 1 4-4z"/></svg>,
   },
   {
     label: "Routers Online", value: "0",
     link: "View All", href: "/admin/network",
-    gradient: "linear-gradient(135deg,#43e97b 0%,#52d9c4 100%)",
+    gradient: "linear-gradient(135deg,#451a03 0%,#d97706 100%)",
     icon: <svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="8" y="24" width="48" height="16" rx="4"/><circle cx="16" cy="32" r="3" fill="#ffffff88"/><circle cx="26" cy="32" r="3" fill="#ffffff88"/><line x1="44" y1="24" x2="44" y2="12" stroke="white" strokeWidth="3"/><line x1="52" y1="24" x2="52" y2="12" stroke="white" strokeWidth="3"/></svg>,
   },
 ];
@@ -87,16 +87,17 @@ const KPI_ROW2 = [
 /* ─── Helper components ─── */
 function KpiCard({ label, value, link, href, gradient, icon }: { label: string; value: string; link: string; href: string; gradient: string; icon: React.ReactNode }) {
   return (
-    <div style={{ borderRadius: 10, background: gradient, padding: "1.125rem 1.25rem 0", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 130 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <div style={{ borderRadius: 20, background: gradient, padding: "1.25rem 1.375rem 0", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 138, boxShadow: "0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08)" }}>
+      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg,rgba(255,255,255,0.06) 0%,transparent 60%)", pointerEvents: "none" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "relative" }}>
         <div>
-          <div style={{ fontSize: "1.625rem", fontWeight: 800, color: "white", letterSpacing: "-0.02em", lineHeight: 1.1 }}>{value}</div>
-          <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.85)", fontWeight: 600, marginTop: "0.25rem" }}>{label}</div>
+          <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "white", letterSpacing: "-0.03em", lineHeight: 1.1 }}>{value}</div>
+          <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.75)", fontWeight: 600, marginTop: "0.3rem", letterSpacing: "0.01em" }}>{label}</div>
         </div>
         <div style={{ position: "absolute", right: "0.75rem", top: "0.5rem" }}>{icon}</div>
       </div>
       <Link href={href}>
-        <div style={{ marginLeft: "-1.25rem", marginRight: "-1.25rem", padding: "0.5rem 1.25rem", background: "rgba(0,0,0,0.18)", fontSize: "0.75rem", fontWeight: 600, color: "rgba(255,255,255,0.9)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.25rem", marginTop: "1rem" }}>
+        <div style={{ marginLeft: "-1.375rem", marginRight: "-1.375rem", padding: "0.5rem 1.375rem", background: "rgba(0,0,0,0.22)", fontSize: "0.72rem", fontWeight: 700, color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.25rem", marginTop: "1.125rem", letterSpacing: "0.02em" }}>
           {link} <span style={{ marginLeft: "auto" }}>→</span>
         </div>
       </Link>
@@ -106,11 +107,12 @@ function KpiCard({ label, value, link, href, gradient, icon }: { label: string; 
 
 function OnlineStatCard({ label, value, gradient, href }: { label: string; value: string; gradient: string; href: string }) {
   return (
-    <div style={{ borderRadius: 10, background: gradient, padding: "1rem 1.25rem 0", display: "flex", flexDirection: "column", minHeight: 110, overflow: "hidden" }}>
-      <div style={{ fontSize: "1.875rem", fontWeight: 800, color: "white", letterSpacing: "-0.02em" }}>{value}</div>
-      <div style={{ fontSize: "0.775rem", color: "rgba(255,255,255,0.85)", fontWeight: 600, marginTop: "0.2rem" }}>{label}</div>
+    <div style={{ borderRadius: 20, background: gradient, padding: "1.125rem 1.375rem 0", display: "flex", flexDirection: "column", minHeight: 116, overflow: "hidden", boxShadow: "0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08)", position: "relative" }}>
+      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg,rgba(255,255,255,0.06) 0%,transparent 60%)", pointerEvents: "none" }} />
+      <div style={{ fontSize: "1.875rem", fontWeight: 800, color: "white", letterSpacing: "-0.03em", position: "relative" }}>{value}</div>
+      <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", fontWeight: 600, marginTop: "0.2rem", position: "relative" }}>{label}</div>
       <Link href={href}>
-        <div style={{ marginLeft: "-1.25rem", marginRight: "-1.25rem", padding: "0.45rem 1.25rem", background: "rgba(0,0,0,0.18)", fontSize: "0.72rem", fontWeight: 600, color: "rgba(255,255,255,0.9)", cursor: "pointer", display: "flex", alignItems: "center", marginTop: "0.875rem" }}>
+        <div style={{ marginLeft: "-1.375rem", marginRight: "-1.375rem", padding: "0.45rem 1.375rem", background: "rgba(0,0,0,0.22)", fontSize: "0.7rem", fontWeight: 700, color: "rgba(255,255,255,0.85)", cursor: "pointer", display: "flex", alignItems: "center", marginTop: "0.875rem", letterSpacing: "0.02em" }}>
           View All <span style={{ marginLeft: "auto" }}>→</span>
         </div>
       </Link>
@@ -251,14 +253,14 @@ export default function Dashboard() {
 
         {/* Online User Stat Cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-          <OnlineStatCard label="Hotspot Online Users" value="0" gradient="linear-gradient(135deg,#00b4d8 0%,#0077b6 100%)" href="/admin/customers?status=online&type=hotspot" />
-          <OnlineStatCard label="PPPoE Online Users"   value="0" gradient="linear-gradient(135deg,#7c3aed 0%,#a855f7 100%)" href="/admin/customers?status=online&type=pppoe" />
-          <OnlineStatCard label="Static Online Users"  value="0" gradient="linear-gradient(135deg,#0d9488 0%,#2dd4bf 100%)" href="/admin/customers?status=online&type=static" />
-          <OnlineStatCard label="Total Online Users"   value="0" gradient="linear-gradient(135deg,#d97706 0%,#f59e0b 100%)" href="/admin/customers?status=online" />
+          <OnlineStatCard label="Hotspot Online Users" value="0" gradient="linear-gradient(135deg,#0c1a3d 0%,#0369a1 100%)" href="/admin/customers?status=online&type=hotspot" />
+          <OnlineStatCard label="PPPoE Online Users"   value="0" gradient="linear-gradient(135deg,#1e003f 0%,#7c3aed 100%)" href="/admin/customers?status=online&type=pppoe" />
+          <OnlineStatCard label="Static Online Users"  value="0" gradient="linear-gradient(135deg,#012a1a 0%,#047857 100%)" href="/admin/customers?status=online&type=static" />
+          <OnlineStatCard label="Total Online Users"   value="0" gradient="linear-gradient(135deg,#2a1500 0%,#b45309 100%)" href="/admin/customers?status=online" />
         </div>
 
         {/* Payment Gateway Status Bar */}
-        <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0, boxShadow: "0 0 6px #22c55e" }} />
           <span style={{ fontSize: "1rem" }}>{gatewayInfo.emoji}</span>
           <span style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.875rem" }}>{gatewayInfo.label}</span>
@@ -268,7 +270,7 @@ export default function Dashboard() {
         </div>
 
         {/* Router Status */}
-        <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
+        <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
               <svg viewBox="0 0 24 24" style={{ width: 16, height: 16 }} fill="none" stroke="#60a5fa" strokeWidth="2">
@@ -297,7 +299,7 @@ export default function Dashboard() {
             ) : routers.map(router => {
               const isOnline = routerOnline(router);
               return (
-                <div key={router.id} style={{ background: "var(--isp-inner-card)", border: `1px solid ${isOnline ? "rgba(34,197,94,0.18)" : "rgba(100,116,139,0.2)"}`, borderRadius: 8, padding: "0.75rem 1rem", minWidth: 185 }}>
+                <div key={router.id} style={{ background: "var(--isp-inner-card)", border: `1px solid ${isOnline ? "rgba(34,197,94,0.18)" : "rgba(100,116,139,0.2)"}`, borderRadius: 12, padding: "0.75rem 1rem", minWidth: 185 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
                     <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{router.name}</span>
                     {isOnline
@@ -316,7 +318,7 @@ export default function Dashboard() {
         </div>
 
         {/* Router Filter */}
-        <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.875rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.875rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginRight: "0.5rem" }}>
             <svg viewBox="0 0 24 24" style={{ width: 15, height: 15 }} fill="none" stroke="#60a5fa" strokeWidth="2">
               <rect x="2" y="8" width="20" height="8" rx="2"/><line x1="6" y1="12" x2="6" y2="12" strokeWidth="3" strokeLinecap="round"/>
@@ -346,16 +348,16 @@ export default function Dashboard() {
         {/* KPI Row 1 — income from real transactions */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
           <KpiCard label="Income Today" value={txLoading ? "…" : fmtKsh(incomeToday)} link="View Reports" href="/admin/transactions"
-            gradient="linear-gradient(135deg,#0fb8ad 0%,#1fc8db 51%,#2cb5e8 75%)"
+            gradient="linear-gradient(135deg,#1e1b4b 0%,#4338ca 100%)"
             icon={<svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="18" y="36" width="8" height="12" rx="1"/><rect x="28" y="28" width="8" height="20" rx="1"/><rect x="38" y="20" width="8" height="28" rx="1"/></svg>} />
           <KpiCard label="Income This Month" value={txLoading ? "…" : fmtKsh(incomeMonth)} link="View Reports" href="/admin/transactions"
-            gradient="linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)"
+            gradient="linear-gradient(135deg,#052e16 0%,#16a34a 100%)"
             icon={<svg viewBox="0 0 64 64" style={{ width: 64, height: 64, opacity: 0.25 }} fill="white"><rect x="8" y="40" width="10" height="16" rx="2"/><rect x="22" y="28" width="10" height="28" rx="2"/><rect x="36" y="20" width="10" height="36" rx="2"/><rect x="50" y="12" width="10" height="44" rx="2"/></svg>} />
           <KpiCard label="Total Transactions" value={txLoading ? "…" : String(transactions.length)} link="View All" href="/admin/transactions"
-            gradient="linear-gradient(135deg,#f7971e 0%,#ffd200 100%)"
+            gradient="linear-gradient(135deg,#431407 0%,#c2410c 100%)"
             icon={<svg viewBox="0 0 64 64" style={{ width: 72, height: 72, opacity: 0.25 }} fill="white"><circle cx="32" cy="20" r="12"/><path d="M8 56c0-13.3 10.7-24 24-24s24 10.7 24 24H8z"/></svg>} />
           <KpiCard label="Total Revenue" value={txLoading ? "…" : fmtKsh(transactions.filter(t => t.status === "completed").reduce((s, t) => s + t.amount, 0))} link="View All" href="/admin/transactions"
-            gradient="linear-gradient(135deg,#f953c6 0%,#b91d73 100%)"
+            gradient="linear-gradient(135deg,#1e0938 0%,#7c3aed 100%)"
             icon={<svg viewBox="0 0 80 64" style={{ width: 80, height: 64, opacity: 0.25 }} fill="white"><circle cx="28" cy="20" r="10"/><path d="M4 52c0-11 10.7-20 24-20s24 9 24 20H4z"/><circle cx="56" cy="22" r="8" opacity="0.7"/></svg>} />
         </div>
 
@@ -368,7 +370,7 @@ export default function Dashboard() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", alignItems: "start" }}>
 
           {/* Monthly bar chart */}
-          <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
+          <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: chartMinimized ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
               <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--isp-text)" }}>Monthly Registered Customers</span>
               <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -405,10 +407,10 @@ export default function Dashboard() {
 
           {/* Right: Payment Gateway + User Insights */}
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
+            <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)", marginBottom: "0.75rem" }}>Payment Gateway</div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.65rem 0.875rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg,${gatewayInfo.color},${gatewayInfo.color}99)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "1.2rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.65rem 0.875rem", borderRadius: 12, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
+                <div style={{ width: 36, height: 36, borderRadius: 12, background: `linear-gradient(135deg,${gatewayInfo.color},${gatewayInfo.color}99)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "1.2rem" }}>
                   {gatewayInfo.emoji}
                 </div>
                 <div>
@@ -418,7 +420,7 @@ export default function Dashboard() {
                 <span style={{ marginLeft: "auto", fontSize: "0.65rem", padding: "0.2rem 0.55rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Active</span>
               </div>
             </div>
-            <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
+            <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
               <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)", marginBottom: "0.875rem" }}>All Users Insights</div>
               <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
                 <DonutChart insights={userInsights} />
@@ -441,7 +443,7 @@ export default function Dashboard() {
         </div>
 
         {/* Recent Transactions */}
-        <div style={{ borderRadius: 10, background: "var(--isp-table-bg)", border: "1px solid var(--isp-border-subtle)", overflow: "hidden" }}>
+        <div style={{ borderRadius: 16, background: "var(--isp-table-bg)", border: "1px solid var(--isp-border-subtle)", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)" }}>
             <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "var(--isp-text)" }}>Recent Transactions</span>
             <Link href="/admin/transactions">
