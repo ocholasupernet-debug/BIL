@@ -182,7 +182,7 @@ export default function LandingPage() {
           <p className="text-slate-500 text-sm">© 2026 isplatty.org. All rights reserved.</p>
           <div className="flex gap-6">
             <Link href="/admin/login" className="text-slate-500 hover:text-white text-sm transition-colors">Admin Portal</Link>
-            <Link href="/super-admin/dashboard" className="text-slate-500 hover:text-indigo-400 text-sm transition-colors">Super Admin</Link>
+            <Link href="/super-admin/login" className="text-slate-500 hover:text-indigo-400 text-sm transition-colors">Super Admin</Link>
             <Link href="/hotspot-login" className="text-slate-500 hover:text-purple-400 text-sm transition-colors">Hotspot Demo</Link>
           </div>
         </div>
