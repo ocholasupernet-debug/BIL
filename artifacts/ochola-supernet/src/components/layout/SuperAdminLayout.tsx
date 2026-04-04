@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, ShieldCheck, Settings, CreditCard,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
   Plug, Gauge, LogOut, Menu, X, ChevronRight,
-  Globe, LogIn, Sun, Moon,
+  Globe, LogIn, Sun, Moon, Clock,
 } from "lucide-react";
 
 /* ── Theme-aware colour tokens ───────────────────────────────── */
@@ -93,6 +93,17 @@ const NAV: NavSection[] = [
   },
 ];
 
+const SESSION_TTL_MS   = 3 * 60 * 60 * 1000; /* 3 hours */
+const VERIFY_INTERVAL  = 5 * 60 * 1000;       /* re-verify every 5 min */
+
+function formatRemaining(ms: number): string {
+  if (ms <= 0) return "0m";
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation]  = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -101,26 +112,104 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
 
   const superAdminName = localStorage.getItem("ochola_superadmin_name") || "Super Admin";
 
-  useEffect(() => {
+  /* Remaining session time shown in the topbar */
+  const [remainingMs, setRemainingMs] = useState<number>(SESSION_TTL_MS);
+
+  /* ── Force-logout helper ─────────────────────────────────────────── */
+  const forceLogout = React.useCallback((reason: string) => {
+    try {
+      localStorage.removeItem("ochola_superadmin_token");
+      localStorage.removeItem("ochola_superadmin_name");
+      localStorage.removeItem("ochola_superadmin_issued_at");
+    } catch {}
+    setLocation(`/super-admin/login?reason=${reason}`);
+  }, [setLocation]);
+
+  /* ── Verify token against server ────────────────────────────────── */
+  const verifySession = React.useCallback(async (): Promise<boolean> => {
     const token = localStorage.getItem("ochola_superadmin_token");
-    if (!token) {
-      setLocation("/super-admin/login");
-      return;
+    if (!token) { forceLogout("no_session"); return false; }
+
+    /* Local expiry check (fast, no network) */
+    const issuedAt = parseInt(localStorage.getItem("ochola_superadmin_issued_at") ?? "0", 10);
+    const elapsed  = Date.now() - (issuedAt || 0);
+    if (issuedAt && elapsed >= SESSION_TTL_MS) { forceLogout("expired"); return false; }
+
+    /* Update countdown from local data */
+    setRemainingMs(Math.max(0, SESSION_TTL_MS - elapsed));
+
+    /* Server-side verification (detects if another session superseded this one) */
+    try {
+      const res  = await fetch("/api/super-admin/verify", {
+        headers: { "x-sa-token": token },
+      });
+      const data = await res.json() as { ok: boolean; reason?: string; remainingMs?: number };
+      if (!data.ok) {
+        forceLogout(data.reason ?? "no_session");
+        return false;
+      }
+      if (data.remainingMs !== undefined) setRemainingMs(data.remainingMs);
+    } catch {
+      /* Network error — keep session alive (don't kick on flaky connection) */
     }
+    return true;
+  }, [forceLogout]);
+
+  /* ── On mount: verify immediately, then poll every 5 min ─────────── */
+  useEffect(() => {
+    verifySession();
+
+    const tick = setInterval(verifySession, VERIFY_INTERVAL);
+
+    /* Also listen for logout in other tabs */
     const handleStorage = (e: StorageEvent) => {
       if (e.key === "ochola_superadmin_token" && !e.newValue) {
         setLocation("/super-admin/login");
       }
     };
     window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem("ochola_superadmin_token");
-    localStorage.removeItem("ochola_superadmin_name");
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [verifySession]);
+
+  /* ── Countdown ticker (updates every minute) ────────────────────── */
+  useEffect(() => {
+    const ticker = setInterval(() => {
+      const issuedAt = parseInt(localStorage.getItem("ochola_superadmin_issued_at") ?? "0", 10);
+      if (!issuedAt) return;
+      const ms = Math.max(0, SESSION_TTL_MS - (Date.now() - issuedAt));
+      setRemainingMs(ms);
+      if (ms === 0) forceLogout("expired");
+    }, 60_000);
+    return () => clearInterval(ticker);
+  }, [forceLogout]);
+
+  /* ── Manual logout ──────────────────────────────────────────────── */
+  const handleLogout = async () => {
+    const token = localStorage.getItem("ochola_superadmin_token");
+    if (token) {
+      try {
+        await fetch("/api/super-admin/logout", {
+          method: "POST",
+          headers: { "x-sa-token": token },
+        });
+      } catch { /* ignore — we still clear locally */ }
+    }
+    try {
+      localStorage.removeItem("ochola_superadmin_token");
+      localStorage.removeItem("ochola_superadmin_name");
+      localStorage.removeItem("ochola_superadmin_issued_at");
+    } catch {}
     setLocation("/super-admin/login");
   };
+
+  /* Session expiry colour: green → amber → red */
+  const expiryColor =
+    remainingMs > 60 * 60 * 1000 ? "#4ade80" :
+    remainingMs > 15 * 60 * 1000 ? "#fbbf24" : "#f87171";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", background: S.bg, color: S.text, fontFamily: "system-ui, sans-serif" }}>
@@ -243,11 +332,14 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
             <span style={{ fontSize: "0.75rem", color: S.accent, fontWeight: 600 }}>Super Admin Console</span>
           </div>
 
-          {/* Right: status + theme toggle */}
+          {/* Right: session timer + theme toggle */}
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80" }} />
-              <span style={{ fontSize: "0.72rem", color: "#4ade80", fontWeight: 600 }}>All Systems Operational</span>
+            {/* Session expiry indicator */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }} title="Session expires in">
+              <Clock size={13} color={expiryColor} />
+              <span style={{ fontSize: "0.72rem", color: expiryColor, fontWeight: 600 }}>
+                {formatRemaining(remainingMs)} left
+              </span>
             </div>
 
             {/* Light / Dark toggle */}

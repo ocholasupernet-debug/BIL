@@ -1,22 +1,30 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { User, Key, Lock, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight } from "lucide-react";
+import { User, Key, Lock, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight, Clock, LogOut } from "lucide-react";
 
 /* ── Helper: store super admin session in localStorage ── */
-function setSuperAdminSession(name: string, token: string) {
+function setSuperAdminSession(name: string, token: string, issuedAt: number) {
   try {
-    localStorage.setItem("ochola_superadmin_token", token);
-    localStorage.setItem("ochola_superadmin_name",  name);
-    localStorage.setItem("ochola_admin_role",        "superadmin");
-    localStorage.setItem("ochola_admin_name",        name);
-    localStorage.setItem("ochola_admin_username",    name);
-    localStorage.setItem("ochola_admin_id",          "0");
+    localStorage.setItem("ochola_superadmin_token",     token);
+    localStorage.setItem("ochola_superadmin_name",      name);
+    localStorage.setItem("ochola_superadmin_issued_at", String(issuedAt));
+    localStorage.setItem("ochola_admin_role",           "superadmin");
+    localStorage.setItem("ochola_admin_name",           name);
+    localStorage.setItem("ochola_admin_username",       name);
+    localStorage.setItem("ochola_admin_id",             "0");
   } catch {}
 }
 
 export function isSuperAdminLoggedIn(): boolean {
   try { return !!localStorage.getItem("ochola_superadmin_token"); } catch { return false; }
 }
+
+/* ── Reason messages shown when redirected back to login ── */
+const REASON_MESSAGES: Record<string, { text: string; color: string; icon: "clock" | "kick" }> = {
+  expired:    { text: "Your session expired after 3 hours. Please log in again.", color: "#fbbf24", icon: "clock" },
+  superseded: { text: "Your session was ended because someone else logged in.", color: "#f87171",  icon: "kick"  },
+  no_session: { text: "Session not found. Please log in to continue.",           color: "#94a3b8", icon: "clock" },
+};
 
 /* ── Input component ── */
 function Field({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
@@ -59,10 +67,19 @@ export default function SuperAdminLogin() {
   const [showKey,  setShowKey]  = useState(false);
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
+  const [reason,   setReason]   = useState<string | null>(null);
+
+  /* Read ?reason= from URL on mount */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const r = params.get("reason");
+    if (r && REASON_MESSAGES[r]) setReason(r);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setReason(null);
     if (!username.trim() || !apiKey.trim() || !password) {
       setError("All three fields are required.");
       return;
@@ -74,12 +91,14 @@ export default function SuperAdminLogin() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), api_key: apiKey.trim(), password }),
       });
-      const data = await res.json() as { ok: boolean; error?: string; name?: string; token?: string };
+      const data = await res.json() as {
+        ok: boolean; error?: string; name?: string; token?: string; issuedAt?: number;
+      };
       if (!res.ok || !data.ok) {
         setError(data.error ?? "Invalid credentials. Access denied.");
         return;
       }
-      setSuperAdminSession(data.name ?? username, data.token ?? "sa");
+      setSuperAdminSession(data.name ?? username, data.token ?? "sa", data.issuedAt ?? Date.now());
       setLocation("/super-admin/dashboard");
     } catch {
       setError("Could not reach the server. Please try again.");
@@ -142,6 +161,18 @@ export default function SuperAdminLogin() {
           <div style={{ height: 3, background: "linear-gradient(90deg, #8b6914, #d4b34a, #c4a44a, #8b6914)" }} />
 
           <form onSubmit={handleLogin} style={{ padding: "32px 28px", display: "flex", flexDirection: "column", gap: 20 }}>
+
+            {/* Session-ended reason banner */}
+            {reason && REASON_MESSAGES[reason] && (() => {
+              const rm = REASON_MESSAGES[reason];
+              const Icon = rm.icon === "clock" ? Clock : LogOut;
+              return (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: `${rm.color}14`, border: `1px solid ${rm.color}44`, borderRadius: 10, padding: "12px 14px" }}>
+                  <Icon size={15} color={rm.color} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <p style={{ margin: 0, fontSize: 13, color: rm.color }}>{rm.text}</p>
+                </div>
+              );
+            })()}
 
             {/* Error */}
             {error && (
