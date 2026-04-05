@@ -342,9 +342,10 @@ function RouterForm({
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
           {/* 1 — Main bridge */}
           <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(6,182,212,0.1)", borderBottom: "1px solid rgba(6,182,212,0.1)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22d3ee", flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#22d3ee" }}>Bridge Interface</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#22d3ee" }}>Main Bridge</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: "#64748b", background: "rgba(100,116,139,0.12)", border: "1px solid rgba(100,116,139,0.2)", padding: "1px 5px", borderRadius: 3 }}>Normal Internet</span>
             </div>
             <input
               value={form.main_bridge_interface}
@@ -353,22 +354,23 @@ function RouterForm({
               placeholder="bridge"
             />
             <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
-              Main LAN bridge on the router (e.g. <code style={{ fontFamily: "monospace" }}>bridge</code>). Contains all LAN ports.
+              Provides regular internet to all LAN clients. Visible in MikroTik under <strong>Interfaces → Bridge</strong> as <code style={{ fontFamily: "monospace" }}>bridge</code>.
             </p>
           </div>
 
           {/* 2 — Hotspot bridge */}
           <div style={{ padding: "13px 15px", borderBottom: "1px solid rgba(6,182,212,0.1)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#4ade80" }}>Hotspot Bridge Interface</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#4ade80" }}>Hotspot Bridge</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: "#4ade80", background: "rgba(74,222,128,0.10)", border: "1px solid rgba(74,222,128,0.25)", padding: "1px 5px", borderRadius: 3 }}>Captive Portal</span>
             </div>
             <div style={{ position: "relative" }}>
               <input
                 value={form.bridge_interface}
                 onChange={e => set("bridge_interface", e.target.value)}
                 style={{ ...inp, fontSize: "0.8rem" }}
-                placeholder="Auto-detected via Test Connection…"
+                placeholder="hotspot-bridge  (auto-detected via Test Connection)"
               />
               {form.bridge_interface && (
                 <span style={{
@@ -380,7 +382,7 @@ function RouterForm({
               )}
             </div>
             <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
-              Separate bridge for hotspot traffic, carried within the main bridge (e.g. <code style={{ fontFamily: "monospace" }}>hotspot-bridge</code>).
+              Separate independent bridge dedicated to hotspot traffic. Carries the captive portal (login) page for hotspot subscribers. Also visible in MikroTik under <strong>Interfaces → Bridge</strong> as <code style={{ fontFamily: "monospace" }}>hotspot-bridge</code> — completely distinct from the main bridge above.
             </p>
           </div>
 
@@ -586,12 +588,12 @@ function AdminRouterCard({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
               {[
                 {
-                  color: "#22d3ee", label: "Bridge Interface", role: "Main LAN bridge",
+                  color: "#22d3ee", label: "Main Bridge", role: "Normal internet · all LAN clients",
                   value: router.main_bridge_interface || "bridge",
                   ip: null,
                 },
                 {
-                  color: "#4ade80", label: "Hotspot Bridge", role: "Hotspot bridge (carried in bridge)",
+                  color: "#4ade80", label: "Hotspot Bridge", role: "Captive portal · hotspot subscribers",
                   value: router.bridge_interface || "—",
                   ip: null,
                 },

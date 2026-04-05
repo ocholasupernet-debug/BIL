@@ -511,6 +511,48 @@ export default function BridgePorts() {
           {/* Instructions + port list (shown once ports are loaded) */}
           {payload && !loading && (
             <>
+              {/* Two-bridge architecture info banner */}
+              <div style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
+                background: "rgba(255,255,255,0.02)", border: "1px solid rgba(6,182,212,0.15)",
+                borderRadius: 10, padding: "12px 14px",
+              }}>
+                {[
+                  {
+                    color: "#22d3ee",
+                    icon: <Network size={12} style={{ color: "#22d3ee", flexShrink: 0 }} />,
+                    label: "bridge",
+                    pill: "Normal Internet",
+                    pillColor: "#64748b",
+                    desc: "All LAN ports live here. Provides standard internet to wired & wireless clients. Do not put WAN here.",
+                  },
+                  {
+                    color: "#4ade80",
+                    icon: <Wifi size={12} style={{ color: "#4ade80", flexShrink: 0 }} />,
+                    label: "hotspot-bridge",
+                    pill: "Captive Portal",
+                    pillColor: "#4ade80",
+                    desc: "Completely separate bridge that carries the hotspot login page. Hotspot subscribers authenticate here before getting internet.",
+                  },
+                ].map(({ color, icon, label, pill, pillColor, desc }) => (
+                  <div key={label} style={{
+                    borderLeft: `3px solid ${color}`, borderRadius: 6,
+                    background: `${color}08`, padding: "9px 12px",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                      {icon}
+                      <code style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 800, color }}>{label}</code>
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, padding: "1px 5px", borderRadius: 3,
+                        background: `${pillColor}18`, border: `1px solid ${pillColor}33`, color: pillColor,
+                        textTransform: "uppercase" as const, letterSpacing: "0.05em",
+                      }}>{pill}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 10, color: "var(--isp-text-muted)", lineHeight: 1.5 }}>{desc}</p>
+                  </div>
+                ))}
+              </div>
+
               {/* Instruction box */}
               <div style={{
                 background: "rgba(6,182,212,0.07)", border: "1px solid rgba(6,182,212,0.25)",
@@ -518,17 +560,17 @@ export default function BridgePorts() {
                 fontSize: "0.82rem", color: "#67e8f9", lineHeight: 1.7,
               }}>
                 <Shield size={13} style={{ display: "inline", marginRight: "0.4rem", color: "#22d3ee" }} />
-                Select ports to assign to hotspot-bridge. WAN (<strong>ether1</strong>) is excluded.
+                Select which ports to assign to <strong>{selectedBridge || "hotspot-bridge"}</strong>. WAN (<strong>ether1</strong>) is always excluded.
                 After you click <strong>Finish</strong>, to re-add your customers please do this in order:{" "}
                 <strong>Step 1</strong>: Networks → pools and sync by router &nbsp;
                 <strong>Step 2</strong>: Packages → hotspot &amp; PPPoE and sync by router &nbsp;
                 <strong>Step 3</strong>: Activation → Prepaid users and sync by router.
               </div>
 
-              {/* Bridge selector (if multiple bridges) */}
+              {/* Bridge selector (if multiple bridges detected) */}
               {payload.bridges.length > 1 && (
                 <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-                  <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--isp-text-muted)" }}>Bridge:</span>
+                  <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--isp-text-muted)" }}>Assign ports to bridge:</span>
                   <div style={{ position: "relative" }}>
                     <select
                       value={selectedBridge}
@@ -541,9 +583,14 @@ export default function BridgePorts() {
                         fontFamily: "monospace", outline: "none", cursor: "pointer", appearance: "none",
                       }}
                     >
-                      {payload.bridges.map(b => (
-                        <option key={b.name} value={b.name}>{b.name}</option>
-                      ))}
+                      {payload.bridges.map(b => {
+                        const isHotspot = b.name.toLowerCase().includes("hotspot");
+                        return (
+                          <option key={b.name} value={b.name}>
+                            {b.name}{isHotspot ? " (hotspot — captive portal)" : " (main — normal internet)"}
+                          </option>
+                        );
+                      })}
                     </select>
                     <ChevronDown size={12} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#06b6d4", pointerEvents: "none" }} />
                   </div>
