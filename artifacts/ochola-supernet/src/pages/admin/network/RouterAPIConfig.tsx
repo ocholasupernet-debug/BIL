@@ -18,6 +18,7 @@ interface DbRouter {
   host: string;
   ip_address: string | null;
   bridge_ip: string | null;
+  bridge_interface: string | null;
   router_secret: string | null;
   router_username: string;
   description: string | null;
@@ -37,6 +38,8 @@ interface TestResult {
   warnings?: string[];
   error?: string;
   usedVpnFallback?: boolean;
+  bridgeInterfaces?: string[];
+  detectedBridgeInterface?: string;
 }
 
 /* ══════════════════════ Styles ══════════════════════════════════ */
@@ -147,6 +150,7 @@ interface RouterForm {
   name: string;
   host: string;
   bridge_ip: string;
+  bridge_interface: string;
   router_username: string;
   router_secret: string;
   api_port: number;
@@ -154,7 +158,7 @@ interface RouterForm {
 }
 
 const EMPTY_FORM: RouterForm = {
-  name: "", host: "", bridge_ip: "",
+  name: "", host: "", bridge_ip: "", bridge_interface: "",
   router_username: "admin", router_secret: "", api_port: 8728, description: "",
 };
 
@@ -198,6 +202,16 @@ function RouterForm({
       const j = await r.json() as TestResult;
       setTestResult(j);
 
+      /* Auto-fill bridge_interface from detection if field is blank or still default */
+      if (j.ok && j.detectedBridgeInterface) {
+        setForm(f => ({
+          ...f,
+          bridge_interface: f.bridge_interface && f.bridge_interface !== "hotspot-bridge"
+            ? f.bridge_interface
+            : j.detectedBridgeInterface!,
+        }));
+      }
+
       /* If test succeeded and editing an existing router, update status in DB */
       if (j.ok && routerId) {
         await supabase
@@ -233,7 +247,8 @@ function RouterForm({
         admin_id:         ADMIN_ID,
         name:             form.name.trim(),
         host:             form.host.trim(),
-        bridge_ip:        form.bridge_ip.trim() || null,
+        bridge_ip:        form.bridge_ip.trim()        || null,
+        bridge_interface: form.bridge_interface.trim() || "hotspot-bridge",
         router_username:  form.router_username.trim(),
         router_secret:    form.router_secret,
         description:      userDesc || null,
@@ -313,6 +328,29 @@ function RouterForm({
         <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="RouterOS API password" />
       </div>
 
+      <div style={field}>
+        <label style={lbl}><Wifi size={11} /> Hotspot Bridge Interface</label>
+        <div style={{ position: "relative" }}>
+          <input
+            value={form.bridge_interface}
+            onChange={e => set("bridge_interface", e.target.value)}
+            style={inp}
+            placeholder="Auto-detected after Test Connection…"
+          />
+          {form.bridge_interface && (
+            <span style={{
+              position: "absolute", right: "0.6rem", top: "50%", transform: "translateY(-50%)",
+              fontSize: 10, fontWeight: 700, color: "#4ade80", fontFamily: "monospace",
+              background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
+              padding: "0.15rem 0.4rem", borderRadius: 4,
+            }}>✓ set</span>
+          )}
+        </div>
+        <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>
+          MikroTik bridge interface used for hotspot. Detected automatically when you "Test Connection" — or type manually (e.g. <code style={{ fontFamily: "monospace" }}>hotspot-bridge</code>).
+        </p>
+      </div>
+
       <div style={{ ...field, marginBottom: 0 }}>
         <label style={lbl}>Description (optional)</label>
         <input value={form.description} onChange={e => set("description", e.target.value)} style={inp} placeholder="e.g. Main office router, handles PPPoE clients" />
@@ -353,6 +391,22 @@ function RouterForm({
               {testResult.routerIdentity && <p style={{ margin: 0 }}>Identity: <strong style={{ color: "var(--isp-text)" }}>{testResult.routerIdentity}</strong></p>}
               {testResult.rosVersion && <p style={{ margin: 0 }}>RouterOS: <strong style={{ color: "var(--isp-text)" }}>{testResult.rosVersion}</strong></p>}
               {testResult.usedVpnFallback && <p style={{ margin: 0, color: "#fbbf24" }}>⚠ Connected via VPN fallback IP</p>}
+              {testResult.detectedBridgeInterface && (
+                <p style={{ margin: "2px 0 0" }}>
+                  Bridge interface detected: <strong style={{ color: "#4ade80", fontFamily: "monospace" }}>{testResult.detectedBridgeInterface}</strong>
+                  <span style={{ marginLeft: 6, fontSize: 10, color: "#4ade80" }}>← auto-filled</span>
+                </p>
+              )}
+              {testResult.bridgeInterfaces && testResult.bridgeInterfaces.length > 1 && (
+                <p style={{ margin: "1px 0 0" }}>
+                  All bridges: {testResult.bridgeInterfaces.map(b => (
+                    <code key={b} style={{ marginLeft: 4, fontFamily: "monospace", fontSize: 10, background: "rgba(255,255,255,0.06)", padding: "0 4px", borderRadius: 3 }}>{b}</code>
+                  ))}
+                </p>
+              )}
+              {testResult.ok && !testResult.detectedBridgeInterface && (
+                <p style={{ margin: "2px 0 0", color: "#fbbf24" }}>⚠ No bridge interfaces found on this router — enter the interface name manually.</p>
+              )}
             </div>
           )}
           {!testResult.ok && testResult.error && (
@@ -527,13 +581,14 @@ export default function RouterAPIConfig() {
   }
 
   const editForm: RouterForm | undefined = editingRouter ? {
-    name:            editingRouter.name,
-    host:            editingRouter.host ?? "",
-    bridge_ip:       editingRouter.bridge_ip ?? "",
-    router_username: editingRouter.router_username ?? "admin",
-    router_secret:   editingRouter.router_secret ?? "",
-    api_port:        8728,
-    description:     editingRouter.description ?? "",
+    name:             editingRouter.name,
+    host:             editingRouter.host ?? "",
+    bridge_ip:        editingRouter.bridge_ip ?? "",
+    bridge_interface: editingRouter.bridge_interface ?? "",
+    router_username:  editingRouter.router_username ?? "admin",
+    router_secret:    editingRouter.router_secret ?? "",
+    api_port:         8728,
+    description:      editingRouter.description ?? "",
   } : undefined;
 
   /* ════ Read-only view for non-superadmins ════ */

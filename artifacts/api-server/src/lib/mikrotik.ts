@@ -951,6 +951,34 @@ export interface ConnectionTestResult {
    * Tells you immediately if a host is blocked by firewall/NAT.
    */
   portProbes: PortProbeResult[];
+  /** Bridge interfaces detected from the router (name list) */
+  bridgeInterfaces?: string[];
+  /** Best candidate bridge interface (prefers "hotspot-bridge", then first found) */
+  detectedBridgeInterface?: string;
+  /** Router identity / model info detected during test */
+  routerIdentity?: string;
+  rosVersion?: string;
+}
+
+/* ─── Detect bridge interfaces from a live MikroTik router ──────────────── */
+export async function detectBridgeInterfaces(
+  creds: RouterCredentials
+): Promise<{ bridgeInterfaces: string[]; detectedBridgeInterface: string | null }> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/interface/bridge/print"]),
+      ms
+    )) as Record<string, string>[];
+    const names = rows.map(r => r.name).filter(Boolean);
+    const best =
+      names.find(n => n === "hotspot-bridge") ??
+      names.find(n => n.toLowerCase().includes("hotspot")) ??
+      names.find(n => n.toLowerCase().includes("bridge")) ??
+      names[0] ??
+      null;
+    return { bridgeInterfaces: names, detectedBridgeInterface: best };
+  });
 }
 
 export async function testConnection(
@@ -1015,6 +1043,29 @@ export async function testConnection(
   try {
     const { conn, connectedHost } = await connectWithRetry(creds);
     const latencyMs = Date.now() - start;
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    /* Fetch identity, resource info, and bridge interfaces in parallel */
+    let routerIdentity: string | undefined;
+    let rosVersion: string | undefined;
+    let bridgeInterfaces: string[] = [];
+    let detectedBridgeInterface: string | undefined;
+    try {
+      const [identRows, resRows, bridgeRows] = await Promise.all([
+        withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+      ]);
+      routerIdentity = identRows[0]?.name;
+      rosVersion     = resRows[0]?.version;
+      bridgeInterfaces = bridgeRows.map(r => r.name).filter(Boolean);
+      detectedBridgeInterface =
+        bridgeInterfaces.find(n => n === "hotspot-bridge") ??
+        bridgeInterfaces.find(n => n.toLowerCase().includes("hotspot")) ??
+        bridgeInterfaces.find(n => n.toLowerCase().includes("bridge")) ??
+        bridgeInterfaces[0];
+    } catch { /* enrichment failure is non-fatal */ }
+
     try { conn.close(); } catch { /* ignore */ }
     const method: ConnectionTestResult["method"] =
       connectedHost === creds.bridgeIp ? "vpn-tunnel" : "public-ip";
@@ -1026,6 +1077,10 @@ export async function testConnection(
       usingSSL:   creds.useSSL ?? creds.port === 8729,
       warnings,
       portProbes,
+      routerIdentity,
+      rosVersion,
+      bridgeInterfaces,
+      detectedBridgeInterface,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

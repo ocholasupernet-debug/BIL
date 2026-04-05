@@ -1,7 +1,7 @@
 import * as net from "net";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
-import { pingRouter } from "../lib/mikrotik.js";
+import { pingRouter, detectBridgeInterfaces } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 
@@ -220,6 +220,52 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
 
   logger.info({ online, offline }, "[router/ping-all] sweep complete");
   res.json({ ok: true, results: mapped, total: mapped.length, online, offline });
+});
+
+/* ══ GET /api/routers/:id/detect-bridge ════════════════════════════════════
+ * Connects to the router, fetches all /interface/bridge names, picks the
+ * best candidate, saves it to bridge_interface in the DB, and returns the
+ * full list + chosen value. No-op if the router can't be reached.
+ * ══════════════════════════════════════════════════════════════════════════ */
+router.get("/routers/:id/detect-bridge", async (req: Request, res: Response): Promise<void> => {
+  const id = req.params.id;
+
+  const rows = await sbSelect<{
+    id: number; host: string; bridge_ip: string | null;
+    router_username: string; router_secret: string | null;
+  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,router_username,router_secret&limit=1`);
+
+  const row = rows[0];
+  if (!row) { res.status(404).json({ ok: false, error: "Router not found" }); return; }
+
+  const creds = {
+    host:     row.host?.trim()      || "",
+    port:     8728,
+    username: row.router_username   || "admin",
+    password: row.router_secret     || "",
+    useSSL:   false,
+    bridgeIp: row.bridge_ip?.trim() || undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 8_000,
+  };
+
+  try {
+    const { bridgeInterfaces, detectedBridgeInterface } = await detectBridgeInterfaces(creds);
+
+    if (detectedBridgeInterface) {
+      await sbUpdate("isp_routers", `id=eq.${id}`, {
+        bridge_interface: detectedBridgeInterface,
+        updated_at:       new Date().toISOString(),
+      });
+      logger.info({ routerId: id, detectedBridgeInterface, all: bridgeInterfaces }, "[detect-bridge] saved");
+    }
+
+    res.json({ ok: true, bridgeInterfaces, detectedBridgeInterface: detectedBridgeInterface ?? null });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.warn({ routerId: id, error }, "[detect-bridge] failed");
+    res.status(503).json({ ok: false, error });
+  }
 });
 
 /* ── Hysteresis: only write "offline" after OFFLINE_THRESHOLD consecutive failures ── */

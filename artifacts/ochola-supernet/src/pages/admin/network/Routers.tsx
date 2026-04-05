@@ -258,6 +258,8 @@ export default function Routers() {
   const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detectResult, setDetectResult] = useState<{ bridgeInterfaces: string[]; detectedBridgeInterface: string | null } | null>(null);
 
   function openEdit(r: DbRouter) {
     setEditRouter(r);
@@ -266,11 +268,36 @@ export default function Routers() {
       host:             r.host               ?? "",
       bridge_ip:        r.bridge_ip          ?? "",
       proxy_ip:         r.proxy_ip           ?? "",
-      bridge_interface: r.bridge_interface   ?? "hotspot-bridge",
+      bridge_interface: r.bridge_interface   ?? "",
       router_username:  r.router_username    ?? "admin",
       router_secret:    r.router_secret      ?? "",
     });
     setEditError(null);
+    setDetectResult(null);
+  }
+
+  async function handleDetectBridge() {
+    if (!editRouter) return;
+    setDetecting(true);
+    setDetectResult(null);
+    try {
+      const r = await fetch(`/api/routers/${editRouter.id}/detect-bridge`);
+      const j = await r.json() as { ok: boolean; bridgeInterfaces: string[]; detectedBridgeInterface: string | null; error?: string };
+      if (j.ok) {
+        setDetectResult(j);
+        if (j.detectedBridgeInterface) {
+          setEditForm(f => ({ ...f, bridge_interface: j.detectedBridgeInterface! }));
+        }
+      } else {
+        setDetectResult({ bridgeInterfaces: [], detectedBridgeInterface: null });
+        setEditError(j.error ?? "Could not connect to router");
+      }
+    } catch (e: any) {
+      setDetectResult({ bridgeInterfaces: [], detectedBridgeInterface: null });
+      setEditError(e.message ?? "Detect failed");
+    } finally {
+      setDetecting(false);
+    }
   }
 
   async function saveEdit() {
@@ -961,7 +988,7 @@ export default function Routers() {
                 host:             "WAN / Public IP (optional — leave empty if no public IP)",
                 bridge_ip:        "VPN Tunnel IP (10.8.0.x) — Main VPN connection",
                 proxy_ip:         "Proxy VPN IP (10.9.0.x) — Backup connection via OcholaSuper-Proxy",
-                bridge_interface: "Hotspot Bridge Interface Name",
+                bridge_interface: "Hotspot Bridge Interface",
                 router_username:  "API Username",
                 router_secret:    "API Password",
               };
@@ -970,13 +997,81 @@ export default function Routers() {
                 host:             "e.g. 41.80.123.45 — public WAN IP if available",
                 bridge_ip:        "e.g. 10.8.0.2 — assigned by main OpenVPN",
                 proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
-                bridge_interface: "hotspot-bridge",
+                bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",
                 router_secret:    "••••••••",
               };
+
+              const inputStyle: React.CSSProperties = {
+                width: "100%", boxSizing: "border-box",
+                padding: "0.5rem 0.75rem", borderRadius: 7,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid var(--isp-border)",
+                color: "var(--isp-text)", fontSize: "0.84rem",
+                fontFamily: "inherit", outline: "none",
+              };
+
+              if (field === "bridge_interface") {
+                return (
+                  <div key={field}>
+                    <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+                      {labels[field]}
+                    </label>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                      <input
+                        type="text"
+                        value={editForm.bridge_interface}
+                        onChange={e => setEditForm(p => ({ ...p, bridge_interface: e.target.value }))}
+                        placeholder={placeholders[field]}
+                        style={{ ...inputStyle, flex: 1 }}
+                      />
+                      <button
+                        onClick={handleDetectBridge}
+                        disabled={detecting}
+                        title="Auto-detect bridge interfaces from the router"
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "0.4rem 0.75rem", borderRadius: 7, flexShrink: 0,
+                          background: detecting ? "rgba(34,197,94,0.06)" : "rgba(34,197,94,0.1)",
+                          border: "1px solid rgba(34,197,94,0.3)",
+                          color: "#4ade80", fontSize: "0.72rem", fontWeight: 700,
+                          cursor: detecting ? "wait" : "pointer", fontFamily: "inherit",
+                          whiteSpace: "nowrap" as const,
+                        }}
+                      >
+                        {detecting
+                          ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Detecting…</>
+                          : <><Radio size={11} /> Detect</>}
+                      </button>
+                    </div>
+                    {/* Detection result pill */}
+                    {detectResult && (
+                      <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.6 }}>
+                        {detectResult.detectedBridgeInterface ? (
+                          <span style={{ color: "#4ade80" }}>
+                            ✓ Found: <strong style={{ fontFamily: "monospace" }}>{detectResult.detectedBridgeInterface}</strong>
+                            {detectResult.bridgeInterfaces.length > 1 && (
+                              <span style={{ color: "var(--isp-text-muted)", marginLeft: 6 }}>
+                                (all: {detectResult.bridgeInterfaces.join(", ")})
+                              </span>
+                            )}
+                            <span style={{ marginLeft: 6, color: "rgba(74,222,128,0.7)", fontSize: 10 }}>— auto-filled & saved</span>
+                          </span>
+                        ) : (
+                          <span style={{ color: "#fbbf24" }}>⚠ No bridge interfaces found on this router</span>
+                        )}
+                      </div>
+                    )}
+                    <p style={{ margin: "3px 0 0", fontSize: "0.65rem", color: "var(--isp-text-muted)" }}>
+                      Detected automatically from the router's /interface/bridge. Used by hotspot setup scripts.
+                    </p>
+                  </div>
+                );
+              }
+
               return (
                 <div key={field}>
-                  <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
                     {labels[field]}
                   </label>
                   <input
@@ -984,14 +1079,7 @@ export default function Routers() {
                     value={editForm[field]}
                     onChange={e => setEditForm(p => ({ ...p, [field]: e.target.value }))}
                     placeholder={placeholders[field]}
-                    style={{
-                      width: "100%", boxSizing: "border-box",
-                      padding: "0.5rem 0.75rem", borderRadius: 7,
-                      background: "rgba(255,255,255,0.05)",
-                      border: "1px solid var(--isp-border)",
-                      color: "var(--isp-text)", fontSize: "0.84rem",
-                      fontFamily: "inherit", outline: "none",
-                    }}
+                    style={inputStyle}
                   />
                 </div>
               );
