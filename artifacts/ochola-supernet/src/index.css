@@ -32,9 +32,70 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   DARK THEME  (default)  — Linear / Stripe inspired
+   LIGHT THEME (default) — Professional SaaS / Stripe-inspired
 ═══════════════════════════════════════════════════════════════════ */
 :root {
+  --background:            210 20% 98%;
+  --foreground:            222 47% 11%;
+  --sidebar:               222 47% 11%;
+  --card:                  0 0% 100%;
+  --card-foreground:       222 47% 11%;
+  --popover:               0 0% 100%;
+  --popover-foreground:    222 47% 11%;
+  --primary:               221 83% 53%;
+  --primary-foreground:    0 0% 100%;
+  --secondary:             210 40% 96%;
+  --secondary-foreground:  222 47% 11%;
+  --muted:                 210 40% 96%;
+  --muted-foreground:      215 16% 47%;
+  --accent:                142 71% 45%;
+  --accent-foreground:     0 0% 100%;
+  --destructive:           0 72% 51%;
+  --destructive-foreground:0 0% 100%;
+  --border:                214 32% 91%;
+  --input:                 214 32% 91%;
+  --ring:                  221 83% 53%;
+
+  /* ── ISP design tokens — Professional Light ─────────────────────── */
+  --isp-bg:            #F8FAFC;
+  --isp-header:        #FFFFFF;
+  --isp-sidebar:       #0F172A;
+  --isp-section:       #FFFFFF;
+  --isp-card:          #FFFFFF;
+  --isp-inner-card:    #F8FAFC;
+  --isp-border:        #E2E8F0;
+  --isp-border-subtle: #F1F5F9;
+  --isp-text:          #0F172A;
+  --isp-text-muted:    #64748B;
+  --isp-text-sub:      #94A3B8;
+  --isp-nav-text:      #CBD5E1;
+  --isp-input-bg:      #FFFFFF;
+  --isp-input-border:  #E2E8F0;
+  --isp-hover:         #F1F5F9;
+  --isp-table-bg:      #FFFFFF;
+  --isp-table-border:  #F1F5F9;
+
+  /* Primary / accent palette */
+  --isp-accent:        #2563EB;
+  --isp-accent-glow:   rgba(37,99,235,0.10);
+  --isp-accent-border: rgba(37,99,235,0.30);
+  --isp-green:         #22C55E;
+  --isp-green-glow:    rgba(34,197,94,0.12);
+
+  /* Sidebar-specific (always dark) */
+  --isp-sidebar-strip: linear-gradient(180deg, #2563EB 0%, #1E40AF 100%);
+
+  /* Shadow system */
+  --shadow-sm:   0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md:   0 4px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-lg:   0 8px 24px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DARK THEME
+═══════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] {
   --background:            222 20% 5%;
   --foreground:            210 40% 96%;
   --sidebar:               222 22% 7%;
@@ -42,7 +103,7 @@
   --card-foreground:       210 40% 96%;
   --popover:               222 20% 8%;
   --popover-foreground:    210 40% 96%;
-  --primary:               239 84% 67%;
+  --primary:               221 83% 63%;
   --primary-foreground:    0 0% 100%;
   --secondary:             222 16% 13%;
   --secondary-foreground:  210 40% 96%;
@@ -54,9 +115,8 @@
   --destructive-foreground:210 40% 98%;
   --border:                222 16% 13%;
   --input:                 222 16% 13%;
-  --ring:                  239 84% 67%;
+  --ring:                  221 83% 63%;
 
-  /* ── ISP design tokens — Abyss Chrome ─────────────────────────── */
   --isp-bg:            #02090f;
   --isp-header:        rgba(3,11,20,0.94);
   --isp-sidebar:       #030c18;
@@ -75,64 +135,17 @@
   --isp-table-bg:      #04101c;
   --isp-table-border:  rgba(0,196,222,0.065);
 
-  /* Accent palette — Electric Cyan */
-  --isp-accent:        #00c4de;
-  --isp-accent-glow:   rgba(0,196,222,0.18);
-  --isp-accent-border: rgba(0,196,222,0.4);
-  --isp-cyan:          #00e5ff;
-  --isp-cyan-glow:     rgba(0,229,255,0.12);
+  --isp-accent:        #3b82f6;
+  --isp-accent-glow:   rgba(59,130,246,0.15);
+  --isp-accent-border: rgba(59,130,246,0.35);
+  --isp-green:         #22c55e;
+  --isp-green-glow:    rgba(34,197,94,0.12);
+  --isp-sidebar-strip: linear-gradient(180deg, #3b82f6 0%, #7c3aed 50%, #3b82f6 100%);
 
-  /* Sidebar gradient strip */
-  --isp-sidebar-strip: linear-gradient(180deg, #00c4de 0%, #7c3aed 50%, #00c4de 100%);
-
-  /* Shadow system */
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.45), 0 1px 3px rgba(0,0,0,0.5);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4);
-  --shadow-card: 0 0 0 1px rgba(0,196,222,0.08), 0 4px 16px rgba(0,0,0,0.4);
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   LIGHT THEME
-═══════════════════════════════════════════════════════════════════ */
-[data-theme="light"] {
-  --background:            210 20% 98%;
-  --foreground:            222 47% 10%;
-  --card:                  0 0% 100%;
-  --card-foreground:       222 47% 10%;
-  --popover:               0 0% 100%;
-  --popover-foreground:    222 47% 10%;
-  --secondary:             210 40% 94%;
-  --secondary-foreground:  222 47% 10%;
-  --muted:                 210 40% 94%;
-  --muted-foreground:      215 16% 46%;
-  --border:                214 32% 88%;
-  --input:                 214 32% 88%;
-
-  --isp-bg:            #f5f7fa;
-  --isp-header:        #ffffff;
-  --isp-sidebar:       #ffffff;
-  --isp-section:       #ffffff;
-  --isp-card:          #ffffff;
-  --isp-inner-card:    #f8fafc;
-  --isp-border:        rgba(0,0,0,0.08);
-  --isp-border-subtle: rgba(0,0,0,0.05);
-  --isp-text:          #0f172a;
-  --isp-text-muted:    #475569;
-  --isp-text-sub:      #94a3b8;
-  --isp-nav-text:      #64748b;
-  --isp-input-bg:      rgba(0,0,0,0.04);
-  --isp-input-border:  rgba(0,0,0,0.12);
-  --isp-hover:         rgba(0,0,0,0.04);
-  --isp-table-bg:      #ffffff;
-  --isp-table-border:  rgba(0,0,0,0.06);
-  --isp-accent:        #4f46e5;
-  --isp-accent-glow:   rgba(79,70,229,0.08);
-  --isp-accent-border: rgba(79,70,229,0.25);
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06);
-  --shadow-lg: 0 8px 24px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.06);
-  --shadow-card: 0 0 0 1px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
+  --shadow-card: 0 0 0 1px rgba(37,99,235,0.08), 0 4px 16px rgba(0,0,0,0.4);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -166,21 +179,18 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   GLOBAL COMPONENT STYLES — applied site-wide
+   SCROLLBAR
 ═══════════════════════════════════════════════════════════════════ */
-
-/* ── Scrollbar ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
-[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.20); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); }
 
-/* ── Selection ──────────────────────────────────────────────────── */
-::selection { background: rgba(99,102,241,0.28); color: inherit; }
+::selection { background: rgba(37,99,235,0.20); color: inherit; }
 
 /* ═══════════════════════════════════════════════════════════════════
-   ISP CARD — global card style
+   ISP CARD
 ═══════════════════════════════════════════════════════════════════ */
 .isp-card {
   background: var(--isp-card);
@@ -190,12 +200,15 @@
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .isp-card:hover {
-  border-color: rgba(255,255,255,0.1);
-  box-shadow: var(--shadow-lg);
+  border-color: rgba(37,99,235,0.20);
+  box-shadow: var(--shadow-md);
+}
+[data-theme="dark"] .isp-card:hover {
+  border-color: rgba(255,255,255,0.10);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   TABLES — global table upgrade
+   TABLES
 ═══════════════════════════════════════════════════════════════════ */
 .isp-table {
   width: 100%;
@@ -203,7 +216,7 @@
   font-size: 0.8rem;
 }
 .isp-table thead th {
-  background: rgba(255,255,255,0.028);
+  background: #F8FAFC;
   color: var(--isp-text-muted);
   font-size: 0.695rem;
   font-weight: 600;
@@ -212,6 +225,9 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--isp-border);
   white-space: nowrap;
+}
+[data-theme="dark"] .isp-table thead th {
+  background: rgba(255,255,255,0.028);
 }
 .isp-table tbody tr {
   border-bottom: 1px solid var(--isp-border-subtle);
@@ -227,7 +243,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   BUTTONS — global button upgrades
+   BUTTONS
 ═══════════════════════════════════════════════════════════════════ */
 .btn {
   display: inline-flex;
@@ -250,39 +266,40 @@
 .btn:focus-visible { outline: 2px solid var(--isp-accent); outline-offset: 2px; }
 
 .btn-primary {
-  background: var(--isp-accent);
+  background: #2563EB;
   color: #fff;
-  border-color: var(--isp-accent);
-  box-shadow: 0 1px 2px rgba(99,102,241,0.3), 0 0 0 0 rgba(99,102,241,0);
+  border-color: #2563EB;
+  box-shadow: 0 1px 2px rgba(37,99,235,0.3);
 }
 .btn-primary:hover {
-  background: #5254d4;
-  box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+  background: #1D4ED8;
+  box-shadow: 0 4px 12px rgba(37,99,235,0.35);
   transform: translateY(-1px);
 }
 
 .btn-ghost {
   background: var(--isp-input-bg);
   color: var(--isp-text-muted);
-  border-color: var(--isp-input-border);
+  border-color: var(--isp-border);
 }
 .btn-ghost:hover {
-  background: rgba(255,255,255,0.08);
+  background: var(--isp-hover);
   color: var(--isp-text);
 }
 
 .btn-danger {
-  background: rgba(239,68,68,0.1);
-  color: #f87171;
-  border-color: rgba(239,68,68,0.25);
+  background: rgba(239,68,68,0.08);
+  color: #DC2626;
+  border-color: rgba(239,68,68,0.20);
 }
 .btn-danger:hover {
-  background: rgba(239,68,68,0.18);
-  border-color: rgba(239,68,68,0.4);
+  background: rgba(239,68,68,0.14);
+  border-color: rgba(239,68,68,0.35);
 }
+[data-theme="dark"] .btn-danger { color: #f87171; }
 
 /* ═══════════════════════════════════════════════════════════════════
-   INPUTS — global input upgrades
+   INPUTS
 ═══════════════════════════════════════════════════════════════════ */
 .isp-input {
   background: var(--isp-input-bg);
@@ -297,8 +314,8 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .isp-input:focus {
-  border-color: var(--isp-accent);
-  box-shadow: 0 0 0 3px var(--isp-accent-glow);
+  border-color: #2563EB;
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
 }
 .isp-input::placeholder { color: var(--isp-text-sub); }
 
@@ -316,12 +333,18 @@
   white-space: nowrap;
   letter-spacing: 0.01em;
 }
-.isp-badge-green  { background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.2); }
-.isp-badge-red    { background: rgba(239,68,68,0.1);  color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
-.isp-badge-blue   { background: rgba(99,102,241,0.12); color: #818cf8; border: 1px solid rgba(99,102,241,0.25); }
-.isp-badge-cyan   { background: rgba(34,211,238,0.1);  color: #22d3ee; border: 1px solid rgba(34,211,238,0.2); }
-.isp-badge-amber  { background: rgba(251,191,36,0.1);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.2); }
-.isp-badge-gray   { background: rgba(255,255,255,0.07); color: var(--isp-text-muted); border: 1px solid var(--isp-border); }
+.isp-badge-green  { background: rgba(34,197,94,0.10);  color: #16A34A; border: 1px solid rgba(34,197,94,0.20); }
+.isp-badge-red    { background: rgba(239,68,68,0.08);  color: #DC2626; border: 1px solid rgba(239,68,68,0.18); }
+.isp-badge-blue   { background: rgba(37,99,235,0.08);  color: #2563EB; border: 1px solid rgba(37,99,235,0.20); }
+.isp-badge-cyan   { background: rgba(6,182,212,0.08);  color: #0891B2; border: 1px solid rgba(6,182,212,0.20); }
+.isp-badge-amber  { background: rgba(245,158,11,0.10); color: #D97706; border: 1px solid rgba(245,158,11,0.22); }
+.isp-badge-gray   { background: rgba(100,116,139,0.08); color: var(--isp-text-muted); border: 1px solid var(--isp-border); }
+
+[data-theme="dark"] .isp-badge-green  { color: #4ade80; }
+[data-theme="dark"] .isp-badge-red    { color: #f87171; }
+[data-theme="dark"] .isp-badge-blue   { color: #93c5fd; }
+[data-theme="dark"] .isp-badge-cyan   { color: #22d3ee; }
+[data-theme="dark"] .isp-badge-amber  { color: #fbbf24; }
 
 /* ═══════════════════════════════════════════════════════════════════
    PAGE LAYOUT HELPERS
@@ -341,7 +364,6 @@
   margin: 0;
 }
 
-/* ── Section card ── */
 .section-card {
   background: var(--isp-section);
   border: 1px solid var(--isp-border);
@@ -350,7 +372,6 @@
   box-shadow: var(--shadow-card);
 }
 
-/* ── Inner card (nested panels) ── */
 .inner-card {
   background: var(--isp-inner-card);
   border: 1px solid var(--isp-border);
@@ -369,7 +390,7 @@
   border-radius: 8px;
   font-size: 0.8rem;
   font-weight: 500;
-  color: var(--isp-nav-text);
+  color: #94A3B8;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
   text-decoration: none;
@@ -377,17 +398,13 @@
   white-space: nowrap;
 }
 .nav-item:hover {
-  background: rgba(255,255,255,0.055);
-  color: var(--isp-text);
+  background: rgba(255,255,255,0.06);
+  color: #E2E8F0;
 }
 .nav-item.active {
-  background: var(--isp-accent-glow);
-  color: #818cf8;
+  background: rgba(37,99,235,0.18);
+  color: #93C5FD;
   font-weight: 600;
-}
-[data-theme="light"] .nav-item.active {
-  background: rgba(79,70,229,0.08);
-  color: var(--isp-accent);
 }
 
 .nav-section-label {
@@ -395,7 +412,7 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--isp-text-sub);
+  color: #475569;
   padding: 12px 20px 4px;
 }
 
@@ -414,54 +431,58 @@
   box-shadow: 0 0 0 1px var(--isp-accent), 0 4px 16px var(--isp-accent-glow);
 }
 
-/* ── Spin animation used by Loader2 ── */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
 .animate-spin { animation: spin 1s linear infinite; }
 
-/* ── Fade in ── */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-in { animation: fadeIn 0.2s ease forwards; }
 
-/* ── Pulse slow ── */
 .animate-pulse-slow {
   animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-/* ── Float ── */
 @keyframes float {
   0%, 100% { transform: translateY(0); }
   50%       { transform: translateY(-8px); }
 }
 .animate-float { animation: float 5s ease-in-out infinite; }
 
-/* ── Grid pattern bg ── */
 .bg-grid-pattern {
+  background-image:
+    linear-gradient(to right, rgba(15,23,42,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15,23,42,0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+[data-theme="dark"] .bg-grid-pattern {
   background-image:
     linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: radial-gradient(ellipse 80% 50% at 50% 0%, black, transparent);
 }
 
-/* ── Glass panel ── */
 .glass-panel {
-  background: rgba(13,16,25,0.7);
+  background: rgba(255,255,255,0.85);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.08);
-}
-[data-theme="light"] .glass-panel {
-  background: rgba(255,255,255,0.8);
   border: 1px solid rgba(0,0,0,0.08);
+}
+[data-theme="dark"] .glass-panel {
+  background: rgba(13,16,25,0.7);
+  border: 1px solid rgba(255,255,255,0.08);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   UTILITY SHIMS (backward compat with inline styles)
+   HIDE SCROLLBAR UTILITY
+═══════════════════════════════════════════════════════════════════ */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   UTILITY SHIMS
 ═══════════════════════════════════════════════════════════════════ */
 [style*="--isp-section"] { background: var(--isp-section) !important; }

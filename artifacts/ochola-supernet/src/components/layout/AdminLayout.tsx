@@ -13,7 +13,6 @@ import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
 import { clearAdminAuth, getAdminName, isImpersonating, getImpersonatedName, stopImpersonation } from "@/lib/supabase";
 
-/* ── Nav structure ──────────────────────────────────────────────── */
 interface NavItem {
   name: string;
   href?: string;
@@ -172,12 +171,8 @@ const navItems: NavItem[] = [
   { name: "FreeRADIUS",       href: "/admin/radius",               icon: Shield },
 ];
 
-/* ── Sidebar width ── */
-const SIDEBAR_W = 232;
+const SIDEBAR_W = 240;
 
-/* ═══════════════════════════════════════════════════════════════════
-   AdminLayout
-═══════════════════════════════════════════════════════════════════ */
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen]     = useState(true);
@@ -189,24 +184,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const impersonating                    = isImpersonating();
   const impersonatedName                 = getImpersonatedName();
 
-  const [clockTime, setClockTime] = useState(() => {
-    const d = new Date();
-    return d.toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  });
-
   const handleLogout = () => {
     clearAdminAuth();
     queryClient.clear();
     setLocation("/admin/login");
   };
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const d = new Date();
-      setClockTime(d.toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }));
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     const id = localStorage.getItem("ochola_admin_id");
@@ -244,29 +226,16 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
   const isChildActive = (href: string) => location.startsWith(href.split("?")[0]);
 
-  /* ── colour tokens ─────────────────────────────────────────────── */
-  const sidebar = {
-    bg:         "var(--isp-sidebar)",
-    border:     "var(--isp-border)",
-    text:       isDark ? "#8bb8d5" : "#374151",
-    textActive: isDark ? "#00e5ff" : "var(--isp-accent)",
-    activeBg:   isDark ? "rgba(0,196,222,0.1)" : "rgba(0,180,210,0.08)",
-    hoverBg:    isDark ? "rgba(0,196,222,0.055)" : "rgba(0,0,0,0.04)",
-    subText:    isDark ? "#4a7a9b" : "#6b7280",
-    subActive:  isDark ? "#00c4de" : "var(--isp-accent)",
-  };
-
   return (
     <div style={{
       minHeight: "100vh",
       display: "flex",
       background: "var(--isp-bg)",
       fontFamily: "'Inter', sans-serif",
-      transition: "background 0.2s",
     }}>
 
       {/* ════════════════════════════════════════════════════════════
-          SIDEBAR
+          SIDEBAR — always dark navy
       ════════════════════════════════════════════════════════════ */}
       <aside style={{
         flexShrink: 0,
@@ -274,42 +243,50 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         flexDirection: "column",
         width: sidebarOpen ? SIDEBAR_W : 0,
         overflow: "hidden",
-        background: sidebar.bg,
-        borderRight: `1px solid ${sidebar.border}`,
+        background: "#0F172A",
         minHeight: "100vh",
         transition: "width 0.25s cubic-bezier(0.4,0,0.2,1)",
         position: "relative",
         zIndex: 20,
-        boxShadow: isDark ? "4px 0 24px rgba(0,0,0,0.5)" : "2px 0 12px rgba(0,0,0,0.06)",
+        boxShadow: "2px 0 8px rgba(0,0,0,0.15)",
       }}>
-
-        {/* Gradient accent strip — left edge */}
-        {isDark && (
-          <div style={{
-            position: "absolute", left: 0, top: 0, bottom: 0, width: 3,
-            background: "linear-gradient(180deg,#00c4de 0%,#7c3aed 50%,#00c4de 100%)",
-            zIndex: 1, flexShrink: 0,
-            boxShadow: "0 0 12px rgba(0,196,222,0.5), 0 0 24px rgba(124,58,237,0.3)",
-          }} />
-        )}
 
         {/* Logo strip */}
         <div style={{
-          padding: "14px 14px 12px 18px",
-          borderBottom: `1px solid ${sidebar.border}`,
+          padding: "16px 16px 14px 20px",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
         }}>
-          <Logo size="sm" />
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 8,
+              background: "linear-gradient(135deg,#2563EB,#1D4ED8)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              flexShrink: 0,
+              boxShadow: "0 2px 8px rgba(37,99,235,0.4)",
+            }}>
+              <Zap size={16} style={{ color: "white" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#F1F5F9", letterSpacing: "-0.01em", lineHeight: 1.1 }}>
+                {brand.ispName || "ISPlatty"}
+              </div>
+              <div style={{ fontSize: "0.6rem", color: "#475569", fontWeight: 500 }}>
+                Admin Panel
+              </div>
+            </div>
+          </div>
           <button
             onClick={() => setSidebarOpen(false)}
             style={{
-              background: isDark ? "rgba(0,196,222,0.08)" : "rgba(0,0,0,0.06)",
-              border: `1px solid ${sidebar.border}`,
-              cursor: "pointer", color: sidebar.text, padding: "4px 6px",
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              cursor: "pointer", color: "#64748B", padding: "4px 6px",
               display: "flex", borderRadius: 6, transition: "all 0.15s",
+              flexShrink: 0,
             }}
             title="Collapse sidebar"
           >
@@ -318,75 +295,84 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav scroll area */}
-        <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "10px 0 16px" }}>
+        <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "8px 0 16px" }}>
           {navItems.map((item) => {
             const active      = isActive(item);
             const expanded_   = expanded.includes(item.name);
             const hasChildren = !!(item.children?.length);
-
-            const rowStyle: React.CSSProperties = {
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "6px 10px 6px 14px",
-              margin: "1px 8px",
-              borderRadius: 9,
-              fontSize: "0.78rem",
-              fontWeight: active ? 700 : 500,
-              color: active ? sidebar.textActive : sidebar.text,
-              background: active ? sidebar.activeBg : "transparent",
-              borderLeft: active ? `2px solid ${isDark ? "#00c4de" : "var(--isp-accent)"}` : "2px solid transparent",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-              userSelect: "none",
-              boxShadow: active && isDark ? "0 0 12px rgba(0,196,222,0.08)" : "none",
-            };
 
             return (
               <div key={item.name}>
                 {item.href && !hasChildren ? (
                   <Link href={item.href}>
                     <div
-                      style={rowStyle}
-                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = sidebar.hoverBg; (e.currentTarget as HTMLElement).style.color = isDark ? "#b8d8f0" : "#374151"; }}}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = active ? sidebar.activeBg : "transparent"; (e.currentTarget as HTMLElement).style.color = active ? sidebar.textActive : sidebar.text; }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 9,
+                        padding: "7px 10px 7px 14px",
+                        margin: "1px 8px",
+                        borderRadius: 8,
+                        fontSize: "0.8rem",
+                        fontWeight: active ? 600 : 400,
+                        color: active ? "#93C5FD" : "#94A3B8",
+                        background: active ? "rgba(37,99,235,0.18)" : "transparent",
+                        borderLeft: active ? "2px solid #3B82F6" : "2px solid transparent",
+                        cursor: "pointer",
+                        transition: "all 0.13s ease",
+                        textDecoration: "none",
+                        whiteSpace: "nowrap",
+                        userSelect: "none",
+                      }}
+                      onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#CBD5E1"; }}}
+                      onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#94A3B8"; }}}
                     >
-                      <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                        <span style={{
-                          width: 24, height: 24, borderRadius: 6, flexShrink: 0,
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          background: active ? (isDark ? "rgba(0,196,222,0.15)" : "rgba(0,180,210,0.1)") : (isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)"),
-                          transition: "all 0.15s",
-                        }}>
-                          <item.icon size={13} style={{ color: active ? (isDark ? "#00e5ff" : "var(--isp-accent)") : sidebar.text, opacity: active ? 1 : 0.65 }} />
-                        </span>
-                        <span>{item.name}</span>
+                      <span style={{
+                        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        background: active ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.04)",
+                      }}>
+                        <item.icon size={12} style={{ color: active ? "#60A5FA" : "#64748B" }} />
                       </span>
+                      <span>{item.name}</span>
                     </div>
                   </Link>
                 ) : (
                   <div
                     onClick={() => toggleExpand(item.name)}
-                    style={rowStyle}
-                    onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = sidebar.hoverBg; (e.currentTarget as HTMLElement).style.color = isDark ? "#b8d8f0" : "#374151"; }}}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = active ? sidebar.activeBg : "transparent"; (e.currentTarget as HTMLElement).style.color = active ? sidebar.textActive : sidebar.text; }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "7px 10px 7px 14px",
+                      margin: "1px 8px",
+                      borderRadius: 8,
+                      fontSize: "0.8rem",
+                      fontWeight: active ? 600 : 400,
+                      color: active ? "#93C5FD" : "#94A3B8",
+                      background: active ? "rgba(37,99,235,0.18)" : "transparent",
+                      borderLeft: active ? "2px solid #3B82F6" : "2px solid transparent",
+                      cursor: "pointer",
+                      transition: "all 0.13s ease",
+                      whiteSpace: "nowrap",
+                      userSelect: "none",
+                    }}
+                    onMouseEnter={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "#CBD5E1"; }}}
+                    onMouseLeave={e => { if (!active) { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#94A3B8"; }}}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
                       <span style={{
-                        width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+                        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        background: active ? (isDark ? "rgba(0,196,222,0.15)" : "rgba(0,180,210,0.1)") : (isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)"),
-                        transition: "all 0.15s",
+                        background: active ? "rgba(59,130,246,0.20)" : "rgba(255,255,255,0.04)",
                       }}>
-                        <item.icon size={13} style={{ color: active ? (isDark ? "#00e5ff" : "var(--isp-accent)") : sidebar.text, opacity: active ? 1 : 0.65 }} />
+                        <item.icon size={12} style={{ color: active ? "#60A5FA" : "#64748B" }} />
                       </span>
                       <span>{item.name}</span>
                       {item.badge && (
                         <span style={{
                           fontSize: "0.5rem", padding: "1px 5px", borderRadius: 99,
-                          background: isDark ? "#00c4de" : "#0891b2", color: isDark ? "#02090f" : "white",
+                          background: "#2563EB", color: "white",
                           fontWeight: 800, letterSpacing: "0.06em",
                         }}>
                           {item.badge}
@@ -396,7 +382,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                     <ChevronRight
                       size={11}
                       style={{
-                        flexShrink: 0, opacity: 0.45,
+                        flexShrink: 0, color: "#475569",
                         transform: expanded_ ? "rotate(90deg)" : "rotate(0deg)",
                         transition: "transform 0.18s ease",
                       }}
@@ -407,9 +393,9 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                 {/* Child items */}
                 {hasChildren && expanded_ && (
                   <div style={{
-                    marginLeft: 22,
-                    paddingLeft: 14,
-                    borderLeft: `1px solid ${isDark ? "rgba(0,196,222,0.12)" : "rgba(0,0,0,0.08)"}`,
+                    marginLeft: 24,
+                    paddingLeft: 12,
+                    borderLeft: "1px solid rgba(255,255,255,0.06)",
                     marginBottom: 2,
                   }}>
                     {item.children!.map((child) => {
@@ -418,19 +404,19 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                         <Link key={child.href} href={child.href}>
                           <div
                             style={{
-                              padding: "5px 8px",
+                              padding: "5px 10px",
                               margin: "1px 0",
                               borderRadius: 6,
-                              fontSize: "0.745rem",
-                              fontWeight: childActive ? 700 : 400,
-                              color: childActive ? sidebar.subActive : sidebar.subText,
+                              fontSize: "0.755rem",
+                              fontWeight: childActive ? 600 : 400,
+                              color: childActive ? "#93C5FD" : "#64748B",
                               cursor: "pointer",
                               transition: "color 0.12s ease, background 0.12s ease",
                               whiteSpace: "nowrap",
-                              background: childActive ? (isDark ? "rgba(0,196,222,0.08)" : "rgba(0,180,210,0.07)") : "transparent",
+                              background: childActive ? "rgba(37,99,235,0.14)" : "transparent",
                             }}
-                            onMouseEnter={e => { if (!childActive) { (e.currentTarget as HTMLElement).style.color = isDark ? "#b8d8f0" : "#0891b2"; (e.currentTarget as HTMLElement).style.background = sidebar.hoverBg; } }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = childActive ? sidebar.subActive : sidebar.subText; (e.currentTarget as HTMLElement).style.background = childActive ? (isDark ? "rgba(0,196,222,0.08)" : "rgba(0,180,210,0.07)") : "transparent"; }}
+                            onMouseEnter={e => { if (!childActive) { (e.currentTarget as HTMLElement).style.color = "#CBD5E1"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"; }}}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = childActive ? "#93C5FD" : "#64748B"; (e.currentTarget as HTMLElement).style.background = childActive ? "rgba(37,99,235,0.14)" : "transparent"; }}
                           >
                             {child.name}
                           </div>
@@ -446,44 +432,42 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
         {/* Bottom: user strip */}
         <div style={{
-          padding: "10px 12px",
-          borderTop: `1px solid ${sidebar.border}`,
+          padding: "12px 14px",
+          borderTop: "1px solid rgba(255,255,255,0.06)",
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           gap: 10,
-          background: isDark ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.02)",
         }}>
           <div style={{
-            width: 32, height: 32, borderRadius: 9,
-            background: isDark ? "linear-gradient(135deg,#00c4de,#7c3aed)" : "linear-gradient(135deg,#0891b2,#7c3aed)",
+            width: 32, height: 32, borderRadius: 8,
+            background: "linear-gradient(135deg,#2563EB,#1E40AF)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "0.78rem", fontWeight: 800, color: "white", flexShrink: 0,
-            boxShadow: isDark ? "0 0 10px rgba(0,196,222,0.3)" : "none",
+            fontSize: "0.78rem", fontWeight: 700, color: "white", flexShrink: 0,
           }}>
             {(adminName || "A").charAt(0).toUpperCase()}
           </div>
           <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
-            <div style={{ fontSize: "0.765rem", fontWeight: 700, color: "var(--isp-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: "0.765rem", fontWeight: 600, color: "#E2E8F0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {adminName || brand.adminName || "Administrator"}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 1 }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0 }} />
-              <span style={{ fontSize: "0.62rem", color: "#22c55e", fontWeight: 600 }}>Online</span>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22C55E", display: "inline-block", flexShrink: 0 }} />
+              <span style={{ fontSize: "0.62rem", color: "#22C55E", fontWeight: 600 }}>Online</span>
             </div>
           </div>
           <button
             onClick={handleLogout}
             title="Sign out"
             style={{
-              flexShrink: 0, background: "rgba(239,68,68,0.06)",
-              border: "1px solid rgba(239,68,68,0.15)",
-              cursor: "pointer", color: "#f87171",
+              flexShrink: 0, background: "rgba(239,68,68,0.08)",
+              border: "1px solid rgba(239,68,68,0.18)",
+              cursor: "pointer", color: "#F87171",
               padding: "5px 7px", display: "flex", borderRadius: 7,
               transition: "all 0.15s",
             }}
-            onMouseEnter={e => { (e.currentTarget.style.background = "rgba(239,68,68,0.14)"); (e.currentTarget.style.borderColor = "rgba(239,68,68,0.3)"); }}
-            onMouseLeave={e => { (e.currentTarget.style.background = "rgba(239,68,68,0.06)"); (e.currentTarget.style.borderColor = "rgba(239,68,68,0.15)"); }}
+            onMouseEnter={e => { (e.currentTarget.style.background = "rgba(239,68,68,0.16)"); (e.currentTarget.style.borderColor = "rgba(239,68,68,0.3)"); }}
+            onMouseLeave={e => { (e.currentTarget.style.background = "rgba(239,68,68,0.08)"); (e.currentTarget.style.borderColor = "rgba(239,68,68,0.18)"); }}
           >
             <LogOut size={13} />
           </button>
@@ -500,123 +484,90 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "0 20px",
-          height: 52,
-          background: "var(--isp-header)",
-          borderBottom: isDark
-            ? "1px solid rgba(0,196,222,0.12)"
-            : "1px solid rgba(0,0,0,0.08)",
+          padding: "0 24px",
+          height: 56,
+          background: isDark ? "var(--isp-header)" : "#FFFFFF",
+          borderBottom: isDark ? "1px solid rgba(255,255,255,0.06)" : "1px solid #E2E8F0",
           flexShrink: 0,
           position: "sticky",
           top: 0,
           zIndex: 30,
-          backdropFilter: "blur(20px)",
-          transition: "background 0.2s",
-          boxShadow: isDark
-            ? "0 1px 0 rgba(0,196,222,0.06), 0 4px 16px rgba(0,0,0,0.4)"
-            : "0 1px 8px rgba(0,0,0,0.05)",
+          boxShadow: isDark ? "0 1px 0 rgba(255,255,255,0.04), 0 2px 8px rgba(0,0,0,0.4)" : "0 1px 4px rgba(0,0,0,0.06)",
         }}>
 
           {/* Hamburger */}
           <button
             onClick={() => setSidebarOpen(o => !o)}
             style={{
-              flexShrink: 0, background: isDark ? "rgba(0,196,222,0.07)" : "rgba(0,0,0,0.05)",
-              border: `1px solid ${isDark ? "rgba(0,196,222,0.12)" : "rgba(0,0,0,0.1)"}`,
+              flexShrink: 0,
+              background: "transparent",
+              border: "1px solid var(--isp-border)",
               cursor: "pointer", color: "var(--isp-text-muted)",
-              padding: 6, borderRadius: 8, display: "flex", transition: "all 0.15s",
+              padding: "6px 8px", borderRadius: 8, display: "flex", transition: "all 0.15s",
             }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--isp-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text)"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isDark ? "rgba(0,196,222,0.07)" : "rgba(0,0,0,0.05)"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; }}
           >
             <Menu size={16} />
           </button>
 
-          {/* Brand name (shown when sidebar is collapsed) */}
+          {/* Brand when sidebar collapsed */}
           {!sidebarOpen && (
-            <span style={{ fontSize: "0.85rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.01em", flexShrink: 0 }}>
-              {brand.ispName}
+            <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "var(--isp-text)", letterSpacing: "-0.01em", flexShrink: 0 }}>
+              {brand.ispName || "ISPlatty"}
             </span>
           )}
 
           {/* Search */}
           <div style={{
-            flex: 1, maxWidth: 340,
+            flex: 1, maxWidth: 360,
             display: "flex", alignItems: "center",
-            background: "var(--isp-input-bg)",
-            border: "1px solid var(--isp-input-border)",
+            background: isDark ? "var(--isp-input-bg)" : "#F8FAFC",
+            border: "1px solid var(--isp-border)",
             borderRadius: 9, overflow: "hidden",
             transition: "border-color 0.15s, box-shadow 0.15s",
           }}
             onFocusCapture={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-accent)";
-              (e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 3px var(--isp-accent-glow)";
+              (e.currentTarget as HTMLElement).style.borderColor = "#2563EB";
+              (e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 3px rgba(37,99,235,0.12)";
             }}
             onBlurCapture={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-input-border)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-border)";
               (e.currentTarget as HTMLElement).style.boxShadow = "none";
             }}
           >
-            <Search size={12} style={{ color: "var(--isp-text-sub)", marginLeft: 11, flexShrink: 0 }} />
+            <Search size={13} style={{ color: "var(--isp-text-sub)", marginLeft: 11, flexShrink: 0 }} />
             <input
               type="text"
               placeholder="Search customers, routers…"
               style={{
                 flex: 1, background: "none", border: "none", outline: "none",
-                color: "var(--isp-text)", fontSize: "0.775rem", padding: "7px 10px",
+                color: "var(--isp-text)", fontSize: "0.8rem", padding: "7px 10px",
                 fontFamily: "inherit",
               }}
             />
             <kbd style={{
-              margin: "0 8px", padding: "1px 5px", borderRadius: 4,
-              background: isDark ? "rgba(0,196,222,0.08)" : "rgba(0,0,0,0.06)",
-              border: `1px solid ${isDark ? "rgba(0,196,222,0.15)" : "rgba(0,0,0,0.1)"}`,
-              color: "var(--isp-text-sub)", fontSize: "0.6rem", fontFamily: "inherit", flexShrink: 0,
+              margin: "0 8px", padding: "2px 6px", borderRadius: 5,
+              background: isDark ? "rgba(255,255,255,0.06)" : "#F1F5F9",
+              border: "1px solid var(--isp-border)",
+              color: "var(--isp-text-sub)", fontSize: "0.62rem", fontFamily: "inherit", flexShrink: 0,
             }}>⌘K</kbd>
           </div>
 
-          {/* Spacer */}
           <div style={{ flex: 1 }} />
 
           {/* Right controls */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
 
-            {/* Live system status */}
-            {isDark && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "5px 11px", borderRadius: 20,
-                background: "rgba(34,197,94,0.07)",
-                border: "1px solid rgba(34,197,94,0.18)",
-              }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", display: "inline-block", boxShadow: "0 0 6px #22c55e" }} />
-                <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "#4ade80", letterSpacing: "0.04em" }}>LIVE</span>
-              </div>
-            )}
-
-            {/* Live clock */}
-            {isDark && (
-              <div style={{
-                padding: "5px 12px", borderRadius: 8,
-                background: "rgba(0,196,222,0.06)",
-                border: "1px solid rgba(0,196,222,0.12)",
-                fontFamily: "'JetBrains Mono','Fira Code',monospace",
-                fontSize: "0.72rem", fontWeight: 700,
-                color: "#00c4de", letterSpacing: "0.06em",
-              }}>
-                {clockTime}
-              </div>
-            )}
-
-            {/* Region */}
+            {/* System status pill */}
             <div style={{
               display: "flex", alignItems: "center", gap: 5,
-              padding: "5px 10px", borderRadius: 8,
-              background: "var(--isp-input-bg)",
-              border: "1px solid var(--isp-input-border)",
-              color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 600,
+              padding: "5px 11px", borderRadius: 20,
+              background: "rgba(34,197,94,0.08)",
+              border: "1px solid rgba(34,197,94,0.18)",
             }}>
-              🇰🇪 <span>KE</span>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22C55E", display: "inline-block" }} />
+              <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "#16A34A", letterSpacing: "0.04em" }}>LIVE</span>
             </div>
 
             {/* Theme toggle */}
@@ -625,36 +576,51 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               title={isDark ? "Switch to light" : "Switch to dark"}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
-                width: 33, height: 33, borderRadius: 8,
-                background: "var(--isp-input-bg)",
-                border: "1px solid var(--isp-input-border)",
+                width: 34, height: 34, borderRadius: 8,
+                background: "transparent",
+                border: "1px solid var(--isp-border)",
                 color: "var(--isp-text-muted)", cursor: "pointer",
                 transition: "all 0.15s",
               }}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--isp-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "var(--isp-input-bg)"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; }}
             >
-              {isDark ? <Sun size={13} /> : <Moon size={13} />}
+              {isDark ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+
+            {/* Notifications */}
+            <button
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 34, height: 34, borderRadius: 8,
+                background: "transparent",
+                border: "1px solid var(--isp-border)",
+                color: "var(--isp-text-muted)", cursor: "pointer",
+                transition: "all 0.15s", position: "relative",
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "var(--isp-hover)"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; }}
+            >
+              <Bell size={14} />
             </button>
 
             {/* Avatar pill */}
             <div style={{
               display: "flex", alignItems: "center", gap: 8,
-              padding: "3px 10px 3px 3px",
-              background: "var(--isp-input-bg)",
-              border: "1px solid var(--isp-input-border)",
+              padding: "4px 12px 4px 4px",
+              background: isDark ? "rgba(255,255,255,0.04)" : "#F8FAFC",
+              border: "1px solid var(--isp-border)",
               borderRadius: 99, cursor: "default",
             }}>
               <div style={{
                 width: 26, height: 26, borderRadius: "50%",
-                background: isDark ? "linear-gradient(135deg,#00c4de,#7c3aed)" : "linear-gradient(135deg,#0891b2,#7c3aed)",
+                background: "linear-gradient(135deg,#2563EB,#1E40AF)",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "0.7rem", fontWeight: 800, color: "white", flexShrink: 0,
-                boxShadow: isDark ? "0 0 8px rgba(0,196,222,0.3)" : "none",
+                fontSize: "0.72rem", fontWeight: 700, color: "white", flexShrink: 0,
               }}>
                 {(adminName || "A").charAt(0).toUpperCase()}
               </div>
-              <span style={{ fontSize: "0.765rem", color: "var(--isp-text-muted)", fontWeight: 600, whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", fontWeight: 600, whiteSpace: "nowrap" }}>
                 {adminName || brand.adminName || "Administrator"}
               </span>
             </div>
@@ -666,16 +632,16 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               style={{
                 display: "flex", alignItems: "center", gap: 5,
                 padding: "6px 12px", borderRadius: 8,
-                background: "rgba(239,68,68,0.07)",
-                border: "1px solid rgba(239,68,68,0.18)",
-                color: "#f87171", fontSize: "0.765rem",
-                cursor: "pointer", fontFamily: "inherit", fontWeight: 700,
+                background: "transparent",
+                border: "1px solid var(--isp-border)",
+                color: "var(--isp-text-muted)", fontSize: "0.775rem",
+                cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
                 transition: "all 0.15s",
               }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.14)"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(239,68,68,0.3)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.07)"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(239,68,68,0.18)"; }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.08)"; (e.currentTarget as HTMLElement).style.color = "#DC2626"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(239,68,68,0.25)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--isp-text-muted)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-border)"; }}
             >
-              <LogOut size={12} />
+              <LogOut size={13} />
               Logout
             </button>
           </div>
@@ -686,7 +652,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           <div style={{
             background: "linear-gradient(90deg,#92400e,#78350f)",
             borderBottom: "1px solid rgba(251,191,36,0.3)",
-            padding: "8px 20px",
+            padding: "8px 24px",
             display: "flex", alignItems: "center", justifyContent: "space-between",
             flexShrink: 0,
           }}>
@@ -695,40 +661,23 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "#fde68a" }}>
                 Super Admin Mode — Impersonating: <span style={{ color: "white" }}>{impersonatedName}</span>
               </span>
-              <span style={{ fontSize: "0.72rem", color: "#fbbf24", opacity: 0.8 }}>
-                · All actions are performed under this admin's account
-              </span>
             </div>
             <button
               onClick={handleExitImpersonation}
               style={{
-                display: "flex", alignItems: "center", gap: 6,
-                background: "rgba(251,191,36,0.15)", border: "1px solid rgba(251,191,36,0.35)",
-                borderRadius: 7, padding: "5px 14px", color: "#fde68a",
-                fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                transition: "background 0.15s",
+                padding: "4px 14px", borderRadius: 8,
+                background: "rgba(251,191,36,0.2)", border: "1px solid rgba(251,191,36,0.4)",
+                color: "#fde68a", fontSize: "0.75rem", fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit",
               }}
             >
-              <LogOut size={12} /> Exit Impersonation
+              Exit Impersonation
             </button>
           </div>
         )}
 
-        {/* ── Page content ──────────────────────────────────────── */}
-        <main style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "24px",
-          background: isDark
-            ? "radial-gradient(ellipse 80% 40% at 50% 0%, rgba(0,196,222,0.04) 0%, transparent 70%), var(--isp-bg)"
-            : "var(--isp-bg)",
-          backgroundImage: isDark
-            ? `radial-gradient(ellipse 80% 40% at 50% 0%, rgba(0,196,222,0.04) 0%, transparent 70%), radial-gradient(circle, rgba(0,196,222,0.06) 1px, transparent 1px)`
-            : "none",
-          backgroundSize: isDark ? "auto, 28px 28px" : "auto",
-          transition: "background 0.2s",
-          position: "relative",
-        }}>
+        {/* ── Page content ────────────────────────────────────── */}
+        <main style={{ flex: 1, padding: "24px", overflowY: "auto" }}>
           {children}
         </main>
       </div>

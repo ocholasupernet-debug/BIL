@@ -9,21 +9,21 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  theme: "dark",
+  theme: "light",
   toggle: () => {},
-  isDark: true,
+  isDark: false,
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = typeof localStorage !== "undefined" ? localStorage.getItem("isp-theme") : null;
-    return (stored === "light" || stored === "dark") ? stored : "dark";
+    return (stored === "light" || stored === "dark") ? stored : "light";
   });
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === "light") {
-      root.setAttribute("data-theme", "light");
+    if (theme === "dark") {
+      root.setAttribute("data-theme", "dark");
     } else {
       root.removeAttribute("data-theme");
     }
