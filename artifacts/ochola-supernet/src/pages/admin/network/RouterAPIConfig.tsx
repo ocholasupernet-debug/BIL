@@ -18,7 +18,9 @@ interface DbRouter {
   host: string;
   ip_address: string | null;
   bridge_ip: string | null;
+  proxy_ip: string | null;
   bridge_interface: string | null;
+  main_bridge_interface: string | null;
   router_secret: string | null;
   router_username: string;
   description: string | null;
@@ -150,7 +152,9 @@ interface RouterForm {
   name: string;
   host: string;
   bridge_ip: string;
+  proxy_ip: string;
   bridge_interface: string;
+  main_bridge_interface: string;
   router_username: string;
   router_secret: string;
   api_port: number;
@@ -158,7 +162,9 @@ interface RouterForm {
 }
 
 const EMPTY_FORM: RouterForm = {
-  name: "", host: "", bridge_ip: "", bridge_interface: "",
+  name: "", host: "",
+  bridge_ip: "", proxy_ip: "",
+  bridge_interface: "", main_bridge_interface: "bridge",
   router_username: "admin", router_secret: "", api_port: 8728, description: "",
 };
 
@@ -244,15 +250,17 @@ function RouterForm({
       const autoDesc = `Manually installed on ${fmtDate}`;
 
       const payload = {
-        admin_id:         ADMIN_ID,
-        name:             form.name.trim(),
-        host:             form.host.trim(),
-        bridge_ip:        form.bridge_ip.trim()        || null,
-        bridge_interface: form.bridge_interface.trim() || "hotspot-bridge",
-        router_username:  form.router_username.trim(),
-        router_secret:    form.router_secret,
-        description:      userDesc || null,
-        updated_at:       now.toISOString(),
+        admin_id:              ADMIN_ID,
+        name:                  form.name.trim(),
+        host:                  form.host.trim(),
+        bridge_ip:             form.bridge_ip.trim()             || null,
+        proxy_ip:              form.proxy_ip.trim()              || null,
+        bridge_interface:      form.bridge_interface.trim()      || "hotspot-bridge",
+        main_bridge_interface: form.main_bridge_interface.trim() || "bridge",
+        router_username:       form.router_username.trim(),
+        router_secret:         form.router_secret,
+        description:           userDesc || null,
+        updated_at:            now.toISOString(),
       };
 
       let err;
@@ -298,20 +306,15 @@ function RouterForm({
         <div>
           <label style={lbl}><Globe size={11} /> MikroTik Public IP / Host</label>
           <input value={form.host} onChange={e => set("host", e.target.value)} style={inp} placeholder="e.g. 102.212.246.158" />
-          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Public IP or hostname reachable from VPS</p>
+          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Public IP or hostname reachable from the VPS</p>
         </div>
-        <div>
-          <label style={lbl}><Wifi size={11} /> VPN Tunnel IP (bridge_ip)</label>
-          <input value={form.bridge_ip} onChange={e => set("bridge_ip", e.target.value)} style={inp} placeholder="e.g. 10.8.0.6" />
-          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>OpenVPN client IP assigned to this router</p>
-        </div>
-      </div>
-
-      <div style={{ ...grid2, marginBottom: 16 }}>
         <div>
           <label style={lbl}><User size={11} /> API Username</label>
           <input value={form.router_username} onChange={e => set("router_username", e.target.value)} style={inp} placeholder="admin" />
         </div>
+      </div>
+
+      <div style={{ ...grid2, marginBottom: 16 }}>
         <div>
           <label style={lbl}><Hash size={11} /> API Port</label>
           <input
@@ -321,34 +324,101 @@ function RouterForm({
           />
           <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>8728 = plain API · 8729 = SSL</p>
         </div>
-      </div>
-
-      <div style={field}>
-        <label style={lbl}><Lock size={11} /> API Password <span style={{ fontWeight: 400, marginLeft: 4 }}>(stored securely in Supabase)</span></label>
-        <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="RouterOS API password" />
-      </div>
-
-      <div style={field}>
-        <label style={lbl}><Wifi size={11} /> Hotspot Bridge Interface</label>
-        <div style={{ position: "relative" }}>
-          <input
-            value={form.bridge_interface}
-            onChange={e => set("bridge_interface", e.target.value)}
-            style={inp}
-            placeholder="Auto-detected after Test Connection…"
-          />
-          {form.bridge_interface && (
-            <span style={{
-              position: "absolute", right: "0.6rem", top: "50%", transform: "translateY(-50%)",
-              fontSize: 10, fontWeight: 700, color: "#4ade80", fontFamily: "monospace",
-              background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
-              padding: "0.15rem 0.4rem", borderRadius: 4,
-            }}>✓ set</span>
-          )}
+        <div>
+          <label style={lbl}><Lock size={11} /> API Password</label>
+          <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="RouterOS API password" />
+          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Stored securely in Supabase</p>
         </div>
-        <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>
-          MikroTik bridge interface used for hotspot. Detected automatically when you "Test Connection" — or type manually (e.g. <code style={{ fontFamily: "monospace" }}>hotspot-bridge</code>).
-        </p>
+      </div>
+
+      {/* ── Interfaces section ─────────────────────────────────── */}
+      <div style={{ margin: "4px 0 18px", borderRadius: 10, border: "1px solid rgba(6,182,212,0.18)", overflow: "hidden" }}>
+        <div style={{ background: "rgba(6,182,212,0.06)", padding: "9px 14px", borderBottom: "1px solid rgba(6,182,212,0.15)", display: "flex", alignItems: "center", gap: 7 }}>
+          <Terminal size={12} style={{ color: "#06b6d4" }} />
+          <span style={{ fontSize: 11, fontWeight: 800, color: "#06b6d4", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>Interfaces</span>
+          <span style={{ fontSize: 10, color: "var(--isp-text-muted)", marginLeft: 4 }}>— each interface has its own IP and purpose</span>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
+          {/* 1 — Main bridge */}
+          <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(6,182,212,0.1)", borderBottom: "1px solid rgba(6,182,212,0.1)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22d3ee", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#22d3ee" }}>Bridge Interface</span>
+            </div>
+            <input
+              value={form.main_bridge_interface}
+              onChange={e => set("main_bridge_interface", e.target.value)}
+              style={{ ...inp, fontSize: "0.8rem" }}
+              placeholder="bridge"
+            />
+            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
+              Main LAN bridge on the router (e.g. <code style={{ fontFamily: "monospace" }}>bridge</code>). Contains all LAN ports.
+            </p>
+          </div>
+
+          {/* 2 — Hotspot bridge */}
+          <div style={{ padding: "13px 15px", borderBottom: "1px solid rgba(6,182,212,0.1)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#4ade80" }}>Hotspot Bridge Interface</span>
+            </div>
+            <div style={{ position: "relative" }}>
+              <input
+                value={form.bridge_interface}
+                onChange={e => set("bridge_interface", e.target.value)}
+                style={{ ...inp, fontSize: "0.8rem" }}
+                placeholder="Auto-detected via Test Connection…"
+              />
+              {form.bridge_interface && (
+                <span style={{
+                  position: "absolute", right: "0.6rem", top: "50%", transform: "translateY(-50%)",
+                  fontSize: 9, fontWeight: 700, color: "#4ade80",
+                  background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)",
+                  padding: "0.15rem 0.4rem", borderRadius: 4,
+                }}>✓</span>
+              )}
+            </div>
+            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
+              Separate bridge for hotspot traffic, carried within the main bridge (e.g. <code style={{ fontFamily: "monospace" }}>hotspot-bridge</code>).
+            </p>
+          </div>
+
+          {/* 3 — Main VPN (remote access) */}
+          <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(6,182,212,0.1)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#818cf8", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#818cf8" }}>VPN Remote Access IP</span>
+            </div>
+            <input
+              value={form.bridge_ip}
+              onChange={e => set("bridge_ip", e.target.value)}
+              style={{ ...inp, fontSize: "0.8rem" }}
+              placeholder="e.g. 10.8.0.6"
+            />
+            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
+              Main OpenVPN IP assigned to this router (10.8.0.x, port 1194). Used for remote API access.
+            </p>
+          </div>
+
+          {/* 4 — Proxy VPN (ocholasuperproxy backup) */}
+          <div style={{ padding: "13px 15px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fb923c", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#fb923c" }}>Proxy IP</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: "#64748b", background: "rgba(251,146,60,0.1)", border: "1px solid rgba(251,146,60,0.25)", padding: "0.1rem 0.4rem", borderRadius: 3 }}>ocholasuperproxy · backup</span>
+            </div>
+            <input
+              value={form.proxy_ip}
+              onChange={e => set("proxy_ip", e.target.value)}
+              style={{ ...inp, fontSize: "0.8rem" }}
+              placeholder="e.g. 10.9.0.6"
+            />
+            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
+              Backup OpenVPN IP via ocholasuperproxy (10.9.0.x, port 1195). Fallback if main VPN is down.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div style={{ ...field, marginBottom: 0 }}>
@@ -509,22 +579,71 @@ function AdminRouterCard({
       </div>
 
       {expanded && (
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "14px 20px", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px,1fr))", gap: 12 }}>
-          {[
-            ["API Host",     router.host || "—"],
-            ["VPN IP",       router.bridge_ip || "—"],
-            ["API User",     router.router_username || "admin"],
-            ["API Port",     "8728"],
-            ["Password",     "••••••••"],
-            ["Model",        router.model || "—"],
-            ["ROS Version",  router.ros_version || "—"],
-            ["Description",  router.description || "—"],
-          ].map(([label, val]) => (
-            <div key={label}>
-              <p style={{ margin: 0, fontSize: 10, color: "var(--isp-text-muted)", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{label}</p>
-              <p style={{ margin: "3px 0 0", fontSize: 12, color: "var(--isp-text)", fontFamily: label === "API Host" || label === "VPN IP" || label === "API User" ? "monospace" : "inherit" }}>{val}</p>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          {/* Interfaces panel */}
+          <div style={{ padding: "12px 18px", borderBottom: "1px solid rgba(6,182,212,0.08)" }}>
+            <p style={{ margin: "0 0 10px", fontSize: 10, fontWeight: 800, color: "#06b6d4", letterSpacing: "0.09em", textTransform: "uppercase" as const }}>Interfaces</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
+              {[
+                {
+                  color: "#22d3ee", label: "Bridge Interface", role: "Main LAN bridge",
+                  value: router.main_bridge_interface || "bridge",
+                  ip: null,
+                },
+                {
+                  color: "#4ade80", label: "Hotspot Bridge", role: "Hotspot bridge (carried in bridge)",
+                  value: router.bridge_interface || "—",
+                  ip: null,
+                },
+                {
+                  color: "#818cf8", label: "VPN Remote Access", role: "Main OpenVPN — port 1194",
+                  value: "ovpn-out1",
+                  ip: router.bridge_ip || "—",
+                },
+                {
+                  color: "#fb923c", label: "Proxy (ocholasuperproxy)", role: "Backup OpenVPN — port 1195",
+                  value: "ocholasuperproxy",
+                  ip: router.proxy_ip || "—",
+                },
+              ].map(({ color, label, role, value, ip }) => (
+                <div key={label} style={{
+                  background: "rgba(255,255,255,0.025)", border: `1px solid ${color}22`,
+                  borderLeft: `3px solid ${color}`, borderRadius: 7, padding: "9px 12px",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color }}>{label}</span>
+                  </div>
+                  <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--isp-text)", fontWeight: 600 }}>
+                    {value}
+                    {ip && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: ip === "—" ? "var(--isp-text-muted)" : "#93c5fd", background: ip === "—" ? "transparent" : "rgba(147,197,253,0.08)", padding: ip === "—" ? "0" : "1px 5px", borderRadius: 3 }}>
+                        {ip}
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ margin: "3px 0 0", fontSize: 9.5, color: "var(--isp-text-muted)", lineHeight: 1.4 }}>{role}</p>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
+
+          {/* Connection details */}
+          <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 10 }}>
+            {[
+              ["Public IP / Host", router.host || "—", true],
+              ["API User",         router.router_username || "admin", true],
+              ["API Port",         "8728", false],
+              ["API Password",     "••••••••", false],
+              ["Model",            router.model || "—", false],
+              ["ROS Version",      router.ros_version || "—", false],
+              ["Description",      router.description || "—", false],
+            ].map(([label, val, mono]) => (
+              <div key={String(label)}>
+                <p style={{ margin: 0, fontSize: 9.5, color: "var(--isp-text-muted)", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.06em" }}>{label}</p>
+                <p style={{ margin: "3px 0 0", fontSize: 11, color: "var(--isp-text)", fontFamily: mono ? "monospace" : "inherit" }}>{val}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -547,7 +666,7 @@ export default function RouterAPIConfig() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,admin_id,name,host,ip_address,bridge_ip,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
+        .select("id,admin_id,name,host,ip_address,bridge_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
         .order("name");
       return (data ?? []) as DbRouter[];
@@ -581,14 +700,16 @@ export default function RouterAPIConfig() {
   }
 
   const editForm: RouterForm | undefined = editingRouter ? {
-    name:             editingRouter.name,
-    host:             editingRouter.host ?? "",
-    bridge_ip:        editingRouter.bridge_ip ?? "",
-    bridge_interface: editingRouter.bridge_interface ?? "",
-    router_username:  editingRouter.router_username ?? "admin",
-    router_secret:    editingRouter.router_secret ?? "",
-    api_port:         8728,
-    description:      editingRouter.description ?? "",
+    name:                  editingRouter.name,
+    host:                  editingRouter.host ?? "",
+    bridge_ip:             editingRouter.bridge_ip ?? "",
+    proxy_ip:              editingRouter.proxy_ip ?? "",
+    bridge_interface:      editingRouter.bridge_interface ?? "",
+    main_bridge_interface: editingRouter.main_bridge_interface ?? "bridge",
+    router_username:       editingRouter.router_username ?? "admin",
+    router_secret:         editingRouter.router_secret ?? "",
+    api_port:              8728,
+    description:           editingRouter.description ?? "",
   } : undefined;
 
   /* ════ Read-only view for non-superadmins ════ */

@@ -139,30 +139,52 @@ interface UnifiedRouter {
   bridge_ip: string | null; source: "supabase"; status: string;
 }
 
+/* ── Classify an interface name into a purpose type ── */
+type IfaceKind = "bridge" | "hotspot-bridge" | "vpn-main" | "vpn-proxy" | "wlan" | "ether" | "loopback" | "other";
+
+function classifyIface(name: string, type: string): IfaceKind {
+  const n = name.toLowerCase();
+  const t = type.toLowerCase();
+  if (t === "loopback") return "loopback";
+  if (t === "wlan" || t.startsWith("wlan")) return "wlan";
+  if (n === "ocholasuperproxy" || n.includes("superproxy") || n.includes("ovpn-out2") || n.includes("proxy")) return "vpn-proxy";
+  if (n.startsWith("ovpn") || n.includes("vpn") || t === "ovpn-client") return "vpn-main";
+  if (n.includes("hotspot") || n.includes("hs-bridge") || n.includes("hsbridge")) return "hotspot-bridge";
+  if (t === "bridge") return "bridge";
+  if (n.startsWith("ether") || t === "ether") return "ether";
+  return "other";
+}
+
 /* ── icon for interface type ── */
-function IfaceIcon({ type, running }: { type: string; running: boolean }) {
+function IfaceIcon({ name, type, running }: { name: string; type: string; running: boolean }) {
+  const kind = classifyIface(name, type);
   const color = running ? "#22d3ee" : "#475569";
-  if (type === "wlan" || type.startsWith("wlan")) return <Wifi size={14} style={{ color }} />;
-  if (type === "bridge") return <Network size={14} style={{ color }} />;
+  if (kind === "wlan") return <Wifi size={14} style={{ color }} />;
+  if (kind === "bridge" || kind === "hotspot-bridge") return <Network size={14} style={{ color }} />;
+  if (kind === "vpn-main" || kind === "vpn-proxy") return <Shield size={14} style={{ color: running ? "#818cf8" : "#475569" }} />;
   return <Plug size={14} style={{ color }} />;
 }
 
 /* ── Classify a bridge name into a readable type ── */
-function bridgeType(bridgeName: string): "hotspot" | "pppoe" | "unknown" {
+function bridgeType(bridgeName: string): "hotspot" | "pppoe" | "vpn-proxy" | "vpn-main" | "unknown" {
   const n = bridgeName.toLowerCase();
+  if (n === "ocholasuperproxy" || n.includes("superproxy")) return "vpn-proxy";
+  if (n.startsWith("ovpn") || n.includes("vpn"))            return "vpn-main";
   if (n.includes("hotspot") || n.includes("hs-bridge") || n.includes("hsbridge")) return "hotspot";
-  if (n.includes("pppoe")   || n.includes("ppp"))                                   return "pppoe";
+  if (n.includes("pppoe")   || n.includes("ppp"))           return "pppoe";
   return "unknown";
 }
 
-/* ── Badge shown beside the port name ── */
+/* ── Badge shown beside the port/interface name ── */
 function BridgeBadge({ bridge }: { bridge: string | null }) {
   if (!bridge) return null;
   const type = bridgeType(bridge);
   const cfg: Record<string, { bg: string; border: string; color: string; label: string }> = {
-    hotspot: { bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.3)",  color: "#4ade80", label: "Hotspot Bridge" },
-    pppoe:   { bg: "rgba(6,182,212,0.12)",  border: "rgba(6,182,212,0.3)",  color: "#22d3ee", label: "PPPoE Bridge"   },
-    unknown: { bg: "rgba(251,191,36,0.10)", border: "rgba(251,191,36,0.3)", color: "#fbbf24", label: "Unknown Bridge"  },
+    hotspot:   { bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.3)",   color: "#4ade80", label: "Hotspot Bridge"      },
+    pppoe:     { bg: "rgba(6,182,212,0.12)",   border: "rgba(6,182,212,0.3)",   color: "#22d3ee", label: "PPPoE Bridge"        },
+    "vpn-main":  { bg: "rgba(129,140,248,0.12)", border: "rgba(129,140,248,0.3)", color: "#818cf8", label: "VPN Remote Access"   },
+    "vpn-proxy": { bg: "rgba(251,146,60,0.12)",  border: "rgba(251,146,60,0.3)",  color: "#fb923c", label: "Proxy · ocholasuperproxy" },
+    unknown:   { bg: "rgba(251,191,36,0.10)",  border: "rgba(251,191,36,0.3)",  color: "#fbbf24", label: "Unknown Bridge"      },
   };
   const { bg, border, color, label } = cfg[type];
   return (
@@ -172,6 +194,32 @@ function BridgeBadge({ bridge }: { bridge: string | null }) {
       whiteSpace: "nowrap", flexShrink: 0,
     }}>
       {label}
+    </span>
+  );
+}
+
+/* ── Interface kind pill ── */
+function IfaceKindBadge({ name, type }: { name: string; type: string }) {
+  const kind = classifyIface(name, type);
+  const cfg: Record<IfaceKind, { color: string; label: string } | null> = {
+    "bridge":        { color: "#22d3ee", label: "Bridge" },
+    "hotspot-bridge":{ color: "#4ade80", label: "Hotspot Bridge" },
+    "vpn-main":      { color: "#818cf8", label: "VPN · Remote Access" },
+    "vpn-proxy":     { color: "#fb923c", label: "ocholasuperproxy · Backup" },
+    "wlan":          { color: "#60a5fa", label: "Wireless" },
+    "ether":         null,
+    "loopback":      null,
+    "other":         null,
+  };
+  const c = cfg[kind];
+  if (!c) return null;
+  return (
+    <span style={{
+      fontSize: "0.6rem", fontWeight: 700, padding: "0.15rem 0.5rem", borderRadius: 4,
+      background: `${c.color}18`, border: `1px solid ${c.color}44`, color: c.color,
+      whiteSpace: "nowrap", flexShrink: 0,
+    }}>
+      {c.label}
     </span>
   );
 }
@@ -541,7 +589,7 @@ export default function BridgePorts() {
                       </div>
 
                       {/* Interface icon */}
-                      <IfaceIcon type={iface.type} running={iface.running} />
+                      <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
 
                       {/* Name */}
                       <span style={{
@@ -823,9 +871,10 @@ export default function BridgePorts() {
                       {inBridge && <Check size={11} strokeWidth={3} color="white" />}
                     </button>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: 1 }}>
-                      <IfaceIcon type={iface.type} running={iface.running} />
+                      <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
                       <span style={{ fontFamily: "monospace", fontSize: "0.85rem", fontWeight: 700, color: "var(--isp-text)" }}>{iface.name}</span>
                       {iface.comment && <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>— {iface.comment}</span>}
+                      <IfaceKindBadge name={iface.name} type={iface.type} />
                     </div>
                     <span style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", padding: "0.15rem 0.5rem", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "var(--isp-text-muted)" }}>{iface.type || "ether"}</span>
                     <BridgeBadge bridge={portCurrentBridge(iface.name, payload!.bridgePorts)} />
