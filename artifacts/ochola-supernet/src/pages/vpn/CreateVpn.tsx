@@ -52,7 +52,7 @@ export default function CreateVpn() {
 
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
-  const [created,  setCreated]  = useState<{ id: number; username: string } | null>(null);
+  const [created,  setCreated]  = useState<{ id: number; username: string; assigned_ip?: string } | null>(null);
 
   function nextStep() { setStep(s => Math.min(s + 1, 2)); }
   function prevStep() { setStep(s => Math.max(s - 1, 1)); }
@@ -77,7 +77,7 @@ export default function CreateVpn() {
         throw new Error(txt);
       }
       const user = await r.json();
-      setCreated({ id: user.id, username: user.username });
+      setCreated({ id: user.id, username: user.username, assigned_ip: user.assigned_ip });
       qc.invalidateQueries({ queryKey: ["vpn-users"] });
       qc.invalidateQueries({ queryKey: ["vpn-users-list"] });
     } catch (e: any) {
@@ -102,6 +102,14 @@ export default function CreateVpn() {
           <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 text-left mb-6 space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-gray-400">Username</span><span className="font-mono font-semibold">{created.username}</span></div>
             <div className="flex justify-between"><span className="text-gray-400">Password</span><span className="font-mono font-semibold">{password}</span></div>
+            {created.assigned_ip && (
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400">VPN IP</span>
+                <span className="inline-flex items-center gap-1 bg-cyan-50 border border-cyan-200 text-cyan-700 text-xs font-mono font-bold px-2 py-0.5 rounded-full">
+                  {created.assigned_ip}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between"><span className="text-gray-400">Protocol</span><span className="font-semibold">OpenVPN / TCP</span></div>
             <div className="flex justify-between"><span className="text-gray-400">Server</span><span className="font-mono font-semibold text-xs">{SERVER_HOST}:1194</span></div>
             <div className="flex justify-between"><span className="text-gray-400">Expires</span><span className="font-semibold">{VALIDITIES.find(v => v.value === validity)?.label}</span></div>

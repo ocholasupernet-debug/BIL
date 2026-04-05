@@ -5,7 +5,7 @@ import {
   Lock, Shield, Eye, EyeOff, Copy, Check, Download, Trash2,
   Search, Circle, Key, Wifi, Clock,
   CheckCircle2, XCircle, Plus, RefreshCw, ToggleLeft, ToggleRight,
-  User, AlertTriangle,
+  User, AlertTriangle, Network,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -22,6 +22,7 @@ type VpnUser = {
   is_active: boolean;
   created_at: string;
   expires_at?: string;
+  assigned_ip?: string;
 };
 
 function CopyBtn({ text }: { text: string }) {
@@ -272,8 +273,9 @@ export default function VpnList() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Username</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden sm:table-cell">VPN IP</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">Notes</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden sm:table-cell">Created</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden lg:table-cell">Created</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden lg:table-cell">Expires</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                   <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
@@ -303,10 +305,23 @@ export default function VpnList() {
                           </div>
                         </div>
                       </td>
+                      <td className="px-4 py-3.5 hidden sm:table-cell">
+                        {v.assigned_ip ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 bg-cyan-50 border border-cyan-200 text-cyan-700 text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                              <Network size={9} />
+                              {v.assigned_ip}
+                            </span>
+                            <CopyBtn text={v.assigned_ip} />
+                          </div>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3.5 hidden md:table-cell">
                         <span className="text-xs text-gray-500 truncate max-w-[160px] block">{v.notes || <span className="text-gray-300">—</span>}</span>
                       </td>
-                      <td className="px-4 py-3.5 hidden sm:table-cell">
+                      <td className="px-4 py-3.5 hidden lg:table-cell">
                         <div className="flex items-center gap-1 text-xs text-gray-500">
                           <Clock size={11} /> {new Date(v.created_at).toLocaleDateString()}
                         </div>

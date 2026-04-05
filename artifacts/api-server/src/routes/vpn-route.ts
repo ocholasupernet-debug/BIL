@@ -488,6 +488,68 @@ function generateOvpn(username: string): string {
   ].join("\n");
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * IP ALLOCATION — picks the next free 10.8.0.x address that is not used
+ * by any VPN user (assigned_ip) or any router (bridge_ip) across ALL admins
+ * so IPs are globally unique, not just per-admin.
+ * ══════════════════════════════════════════════════════════════════════════ */
+async function collectUsedVpnIps(url: string, key: string): Promise<Set<string>> {
+  const used = new Set<string>();
+
+  /* All assigned VPN user IPs (global) */
+  try {
+    const r = await fetch(`${url}/rest/v1/isp_vpn_users?select=assigned_ip&assigned_ip=not.is.null`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    if (r.ok) {
+      const rows = (await r.json()) as { assigned_ip: string }[];
+      for (const row of rows) if (row.assigned_ip) used.add(row.assigned_ip);
+    }
+  } catch { /* ignore — proceed with partial data */ }
+
+  /* All router bridge IPs (global) — prevent overlap with router tunnel IPs */
+  try {
+    const r = await fetch(`${url}/rest/v1/isp_routers?select=bridge_ip&bridge_ip=not.is.null`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+    if (r.ok) {
+      const rows = (await r.json()) as { bridge_ip: string }[];
+      for (const row of rows) if (row.bridge_ip?.startsWith("10.8.")) used.add(row.bridge_ip);
+    }
+  } catch { /* ignore */ }
+
+  /* Also check ipp.txt on disk */
+  for (const [, ip] of readIppFile()) used.add(ip);
+
+  return used;
+}
+
+async function allocateNextVpnIp(url: string, key: string): Promise<string> {
+  const used = await collectUsedVpnIps(url, key);
+  /* 10.8.0.1 = server; start clients at 10.8.0.2 */
+  used.add("10.8.0.1");
+  for (let i = 2; i <= 254; i++) {
+    const candidate = `10.8.0.${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  /* Overflow into 10.8.1.x */
+  for (let i = 1; i <= 254; i++) {
+    const candidate = `10.8.1.${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new Error("VPN IP pool exhausted (all 10.8.0.x and 10.8.1.x addresses are in use)");
+}
+
+function writeIppEntry(username: string, ip: string): void {
+  try {
+    const path = IPP_PATHS.find(p => existsSync(p)) ?? IPP_PATHS[0];
+    const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
+    const lines = content.split("\n").filter(l => l.trim() && !l.startsWith(`${username},`));
+    lines.push(`${username},${ip}`);
+    writeFileSync(path, lines.join("\n") + "\n");
+  } catch { /* dev environment — no ipp.txt present */ }
+}
+
 /* ── GET /api/vpn/users ── list VPN users for an admin */
 router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
   const adminId = req.query.adminId ?? "1";
@@ -496,7 +558,7 @@ router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
 
   try {
     const r = await fetch(
-      `${url}/rest/v1/isp_vpn_users?admin_id=eq.${adminId}&order=created_at.desc&select=id,username,notes,is_active,created_at,expires_at`,
+      `${url}/rest/v1/isp_vpn_users?admin_id=eq.${adminId}&order=created_at.desc&select=id,username,notes,is_active,created_at,expires_at,assigned_ip`,
       { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
     if (!r.ok) throw new Error(await r.text());
@@ -515,21 +577,27 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
+    /* Allocate a globally unique VPN IP before inserting */
+    const assignedIp = await allocateNextVpnIp(url, key);
+
     const r = await fetch(`${url}/rest/v1/isp_vpn_users`, {
       method: "POST",
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
       body: JSON.stringify({
-        admin_id:   Number(adminId),
-        username:   username.trim(),
-        password:   password.trim(),
-        notes:      notes?.trim() || null,
-        is_active:  true,
-        expires_at: expiresAt || null,
+        admin_id:    Number(adminId),
+        username:    username.trim(),
+        password:    password.trim(),
+        notes:       notes?.trim() || null,
+        is_active:   true,
+        expires_at:  expiresAt || null,
+        assigned_ip: assignedIp,
       }),
     });
     if (!r.ok) throw new Error(await r.text());
     const rows = await r.json();
     syncUserToDb(username.trim(), password.trim());
+    /* Pre-register the IP in ipp.txt so OpenVPN always assigns this IP */
+    writeIppEntry(username.trim(), assignedIp);
     res.status(201).json(rows[0]);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
