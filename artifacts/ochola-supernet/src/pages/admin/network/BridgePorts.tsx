@@ -6,7 +6,7 @@ import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle,
-  ChevronDown, Check, Network, Plug, Wifi, Shield, Copy,
+  ChevronDown, Check, Network, Plug, Wifi, Shield, Copy, Plus,
 } from "lucide-react";
 
 /* ── Smart error panel ─────────────────────────────────────────── */
@@ -232,6 +232,62 @@ function portCurrentBridge(portName: string, bridgePorts: BridgePort[]): string 
 /* ════════════════════════════════════════════════════════
    Main page
 ════════════════════════════════════════════════════════ */
+function CreateHotspotBridgeBanner({ creating, message, onCreateClick }: {
+  creating: boolean;
+  message: string | null;
+  onCreateClick: () => void;
+}) {
+  if (message) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: "0.625rem",
+        padding: "0.75rem 1.25rem", borderRadius: 10,
+        background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)",
+        color: "#4ade80", fontSize: "0.85rem", fontWeight: 600,
+      }}>
+        <CheckCircle2 size={15} style={{ flexShrink: 0 }} />
+        {message}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "0.75rem",
+      padding: "0.875rem 1.25rem", borderRadius: 10,
+      background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)",
+    }}>
+      <AlertTriangle size={16} style={{ color: "#fbbf24", flexShrink: 0 }} />
+      <div style={{ flex: 1 }}>
+        <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#fbbf24" }}>
+          No hotspot bridge found
+        </span>
+        <p style={{ margin: "0.25rem 0 0", fontSize: "0.78rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
+          A separate <code style={{ fontFamily: "monospace", fontWeight: 700, color: "#4ade80" }}>hotspot-bridge</code> is required for the captive portal. Click the button to create it on this router.
+        </p>
+      </div>
+      <button
+        onClick={onCreateClick}
+        disabled={creating}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: "0.4rem",
+          padding: "0.5rem 1rem", borderRadius: 8, flexShrink: 0,
+          background: creating ? "rgba(74,222,128,0.15)" : "linear-gradient(135deg,#22c55e,#16a34a)",
+          border: "none", color: creating ? "#4ade80" : "white",
+          fontWeight: 700, fontSize: "0.8rem", fontFamily: "inherit",
+          cursor: creating ? "not-allowed" : "pointer",
+          boxShadow: creating ? "none" : "0 4px 12px rgba(34,197,94,0.3)",
+        }}
+      >
+        {creating
+          ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Creating…</>
+          : <><Plus size={13} /> Create Hotspot Bridge</>
+        }
+      </button>
+    </div>
+  );
+}
+
 export default function BridgePorts() {
   const [, navigate] = useLocation();
 
@@ -249,6 +305,8 @@ export default function BridgePorts() {
   const [applying, setApplying]             = useState(false);
   const [applyLogs, setApplyLogs]           = useState<string[] | null>(null);
   const [applyOk, setApplyOk]               = useState<boolean | null>(null);
+  const [creatingBridge, setCreatingBridge] = useState(false);
+  const [bridgeCreateMsg, setBridgeCreateMsg] = useState<string | null>(null);
 
   /* ── Load routers from Supabase ── */
   const { data: sbRouters = [] } = useQuery<SbRouter[]>({
@@ -426,6 +484,45 @@ export default function BridgePorts() {
     i => i.type !== "bridge" && i.type !== "loopback" && i.name !== "ether1"
   );
 
+  const hasHotspotBridge = (payload?.bridges ?? []).some(
+    b => bridgeType(b.name) === "hotspot"
+  );
+
+  async function handleCreateHotspotBridge() {
+    if (!activeRouter || creatingBridge) return;
+    setCreatingBridge(true);
+    setLoadError(null);
+    setBridgeCreateMsg(null);
+    try {
+      const res = await fetch("/api/admin/router/bridge-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host: effectiveHost(activeRouter),
+          username: activeRouter.router_username || "admin",
+          password: activeRouter.router_secret   || "",
+          bridgeName: "hotspot-bridge",
+          bridgeIp: activeRouter.bridge_ip || undefined,
+        }),
+      });
+      if (!res.ok && !res.headers.get("content-type")?.includes("json")) {
+        setLoadError(`Server error (${res.status}) while creating hotspot-bridge.`);
+        return;
+      }
+      const data = await res.json() as { ok: boolean; created: boolean; message: string; error?: string };
+      if (data.ok) {
+        setBridgeCreateMsg(data.message);
+        fetchPorts(selectedKey!);
+      } else {
+        setLoadError(data.error || "Failed to create hotspot-bridge.");
+      }
+    } catch (e) {
+      setLoadError(String(e));
+    } finally {
+      setCreatingBridge(false);
+    }
+  }
+
   const connectedIp = connectedVia || activeRouter?.bridge_ip || activeRouter?.host || "";
   const profileName = activeRouter ? `${slugify(activeRouter.name)}.ovpn` : "";
   const bridgeLabel = selectedBridge ? `*${selectedBridge.replace(/hotspot-?/i, "").replace(/bridge/i, "B") || "B"}` : "*B";
@@ -506,6 +603,11 @@ export default function BridgePorts() {
             <div style={{ padding: "2rem 1.25rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.85rem" }}>
               Loading router data…
             </div>
+          )}
+
+          {/* Create Hotspot Bridge banner (Replace mode) */}
+          {payload && !loading && !hasHotspotBridge && (
+            <CreateHotspotBridgeBanner creating={creatingBridge} message={bridgeCreateMsg} onCreateClick={handleCreateHotspotBridge} />
           )}
 
           {/* Instructions + port list (shown once ports are loaded) */}
@@ -884,6 +986,11 @@ export default function BridgePorts() {
         )}
 
         {loadError && !loading && <RouterErrorPanel error={loadError} />}
+
+        {/* Create Hotspot Bridge banner (Standalone mode) */}
+        {payload && !loading && !hasHotspotBridge && (
+          <CreateHotspotBridgeBanner creating={creatingBridge} message={bridgeCreateMsg} onCreateClick={handleCreateHotspotBridge} />
+        )}
 
         {payload && !loading && (
           <>

@@ -1681,3 +1681,33 @@ export async function assignBridgePorts(
     return logs;
   });
 }
+
+/**
+ * Create a bridge on the router if it does not already exist.
+ * Idempotent: if a bridge with the given name exists, returns without error.
+ * Returns { created: boolean, message: string }.
+ */
+export async function createBridge(
+  creds: RouterCredentials,
+  bridgeName: string
+): Promise<{ created: boolean; message: string }> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    const existing = (await withTimeout(
+      conn.write(["/interface/bridge/print", `?name=${bridgeName}`]),
+      ms
+    )) as Record<string, string>[];
+
+    if (Array.isArray(existing) && existing.length > 0) {
+      return { created: false, message: `Bridge "${bridgeName}" already exists.` };
+    }
+
+    await withTimeout(
+      conn.write(["/interface/bridge/add", `=name=${bridgeName}`]),
+      ms
+    );
+
+    return { created: true, message: `Bridge "${bridgeName}" created successfully.` };
+  });
+}

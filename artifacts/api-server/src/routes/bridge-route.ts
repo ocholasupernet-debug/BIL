@@ -9,12 +9,17 @@
  * POST /api/admin/router/bridge-assign
  *   Adds or removes interfaces from a named bridge on the router.
  *   Body: { host, username, password, bridge, addPorts, removePorts, bridgeIp? }
+ *
+ * POST /api/admin/router/bridge-create
+ *   Creates a new bridge on the router (idempotent — skips if it already exists).
+ *   Body: { host, username, password, bridgeName, bridgeIp?, port? }
  */
 
 import { Router, type IRouter } from "express";
 import {
   fetchBridgePortLayout,
   assignBridgePorts,
+  createBridge,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 
@@ -98,6 +103,34 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(503).json({ ok: false, error: msg, logs: [`✗ ${msg}`] });
+  }
+});
+
+/* ─── POST /api/admin/router/bridge-create ─────────────────────────────── */
+router.post("/admin/router/bridge-create", async (req, res): Promise<void> => {
+  const { host, username, password, bridgeName, bridgeIp, port } = req.body as {
+    host: string;
+    username: string;
+    password: string;
+    bridgeName: string;
+    bridgeIp?: string;
+    port?: number;
+  };
+
+  const name = bridgeName?.trim();
+  if (!host || !username || !name) {
+    res.status(400).json({ ok: false, error: "host, username, and bridgeName are required" });
+    return;
+  }
+
+  const creds = buildCreds({ host, username, password, bridgeIp, port });
+
+  try {
+    const result = await createBridge(creds, name);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(503).json({ ok: false, error: msg, created: false, message: msg });
   }
 });
 
