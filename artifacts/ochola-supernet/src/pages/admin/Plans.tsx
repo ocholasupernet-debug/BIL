@@ -335,20 +335,24 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
           <span style={LBL_CYAN}>Router</span>
           <div style={{ flex: 1 }}>
             {routers.length === 0 ? (
-              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)", color: "#fbbf24", fontSize: "0.8rem" }}>
-                No routers found — <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline" }}>add a router first</a>
+              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(6,182,212,0.05)", border: "1px solid rgba(6,182,212,0.18)", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
+                No routers configured — router assignment is optional.{" "}
+                <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline" }}>Add a router</a> anytime later.
               </div>
             ) : (
               <select style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => setRouterId(e.target.value)}>
-                <option value="">— No specific router —</option>
+                <option value="">— No specific router (save to DB only) —</option>
                 {routers.map(r => (
                   <option key={r.id} value={r.id}>
                     {r.name}{r.model ? ` — ${r.model}` : ""}{r.host ? ` (${r.host})` : ""}
+                    {r.status && r.status !== "online" && r.status !== "connected" ? " [offline]" : ""}
                   </option>
                 ))}
               </select>
             )}
-            <p style={HINT}>Assign this plan to a specific router (optional — used for multi-router setups).</p>
+            <p style={HINT}>
+              Router assignment is optional. This plan will be saved to your database immediately — you can sync it to a router at any time using the <strong>Sync to Router</strong> bar, even if the router is currently offline.
+            </p>
           </div>
         </div>
 
