@@ -23,6 +23,7 @@ type VpnUser = {
   created_at: string;
   expires_at?: string;
   assigned_ip?: string;
+  vpn_type?: "main" | "proxy";
 };
 
 function CopyBtn({ text }: { text: string }) {
@@ -48,7 +49,7 @@ export default function VpnList() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "inactive" | "expired">("all");
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ username: "", password: "ocholasupernet", notes: "" });
+  const [form, setForm] = useState({ username: "", password: "ocholasupernet", notes: "", vpnType: "main" as "main" | "proxy" });
   const [showPass, setShowPass] = useState(false);
 
   const { data: users = [], isLoading, refetch } = useQuery<VpnUser[]>({
@@ -65,14 +66,14 @@ export default function VpnList() {
       const r = await fetch(`${API}/api/vpn/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminId, ...data }),
+        body: JSON.stringify({ adminId, username: data.username, password: data.password, notes: data.notes, vpnType: data.vpnType }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
     onSuccess: () => {
       setShowCreate(false);
-      setForm({ username: "", password: "ocholasupernet", notes: "" });
+      setForm({ username: "", password: "ocholasupernet", notes: "", vpnType: "main" });
       qc.invalidateQueries({ queryKey: ["vpn-users-list"] });
       qc.invalidateQueries({ queryKey: ["vpn-users"] });
     },
@@ -210,6 +211,26 @@ export default function VpnList() {
                   className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none"
                 />
               </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 block mb-1">VPN Type</label>
+                <div className="flex gap-2">
+                  {(["main", "proxy"] as const).map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setForm(p => ({ ...p, vpnType: t }))}
+                      className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-colors ${form.vpnType === t
+                        ? t === "proxy" ? "bg-purple-600 border-purple-600 text-white" : "bg-blue-600 border-blue-600 text-white"
+                        : "border-gray-200 text-gray-600 hover:border-blue-300"}`}
+                    >
+                      {t === "main" ? "⚡ Main VPN (10.8.0.x)" : "⇄ Proxy / Backup (10.9.0.x)"}
+                    </button>
+                  ))}
+                </div>
+                {form.vpnType === "proxy" && (
+                  <p className="text-[11px] text-purple-500 mt-1.5">Proxy user gets a 10.9.0.x IP and is auto-linked to a router by name match. The proxy .ovpn connects on port 1195.</p>
+                )}
+              </div>
               <div className="flex items-center gap-2 justify-end pt-1">
                 <button onClick={() => setShowCreate(false)} className="px-4 py-1.5 text-sm font-semibold text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
                   Cancel
@@ -296,12 +317,17 @@ export default function VpnList() {
                     <tr key={v.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                            <Shield size={14} className="text-blue-500" />
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${v.vpn_type === "proxy" ? "bg-purple-50" : "bg-blue-50"}`}>
+                            <Shield size={14} className={v.vpn_type === "proxy" ? "text-purple-500" : "text-blue-500"} />
                           </div>
                           <div>
                             <p className="font-semibold text-gray-800 text-xs font-mono">{v.username}</p>
-                            <p className="text-gray-400 text-[11px]">ID #{v.id}</p>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0 rounded-full ${v.vpn_type === "proxy" ? "bg-purple-100 text-purple-600" : "bg-blue-100 text-blue-600"}`}>
+                                {v.vpn_type === "proxy" ? "⇄ proxy" : "⚡ main"}
+                              </span>
+                              <span className="text-gray-400 text-[11px]">#{v.id}</span>
+                            </div>
                           </div>
                         </div>
                       </td>

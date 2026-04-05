@@ -145,6 +145,8 @@ export interface DbRouter {
   host: string;
   ip_address: string | null;
   bridge_ip: string | null;
+  proxy_ip: string | null;
+  bridge_interface: string | null;
   router_secret: string | null;
   router_username: string;
   description: string | null;

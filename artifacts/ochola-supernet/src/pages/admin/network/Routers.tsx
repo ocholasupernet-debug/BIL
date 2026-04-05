@@ -255,19 +255,20 @@ export default function Routers() {
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", bridge_interface: "", router_username: "", router_secret: "" });
+  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
   function openEdit(r: DbRouter) {
     setEditRouter(r);
     setEditForm({
-      name:            r.name            ?? "",
-      host:            r.host            ?? "",
-      bridge_ip:        (r as any).bridge_ip         ?? "",
-      bridge_interface: (r as any).bridge_interface ?? "hotspot-bridge",
-      router_username:  (r as any).router_username  ?? "admin",
-      router_secret:    (r as any).router_secret    ?? "",
+      name:             r.name               ?? "",
+      host:             r.host               ?? "",
+      bridge_ip:        r.bridge_ip          ?? "",
+      proxy_ip:         r.proxy_ip           ?? "",
+      bridge_interface: r.bridge_interface   ?? "hotspot-bridge",
+      router_username:  r.router_username    ?? "admin",
+      router_secret:    r.router_secret      ?? "",
     });
     setEditError(null);
   }
@@ -280,13 +281,14 @@ export default function Routers() {
       const { error } = await supabase
         .from("isp_routers")
         .update({
-          name:            editForm.name.trim()            || editRouter.name,
-          host:            editForm.host.trim()            || editRouter.host,
+          name:             editForm.name.trim()             || editRouter.name,
+          host:             editForm.host.trim()             || editRouter.host,
           bridge_ip:        editForm.bridge_ip.trim()        || null,
+          proxy_ip:         editForm.proxy_ip.trim()         || null,
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
-          router_username:  editForm.router_username.trim() || "admin",
-          router_secret:   editForm.router_secret.trim()   || null,
-          updated_at:      new Date().toISOString(),
+          router_username:  editForm.router_username.trim()  || "admin",
+          router_secret:    editForm.router_secret.trim()    || null,
+          updated_at:       new Date().toISOString(),
         })
         .eq("id", editRouter.id);
       if (error) throw error;
@@ -614,7 +616,7 @@ export default function Routers() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
                 <thead>
                   <tr>
-                    {["ID","ROUTER NAME","WAN IP (Public)","VPN IP (Tunnel)","USERNAME","DESCRIPTION","STATUS","STATE","UPTIME","MODEL","LAST SEEN","REBOOT","MANAGE","REMOTE ACCESS"].map(h => (
+                    {["ID","ROUTER NAME","WAN IP (Public)","VPN IP (Tunnel)","PROXY (Backup)","USERNAME","DESCRIPTION","STATUS","STATE","UPTIME","MODEL","LAST SEEN","REBOOT","MANAGE","REMOTE ACCESS"].map(h => (
                       <Th key={h} label={h} />
                     ))}
                   </tr>
@@ -622,7 +624,7 @@ export default function Routers() {
                 <tbody>
                   {pageRows.length === 0 ? (
                     <tr>
-                      <td colSpan={14} style={{ padding: "3rem 1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.875rem" }}>
+                      <td colSpan={15} style={{ padding: "3rem 1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.875rem" }}>
                         {search ? `No routers matching "${search}"` : (
                           <>No routers added yet. <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline", fontWeight: 600 }}>Add your first router</a></>
                         )}
@@ -655,9 +657,25 @@ export default function Routers() {
                           {r.host || r.ip_address || "—"}
                         </td>
 
-                        {/* PROXY VPN BACKUP */}
+                        {/* VPN IP (Tunnel) */}
                         <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
                           {r.bridge_ip || "—"}
+                        </td>
+
+                        {/* PROXY (Backup) */}
+                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                          {r.proxy_ip ? (
+                            <span style={{
+                              display: "inline-flex", alignItems: "center", gap: 4,
+                              background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.3)",
+                              color: "#c084fc", borderRadius: 5,
+                              padding: "0.18rem 0.55rem", fontFamily: "monospace", fontSize: "0.68rem", fontWeight: 700,
+                            }}>
+                              ⇄ {r.proxy_ip}
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>—</span>
+                          )}
                         </td>
 
                         {/* USERNAME */}
@@ -937,11 +955,12 @@ export default function Routers() {
             <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
               <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and only set the <em>VPN Tunnel IP</em>. The system uses the VPN IP to reach the router. Seeing the same IP in both fields is normal.
             </div>
-            {(["name", "host", "bridge_ip", "bridge_interface", "router_username", "router_secret"] as const).map((field) => {
+            {(["name", "host", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret"] as const).map((field) => {
               const labels: Record<string, string> = {
                 name:             "Router Name",
                 host:             "WAN / Public IP (optional — leave empty if no public IP)",
-                bridge_ip:        "VPN Tunnel IP (10.8.0.x) — used for API connection",
+                bridge_ip:        "VPN Tunnel IP (10.8.0.x) — Main VPN connection",
+                proxy_ip:         "Proxy VPN IP (10.9.0.x) — Backup connection via OcholaSuper-Proxy",
                 bridge_interface: "Hotspot Bridge Interface Name",
                 router_username:  "API Username",
                 router_secret:    "API Password",
@@ -949,7 +968,8 @@ export default function Routers() {
               const placeholders: Record<string, string> = {
                 name:             "e.g. come1",
                 host:             "e.g. 41.80.123.45 — public WAN IP if available",
-                bridge_ip:        "e.g. 10.8.0.2 — assigned by OpenVPN",
+                bridge_ip:        "e.g. 10.8.0.2 — assigned by main OpenVPN",
+                proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
                 bridge_interface: "hotspot-bridge",
                 router_username:  "admin",
                 router_secret:    "••••••••",

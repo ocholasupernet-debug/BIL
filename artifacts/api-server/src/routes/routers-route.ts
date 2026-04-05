@@ -49,7 +49,7 @@ router.get("/routers", async (req, res): Promise<void> => {
   const adminId = req.query.adminId ?? req.query.ispId ?? "1";
   const rows = await sbSelect(
     "isp_routers",
-    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,bridge_interface,router_username,status,last_seen,model,ros_version,ip_address`,
+    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,proxy_ip,bridge_interface,router_username,status,last_seen,model,ros_version,ip_address`,
   );
   res.json(rows);
 });
@@ -79,7 +79,7 @@ router.post("/routers", async (req, res): Promise<void> => {
 
 router.patch("/routers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
-  const { name, host, ipAddress, model, rosVersion, status, router_username, apiUsername, router_secret, apiPassword, bridge_ip } = req.body;
+  const { name, host, ipAddress, model, rosVersion, status, router_username, apiUsername, router_secret, apiPassword, bridge_ip, proxy_ip } = req.body;
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name           !== undefined) updates.name            = name;
   if (host           !== undefined) updates.host            = host;
@@ -92,6 +92,7 @@ router.patch("/routers/:id", async (req, res): Promise<void> => {
   if (router_secret  !== undefined) updates.router_secret   = router_secret;
   if (apiPassword    !== undefined) updates.router_secret   = apiPassword;
   if (bridge_ip      !== undefined) updates.bridge_ip       = bridge_ip;
+  if (proxy_ip       !== undefined) updates.proxy_ip        = proxy_ip;
   const [r] = await sbUpdate<Record<string, unknown>>("isp_routers", `id=eq.${id}`, updates);
   if (!r) { res.status(404).json({ error: "Router not found" }); return; }
   const adminIdForLog = req.body?.adminId ?? req.query.adminId ?? 1;

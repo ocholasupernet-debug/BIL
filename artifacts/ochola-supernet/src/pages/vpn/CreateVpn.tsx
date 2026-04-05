@@ -48,6 +48,7 @@ export default function CreateVpn() {
   const [password, setPassword] = useState("ocholasupernet");
   const [notes,    setNotes]    = useState("");
   const [validity, setValidity] = useState("never");
+  const [vpnType,  setVpnType]  = useState<"main" | "proxy">("main");
   const [showPass, setShowPass] = useState(false);
 
   const [loading,  setLoading]  = useState(false);
@@ -70,6 +71,7 @@ export default function CreateVpn() {
           password,
           notes:    notes.trim() || null,
           expiresAt: expiresAt(validity),
+          vpnType,
         }),
       });
       if (!r.ok) {
@@ -134,7 +136,7 @@ export default function CreateVpn() {
               <Download size={14} /> Download .ovpn
             </a>
             <button
-              onClick={() => { setCreated(null); setStep(1); setUsername(""); setPassword("ocholasupernet"); setNotes(""); setValidity("never"); }}
+              onClick={() => { setCreated(null); setStep(1); setUsername(""); setPassword("ocholasupernet"); setNotes(""); setValidity("never"); setVpnType("main"); }}
               className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors"
             >
               Create Another
@@ -236,6 +238,24 @@ export default function CreateVpn() {
                     ))}
                   </div>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1"><Wifi size={12} /> VPN Type</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { value: "main",  label: "⚡ Main VPN",   sub: "10.8.0.x · Port 1194",        cls: "border-blue-600 bg-blue-600 text-white" },
+                      { value: "proxy", label: "⇄ Proxy / Backup", sub: "10.9.0.x · Port 1195",     cls: "border-purple-600 bg-purple-600 text-white" },
+                    ] as const).map(t => (
+                      <button key={t.value} onClick={() => setVpnType(t.value)}
+                        className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-colors text-left ${vpnType === t.value ? t.cls : "border-gray-200 text-gray-600 hover:border-gray-300"}`}>
+                        <div>{t.label}</div>
+                        <div className={`text-[10px] mt-0.5 font-normal ${vpnType === t.value ? "opacity-80" : "text-gray-400"}`}>{t.sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {vpnType === "proxy" && (
+                    <p className="text-[11px] text-purple-600 mt-1.5">This user gets a unique 10.9.0.x IP from the backup tunnel pool and will be auto-linked to a matching router as its proxy IP.</p>
+                  )}
+                </div>
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-700">
@@ -253,8 +273,9 @@ export default function CreateVpn() {
                 {[
                   { label: "Username",   value: slugify(username),                                    icon: User   },
                   { label: "Password",   value: "•".repeat(Math.min(password.length, 16)),            icon: Key    },
-                  { label: "Protocol",   value: "OpenVPN / TCP port 1194",                            icon: Wifi   },
-                  { label: "Server",     value: `${SERVER_HOST}:1194`,                                icon: Server },
+                  { label: "VPN Type",   value: vpnType === "proxy" ? "⇄ Proxy / Backup (10.9.0.x · port 1195)" : "⚡ Main VPN (10.8.0.x · port 1194)", icon: Wifi },
+                  { label: "Protocol",   value: "OpenVPN / TCP",                                      icon: Wifi   },
+                  { label: "Server",     value: `${SERVER_HOST}:${vpnType === "proxy" ? 1195 : 1194}`, icon: Server },
                   { label: "Validity",   value: VALIDITIES.find(v => v.value === validity)?.label ?? "", icon: Clock },
                   ...(notes ? [{ label: "Notes", value: notes, icon: User }] : []),
                 ].map(row => {

@@ -458,21 +458,38 @@ function removeUserFromDb(username: string): void {
   } catch { /* dev env */ }
 }
 
-function generateOvpn(username: string): string {
-  const serverHost = process.env.VPN_HOST
+function generateOvpn(username: string, type: "main" | "proxy" = "main"): string {
+  const mainHost = process.env.VPN_HOST
     || process.env.VITE_API_BASE?.replace(/^https?:\/\//, "").split(":")[0]
     || "proxyvpn.isplatty.org";
+
+  /* Proxy can use a different host via VPN_PROXY_HOST, falls back to same server */
+  const proxyHost = process.env.VPN_PROXY_HOST || mainHost;
+  const serverHost = type === "proxy" ? proxyHost : mainHost;
+  const port       = type === "proxy" ? 1195 : 1194;
 
   const caPath = CA_PATHS.find(p => existsSync(p));
   const caCert = caPath ? readFileSync(caPath, "utf-8").trim() : "# CA cert not available — paste your ca.crt here";
 
+  const header = type === "proxy"
+    ? [
+        `# OcholaSupernet PROXY VPN (backup) — ${username}`,
+        `# Network: 10.9.0.0/24 | Port: ${port} | Tunnel: tun1`,
+        `# This client connects when the main VPN (10.8.0.x:1194) is unavailable.`,
+        `# Generated: ${new Date().toISOString()}`,
+      ]
+    : [
+        `# OcholaSupernet VPN — ${username}`,
+        `# Network: 10.8.0.0/24 | Port: ${port} | Tunnel: tun0`,
+        `# Generated: ${new Date().toISOString()}`,
+      ];
+
   return [
-    `# OcholaSupernet VPN — ${username}`,
-    `# Generated: ${new Date().toISOString()}`,
+    ...header,
     `client`,
     `dev tun`,
     `proto tcp`,
-    `remote ${serverHost} 1194`,
+    `remote ${serverHost} ${port}`,
     `resolv-retry infinite`,
     `nobind`,
     `persist-key`,
@@ -493,51 +510,63 @@ function generateOvpn(username: string): string {
  * by any VPN user (assigned_ip) or any router (bridge_ip) across ALL admins
  * so IPs are globally unique, not just per-admin.
  * ══════════════════════════════════════════════════════════════════════════ */
-async function collectUsedVpnIps(url: string, key: string): Promise<Set<string>> {
+/* prefix for each pool:
+ * main  → 10.8  (OpenVPN server tun0, port 1194)
+ * proxy → 10.9  (OcholaSuper-Proxy tun1, port 1195)
+ */
+async function collectUsedVpnIps(url: string, key: string, subnet: "10.8" | "10.9"): Promise<Set<string>> {
   const used = new Set<string>();
 
-  /* All assigned VPN user IPs (global) */
+  /* All assigned VPN user IPs for this subnet */
   try {
     const r = await fetch(`${url}/rest/v1/isp_vpn_users?select=assigned_ip&assigned_ip=not.is.null`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     if (r.ok) {
       const rows = (await r.json()) as { assigned_ip: string }[];
-      for (const row of rows) if (row.assigned_ip) used.add(row.assigned_ip);
+      for (const row of rows) {
+        if (row.assigned_ip?.startsWith(subnet + ".")) used.add(row.assigned_ip);
+      }
     }
   } catch { /* ignore — proceed with partial data */ }
 
-  /* All router bridge IPs (global) — prevent overlap with router tunnel IPs */
+  /* Router IPs in this subnet */
   try {
-    const r = await fetch(`${url}/rest/v1/isp_routers?select=bridge_ip&bridge_ip=not.is.null`, {
+    const r = await fetch(`${url}/rest/v1/isp_routers?select=bridge_ip,proxy_ip`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     if (r.ok) {
-      const rows = (await r.json()) as { bridge_ip: string }[];
-      for (const row of rows) if (row.bridge_ip?.startsWith("10.8.")) used.add(row.bridge_ip);
+      const rows = (await r.json()) as { bridge_ip: string | null; proxy_ip: string | null }[];
+      for (const row of rows) {
+        if (row.bridge_ip?.startsWith(subnet + ".")) used.add(row.bridge_ip);
+        if (row.proxy_ip?.startsWith(subnet + "."))  used.add(row.proxy_ip);
+      }
     }
   } catch { /* ignore */ }
 
-  /* Also check ipp.txt on disk */
-  for (const [, ip] of readIppFile()) used.add(ip);
+  /* Also check ipp.txt on disk (only pick IPs in this subnet) */
+  for (const [, ip] of readIppFile()) {
+    if (ip.startsWith(subnet + ".")) used.add(ip);
+  }
 
   return used;
 }
 
-async function allocateNextVpnIp(url: string, key: string): Promise<string> {
-  const used = await collectUsedVpnIps(url, key);
-  /* 10.8.0.1 = server; start clients at 10.8.0.2 */
-  used.add("10.8.0.1");
+async function allocateNextVpnIp(url: string, key: string, type: "main" | "proxy" = "main"): Promise<string> {
+  const subnet: "10.8" | "10.9" = type === "proxy" ? "10.9" : "10.8";
+  const used = await collectUsedVpnIps(url, key, subnet);
+  /* .1 = server; clients start at .2 */
+  used.add(`${subnet}.0.1`);
   for (let i = 2; i <= 254; i++) {
-    const candidate = `10.8.0.${i}`;
+    const candidate = `${subnet}.0.${i}`;
     if (!used.has(candidate)) return candidate;
   }
-  /* Overflow into 10.8.1.x */
+  /* Overflow into next /24 */
   for (let i = 1; i <= 254; i++) {
-    const candidate = `10.8.1.${i}`;
+    const candidate = `${subnet}.1.${i}`;
     if (!used.has(candidate)) return candidate;
   }
-  throw new Error("VPN IP pool exhausted (all 10.8.0.x and 10.8.1.x addresses are in use)");
+  throw new Error(`VPN IP pool exhausted (all ${subnet}.0.x and ${subnet}.1.x addresses are in use)`);
 }
 
 function writeIppEntry(username: string, ip: string): void {
@@ -558,7 +587,7 @@ router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
 
   try {
     const r = await fetch(
-      `${url}/rest/v1/isp_vpn_users?admin_id=eq.${adminId}&order=created_at.desc&select=id,username,notes,is_active,created_at,expires_at,assigned_ip`,
+      `${url}/rest/v1/isp_vpn_users?admin_id=eq.${adminId}&order=created_at.desc&select=id,username,notes,is_active,created_at,expires_at,assigned_ip,vpn_type`,
       { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
     if (!r.ok) throw new Error(await r.text());
@@ -570,15 +599,16 @@ router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
 
 /* ── POST /api/vpn/users ── create a VPN user */
 router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => {
-  const { adminId = 1, username, password, notes, expiresAt } = req.body;
+  const { adminId = 1, username, password, notes, expiresAt, vpnType = "main" } = req.body;
   if (!username || !password) { res.status(400).json({ error: "username and password required" }); return; }
 
+  const type: "main" | "proxy" = vpnType === "proxy" ? "proxy" : "main";
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
-    /* Allocate a globally unique VPN IP before inserting */
-    const assignedIp = await allocateNextVpnIp(url, key);
+    /* Allocate a globally unique VPN IP from the correct subnet */
+    const assignedIp = await allocateNextVpnIp(url, key, type);
 
     const r = await fetch(`${url}/rest/v1/isp_vpn_users`, {
       method: "POST",
@@ -591,6 +621,7 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
         is_active:   true,
         expires_at:  expiresAt || null,
         assigned_ip: assignedIp,
+        vpn_type:    type,
       }),
     });
     if (!r.ok) throw new Error(await r.text());
@@ -598,6 +629,36 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
     syncUserToDb(username.trim(), password.trim());
     /* Pre-register the IP in ipp.txt so OpenVPN always assigns this IP */
     writeIppEntry(username.trim(), assignedIp);
+
+    /* For proxy users: auto-link to matching router by name fuzzy match */
+    if (type === "proxy") {
+      try {
+        const routersR = await fetch(
+          `${url}/rest/v1/isp_routers?admin_id=eq.${adminId}&select=id,name`,
+          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+        );
+        if (routersR.ok) {
+          const rouRows = (await routersR.json()) as { id: number; name: string }[];
+          const names   = rouRows.map(rr => rr.name);
+          const matched = bestMatch(username.trim(), names);
+          if (matched) {
+            const matchedRouter = rouRows.find(rr => rr.name === matched);
+            if (matchedRouter) {
+              await fetch(`${url}/rest/v1/isp_routers?id=eq.${matchedRouter.id}`, {
+                method:  "PATCH",
+                headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+                body:    JSON.stringify({ proxy_ip: assignedIp, updated_at: new Date().toISOString() }),
+              });
+              logger.info({ routerId: matchedRouter.id, username, proxyIp: assignedIp }, "[vpn] proxy user auto-linked to router");
+            }
+          }
+        }
+      } catch (linkErr) {
+        /* non-fatal — user still created, proxy_ip just not auto-linked */
+        logger.warn({ linkErr }, "[vpn] proxy auto-link failed (non-fatal)");
+      }
+    }
+
     res.status(201).json(rows[0]);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -690,15 +751,17 @@ router.get("/vpn/users/:id/ovpn", async (req: Request, res: Response): Promise<v
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
-    const r = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+    const r = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username,vpn_type`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
-    const rows = await r.json() as { username: string }[];
+    const rows = await r.json() as { username: string; vpn_type: string | null }[];
     if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
 
-    const ovpn = generateOvpn(rows[0].username);
+    const type: "main" | "proxy" = rows[0].vpn_type === "proxy" ? "proxy" : "main";
+    const ovpn = generateOvpn(rows[0].username, type);
+    const suffix = type === "proxy" ? "-proxy" : "";
     res.set("Content-Type", "application/x-openvpn-profile");
-    res.set("Content-Disposition", `attachment; filename="${rows[0].username}.ovpn"`);
+    res.set("Content-Disposition", `attachment; filename="${rows[0].username}${suffix}.ovpn"`);
     res.send(ovpn);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
