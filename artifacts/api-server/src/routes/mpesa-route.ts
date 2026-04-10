@@ -2,7 +2,8 @@
  * M-Pesa Daraja API routes
  *
  *   GET  /api/mpesa/token     — Generate OAuth access token from Consumer Key + Secret
- *   POST /api/mpesa/stk       — Initiate STK Push (Lipa na M-Pesa Online)
+ *   POST /api/mpesa/stkpush   — Initiate STK Push (shortcode 174379 sandbox default)
+ *   POST /api/mpesa/stk       — Initiate STK Push (legacy alias)
  *   GET  /api/mpesa/status    — Poll payment status by CheckoutRequestID
  *   POST /api/mpesa/verify    — Verify a manually-pasted M-Pesa confirmation SMS
  */
@@ -68,7 +69,107 @@ router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> =
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * POST /api/mpesa/stk
+ * POST /api/mpesa/stkpush
+ * Body: { phone, amount, account_ref? }
+ * Uses shortcode 174379 (sandbox default), passkey, timestamp-derived password.
+ * Formats phone to 2547XXXXXXXX and sends STK Push via Daraja API.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void> => {
+  const { phone, amount, account_ref } = req.body as {
+    phone?: string; amount?: number; account_ref?: string;
+  };
+
+  if (!phone || !amount) {
+    res.status(400).json({ ok: false, error: "phone and amount are required" });
+    return;
+  }
+
+  if (!isMpesaConfigured()) {
+    res.status(503).json({
+      ok: false,
+      error: "M-Pesa credentials not configured. Set Consumer Key, Consumer Secret, Shortcode & Passkey in Admin Settings → Billing.",
+    });
+    return;
+  }
+
+  const raw = String(phone).replace(/\D/g, "");
+  const formatted = raw.startsWith("0")
+    ? `254${raw.slice(1)}`
+    : raw.startsWith("+254")
+    ? raw.slice(1)
+    : raw.startsWith("254")
+    ? raw
+    : `254${raw}`;
+
+  try {
+    const cfg = getMpesaSettings();
+    const shortcode = cfg.shortcode || "174379";
+    const passkey   = cfg.passkey;
+
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[-T:.Z]/g, "")
+      .slice(0, 14);
+    const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
+
+    const token = await getDarajaToken();
+
+    const stkBody = {
+      BusinessShortCode: shortcode,
+      Password:          password,
+      Timestamp:         timestamp,
+      TransactionType:   "CustomerPayBillOnline",
+      Amount:            Math.ceil(Number(amount)),
+      PartyA:            formatted,
+      PartyB:            shortcode,
+      PhoneNumber:       formatted,
+      CallBackURL:       cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/webhooks/mpesa`,
+      AccountReference:  account_ref ?? "ISPlatty",
+      TransactionDesc:   "STK Push Payment",
+    };
+
+    const stkRes = await fetch(`${darajaBase()}/mpesa/stkpush/v1/processrequest`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(stkBody),
+    });
+
+    const data = await stkRes.json() as Record<string, unknown>;
+    logger.info({ phone: formatted, amount, data }, "[mpesa/stkpush] response");
+
+    if (!stkRes.ok || data["ResponseCode"] !== "0") {
+      res.status(400).json({
+        ok: false,
+        error: (data["errorMessage"] ?? data["ResponseDescription"] ?? "STK push failed") as string,
+      });
+      return;
+    }
+
+    await sbInsert("isp_transactions", {
+      admin_id:       null,
+      plan_id:        null,
+      amount:         Math.ceil(Number(amount)),
+      payment_method: "mpesa",
+      reference:      String(data["CheckoutRequestID"] ?? ""),
+      status:         "pending",
+      notes:          `STK push to ${formatted}`,
+      created_at:     new Date().toISOString(),
+    }).catch(() => {});
+
+    res.json({
+      ok: true,
+      CheckoutRequestID:  data["CheckoutRequestID"],
+      MerchantRequestID:  data["MerchantRequestID"],
+      ResponseDescription: data["ResponseDescription"],
+    });
+  } catch (e) {
+    logger.error({ err: e }, "[mpesa/stkpush] error");
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * POST /api/mpesa/stk  (legacy alias — same behavior as /stkpush)
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
