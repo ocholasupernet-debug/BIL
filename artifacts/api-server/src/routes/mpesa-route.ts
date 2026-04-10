@@ -1,6 +1,7 @@
 /**
  * M-Pesa Daraja API routes
  *
+ *   GET  /api/mpesa/token     — Generate OAuth access token from Consumer Key + Secret
  *   POST /api/mpesa/stk       — Initiate STK Push (Lipa na M-Pesa Online)
  *   GET  /api/mpesa/status    — Poll payment status by CheckoutRequestID
  *   POST /api/mpesa/verify    — Verify a manually-pasted M-Pesa confirmation SMS
@@ -42,6 +43,29 @@ function stkCredentials(): { timestamp: string; password: string } {
   const password = Buffer.from(raw).toString("base64");
   return { timestamp, password };
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * GET /api/mpesa/token
+ * Generates an M-Pesa access token using Consumer Key + Consumer Secret
+ * via Safaricom's OAuth endpoint.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> => {
+  if (!isMpesaConfigured()) {
+    res.status(503).json({
+      ok: false,
+      error: "M-Pesa credentials not configured. Go to Admin Settings → Billing and enter your Daraja Consumer Key & Consumer Secret.",
+    });
+    return;
+  }
+
+  try {
+    const token = await getDarajaToken();
+    res.json({ ok: true, access_token: token });
+  } catch (e) {
+    logger.error({ err: e }, "[mpesa/token] failed to generate access token");
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * POST /api/mpesa/stk
