@@ -3,6 +3,7 @@
  *
  *   GET  /api/mpesa/token     — Generate OAuth access token from Consumer Key + Secret
  *   POST /api/mpesa/stkpush   — Initiate STK Push (shortcode 174379 sandbox default)
+ *   POST /api/mpesa/callback  — Receive M-Pesa STK Push result, update wallet + transaction
  *   POST /api/mpesa/stk       — Initiate STK Push (legacy alias)
  *   GET  /api/mpesa/status    — Poll payment status by CheckoutRequestID
  *   POST /api/mpesa/verify    — Verify a manually-pasted M-Pesa confirmation SMS
@@ -123,7 +124,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       PartyA:            formatted,
       PartyB:            shortcode,
       PhoneNumber:       formatted,
-      CallBackURL:       cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/webhooks/mpesa`,
+      CallBackURL:       cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/mpesa/callback`,
       AccountReference:  account_ref ?? "ISPlatty",
       TransactionDesc:   "STK Push Payment",
     };
@@ -165,6 +166,114 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
   } catch (e) {
     logger.error({ err: e }, "[mpesa/stkpush] error");
     res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * POST /api/mpesa/callback
+ * Receives the M-Pesa STK Push result from Safaricom.
+ * If ResultCode = 0 → payment successful:
+ *   - Updates the pending transaction in isp_transactions to "completed"
+ *   - Credits the customer's wallet_balance in isp_customers
+ *   - Logs the event
+ * Always responds 200 to Safaricom immediately.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void> => {
+  res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+  try {
+    const callback = req.body?.Body?.stkCallback;
+    if (!callback) {
+      logger.warn({ body: req.body }, "[mpesa/callback] No stkCallback in body — ignoring");
+      return;
+    }
+
+    const { ResultCode, CheckoutRequestID, MerchantRequestID } = callback;
+
+    logger.info(
+      { ResultCode, CheckoutRequestID, MerchantRequestID },
+      "[mpesa/callback] Received callback"
+    );
+
+    if (ResultCode !== 0) {
+      logger.info({ ResultCode, CheckoutRequestID }, "[mpesa/callback] Payment failed or cancelled by user");
+      await sbUpdate(
+        "isp_transactions",
+        `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`,
+        { status: "failed", notes: `ResultCode ${ResultCode}: ${callback.ResultDesc ?? "cancelled"}` },
+      ).catch(() => {});
+      return;
+    }
+
+    const items: { Name: string; Value: unknown }[] = callback.CallbackMetadata?.Item ?? [];
+    const get = (name: string) => items.find(i => i.Name === name)?.Value;
+
+    const amount       = Number(get("Amount") ?? 0);
+    const mpesaReceipt = String(get("MpesaReceiptNumber") ?? "");
+    const rawPhone     = String(get("PhoneNumber") ?? "");
+
+    logger.info(
+      { amount, mpesaReceipt, phone: rawPhone, CheckoutRequestID },
+      "[mpesa/callback] Payment successful"
+    );
+
+    if (amount <= 0) {
+      logger.warn("[mpesa/callback] Amount is 0 or missing — skipping");
+      return;
+    }
+
+    await sbUpdate(
+      "isp_transactions",
+      `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`,
+      {
+        status: "completed",
+        reference: mpesaReceipt || String(CheckoutRequestID),
+        notes: `M-Pesa payment confirmed. Receipt: ${mpesaReceipt}. Phone: ${rawPhone}`,
+      },
+    ).catch(err => logger.warn({ err }, "[mpesa/callback] Failed to update transaction"));
+
+    if (rawPhone) {
+      const digits = rawPhone.replace(/\D/g, "");
+      const phoneVariants: string[] = [digits];
+      if (digits.startsWith("254") && digits.length === 12) {
+        phoneVariants.push("0" + digits.slice(3));
+      }
+      if (digits.startsWith("0") && digits.length === 10) {
+        phoneVariants.push("254" + digits.slice(1));
+      }
+
+      let credited = false;
+      for (const phone of phoneVariants) {
+        const customers = await sbSelect<{ id: number; wallet_balance: number | null }>(
+          "isp_customers",
+          `phone=eq.${phone}&select=id,wallet_balance&limit=1`,
+        ).catch(() => [] as { id: number; wallet_balance: number | null }[]);
+
+        if (customers.length > 0) {
+          const customer = customers[0];
+          const currentBalance = Number(customer.wallet_balance ?? 0);
+          const newBalance = currentBalance + amount;
+
+          await sbUpdate("isp_customers", `id=eq.${customer.id}`, {
+            wallet_balance: newBalance,
+            updated_at: new Date().toISOString(),
+          });
+
+          logger.info(
+            { customerId: customer.id, phone, previousBalance: currentBalance, credited: amount, newBalance },
+            "[mpesa/callback] Wallet balance updated"
+          );
+          credited = true;
+          break;
+        }
+      }
+
+      if (!credited) {
+        logger.warn({ phone: rawPhone }, "[mpesa/callback] No customer found for phone — wallet not updated, transaction still recorded");
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "[mpesa/callback] Unexpected error processing callback");
   }
 });
 
