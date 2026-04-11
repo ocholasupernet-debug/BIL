@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
-  AlertCircle, User, Loader2, Shield, Clock, Signal,
-  ChevronRight, Star, ArrowRight,
+  AlertCircle, User, Loader2, Shield, Clock,
+  ArrowRight, Globe, CreditCard,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { ADMIN_ID } from "@/lib/supabase";
 
-/* ── Types ── */
 interface Plan {
   id: number; name: string; price: number;
   validity: number; validity_unit: string; validity_days: number;
@@ -16,125 +15,29 @@ interface Plan {
 }
 type Tab = "plans" | "login" | "voucher";
 
-/* ── Helpers ── */
 function formatValidity(plan: Plan): string {
   const days = plan.validity_days ?? plan.validity ?? 0;
   const unit = plan.validity_unit ?? "days";
-  if (unit === "hours" || days === 0) return `${plan.validity ?? 1} ${unit}`;
-  if (days < 1) return `${Math.round(days * 24)} hrs`;
-  if (days === 1) return "1 day";
-  if (days < 7) return `${days} days`;
-  if (days === 7) return "1 week";
-  if (days === 30 || days === 31) return "1 month";
-  if (days === 365) return "1 year";
-  return `${days} days`;
+  if (unit === "hours" || days === 0) return `${plan.validity ?? 1} Hrs`;
+  if (days < 1) return `${Math.round(days * 24)} Hrs`;
+  if (days === 1) return "1 Day";
+  if (days < 7) return `${days} Days`;
+  if (days === 7) return "1 Week";
+  if (days === 30 || days === 31) return "1 Month";
+  if (days === 365) return "1 Year";
+  return `${days} Days`;
 }
 
-/* ── Accent palette for plan cards ── */
-const CARD_ACCENTS = [
-  { bar: "linear-gradient(90deg,#00d4ff,#0080ff)", glow: "rgba(0,212,255,0.18)", badge: "#00d4ff" },
-  { bar: "linear-gradient(90deg,#a855f7,#7c3aed)", glow: "rgba(168,85,247,0.18)", badge: "#a855f7" },
-  { bar: "linear-gradient(90deg,#00ff9d,#00b86b)", glow: "rgba(0,255,157,0.18)", badge: "#00ff9d" },
-  { bar: "linear-gradient(90deg,#f59e0b,#ef4444)", glow: "rgba(245,158,11,0.18)", badge: "#f59e0b" },
-  { bar: "linear-gradient(90deg,#f43f5e,#e11d48)", glow: "rgba(244,63,94,0.18)", badge: "#f43f5e" },
-  { bar: "linear-gradient(90deg,#06b6d4,#0e7490)", glow: "rgba(6,182,212,0.18)", badge: "#06b6d4" },
+function formatSpeed(mbps: number): string {
+  if (mbps >= 1000) return `${mbps / 1000}Gbps`;
+  return `${mbps}Mbps`;
+}
+
+const PLAN_COLORS = [
+  "#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4",
+  "#ec4899", "#14b8a6", "#f97316", "#6366f1",
 ];
 
-/* ── Inline style constants ── */
-const BG   = "#020b18";
-const CARD = "rgba(255,255,255,0.04)";
-const BORD = "rgba(0,212,255,0.12)";
-const CYAN = "#00d4ff";
-const MINT = "#00ff9d";
-
-/* ── Pulsing WiFi rings (pure CSS animation via style tag) ── */
-function GlobalStyles() {
-  return (
-    <style>{`
-      @keyframes ring-pulse {
-        0%   { transform: scale(0.6); opacity: 0.7; }
-        100% { transform: scale(2.6); opacity: 0; }
-      }
-      @keyframes float-up {
-        0%   { transform: translateY(0px); }
-        50%  { transform: translateY(-8px); }
-        100% { transform: translateY(0px); }
-      }
-      @keyframes shimmer {
-        0%   { background-position: -200% center; }
-        100% { background-position:  200% center; }
-      }
-      .ring { animation: ring-pulse 3s ease-out infinite; transform-origin: center; }
-      .ring:nth-child(2) { animation-delay: 1s; }
-      .ring:nth-child(3) { animation-delay: 2s; }
-      .wifi-icon { animation: float-up 4s ease-in-out infinite; }
-      .shimmer-text {
-        background: linear-gradient(90deg, #fff 30%, ${CYAN} 50%, #fff 70%);
-        background-size: 200% auto;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        animation: shimmer 4s linear infinite;
-      }
-      .plan-card { transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; }
-      .plan-card:hover { transform: translateY(-2px); }
-      input:focus { outline: none; border-color: ${CYAN} !important; box-shadow: 0 0 0 3px rgba(0,212,255,0.15) !important; }
-      ::-webkit-scrollbar { width: 6px; } 
-      ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 3px; }
-    `}</style>
-  );
-}
-
-/* ── WiFi hero animation ── */
-function WifiHero() {
-  return (
-    <div style={{ position: "relative", width: 120, height: 120, margin: "0 auto 32px" }}>
-      {[0,1,2].map(i => (
-        <div key={i} className="ring" style={{
-          position: "absolute", inset: 0,
-          borderRadius: "50%",
-          border: `1px solid rgba(0,212,255,${0.35 - i * 0.1})`,
-          animationDelay: `${i}s`,
-        }} />
-      ))}
-      <div className="wifi-icon" style={{
-        position: "absolute", inset: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        background: "radial-gradient(circle, rgba(0,212,255,0.15) 0%, transparent 70%)",
-      }}>
-        <div style={{
-          width: 64, height: 64, borderRadius: 18,
-          background: `linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,128,255,0.25))`,
-          border: `1px solid rgba(0,212,255,0.35)`,
-          backdropFilter: "blur(12px)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 0 32px rgba(0,212,255,0.25)",
-        }}>
-          <Wifi size={28} color={CYAN} strokeWidth={1.8} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Small trust badge ── */
-function Badge({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 6,
-      padding: "5px 12px", borderRadius: 99,
-      background: "rgba(255,255,255,0.04)",
-      border: "1px solid rgba(255,255,255,0.08)",
-      fontSize: 11, color: "rgba(255,255,255,0.55)", fontWeight: 600,
-    }}>
-      {icon}
-      {label}
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════ */
 export default function HotspotLogin() {
   const brand = useBrand();
   const [activeTab, setActiveTab] = useState<Tab>("plans");
@@ -147,19 +50,18 @@ export default function HotspotLogin() {
     } catch { return ADMIN_ID; }
   })();
 
-  /* ── Plans ── */
-  const [plans,        setPlans]        = useState<Plan[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-  const [phone,        setPhone]        = useState("");
-  const [payLoading,   setPayLoading]   = useState(false);
-  const [payError,     setPayError]     = useState<string | null>(null);
-  const [stkSent,      setStkSent]      = useState(false);
+  const [phone, setPhone] = useState("");
+  const [payLoading, setPayLoading] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [stkSent, setStkSent] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const res  = await fetch(`/api/plans?adminId=${adminId}`);
+        const res = await fetch(`/api/plans?adminId=${adminId}`);
         const data: Plan[] = await res.json();
         const hs = data.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
         setPlans(hs.length > 0 ? hs : data);
@@ -173,7 +75,7 @@ export default function HotspotLogin() {
     if (!selectedPlan || !phone.trim()) return;
     setPayLoading(true); setPayError(null);
     try {
-      const res  = await fetch("/api/mpesa/stk", {
+      const res = await fetch("/api/mpesa/stk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: phone.trim(), amount: selectedPlan.price, plan_id: selectedPlan.id, adminId, account_ref: "ISPlatty" }),
@@ -185,19 +87,18 @@ export default function HotspotLogin() {
     finally { setPayLoading(false); }
   };
 
-  /* ── Member login ── */
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginLoading,  setLoginLoading]  = useState(false);
-  const [loginError,    setLoginError]    = useState("");
-  const [loginSuccess,  setLoginSuccess]  = useState(false);
-  const [loggedInName,  setLoggedInName]  = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [loginSuccess, setLoginSuccess] = useState(false);
+  const [loggedInName, setLoggedInName] = useState("");
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(""); setLoginLoading(true);
     try {
-      const res  = await fetch("/api/customers/hotspot-login", {
+      const res = await fetch("/api/customers/hotspot-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId, username: loginUsername, password: loginPassword }),
@@ -209,18 +110,17 @@ export default function HotspotLogin() {
     finally { setLoginLoading(false); }
   };
 
-  /* ── Voucher ── */
-  const [voucherCode,    setVoucherCode]    = useState("");
+  const [voucherCode, setVoucherCode] = useState("");
   const [voucherLoading, setVoucherLoading] = useState(false);
-  const [voucherError,   setVoucherError]   = useState("");
+  const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState(false);
-  const [voucherInfo,    setVoucherInfo]    = useState<Record<string, unknown> | null>(null);
+  const [voucherInfo, setVoucherInfo] = useState<Record<string, unknown> | null>(null);
 
   const handleVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
     setVoucherError(""); setVoucherLoading(true);
     try {
-      const res  = await fetch("/api/vouchers/redeem", {
+      const res = await fetch("/api/vouchers/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId, code: voucherCode.trim().toUpperCase() }),
@@ -232,633 +132,511 @@ export default function HotspotLogin() {
     finally { setVoucherLoading(false); }
   };
 
-  /* ── Tab definitions ── */
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "plans",   label: "Buy Data",      icon: <Signal size={14} /> },
-    { id: "login",   label: "Member Login",  icon: <User   size={14} /> },
-    { id: "voucher", label: "Voucher",        icon: <Ticket size={14} /> },
+    { id: "plans", label: "Buy Data", icon: <CreditCard size={15} /> },
+    { id: "login", label: "Login", icon: <User size={15} /> },
+    { id: "voucher", label: "Voucher", icon: <Ticket size={15} /> },
   ];
 
-  /* ════ RENDER ════ */
   return (
-    <div style={{
-      minHeight: "100vh", background: BG, color: "#e8f4f8",
-      fontFamily: "'Inter', system-ui, sans-serif",
-      overflowX: "hidden", position: "relative",
-    }}>
-      <GlobalStyles />
+    <>
+      <style>{`
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.6; } 100% { transform: scale(1.8); opacity: 0; } }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+        .hs-page { min-height: 100vh; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0f1e; color: #e2e8f0; overflow-x: hidden; }
+        .hs-input { width: 100%; padding: 12px 14px; background: rgba(255,255,255,0.06); border: 1.5px solid rgba(255,255,255,0.1); border-radius: 10px; color: #f1f5f9; font-size: 14px; font-family: inherit; transition: border-color 0.2s, box-shadow 0.2s; outline: none; }
+        .hs-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+        .hs-input::placeholder { color: rgba(148,163,184,0.5); }
+        .hs-btn { width: 100%; padding: 13px; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; font-family: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; }
+        .hs-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .hs-btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; box-shadow: 0 4px 20px rgba(59,130,246,0.3); }
+        .hs-btn-primary:hover:not(:disabled) { box-shadow: 0 6px 28px rgba(59,130,246,0.4); transform: translateY(-1px); }
+        .hs-btn-mpesa { background: linear-gradient(135deg, #00a651, #00c96b); color: #fff; box-shadow: 0 4px 20px rgba(0,166,81,0.3); }
+        .hs-btn-mpesa:hover:not(:disabled) { box-shadow: 0 6px 28px rgba(0,166,81,0.4); transform: translateY(-1px); }
+        .hs-btn-voucher { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; box-shadow: 0 4px 20px rgba(245,158,11,0.25); }
+        .hs-btn-voucher:hover:not(:disabled) { box-shadow: 0 6px 28px rgba(245,158,11,0.35); transform: translateY(-1px); }
+        .hs-card { background: rgba(15,23,42,0.8); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; animation: fadeIn 0.3s ease-out; }
+        .plan-card { background: rgba(255,255,255,0.04); border: 1.5px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px; cursor: pointer; transition: all 0.2s; position: relative; text-align: left; font-family: inherit; color: inherit; width: 100%; }
+        .plan-card:hover { border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); transform: translateY(-2px); }
+        .plan-card.selected { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.08); box-shadow: 0 0 20px rgba(59,130,246,0.1); }
+        .error-box { display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px; border-radius: 10px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); font-size: 13px; color: #fca5a5; }
+        .success-box { text-align: center; padding: 32px 24px; animation: fadeIn 0.4s ease-out; }
+        .success-icon { width: 64px; height: 64px; border-radius: 50%; background: rgba(16,185,129,0.12); border: 2px solid rgba(16,185,129,0.3); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(59,130,246,0.2); border-radius: 3px; }
+      `}</style>
 
-      {/* ── Deep-space background ── */}
-      <div style={{
-        position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
-        background: `radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0,100,200,0.18) 0%, transparent 70%),
-                     radial-gradient(ellipse 60% 40% at 80% 80%, rgba(0,212,255,0.06) 0%, transparent 60%)`,
-      }} />
-      <div style={{
-        position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
-        backgroundImage: `linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),
-                          linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px)`,
-        backgroundSize: "48px 48px",
-        maskImage: "radial-gradient(ellipse 100% 80% at 50% 0%, black, transparent)",
-        WebkitMaskImage: "radial-gradient(ellipse 100% 80% at 50% 0%, black, transparent)",
-      }} />
-
-      {/* ── Header ── */}
-      <header style={{
-        position: "relative", zIndex: 10,
-        borderBottom: "1px solid rgba(0,212,255,0.1)",
-        background: "rgba(2,11,24,0.8)", backdropFilter: "blur(20px)",
-        padding: "0 24px", height: 64,
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{
-            width: 38, height: 38, borderRadius: 10,
-            background: `linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,128,255,0.3))`,
-            border: "1px solid rgba(0,212,255,0.3)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 0 20px rgba(0,212,255,0.15)",
-          }}>
-            <Wifi size={18} color={CYAN} strokeWidth={2} />
-          </div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 14, letterSpacing: "0.04em", color: "#f0f9ff" }}>
-              {brand.ispName.toUpperCase()}
-            </div>
-            <div style={{ fontSize: 11, color: "rgba(0,212,255,0.6)", fontWeight: 500 }}>
-              Hotspot Portal · {brand.domain}
-            </div>
-          </div>
-        </div>
-
-        {/* Network status chip */}
+      <div className="hs-page">
+        {/* Background layers */}
         <div style={{
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "6px 14px", borderRadius: 99,
-          background: "rgba(0,255,157,0.06)",
-          border: "1px solid rgba(0,255,157,0.2)",
+          position: "fixed", inset: 0, pointerEvents: "none",
+          background: "radial-gradient(ellipse 80% 60% at 50% -20%, rgba(59,130,246,0.08) 0%, transparent 60%), radial-gradient(ellipse 60% 50% at 80% 100%, rgba(139,92,246,0.06) 0%, transparent 60%)",
+        }} />
+
+        {/* Header */}
+        <header style={{
+          position: "sticky", top: 0, zIndex: 50,
+          background: "rgba(10,15,30,0.85)", backdropFilter: "blur(20px)",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          padding: "0 20px", height: 56,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <span style={{
-            width: 7, height: 7, borderRadius: "50%",
-            background: MINT, display: "inline-block",
-            boxShadow: `0 0 8px ${MINT}`,
-            animation: "ring-pulse 2s ease-out infinite",
-          }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: MINT }}>Network Online</span>
-        </div>
-      </header>
-
-      {/* ── Main ── */}
-      <main style={{ position: "relative", zIndex: 1, maxWidth: 560, margin: "0 auto", padding: "48px 20px 80px" }}>
-
-        {/* Hero */}
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <WifiHero />
-          <h1 className="shimmer-text" style={{ fontSize: 36, fontWeight: 900, margin: "0 0 12px", letterSpacing: "-0.03em", lineHeight: 1.1 }}>
-            Connect in Seconds
-          </h1>
-          <p style={{ color: "rgba(200,230,255,0.5)", fontSize: 14, margin: "0 0 24px", maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
-            Fast, reliable Wi-Fi powered by {brand.ispName}. Pay instantly with M-Pesa and get online.
-          </p>
-          {/* Trust badges */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
-            <Badge icon={<Shield size={11} color={CYAN} />} label="Secure Payment" />
-            <Badge icon={<Zap size={11} color="#f59e0b" />} label="Instant Activation" />
-            <Badge icon={<Clock size={11} color={MINT} />} label="24/7 Support" />
-          </div>
-        </div>
-
-        {/* ── Tab switcher ── */}
-        <div style={{
-          display: "flex", background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 16, padding: 4, marginBottom: 28, gap: 2,
-        }}>
-          {TABS.map(tab => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                  padding: "10px 8px", borderRadius: 12, border: "none", cursor: "pointer",
-                  fontSize: 12, fontWeight: 700, fontFamily: "inherit",
-                  transition: "all 0.2s",
-                  background: active ? CYAN : "transparent",
-                  color: active ? "#020b18" : "rgba(200,230,255,0.5)",
-                  boxShadow: active ? `0 4px 16px rgba(0,212,255,0.3)` : "none",
-                }}
-              >
-                {tab.icon}
-                <span style={{ whiteSpace: "nowrap" }}>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ══════════════════════════════════════
-            TAB: BUY DATA
-        ══════════════════════════════════════ */}
-        {activeTab === "plans" && (
-          <div>
-            {stkSent ? (
-              /* ── STK sent success ── */
-              <div style={{
-                background: CARD, border: "1px solid rgba(0,255,157,0.2)",
-                borderRadius: 24, padding: "48px 32px", textAlign: "center",
-                backdropFilter: "blur(20px)",
-                boxShadow: "0 0 40px rgba(0,255,157,0.06)",
-              }}>
-                <div style={{
-                  width: 72, height: 72, borderRadius: "50%",
-                  background: "rgba(0,255,157,0.1)", border: "1px solid rgba(0,255,157,0.25)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  margin: "0 auto 20px", boxShadow: "0 0 32px rgba(0,255,157,0.15)",
-                }}>
-                  <CheckCircle2 size={32} color={MINT} strokeWidth={1.5} />
-                </div>
-                <h3 style={{ fontSize: 22, fontWeight: 800, color: "#fff", margin: "0 0 10px" }}>
-                  STK Push Sent!
-                </h3>
-                <p style={{ color: "rgba(200,230,255,0.6)", fontSize: 14, margin: "0 0 8px" }}>
-                  Check your phone and enter your M-Pesa PIN to complete payment.
-                </p>
-                <p style={{ color: "rgba(200,230,255,0.4)", fontSize: 12, margin: "0 0 32px" }}>
-                  You'll be connected automatically once payment is confirmed.
-                </p>
-                <button
-                  onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); }}
-                  style={{
-                    background: "none", border: `1px solid rgba(0,212,255,0.25)`,
-                    color: CYAN, borderRadius: 10, padding: "10px 24px",
-                    fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                  }}
-                >
-                  Start Over
-                </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 8,
+              background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 2px 12px rgba(59,130,246,0.3)",
+            }}>
+              <Wifi size={16} color="#fff" strokeWidth={2.5} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 13, color: "#f1f5f9", letterSpacing: "0.02em" }}>
+                {brand.ispName}
               </div>
-            ) : (
-              <>
-                {/* Plan grid */}
-                {plansLoading ? (
-                  <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
-                    <Loader2 size={28} color={CYAN} style={{ animation: "spin 1s linear infinite" }} />
+              <div style={{ fontSize: 10, color: "#64748b", fontWeight: 500 }}>
+                {brand.domain}
+              </div>
+            </div>
+          </div>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "5px 12px", borderRadius: 99,
+            background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)",
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#10b981" }}>Online</span>
+          </div>
+        </header>
+
+        {/* Main content */}
+        <main style={{ position: "relative", zIndex: 1, maxWidth: 480, margin: "0 auto", padding: "32px 16px 60px" }}>
+
+          {/* Hero section */}
+          <div style={{ textAlign: "center", marginBottom: 32 }}>
+            <div style={{ position: "relative", width: 80, height: 80, margin: "0 auto 20px" }}>
+              {[0, 1, 2].map(i => (
+                <div key={i} style={{
+                  position: "absolute", inset: -8 - i * 12, borderRadius: "50%",
+                  border: `1px solid rgba(59,130,246,${0.2 - i * 0.06})`,
+                  animation: `pulse-ring 3s ease-out ${i * 0.8}s infinite`,
+                }} />
+              ))}
+              <div style={{
+                width: 80, height: 80, borderRadius: 20,
+                background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.1))",
+                border: "1px solid rgba(59,130,246,0.25)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                animation: "float 4s ease-in-out infinite",
+                position: "relative", zIndex: 1,
+              }}>
+                <Wifi size={32} color="#3b82f6" strokeWidth={2} />
+              </div>
+            </div>
+
+            <h1 style={{
+              fontSize: 28, fontWeight: 900, color: "#f8fafc",
+              margin: "0 0 8px", letterSpacing: "-0.03em", lineHeight: 1.15,
+            }}>
+              Get Connected
+            </h1>
+            <p style={{ color: "#64748b", fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>
+              Fast, reliable Wi-Fi by {brand.ispName}
+            </p>
+
+            <div style={{ display: "flex", justifyContent: "center", gap: 16, flexWrap: "wrap" }}>
+              {[
+                { icon: <Shield size={12} />, text: "Secure" },
+                { icon: <Zap size={12} />, text: "Instant" },
+                { icon: <Globe size={12} />, text: "24/7" },
+              ].map((b, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                  {b.icon} {b.text}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tab bar */}
+          <div style={{
+            display: "flex", background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.06)",
+            borderRadius: 12, padding: 3, marginBottom: 20, gap: 2,
+          }}>
+            {TABS.map(tab => {
+              const active = activeTab === tab.id;
+              return (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                  flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  padding: "10px 8px", borderRadius: 9, border: "none", cursor: "pointer",
+                  fontSize: 13, fontWeight: 600, fontFamily: "inherit",
+                  transition: "all 0.2s",
+                  background: active ? "#3b82f6" : "transparent",
+                  color: active ? "#fff" : "#64748b",
+                  boxShadow: active ? "0 2px 12px rgba(59,130,246,0.3)" : "none",
+                }}>
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ── TAB: BUY DATA ── */}
+          {activeTab === "plans" && (
+            <div style={{ animation: "fadeIn 0.3s ease-out" }}>
+              {stkSent ? (
+                <div className="hs-card" style={{ overflow: "hidden" }}>
+                  <div className="success-box">
+                    <div className="success-icon">
+                      <CheckCircle2 size={28} color="#10b981" strokeWidth={2} />
+                    </div>
+                    <h3 style={{ fontSize: 20, fontWeight: 800, color: "#f1f5f9", marginBottom: 8 }}>
+                      Payment Requested
+                    </h3>
+                    <p style={{ color: "#94a3b8", fontSize: 14, marginBottom: 6 }}>
+                      Check your phone and enter your M-Pesa PIN.
+                    </p>
+                    <p style={{ color: "#64748b", fontSize: 12, marginBottom: 28 }}>
+                      You'll be connected automatically once confirmed.
+                    </p>
+                    <button onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); }}
+                      style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8", borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      Start Over
+                    </button>
                   </div>
-                ) : plans.length === 0 ? (
-                  <p style={{ textAlign: "center", color: "rgba(200,230,255,0.4)", padding: "40px 0", fontSize: 14 }}>
-                    No hotspot plans available yet.
-                  </p>
-                ) : (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-                    {plans.map((plan, i) => {
-                      const acc = CARD_ACCENTS[i % CARD_ACCENTS.length];
-                      const sel = selectedPlan?.id === plan.id;
-                      return (
-                        <button
-                          key={plan.id}
-                          className="plan-card"
-                          onClick={() => setSelectedPlan(sel ? null : plan)}
-                          style={{
-                            textAlign: "left", padding: "0 0 16px",
-                            borderRadius: 16, border: `1px solid ${sel ? acc.badge + "55" : BORD}`,
-                            background: sel ? `${acc.glow}` : CARD,
-                            backdropFilter: "blur(12px)",
-                            cursor: "pointer", fontFamily: "inherit", color: "#e8f4f8",
-                            overflow: "hidden", position: "relative",
-                            boxShadow: sel ? `0 0 24px ${acc.glow}` : "none",
-                          }}
-                        >
-                          {/* Colour bar */}
-                          <div style={{ height: 3, background: acc.bar, marginBottom: 14 }} />
+                </div>
+              ) : (
+                <>
+                  {plansLoading ? (
+                    <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
+                      <Loader2 size={24} color="#3b82f6" style={{ animation: "spin 1s linear infinite" }} />
+                    </div>
+                  ) : plans.length === 0 ? (
+                    <p style={{ textAlign: "center", color: "#64748b", padding: "48px 0", fontSize: 14 }}>
+                      No plans available at the moment.
+                    </p>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+                      {plans.map((plan, i) => {
+                        const color = PLAN_COLORS[i % PLAN_COLORS.length];
+                        const sel = selectedPlan?.id === plan.id;
+                        return (
+                          <button key={plan.id} className={`plan-card${sel ? " selected" : ""}`}
+                            onClick={() => setSelectedPlan(sel ? null : plan)}
+                            style={sel ? { borderColor: color + "66", background: color + "0d", boxShadow: `0 0 20px ${color}15` } : {}}>
 
-                          <div style={{ padding: "0 16px" }}>
-                            {/* Selected tick */}
-                            {sel && (
-                              <div style={{
-                                position: "absolute", top: 12, right: 12,
-                                width: 20, height: 20, borderRadius: "50%",
-                                background: acc.badge,
-                                display: "flex", alignItems: "center", justifyContent: "center",
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                              <span style={{
+                                fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+                                letterSpacing: "0.06em", color, opacity: 0.9,
                               }}>
-                                <CheckCircle2 size={12} color="#020b18" strokeWidth={3} />
-                              </div>
-                            )}
-
-                            <p style={{ fontSize: 11, fontWeight: 700, color: "rgba(200,230,255,0.5)", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>
-                              {plan.name}
-                            </p>
-                            <p style={{ fontSize: 26, fontWeight: 900, margin: "0 0 10px", color: "#fff", letterSpacing: "-0.02em" }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(200,230,255,0.5)" }}>Ksh </span>
-                              {plan.price}
-                            </p>
-
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: acc.badge, fontWeight: 600 }}>
-                                <Clock size={11} /> {formatValidity(plan)}
-                              </div>
-                              {plan.speed_down > 0 && (
-                                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(200,230,255,0.4)", fontWeight: 500 }}>
-                                  <Zap size={10} /> {plan.speed_down}Mbps
+                                {plan.name}
+                              </span>
+                              {sel && (
+                                <div style={{
+                                  width: 18, height: 18, borderRadius: "50%", background: color,
+                                  display: "flex", alignItems: "center", justifyContent: "center",
+                                }}>
+                                  <CheckCircle2 size={10} color="#fff" strokeWidth={3} />
                                 </div>
                               )}
                             </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
 
-                {/* Selected plan summary + payment form */}
-                <div style={{
-                  background: "rgba(0,20,40,0.7)", backdropFilter: "blur(20px)",
-                  border: `1px solid ${BORD}`, borderRadius: 20,
-                  overflow: "hidden",
-                }}>
-                  {/* Header stripe */}
-                  <div style={{
-                    padding: "16px 24px", borderBottom: "1px solid rgba(0,212,255,0.08)",
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      {/* M-Pesa green dot */}
+                            <div style={{ fontSize: 28, fontWeight: 900, color: "#f1f5f9", lineHeight: 1, marginBottom: 12 }}>
+                              <span style={{ fontSize: 12, fontWeight: 500, color: "#64748b" }}>Ksh</span>{" "}
+                              {plan.price}
+                            </div>
+
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#94a3b8" }}>
+                                <Clock size={11} color={color} /> {formatValidity(plan)}
+                              </div>
+                              {plan.speed_down > 0 && (
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#94a3b8" }}>
+                                  <Zap size={11} color={color} /> {formatSpeed(plan.speed_down)}
+                                </div>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Payment section */}
+                  <div className="hs-card" style={{ overflow: "hidden" }}>
+                    <div style={{
+                      padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+                      display: "flex", alignItems: "center", gap: 10,
+                    }}>
                       <div style={{
-                        width: 32, height: 32, borderRadius: 9,
-                        background: "rgba(0,166,81,0.15)", border: "1px solid rgba(0,166,81,0.3)",
+                        width: 30, height: 30, borderRadius: 8,
+                        background: "rgba(0,166,81,0.12)", border: "1px solid rgba(0,166,81,0.2)",
                         display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
-                        <Phone size={15} color="#00a651" />
+                        <Phone size={14} color="#00a651" />
                       </div>
                       <div>
-                        <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#fff" }}>Pay with M-Pesa</p>
-                        <p style={{ margin: 0, fontSize: 11, color: "rgba(200,230,255,0.4)" }}>STK push to your phone</p>
+                        <p style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>M-Pesa Payment</p>
+                        <p style={{ fontSize: 11, color: "#64748b" }}>Instant STK push</p>
                       </div>
                     </div>
-                    <div style={{
-                      fontSize: 10, fontWeight: 700, color: "#00a651",
-                      background: "rgba(0,166,81,0.1)", border: "1px solid rgba(0,166,81,0.25)",
-                      borderRadius: 99, padding: "3px 10px", letterSpacing: "0.05em",
-                    }}>
-                      OFFICIAL
-                    </div>
-                  </div>
 
-                  <div style={{ padding: "20px 24px" }}>
-                    {/* Selected plan chip */}
-                    {selectedPlan ? (
-                      <div style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        padding: "10px 14px", borderRadius: 10, marginBottom: 18,
-                        background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)",
-                      }}>
-                        <div>
-                          <span style={{ fontSize: 11, color: "rgba(200,230,255,0.5)", display: "block" }}>Selected plan</span>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{selectedPlan.name}</span>
-                        </div>
-                        <span style={{ fontSize: 18, fontWeight: 900, color: CYAN }}>Ksh {selectedPlan.price}</span>
-                      </div>
-                    ) : (
-                      <div style={{
-                        padding: "10px 14px", borderRadius: 10, marginBottom: 18,
-                        background: "rgba(255,255,255,0.03)", border: "1px dashed rgba(255,255,255,0.1)",
-                        fontSize: 13, color: "rgba(200,230,255,0.35)", textAlign: "center",
-                      }}>
-                        ↑ Select a plan above to continue
-                      </div>
-                    )}
-
-                    <form onSubmit={handlePay} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                      <div>
-                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(200,230,255,0.45)", marginBottom: 8 }}>
-                          M-Pesa Phone Number
-                        </label>
-                        <div style={{ position: "relative" }}>
-                          <span style={{
-                            position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)",
-                            fontSize: 13, fontWeight: 700, color: "rgba(200,230,255,0.35)",
-                          }}>🇰🇪 +254</span>
-                          <input
-                            type="tel" placeholder="7XX XXX XXX" required
-                            value={phone}
-                            onChange={e => setPhone(e.target.value)}
-                            style={{
-                              width: "100%", boxSizing: "border-box",
-                              background: "rgba(255,255,255,0.04)",
-                              border: "1px solid rgba(0,212,255,0.15)",
-                              borderRadius: 12, padding: "13px 14px 13px 88px",
-                              fontSize: 15, fontWeight: 700, color: "#fff",
-                              fontFamily: "inherit", transition: "border-color 0.2s",
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      {payError && (
+                    <div style={{ padding: 18 }}>
+                      {selectedPlan ? (
                         <div style={{
-                          display: "flex", alignItems: "flex-start", gap: 8,
-                          background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
-                          borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#fca5a5",
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "10px 14px", borderRadius: 10, marginBottom: 14,
+                          background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.12)",
                         }}>
-                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                          {payError}
+                          <div>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Selected</span>
+                            <p style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", margin: 0 }}>{selectedPlan.name}</p>
+                          </div>
+                          <span style={{ fontSize: 18, fontWeight: 900, color: "#3b82f6" }}>Ksh {selectedPlan.price}</span>
+                        </div>
+                      ) : (
+                        <div style={{
+                          padding: "14px", borderRadius: 10, marginBottom: 14,
+                          background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.08)",
+                          fontSize: 13, color: "#475569", textAlign: "center",
+                        }}>
+                          Select a plan above
                         </div>
                       )}
 
-                      <button
-                        type="submit"
-                        disabled={payLoading || !selectedPlan}
-                        style={{
-                          width: "100%", padding: "14px", borderRadius: 12, border: "none",
-                          background: selectedPlan
-                            ? "linear-gradient(135deg, #00a651, #00c96b)"
-                            : "rgba(255,255,255,0.06)",
-                          color: selectedPlan ? "#fff" : "rgba(200,230,255,0.25)",
-                          fontSize: 14, fontWeight: 800, cursor: selectedPlan ? "pointer" : "not-allowed",
-                          fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                          boxShadow: selectedPlan ? "0 4px 24px rgba(0,166,81,0.3)" : "none",
-                          transition: "all 0.2s",
-                        }}
-                      >
-                        {payLoading ? (
-                          <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending prompt…</>
-                        ) : !selectedPlan ? (
-                          "Select a plan above"
-                        ) : (
-                          <><Phone size={15} /> Send M-Pesa STK Push · Ksh {selectedPlan.price}</>
+                      <form onSubmit={handlePay} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>
+                            Phone Number
+                          </label>
+                          <div style={{ position: "relative" }}>
+                            <span style={{
+                              position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
+                              fontSize: 13, fontWeight: 600, color: "#64748b", pointerEvents: "none",
+                            }}>+254</span>
+                            <input className="hs-input" type="tel" placeholder="7XX XXX XXX" required
+                              value={phone} onChange={e => setPhone(e.target.value)}
+                              style={{ paddingLeft: 56 }} />
+                          </div>
+                        </div>
+
+                        {payError && (
+                          <div className="error-box">
+                            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                            {payError}
+                          </div>
                         )}
-                      </button>
-                    </form>
 
-                    {/* Security note */}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 }}>
-                      <Shield size={11} color="rgba(200,230,255,0.25)" />
-                      <span style={{ fontSize: 11, color: "rgba(200,230,255,0.25)" }}>
-                        Secured · Powered by Safaricom M-Pesa
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+                        <button type="submit" disabled={payLoading || !selectedPlan}
+                          className={`hs-btn ${selectedPlan ? "hs-btn-mpesa" : ""}`}
+                          style={!selectedPlan ? { background: "rgba(255,255,255,0.06)", color: "#475569", cursor: "not-allowed", boxShadow: "none" } : {}}>
+                          {payLoading ? (
+                            <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Sending...</>
+                          ) : !selectedPlan ? (
+                            "Select a plan to continue"
+                          ) : (
+                            <><Phone size={15} /> Pay Ksh {selectedPlan.price}</>
+                          )}
+                        </button>
+                      </form>
 
-        {/* ══════════════════════════════════════
-            TAB: MEMBER LOGIN
-        ══════════════════════════════════════ */}
-        {activeTab === "login" && (
-          <div style={{
-            background: "rgba(0,20,40,0.7)", backdropFilter: "blur(20px)",
-            border: `1px solid ${BORD}`, borderRadius: 20, overflow: "hidden",
-          }}>
-            <div style={{
-              padding: "20px 24px", borderBottom: "1px solid rgba(0,212,255,0.08)",
-              display: "flex", alignItems: "center", gap: 12,
-            }}>
-              <div style={{
-                width: 38, height: 38, borderRadius: 10,
-                background: "rgba(0,212,255,0.1)", border: "1px solid rgba(0,212,255,0.2)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <User size={18} color={CYAN} />
-              </div>
-              <div>
-                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#fff" }}>Member Login</p>
-                <p style={{ margin: 0, fontSize: 11, color: "rgba(200,230,255,0.4)" }}>Sign in to your account</p>
-              </div>
-            </div>
-
-            <div style={{ padding: "24px" }}>
-              {loginSuccess ? (
-                <div style={{ textAlign: "center", padding: "24px 0" }}>
-                  <div style={{
-                    width: 72, height: 72, borderRadius: "50%",
-                    background: "rgba(0,255,157,0.1)", border: "1px solid rgba(0,255,157,0.25)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    margin: "0 auto 20px", boxShadow: "0 0 32px rgba(0,255,157,0.15)",
-                  }}>
-                    <CheckCircle2 size={32} color={MINT} strokeWidth={1.5} />
-                  </div>
-                  <h3 style={{ fontSize: 20, fontWeight: 800, color: "#fff", margin: "0 0 8px" }}>
-                    Welcome, {loggedInName}!
-                  </h3>
-                  <p style={{ color: "rgba(200,230,255,0.5)", fontSize: 13, margin: "0 0 28px" }}>
-                    You are now connected to the network.
-                  </p>
-                  <button
-                    onClick={() => { setLoginSuccess(false); setLoginUsername(""); setLoginPassword(""); }}
-                    style={{
-                      background: "none", border: "1px solid rgba(0,212,255,0.2)",
-                      color: CYAN, borderRadius: 10, padding: "9px 22px",
-                      fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                    }}
-                  >
-                    Sign Out
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  {loginError && (
-                    <div style={{
-                      display: "flex", alignItems: "flex-start", gap: 8,
-                      background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
-                      borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#fca5a5",
-                    }}>
-                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                      {loginError}
-                    </div>
-                  )}
-
-                  {[
-                    { label: "Username", type: "text",     val: loginUsername, set: setLoginUsername, ph: "your-username", icon: <User size={14} /> },
-                    { label: "Password", type: "password", val: loginPassword, set: setLoginPassword, ph: "••••••••",       icon: <Lock size={14} /> },
-                  ].map(f => (
-                    <div key={f.label}>
-                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(200,230,255,0.45)", marginBottom: 8 }}>
-                        {f.label}
-                      </label>
-                      <div style={{ position: "relative" }}>
-                        <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "rgba(200,230,255,0.3)" }}>
-                          {f.icon}
-                        </span>
-                        <input
-                          type={f.type} placeholder={f.ph} required
-                          value={f.val} onChange={e => f.set(e.target.value)}
-                          style={{
-                            width: "100%", boxSizing: "border-box",
-                            background: "rgba(255,255,255,0.04)",
-                            border: "1px solid rgba(0,212,255,0.15)",
-                            borderRadius: 12, padding: "13px 14px 13px 44px",
-                            fontSize: 14, color: "#fff", fontFamily: "inherit",
-                            transition: "border-color 0.2s",
-                          }}
-                        />
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 12 }}>
+                        <Shield size={10} color="#475569" />
+                        <span style={{ fontSize: 10, color: "#475569" }}>Secured by Safaricom M-Pesa</span>
                       </div>
                     </div>
-                  ))}
-
-                  <button
-                    type="submit" disabled={loginLoading}
-                    style={{
-                      width: "100%", padding: "14px", borderRadius: 12, border: "none",
-                      background: `linear-gradient(135deg, ${CYAN}, #0080ff)`,
-                      color: "#020b18", fontSize: 14, fontWeight: 800,
-                      cursor: loginLoading ? "not-allowed" : "pointer",
-                      fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                      boxShadow: "0 4px 24px rgba(0,212,255,0.25)",
-                      opacity: loginLoading ? 0.7 : 1, transition: "opacity 0.2s",
-                    }}
-                  >
-                    {loginLoading ? (
-                      <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying…</>
-                    ) : (
-                      <><Wifi size={15} /> Connect to Network</>
-                    )}
-                  </button>
-                </form>
+                  </div>
+                </>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* ══════════════════════════════════════
-            TAB: VOUCHER
-        ══════════════════════════════════════ */}
-        {activeTab === "voucher" && (
-          <div style={{
-            background: "rgba(0,20,40,0.7)", backdropFilter: "blur(20px)",
-            border: "1px solid rgba(245,158,11,0.15)", borderRadius: 20, overflow: "hidden",
-          }}>
-            <div style={{
-              padding: "20px 24px", borderBottom: "1px solid rgba(245,158,11,0.1)",
-              display: "flex", alignItems: "center", gap: 12,
-            }}>
+          {/* ── TAB: LOGIN ── */}
+          {activeTab === "login" && (
+            <div className="hs-card" style={{ overflow: "hidden", animation: "fadeIn 0.3s ease-out" }}>
               <div style={{
-                width: 38, height: 38, borderRadius: 10,
-                background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)",
-                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+                display: "flex", alignItems: "center", gap: 10,
               }}>
-                <Ticket size={18} color="#f59e0b" />
-              </div>
-              <div>
-                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#fff" }}>Redeem Voucher</p>
-                <p style={{ margin: 0, fontSize: 11, color: "rgba(200,230,255,0.4)" }}>Enter your printed code to connect</p>
-              </div>
-            </div>
-
-            <div style={{ padding: "24px" }}>
-              {voucherSuccess ? (
-                <div style={{ textAlign: "center", padding: "24px 0" }}>
-                  <div style={{
-                    width: 72, height: 72, borderRadius: "50%",
-                    background: "rgba(0,255,157,0.1)", border: "1px solid rgba(0,255,157,0.25)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    margin: "0 auto 20px",
-                  }}>
-                    <CheckCircle2 size={32} color={MINT} strokeWidth={1.5} />
-                  </div>
-                  <h3 style={{ fontSize: 20, fontWeight: 800, color: "#fff", margin: "0 0 8px" }}>Voucher Activated!</h3>
-                  {voucherInfo?.plan_name && (
-                    <p style={{ color: "rgba(200,230,255,0.5)", fontSize: 13, margin: "0 0 4px" }}>
-                      Plan: <strong style={{ color: "#fff" }}>{String(voucherInfo.plan_name)}</strong>
-                    </p>
-                  )}
-                  {voucherInfo?.duration && (
-                    <p style={{ color: "rgba(200,230,255,0.5)", fontSize: 13, margin: "0 0 24px" }}>
-                      Duration: <strong style={{ color: "#fff" }}>{String(voucherInfo.duration)}</strong>
-                    </p>
-                  )}
-                  <div style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    background: "rgba(0,255,157,0.06)", border: "1px solid rgba(0,255,157,0.2)",
-                    borderRadius: 99, padding: "6px 16px", marginBottom: 28,
-                  }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: MINT }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: MINT }}>You are now connected</span>
-                  </div>
-                  <br />
-                  <button
-                    onClick={() => { setVoucherSuccess(false); setVoucherCode(""); setVoucherInfo(null); }}
-                    style={{
-                      background: "none", border: "1px solid rgba(245,158,11,0.25)",
-                      color: "#f59e0b", borderRadius: 10, padding: "9px 22px",
-                      fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-                    }}
-                  >
-                    Redeem Another
-                  </button>
+                <div style={{
+                  width: 30, height: 30, borderRadius: 8,
+                  background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.2)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <User size={14} color="#3b82f6" />
                 </div>
-              ) : (
-                <form onSubmit={handleVoucher} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                  <div style={{
-                    padding: "20px", borderRadius: 14,
-                    background: "rgba(245,158,11,0.04)", border: "1px dashed rgba(245,158,11,0.2)",
-                    textAlign: "center",
-                  }}>
-                    <Star size={20} color="#f59e0b" style={{ marginBottom: 8 }} />
-                    <p style={{ margin: 0, fontSize: 12, color: "rgba(200,230,255,0.45)" }}>
-                      Enter the code printed on your voucher card below.
-                    </p>
-                  </div>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Member Login</p>
+                  <p style={{ fontSize: 11, color: "#64748b" }}>Sign in with your credentials</p>
+                </div>
+              </div>
 
-                  {voucherError && (
-                    <div style={{
-                      display: "flex", alignItems: "flex-start", gap: 8,
-                      background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
-                      borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#fca5a5",
-                    }}>
-                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                      {voucherError}
+              <div style={{ padding: 18 }}>
+                {loginSuccess ? (
+                  <div className="success-box">
+                    <div className="success-icon">
+                      <CheckCircle2 size={28} color="#10b981" strokeWidth={2} />
                     </div>
-                  )}
-
-                  <input
-                    type="text" placeholder="XXXX-XXXX-XXXX" required
-                    value={voucherCode}
-                    onChange={e => setVoucherCode(e.target.value.toUpperCase())}
-                    style={{
-                      width: "100%", boxSizing: "border-box",
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(245,158,11,0.25)",
-                      borderRadius: 12, padding: "16px",
-                      textAlign: "center", fontFamily: "monospace",
-                      fontSize: 20, letterSpacing: "0.15em", fontWeight: 700,
-                      color: "#f59e0b", transition: "border-color 0.2s",
-                    }}
-                  />
-
-                  <button
-                    type="submit" disabled={voucherLoading}
-                    style={{
-                      width: "100%", padding: "14px", borderRadius: 12, border: "none",
-                      background: "linear-gradient(135deg, #f59e0b, #ef4444)",
-                      color: "#fff", fontSize: 14, fontWeight: 800,
-                      cursor: voucherLoading ? "not-allowed" : "pointer",
-                      fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                      boxShadow: "0 4px 24px rgba(245,158,11,0.2)",
-                      opacity: voucherLoading ? 0.7 : 1, transition: "opacity 0.2s",
-                    }}
-                  >
-                    {voucherLoading ? (
-                      <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Validating…</>
-                    ) : (
-                      <><ArrowRight size={15} /> Activate Voucher</>
+                    <h3 style={{ fontSize: 20, fontWeight: 800, color: "#f1f5f9", marginBottom: 6 }}>
+                      Welcome, {loggedInName}!
+                    </h3>
+                    <p style={{ color: "#64748b", fontSize: 13, marginBottom: 24 }}>
+                      You're now connected to the network.
+                    </p>
+                    <button onClick={() => { setLoginSuccess(false); setLoginUsername(""); setLoginPassword(""); }}
+                      style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8", borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      Sign Out
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {loginError && (
+                      <div className="error-box">
+                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                        {loginError}
+                      </div>
                     )}
-                  </button>
-                </form>
-              )}
-            </div>
-          </div>
-        )}
 
-        {/* Footer */}
-        <div style={{ textAlign: "center", marginTop: 40 }}>
-          <p style={{ fontSize: 11, color: "rgba(200,230,255,0.2)", margin: 0 }}>
-            © {new Date().getFullYear()} {brand.ispName} · {brand.domain} · All rights reserved
-          </p>
-        </div>
-      </main>
-    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>Username</label>
+                      <div style={{ position: "relative" }}>
+                        <User size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#475569" }} />
+                        <input className="hs-input" type="text" placeholder="Enter username" required
+                          value={loginUsername} onChange={e => setLoginUsername(e.target.value)}
+                          style={{ paddingLeft: 36 }} />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6 }}>Password</label>
+                      <div style={{ position: "relative" }}>
+                        <Lock size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#475569" }} />
+                        <input className="hs-input" type="password" placeholder="Enter password" required
+                          value={loginPassword} onChange={e => setLoginPassword(e.target.value)}
+                          style={{ paddingLeft: 36 }} />
+                      </div>
+                    </div>
+
+                    <button type="submit" disabled={loginLoading} className="hs-btn hs-btn-primary">
+                      {loginLoading ? (
+                        <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Connecting...</>
+                      ) : (
+                        <><Wifi size={15} /> Connect</>
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB: VOUCHER ── */}
+          {activeTab === "voucher" && (
+            <div className="hs-card" style={{ overflow: "hidden", animation: "fadeIn 0.3s ease-out" }}>
+              <div style={{
+                padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+                display: "flex", alignItems: "center", gap: 10,
+              }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: 8,
+                  background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <Ticket size={14} color="#f59e0b" />
+                </div>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Redeem Voucher</p>
+                  <p style={{ fontSize: 11, color: "#64748b" }}>Enter your voucher code</p>
+                </div>
+              </div>
+
+              <div style={{ padding: 18 }}>
+                {voucherSuccess ? (
+                  <div className="success-box">
+                    <div className="success-icon">
+                      <CheckCircle2 size={28} color="#10b981" strokeWidth={2} />
+                    </div>
+                    <h3 style={{ fontSize: 20, fontWeight: 800, color: "#f1f5f9", marginBottom: 8 }}>Activated!</h3>
+                    {voucherInfo?.plan_name && (
+                      <p style={{ color: "#94a3b8", fontSize: 13, marginBottom: 4 }}>
+                        Plan: <strong style={{ color: "#f1f5f9" }}>{String(voucherInfo.plan_name)}</strong>
+                      </p>
+                    )}
+                    {voucherInfo?.duration && (
+                      <p style={{ color: "#94a3b8", fontSize: 13, marginBottom: 20 }}>
+                        Duration: <strong style={{ color: "#f1f5f9" }}>{String(voucherInfo.duration)}</strong>
+                      </p>
+                    )}
+                    <div style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)",
+                      borderRadius: 99, padding: "5px 14px", marginBottom: 24,
+                    }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#10b981" }}>Connected</span>
+                    </div>
+                    <br />
+                    <button onClick={() => { setVoucherSuccess(false); setVoucherCode(""); setVoucherInfo(null); }}
+                      style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8", borderRadius: 8, padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                      Redeem Another
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleVoucher} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    <div style={{
+                      padding: 16, borderRadius: 10,
+                      background: "rgba(245,158,11,0.04)", border: "1px solid rgba(245,158,11,0.1)",
+                      textAlign: "center",
+                    }}>
+                      <Ticket size={18} color="#f59e0b" style={{ marginBottom: 6 }} />
+                      <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>
+                        Enter the code from your voucher card
+                      </p>
+                    </div>
+
+                    {voucherError && (
+                      <div className="error-box">
+                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                        {voucherError}
+                      </div>
+                    )}
+
+                    <input className="hs-input" type="text" placeholder="XXXX-XXXX-XXXX" required
+                      value={voucherCode} onChange={e => setVoucherCode(e.target.value.toUpperCase())}
+                      style={{
+                        textAlign: "center", fontFamily: "monospace",
+                        fontSize: 18, letterSpacing: "0.12em", fontWeight: 700,
+                        color: "#f59e0b", padding: "14px",
+                        borderColor: "rgba(245,158,11,0.2)",
+                      }} />
+
+                    <button type="submit" disabled={voucherLoading} className="hs-btn hs-btn-voucher">
+                      {voucherLoading ? (
+                        <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Validating...</>
+                      ) : (
+                        <><ArrowRight size={15} /> Activate Voucher</>
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div style={{ textAlign: "center", marginTop: 32, padding: "0 16px" }}>
+            <p style={{ fontSize: 11, color: "#334155" }}>
+              {new Date().getFullYear()} {brand.ispName} · {brand.domain}
+            </p>
+          </div>
+        </main>
+      </div>
+    </>
   );
 }
