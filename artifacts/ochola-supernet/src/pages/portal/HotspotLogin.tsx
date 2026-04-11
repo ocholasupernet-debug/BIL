@@ -65,18 +65,58 @@ export default function HotspotLogin() {
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [stkSent, setStkSent] = useState(false);
+  const [checkoutId, setCheckoutId] = useState<string | null>(null);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [mpesaStatus, setMpesaStatus] = useState<{ configured: boolean; env: string; shortcode: string } | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`/api/plans?adminId=${adminId}`);
-        const data: Plan[] = await res.json();
-        const hs = data.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
-        setPlans(hs.length > 0 ? hs : data);
+        const [plansRes, mpesaRes] = await Promise.all([
+          fetch(`/api/plans?adminId=${adminId}`),
+          fetch("/api/settings/mpesa").catch(() => null),
+        ]);
+        const plansData: Plan[] = await plansRes.json();
+        const hs = plansData.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
+        setPlans(hs.length > 0 ? hs : plansData);
+
+        if (mpesaRes?.ok) {
+          const mpesaData = await mpesaRes.json();
+          setMpesaStatus({
+            configured: mpesaData.configured,
+            env: mpesaData.settings?.env ?? "sandbox",
+            shortcode: mpesaData.settings?.shortcode ?? "",
+          });
+        }
       } catch { setPlans([]); }
       finally { setPlansLoading(false); }
     })();
   }, [adminId]);
+
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (!checkoutId || paymentConfirmed) return;
+    setPollTimedOut(false);
+    const start = Date.now();
+    const maxPollMs = 3 * 60 * 1000;
+    const interval = setInterval(async () => {
+      if (Date.now() - start > maxPollMs) {
+        setPollTimedOut(true);
+        clearInterval(interval);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`);
+        const data = await res.json();
+        if (data.paid) {
+          setPaymentConfirmed(true);
+          clearInterval(interval);
+        }
+      } catch {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [checkoutId, paymentConfirmed]);
 
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,11 +126,14 @@ export default function HotspotLogin() {
       const res = await fetch("/api/mpesa/stk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), amount: selectedPlan.price, plan_id: selectedPlan.id, adminId, account_ref: "ISPlatty" }),
+        body: JSON.stringify({ phone: phone.trim(), amount: selectedPlan.price, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName }),
       });
-      const data = await res.json() as { ok: boolean; error?: string };
+      const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
       if (!res.ok || !data.ok) setPayError(data.error ?? "Failed to send STK push. Please try again.");
-      else setStkSent(true);
+      else {
+        setStkSent(true);
+        if (data.CheckoutRequestID) setCheckoutId(data.CheckoutRequestID);
+      }
     } catch { setPayError("Could not reach the payment server. Please try again."); }
     finally { setPayLoading(false); }
   };
@@ -533,16 +576,60 @@ export default function HotspotLogin() {
               {stkSent ? (
                 <div className="hp-glass">
                   <div className="hp-success">
-                    <div className="hp-success-icon">
-                      <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
-                    </div>
-                    <h3>Payment Requested</h3>
-                    <p>Check your phone and enter your M-Pesa PIN.</p>
-                    <p style={{ fontSize: 12, marginBottom: 28 }}>You'll be connected automatically once confirmed.</p>
-                    <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                      onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); }}>
-                      Start Over
-                    </button>
+                    {paymentConfirmed ? (
+                      <>
+                        <div className="hp-success-icon">
+                          <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
+                        </div>
+                        <h3>Payment Confirmed!</h3>
+                        <p>Your payment of <strong style={{ color: "#fff" }}>Ksh {selectedPlan?.price}</strong> has been received.</p>
+                        <p style={{ fontSize: 12, marginBottom: 8 }}>You are now connected to the network.</p>
+                        <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
+                          Connected
+                        </div>
+                        {mpesaStatus?.shortcode && (
+                          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginBottom: 16 }}>
+                            Paybill: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
+                          </p>
+                        )}
+                        <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); }}>
+                          Done
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "rgba(99,102,241,0.1)", border: "2px solid rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+                          <Loader2 size={28} color="#818cf8" style={{ animation: "spin 1.5s linear infinite" }} />
+                        </div>
+                        <h3>Waiting for Payment</h3>
+                        <p>An STK push has been sent to <strong style={{ color: "#fff" }}>{phone}</strong></p>
+                        <p style={{ fontSize: 13, marginBottom: 4 }}>
+                          Enter your M-Pesa PIN on your phone to pay <strong style={{ color: "#34d399" }}>Ksh {selectedPlan?.price}</strong>
+                        </p>
+                        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginBottom: 20 }}>
+                          {mpesaStatus?.shortcode && <>Paybill: {mpesaStatus.shortcode} &middot; </>}
+                          {mpesaStatus?.env === "sandbox" ? "Sandbox Mode" : "Live Payment"}
+                        </p>
+                        {pollTimedOut ? (
+                          <div style={{ padding: 14, borderRadius: 10, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)", marginBottom: 20, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5, textAlign: "center" }}>
+                            <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
+                            <p style={{ margin: 0 }}>Payment not confirmed yet. If you already entered your PIN, it may take a moment to process.</p>
+                            <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Try again or contact support if the amount was deducted.</p>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 24, fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
+                            <Loader2 size={12} style={{ animation: "spin 2s linear infinite" }} />
+                            Checking payment status...
+                          </div>
+                        )}
+                        <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPollTimedOut(false); }}>
+                          {pollTimedOut ? "Try Again" : "Cancel & Start Over"}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -593,40 +680,71 @@ export default function HotspotLogin() {
                                 </div>
 
                                 <div className="hp-plan-pay">
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                                    <Phone size={14} color="#22c55e" />
-                                    <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Pay with M-Pesa</span>
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                      <Phone size={14} color="#22c55e" />
+                                      <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Pay with M-Pesa</span>
+                                    </div>
+                                    {mpesaStatus && (
+                                      <span style={{
+                                        fontSize: 10, fontWeight: 700,
+                                        padding: "3px 8px", borderRadius: 6,
+                                        background: mpesaStatus.configured ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
+                                        color: mpesaStatus.configured ? "#34d399" : "#fca5a5",
+                                        border: `1px solid ${mpesaStatus.configured ? "rgba(52,211,153,0.2)" : "rgba(239,68,68,0.2)"}`,
+                                      }}>
+                                        {mpesaStatus.configured
+                                          ? mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"
+                                          : "NOT CONFIGURED"}
+                                      </span>
+                                    )}
                                   </div>
 
-                                  <form onSubmit={handlePay}>
-                                    <div className="hp-input-group">
-                                      <div className="hp-input-wrap">
-                                        <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
-                                        <input className="hp-input hp-input-phone" type="tel"
-                                          placeholder="7XX XXX XXX" required
-                                          value={phone} onChange={e => setPhone(e.target.value)} />
-                                      </div>
+                                  {mpesaStatus && !mpesaStatus.configured ? (
+                                    <div style={{
+                                      padding: 14, borderRadius: 10, textAlign: "center",
+                                      background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
+                                      fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
+                                    }}>
+                                      <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
+                                      <p style={{ margin: 0 }}>M-Pesa Daraja API not configured yet.</p>
+                                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Admin needs to set Consumer Key, Secret, Shortcode &amp; Passkey in Settings.</p>
                                     </div>
-
-                                    {payError && (
-                                      <div className="hp-error">
-                                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                        {payError}
+                                  ) : (
+                                    <form onSubmit={handlePay}>
+                                      <div className="hp-input-group">
+                                        <div className="hp-input-wrap">
+                                          <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
+                                          <input className="hp-input hp-input-phone" type="tel"
+                                            placeholder="7XX XXX XXX" required
+                                            value={phone} onChange={e => setPhone(e.target.value)} />
+                                        </div>
                                       </div>
-                                    )}
 
-                                    <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
-                                      {payLoading ? (
-                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending...</>
-                                      ) : (
-                                        <><Phone size={16} /> Pay Ksh {plan.price}</>
+                                      {payError && (
+                                        <div className="hp-error">
+                                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                                          {payError}
+                                        </div>
                                       )}
-                                    </button>
-                                  </form>
+
+                                      <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
+                                        {payLoading ? (
+                                          <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
+                                        ) : (
+                                          <><Phone size={16} /> Pay Ksh {plan.price}</>
+                                        )}
+                                      </button>
+                                    </form>
+                                  )}
 
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                                     <div className="hp-secured" style={{ margin: 0 }}>
-                                      <Shield size={11} /> Secured by M-Pesa
+                                      <Shield size={11} />
+                                      {mpesaStatus?.shortcode
+                                        ? <>Paybill {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
+                                        : <>Secured by Safaricom M-Pesa</>
+                                      }
                                     </div>
                                     <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan

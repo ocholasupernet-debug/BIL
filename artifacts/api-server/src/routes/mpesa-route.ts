@@ -228,7 +228,6 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
       `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`,
       {
         status: "completed",
-        reference: mpesaReceipt || String(CheckoutRequestID),
         notes: `M-Pesa payment confirmed. Receipt: ${mpesaReceipt}. Phone: ${rawPhone}`,
       },
     ).catch(err => logger.warn({ err }, "[mpesa/callback] Failed to update transaction"));
