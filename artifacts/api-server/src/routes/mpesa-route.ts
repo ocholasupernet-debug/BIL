@@ -52,10 +52,11 @@ function stkCredentials(): { timestamp: string; password: string } {
  * via Safaricom's OAuth endpoint.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> => {
-  if (!isMpesaConfigured()) {
+  const { consumerKey, consumerSecret } = getMpesaSettings();
+  if (!consumerKey || !consumerSecret) {
     res.status(503).json({
       ok: false,
-      error: "M-Pesa credentials not configured. Go to Admin Settings → Billing and enter your Daraja Consumer Key & Consumer Secret.",
+      error: "MPESA_CONSUMER_KEY and MPESA_CONSUMER_SECRET are not set. Add them as environment variables or configure in Admin Settings → Billing.",
     });
     return;
   }
