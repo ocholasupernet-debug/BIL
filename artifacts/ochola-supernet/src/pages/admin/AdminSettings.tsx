@@ -720,6 +720,8 @@ function SecurityTab() {
   const [ipWhitelist, setIpWL]  = useState(false);
   const [forceHttps, setHttps]  = useState(true);
   const [auditLog, setAudit]    = useState(true);
+  const [singleSession, setSingleSession] = useState(false);
+  const [csrfProtect, setCsrfProtect]     = useState(true);
   const [showApiKey, setShowKey] = useState(false);
   const [copied, setCopied]     = useState(false);
   const ADMIN_KEY = "demo_admin_key_xxxxxxxxxxxxxxxxxxxxxxxx";
@@ -763,6 +765,8 @@ function SecurityTab() {
           { label: "Force HTTPS",         desc: "Redirect all HTTP traffic to HTTPS",                          val: forceHttps, fn: setHttps },
           { label: "IP Whitelist",         desc: "Only allow admin access from specific IP addresses",          val: ipWhitelist,fn: setIpWL  },
           { label: "Admin Audit Log",      desc: "Log all admin actions (login, changes, deletions)",           val: auditLog,   fn: setAudit },
+          { label: "Single Session Only",   desc: "Invalidate previous sessions when admin logs in from a new device", val: singleSession, fn: setSingleSession },
+          { label: "CSRF Protection",       desc: "Require CSRF tokens on all form submissions",                      val: csrfProtect, fn: setCsrfProtect },
         ].map((item, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
             <div>

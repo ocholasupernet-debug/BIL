@@ -73,6 +73,8 @@ const navItems: NavItem[] = [
       { name: "M-Pesa",         href: "/admin/transactions?method=mpesa" },
       { name: "Voucher Sales",  href: "/admin/transactions?method=voucher" },
       { name: "Graphs",         href: "/admin/transactions/graphs" },
+      { name: "Invoices",       href: "/admin/invoices" },
+      { name: "Customer Balance", href: "/admin/balance" },
     ],
   },
   { name: "Support Tickets",  href: "/admin/support",              icon: MessageSquare },
@@ -81,6 +83,7 @@ const navItems: NavItem[] = [
     children: [
       { name: "All",            href: "/admin/notifications" },
       { name: "Expiry Alerts",  href: "/admin/notifications?type=expiry" },
+      { name: "Message Templates", href: "/admin/message-templates" },
     ],
   },
   {

@@ -58,6 +58,9 @@ import VpnCreate from "./pages/vpn/CreateVpn";
 import VpnTutorials from "./pages/vpn/VideoTutorials";
 import VpnSettings from "./pages/vpn/Settings";
 import AdminSettings from "./pages/admin/AdminSettings";
+import AdminInvoices from "./pages/admin/Invoices";
+import AdminCustomerBalance from "./pages/admin/CustomerBalance";
+import AdminMessageTemplates from "./pages/admin/MessageTemplates";
 import AdminRegister from "./pages/admin/AdminRegister";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 
@@ -132,6 +135,9 @@ function Router() {
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/webhooks"          component={Webhooks}         />
       <Route path="/admin/logs"             component={ActivityLogs}     />
+      <Route path="/admin/invoices" component={AdminInvoices} />
+      <Route path="/admin/balance" component={AdminCustomerBalance} />
+      <Route path="/admin/message-templates" component={AdminMessageTemplates} />
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN — inside admin panel */}
