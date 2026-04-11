@@ -18,6 +18,7 @@ import bridgeRouter from "./bridge-route.js";
 import mpesaRouter from "./mpesa-route.js";
 import settingsRouter from "./settings-route.js";
 import superAdminAuthRouter from "./super-admin-auth-route.js";
+import apiAuthRouter from "./api-auth-route.js";
 
 const router: IRouter = Router();
 
@@ -40,5 +41,6 @@ router.use(bridgeRouter);
 router.use(mpesaRouter);
 router.use(settingsRouter);
 router.use(superAdminAuthRouter);
+router.use(apiAuthRouter);
 
 export default router;
