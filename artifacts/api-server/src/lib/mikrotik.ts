@@ -827,7 +827,10 @@ export async function fetchPPPSecrets(creds: RouterCredentials): Promise<PPPSecr
 
 export async function addPPPSecret(
   creds: RouterCredentials,
-  opts: { name: string; password: string; profile?: string; service?: string; comment?: string }
+  opts: {
+    name: string; password: string; profile?: string; service?: string; comment?: string;
+    localAddress?: string; remoteAddress?: string;
+  }
 ): Promise<void> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -835,10 +838,12 @@ export async function addPPPSecret(
       "/ppp/secret/add",
       `=name=${opts.name}`,
       `=password=${opts.password}`,
-      `=service=${opts.service ?? "pppoe"}`,
+      `=service=${opts.service ?? "any"}`,
       `=profile=${opts.profile ?? "default"}`,
     ];
-    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    if (opts.comment)        params.push(`=comment=${opts.comment}`);
+    if (opts.localAddress)   params.push(`=local-address=${opts.localAddress}`);
+    if (opts.remoteAddress)  params.push(`=remote-address=${opts.remoteAddress}`);
     await withTimeout(conn.write(params), ms);
   });
 }
@@ -850,19 +855,52 @@ export async function removePPPSecret(creds: RouterCredentials, id: string): Pro
   });
 }
 
+export async function removePPPSecretByName(creds: RouterCredentials, username: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/secret/print", `?name=${username}`]), ms)) as Record<string, string>[];
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      const id = r[".id"];
+      if (id) await withTimeout(conn.write(["/ppp/secret/remove", `=.id=${id}`]), ms);
+    }
+  });
+}
+
 export async function updatePPPSecret(
   creds: RouterCredentials,
   id: string,
-  fields: { password?: string; profile?: string; disabled?: boolean; comment?: string }
+  fields: {
+    name?: string; password?: string; profile?: string; disabled?: boolean; comment?: string;
+    service?: string; localAddress?: string; remoteAddress?: string;
+  }
 ): Promise<void> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const params: string[] = ["/ppp/secret/set", `=.id=${id}`];
-    if (fields.password  !== undefined) params.push(`=password=${fields.password}`);
-    if (fields.profile   !== undefined) params.push(`=profile=${fields.profile}`);
-    if (fields.disabled  !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
-    if (fields.comment   !== undefined) params.push(`=comment=${fields.comment}`);
+    if (fields.name          !== undefined) params.push(`=name=${fields.name}`);
+    if (fields.password      !== undefined) params.push(`=password=${fields.password}`);
+    if (fields.profile       !== undefined) params.push(`=profile=${fields.profile}`);
+    if (fields.disabled      !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
+    if (fields.comment       !== undefined) params.push(`=comment=${fields.comment}`);
+    if (fields.service       !== undefined) params.push(`=service=${fields.service}`);
+    if (fields.localAddress  !== undefined) params.push(`=local-address=${fields.localAddress}`);
+    if (fields.remoteAddress !== undefined) params.push(`=remote-address=${fields.remoteAddress}`);
     await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function changePPPSecretName(
+  creds: RouterCredentials,
+  fromName: string,
+  toName: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/secret/print", `?name=${fromName}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`PPP secret '${fromName}' not found`);
+    await withTimeout(conn.write(["/ppp/secret/set", `=.id=${id}`, `=name=${toName}`]), ms);
+    await disconnectPPPActiveByName(creds, fromName).catch(() => {});
   });
 }
 
@@ -870,6 +908,26 @@ export async function disconnectPPPActive(creds: RouterCredentials, id: string):
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     await withTimeout(conn.write(["/ppp/active/remove", `=.id=${id}`]), ms);
+  });
+}
+
+export async function disconnectPPPActiveByName(creds: RouterCredentials, username: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/active/print", `?name=${username}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ppp/active/remove", `=.id=${id}`]), ms);
+  });
+}
+
+export async function isPPPUserOnline(
+  creds: RouterCredentials,
+  username: string,
+): Promise<boolean> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/active/print", `?name=${username}`]), ms)) as Record<string, string>[];
+    return rows.length > 0 && !!rows[0]?.[".id"];
   });
 }
 
@@ -899,6 +957,194 @@ export async function fetchPPPProfiles(creds: RouterCredentials): Promise<PPPPro
       idleTimeout:    r["idle-timeout"]    ?? "",
       comment:        r.comment            ?? "",
     }));
+  });
+}
+
+export async function addPPPProfile(
+  creds: RouterCredentials,
+  opts: {
+    name: string; localAddress?: string; remoteAddress?: string;
+    rateLimit?: string; onUp?: string; onDown?: string;
+  },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = ["/ppp/profile/add", `=name=${opts.name}`];
+    if (opts.localAddress)  params.push(`=local-address=${opts.localAddress}`);
+    if (opts.remoteAddress) params.push(`=remote-address=${opts.remoteAddress}`);
+    if (opts.rateLimit)     params.push(`=rate-limit=${opts.rateLimit}`);
+    if (opts.onUp)          params.push(`=on-up=${opts.onUp}`);
+    if (opts.onDown)        params.push(`=on-down=${opts.onDown}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function updatePPPProfile(
+  creds: RouterCredentials,
+  name: string,
+  fields: {
+    newName?: string; localAddress?: string; remoteAddress?: string;
+    rateLimit?: string; onUp?: string; onDown?: string;
+  },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/profile/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`PPP profile '${name}' not found`);
+    const params: string[] = ["/ppp/profile/set", `=.id=${id}`];
+    if (fields.newName       !== undefined) params.push(`=name=${fields.newName}`);
+    if (fields.localAddress  !== undefined) params.push(`=local-address=${fields.localAddress}`);
+    if (fields.remoteAddress !== undefined) params.push(`=remote-address=${fields.remoteAddress}`);
+    if (fields.rateLimit     !== undefined) params.push(`=rate-limit=${fields.rateLimit}`);
+    if (fields.onUp          !== undefined) params.push(`=on-up=${fields.onUp}`);
+    if (fields.onDown        !== undefined) params.push(`=on-down=${fields.onDown}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removePPPProfile(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ppp/profile/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ppp/profile/remove", `=.id=${id}`]), ms);
+  });
+}
+
+/* ══ IP Pool CRUD ═════════════════════════════════════════════════════════ */
+export interface IpPool {
+  id: string;
+  name: string;
+  ranges: string;
+  comment: string;
+}
+
+export async function fetchIpPools(creds: RouterCredentials): Promise<IpPool[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/pool/print"]), ms)) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:      r[".id"]   ?? "",
+      name:    r.name     ?? "",
+      ranges:  r.ranges   ?? "",
+      comment: r.comment  ?? "",
+    }));
+  });
+}
+
+export async function addIpPool(
+  creds: RouterCredentials,
+  opts: { name: string; ranges: string; comment?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = ["/ip/pool/add", `=name=${opts.name}`, `=ranges=${opts.ranges}`];
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function updateIpPool(
+  creds: RouterCredentials,
+  name: string,
+  fields: { newName?: string; ranges?: string; comment?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/pool/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`IP pool '${name}' not found`);
+    const params: string[] = ["/ip/pool/set", `=.id=${id}`];
+    if (fields.newName  !== undefined) params.push(`=name=${fields.newName}`);
+    if (fields.ranges   !== undefined) params.push(`=ranges=${fields.ranges}`);
+    if (fields.comment  !== undefined) params.push(`=comment=${fields.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removeIpPool(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/pool/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ip/pool/remove", `=.id=${id}`]), ms);
+  });
+}
+
+/* ══ Firewall Address List ════════════════════════════════════════════════ */
+export async function addIpToAddressList(
+  creds: RouterCredentials,
+  opts: { address: string; list: string; comment?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ip/firewall/address-list/add",
+      `=address=${opts.address}`,
+      `=list=${opts.list}`,
+    ];
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removeIpFromAddressList(
+  creds: RouterCredentials,
+  address: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/firewall/address-list/print", `?address=${address}`]), ms)) as Record<string, string>[];
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      const id = r[".id"];
+      if (id) await withTimeout(conn.write(["/ip/firewall/address-list/remove", `=.id=${id}`]), ms);
+    }
+  });
+}
+
+/* ══ NAT Rules (VPN port forwarding) ═════════════════════════════════════ */
+export async function addDstNatRule(
+  creds: RouterCredentials,
+  opts: {
+    dstAddress: string; dstPort: string; protocol?: string;
+    toAddresses: string; toPorts: string; comment?: string;
+  },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ip/firewall/nat/add",
+      "=chain=dstnat",
+      `=protocol=${opts.protocol ?? "tcp"}`,
+      `=dst-port=${opts.dstPort}`,
+      "=action=dst-nat",
+      `=to-addresses=${opts.toAddresses}`,
+      `=to-ports=${opts.toPorts}`,
+      `=dst-address=${opts.dstAddress}`,
+    ];
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removeDstNatByAddress(
+  creds: RouterCredentials,
+  toAddress: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/firewall/nat/print", `?to-addresses=${toAddress}`]), ms)) as Record<string, string>[];
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      const id = r[".id"];
+      if (id) await withTimeout(conn.write(["/ip/firewall/nat/remove", `=.id=${id}`]), ms);
+    }
   });
 }
 
