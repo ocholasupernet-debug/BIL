@@ -291,20 +291,26 @@ export default function HotspotLogin() {
           display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
           margin-bottom: 16px;
         }
+        .hp-plans-grid.has-expanded {
+          grid-template-columns: 1fr;
+        }
 
         .hp-plan {
           position: relative; padding: 0; border: none; cursor: pointer;
           border-radius: 16px; overflow: hidden;
           text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;
-          color: #fff; transition: all 0.25s ease;
+          color: #fff; transition: all 0.3s ease;
           background: rgba(255,255,255,0.05);
           border: 1.5px solid rgba(255,255,255,0.07);
         }
         .hp-plan:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.12); }
-        .hp-plan.selected { border-color: rgba(99,102,241,0.5); }
+        .hp-plan.expanded { grid-column: 1 / -1; cursor: default; }
+        .hp-plan.expanded:hover { transform: none; }
+        .hp-plan.collapsed { display: none; }
 
         .hp-plan-accent { height: 4px; }
-        .hp-plan-body { padding: 14px 16px 16px; }
+        .hp-plan-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 0; cursor: pointer; }
+        .hp-plan-body { padding: 6px 16px 16px; }
 
         .hp-plan-name {
           font-size: 10px; font-weight: 800; text-transform: uppercase;
@@ -323,10 +329,29 @@ export default function HotspotLogin() {
         }
 
         .hp-plan-check {
-          position: absolute; top: 14px; right: 14px;
           width: 22px; height: 22px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
         }
+
+        .hp-plan-pay {
+          margin-top: 14px; padding-top: 14px;
+          border-top: 1px solid rgba(255,255,255,0.06);
+          animation: fadeUp 0.3s ease-out;
+        }
+        .hp-plan-pay .hp-input {
+          background: rgba(0,0,0,0.2);
+          border-color: rgba(255,255,255,0.1);
+        }
+        .hp-plan-change {
+          display: inline-flex; align-items: center; gap: 4px;
+          background: none; border: none; color: rgba(255,255,255,0.4);
+          font-size: 12px; font-weight: 600; cursor: pointer;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          padding: 0; margin-top: 10px;
+          transition: color 0.2s;
+        }
+        .hp-plan-change:hover { color: rgba(255,255,255,0.7); }
 
         .hp-input-group { margin-bottom: 14px; }
         .hp-label {
@@ -396,18 +421,11 @@ export default function HotspotLogin() {
           margin-bottom: 14px;
         }
 
-        .hp-selected-chip {
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 12px 16px; border-radius: 12px; margin-bottom: 16px;
-          background: rgba(99,102,241,0.08);
-          border: 1px solid rgba(99,102,241,0.15);
+        .hp-plan-inline-meta {
+          display: flex; align-items: center; gap: 14px;
+          flex-wrap: wrap;
         }
-        .hp-empty-chip {
-          padding: 14px; border-radius: 12px; margin-bottom: 16px;
-          background: rgba(255,255,255,0.02);
-          border: 1.5px dashed rgba(255,255,255,0.08);
-          text-align: center; font-size: 13px; color: rgba(255,255,255,0.2); font-weight: 500;
-        }
+        .hp-plan-inline-meta .hp-plan-meta-row { flex-direction: row; }
 
         .hp-success { text-align: center; padding: 32px 20px; animation: fadeUp 0.4s ease-out; }
         .hp-success-icon {
@@ -538,104 +556,107 @@ export default function HotspotLogin() {
                       No plans available at the moment.
                     </p>
                   ) : (
-                    <div className="hp-plans-grid">
+                    <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
                       {plans.map((plan, i) => {
                         const grad = PLAN_GRADIENTS[i % PLAN_GRADIENTS.length];
-                        const sel = selectedPlan?.id === plan.id;
+                        const isExpanded = selectedPlan?.id === plan.id;
+                        const isCollapsed = selectedPlan && !isExpanded;
                         return (
-                          <button key={plan.id}
-                            className={`hp-plan${sel ? " selected" : ""}`}
-                            onClick={() => setSelectedPlan(sel ? null : plan)}
-                            style={sel ? { borderColor: grad.light + "55", boxShadow: `0 4px 24px ${grad.light}20` } : {}}>
+                          <div key={plan.id}
+                            className={`hp-plan${isExpanded ? " expanded" : ""}${isCollapsed ? " collapsed" : ""}`}
+                            style={isExpanded ? { borderColor: grad.light + "44", boxShadow: `0 4px 32px ${grad.light}15` } : {}}>
 
                             <div className="hp-plan-accent" style={{ background: grad.bg }} />
-                            <div className="hp-plan-body">
-                              {sel && (
-                                <div className="hp-plan-check" style={{ background: grad.bg }}>
-                                  <CheckCircle2 size={12} color="#fff" strokeWidth={3} />
-                                </div>
-                              )}
 
-                              <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
-                              <div className="hp-plan-price">
-                                <span>Ksh </span>{plan.price}
-                              </div>
-                              <div className="hp-plan-meta">
-                                <div className="hp-plan-meta-row">
-                                  <Clock size={12} color={grad.light} /> {formatValidity(plan)}
-                                </div>
-                                {plan.speed_down > 0 && (
-                                  <div className="hp-plan-meta-row">
-                                    <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
+                            {isExpanded ? (
+                              <div className="hp-plan-body">
+                                <div className="hp-plan-top" onClick={() => setSelectedPlan(null)} style={{ padding: 0, marginBottom: 4 }}>
+                                  <div>
+                                    <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
+                                    <div className="hp-plan-price" style={{ marginBottom: 6 }}>
+                                      <span>Ksh </span>{plan.price}
+                                    </div>
                                   </div>
-                                )}
+                                  <div className="hp-plan-check" style={{ background: grad.bg }}>
+                                    <CheckCircle2 size={12} color="#fff" strokeWidth={3} />
+                                  </div>
+                                </div>
+                                <div className="hp-plan-inline-meta" style={{ marginBottom: 0 }}>
+                                  <div className="hp-plan-meta-row">
+                                    <Clock size={12} color={grad.light} /> {formatValidity(plan)}
+                                  </div>
+                                  {plan.speed_down > 0 && (
+                                    <div className="hp-plan-meta-row">
+                                      <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="hp-plan-pay">
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                                    <Phone size={14} color="#22c55e" />
+                                    <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Pay with M-Pesa</span>
+                                  </div>
+
+                                  <form onSubmit={handlePay}>
+                                    <div className="hp-input-group">
+                                      <div className="hp-input-wrap">
+                                        <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
+                                        <input className="hp-input hp-input-phone" type="tel"
+                                          placeholder="7XX XXX XXX" required
+                                          value={phone} onChange={e => setPhone(e.target.value)} />
+                                      </div>
+                                    </div>
+
+                                    {payError && (
+                                      <div className="hp-error">
+                                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                                        {payError}
+                                      </div>
+                                    )}
+
+                                    <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
+                                      {payLoading ? (
+                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending...</>
+                                      ) : (
+                                        <><Phone size={16} /> Pay Ksh {plan.price}</>
+                                      )}
+                                    </button>
+                                  </form>
+
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+                                    <div className="hp-secured" style={{ margin: 0 }}>
+                                      <Shield size={11} /> Secured by M-Pesa
+                                    </div>
+                                    <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
+                                      <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan
+                                    </button>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          </button>
+                            ) : (
+                              <div className="hp-plan-body" onClick={() => { setSelectedPlan(plan); setPhone(""); setPayError(null); }} style={{ cursor: "pointer" }}>
+                                <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
+                                <div className="hp-plan-price">
+                                  <span>Ksh </span>{plan.price}
+                                </div>
+                                <div className="hp-plan-meta">
+                                  <div className="hp-plan-meta-row">
+                                    <Clock size={12} color={grad.light} /> {formatValidity(plan)}
+                                  </div>
+                                  {plan.speed_down > 0 && (
+                                    <div className="hp-plan-meta-row">
+                                      <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
                   )}
-
-                  {/* M-Pesa Payment */}
-                  <div className="hp-glass">
-                    <div className="hp-glass-header">
-                      <div className="hp-glass-icon" style={{ background: "rgba(22,163,74,0.12)", border: "1px solid rgba(22,163,74,0.2)" }}>
-                        <Phone size={16} color="#22c55e" />
-                      </div>
-                      <div>
-                        <div className="hp-glass-title">M-Pesa Payment</div>
-                        <div className="hp-glass-desc">Instant STK push to your phone</div>
-                      </div>
-                    </div>
-                    <div className="hp-glass-body">
-                      {selectedPlan ? (
-                        <div className="hp-selected-chip">
-                          <div>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", fontWeight: 500 }}>Selected</div>
-                            <div style={{ fontSize: 14, fontWeight: 700 }}>{selectedPlan.name}</div>
-                          </div>
-                          <div style={{ fontSize: 20, fontWeight: 900, color: "#a5b4fc" }}>Ksh {selectedPlan.price}</div>
-                        </div>
-                      ) : (
-                        <div className="hp-empty-chip">Select a plan above</div>
-                      )}
-
-                      <form onSubmit={handlePay}>
-                        <div className="hp-input-group">
-                          <label className="hp-label">Phone Number</label>
-                          <div className="hp-input-wrap">
-                            <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
-                            <input className="hp-input hp-input-phone" type="tel"
-                              placeholder="7XX XXX XXX" required
-                              value={phone} onChange={e => setPhone(e.target.value)} />
-                          </div>
-                        </div>
-
-                        {payError && (
-                          <div className="hp-error">
-                            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                            {payError}
-                          </div>
-                        )}
-
-                        <button type="submit" disabled={payLoading || !selectedPlan}
-                          className={`hp-btn ${selectedPlan ? "hp-btn-mpesa" : "hp-btn-disabled"}`}>
-                          {payLoading ? (
-                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending...</>
-                          ) : !selectedPlan ? (
-                            "Select a plan to continue"
-                          ) : (
-                            <><Phone size={16} /> Pay Ksh {selectedPlan.price}</>
-                          )}
-                        </button>
-                      </form>
-
-                      <div className="hp-secured">
-                        <Shield size={11} /> Secured by Safaricom M-Pesa
-                      </div>
-                    </div>
-                  </div>
                 </>
               )}
             </div>
