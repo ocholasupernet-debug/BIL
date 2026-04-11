@@ -338,6 +338,14 @@ export async function clearRadAcct(username: string): Promise<void> {
   await sbDelete("radacct", `username=eq.${enc(username)}`);
 }
 
+export async function resetRadAcctCounters(username: string): Promise<void> {
+  if (!supabaseConfigured) return;
+  await sbUpdate("radacct", `username=eq.${enc(username)}`, {
+    acctinputoctets: 0,
+    acctoutputoctets: 0,
+  });
+}
+
 export async function fetchRadAcct(username: string): Promise<RadAcctRow[]> {
   return sbSelect<RadAcctRow>("radacct", `username=eq.${enc(username)}&select=*&order=radacctid.desc&limit=50`);
 }
