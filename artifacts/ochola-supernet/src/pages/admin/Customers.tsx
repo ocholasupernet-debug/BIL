@@ -38,6 +38,7 @@ interface NewCustomerForm {
   gateway_ip: string;
   // common
   expires_at: string;
+  custom_fields: { name: string; value: string }[];
 }
 
 /* ══════════════════════════ Helpers ══════════════════════════ */
@@ -71,6 +72,7 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
     type, name: "", username: "", password: genPassword(), email: "", phone: "",
     plan_id: "", router_id: "", mac_address: "", pppoe_username: "", ip_assign: "dynamic",
     ip_address: "", pppoe_service: "internet", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
+    custom_fields: [],
   };
 }
 
@@ -110,6 +112,9 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
     mac_address:   form.mac_address || null,
     pppoe_username: form.type === "pppoe" ? (form.pppoe_username || form.username) : null,
     expires_at:    form.expires_at ? new Date(form.expires_at).toISOString() : null,
+    custom_fields: form.custom_fields.length > 0
+      ? Object.fromEntries(form.custom_fields.filter(f => f.value.trim()).map(f => [f.name, f.value]))
+      : null,
   });
   if (custErr) throw custErr;
 
@@ -172,6 +177,85 @@ const inp: React.CSSProperties = {
 };
 const sel: React.CSSProperties = { ...inp };
 
+/* ══════════════════════════ Custom Fields ══════════════════════════ */
+function CustomFieldsSection({ fields, setFields }: { fields: { name: string; value: string }[]; setFields: (fn: (prev: { name: string; value: string }[]) => { name: string; value: string }[]) => void }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [newFieldName, setNewFieldName] = useState("");
+
+  const addField = () => {
+    if (!newFieldName.trim()) return;
+    setFields(prev => [...prev, { name: newFieldName.trim(), value: "" }]);
+    setNewFieldName("");
+    setShowAdd(false);
+  };
+
+  const updateValue = (index: number, value: string) => {
+    setFields(prev => prev.map((f, i) => i === index ? { ...f, value } : f));
+  };
+
+  const removeField = (index: number) => {
+    setFields(prev => prev.filter((_, i) => i !== index));
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        Custom Fields
+        <button type="button" onClick={() => setShowAdd(true)} style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", borderRadius: 6, padding: "2px 8px", color: "#06b6d4", fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          <Plus size={10} /> Add Field
+        </button>
+      </div>
+
+      {showAdd && (
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <span style={{ display: "block", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 4, textTransform: "uppercase" }}>Field Name</span>
+            <input
+              style={inp}
+              value={newFieldName}
+              onChange={e => setNewFieldName(e.target.value)}
+              placeholder="e.g. National ID, Address Bill, etc."
+              onKeyDown={e => e.key === "Enter" && addField()}
+            />
+          </div>
+          <button type="button" onClick={addField} style={{ padding: "0.575rem 1rem", borderRadius: 8, background: "#06b6d4", border: "none", color: "white", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+            Add
+          </button>
+          <button type="button" onClick={() => setShowAdd(false)} style={{ padding: "0.575rem 0.75rem", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {fields.length === 0 && !showAdd && (
+        <p style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", margin: 0, fontStyle: "italic" }}>
+          No custom fields added. Use custom fields for extra data like ID numbers, building name, installment info, etc.
+        </p>
+      )}
+
+      {fields.map((field, i) => (
+        <div key={i} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <span style={{ display: "block", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 4, textTransform: "uppercase" }}>
+              {field.name}
+            </span>
+            <input
+              style={inp}
+              value={field.value}
+              onChange={e => updateValue(i, e.target.value)}
+              placeholder={`Enter ${field.name}`}
+            />
+          </div>
+          <button type="button" onClick={() => removeField(i)}
+            style={{ padding: "0.5rem", borderRadius: 6, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", cursor: "pointer", flexShrink: 0, display: "flex" }}>
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+    </>
+  );
+}
+
 /* ══════════════════════════ Add / Edit Modal ══════════════════════════ */
 function CustomerModal({
   plans, routers, editing, onClose, onSave,
@@ -198,6 +282,9 @@ function CustomerModal({
         pppoe_username:editing.pppoe_username ?? "",
         ip_address:    editing.ip_address ?? "",
         expires_at:    editing.expires_at ? editing.expires_at.slice(0, 10) : "",
+        custom_fields: (editing as any).custom_fields
+          ? Object.entries((editing as any).custom_fields).map(([name, value]) => ({ name, value: String(value) }))
+          : [],
       };
     }
     return emptyForm("hotspot");
@@ -472,6 +559,12 @@ function CustomerModal({
               style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", alignSelf: "flex-start" }}>
               <RotateCcw size={12} /> Regenerate Password
             </button>
+
+            {/* ─── CUSTOM FIELDS ─── */}
+            <CustomFieldsSection
+              fields={form.custom_fields}
+              setFields={(fn) => setForm(f => ({ ...f, custom_fields: fn(f.custom_fields) }))}
+            />
 
           </div>
         </div>

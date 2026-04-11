@@ -5,7 +5,9 @@ import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
   Bell, Wrench, Check, Eye, EyeOff, Copy, Trash2, Plus,
   Upload, RefreshCw, AlertTriangle, Terminal, Save, Key,
-  LogOut, Monitor, ChevronDown, Smartphone, Mail,
+  LogOut, Monitor, ChevronDown, Smartphone, Mail, Puzzle,
+  Send, MessageCircle, Phone, Palette, LayoutDashboard,
+  MapPin, Clock, Users, Zap,
 } from "lucide-react";
 
 // ─── shared primitives ───────────────────────────────────────────────────────
@@ -117,6 +119,7 @@ function Row({ children, style }: { children: React.ReactNode; style?: React.CSS
 function IspProfileTab() {
   const brand = useBrand();
   const year = new Date().getFullYear();
+  const [tawkEnabled, setTawkEnabled] = useState(false);
   return (
     <>
       <Card title="ISP Identity" desc="Branding and contact info shown to customers and on invoices">
@@ -167,6 +170,28 @@ function IspProfileTab() {
         </Field>
         <Row><SaveBtn label="Save Portal Settings" /></Row>
       </Card>
+
+      <Card title="Tawk.to Live Chat" desc="Embed a live chat widget on your customer portal for real-time support">
+        <Grid2>
+          <Field label="Tawk.to Property ID" hint="Found in your Tawk.to dashboard under Administration → Channels → Chat Widget">
+            <Input placeholder="e.g. 6123456789abcdef01234567" />
+          </Field>
+          <Field label="Tawk.to Widget ID" hint="The widget identifier from your embed code">
+            <Input placeholder="e.g. 1abcdefgh" />
+          </Field>
+          <Field label="Tawk.to API Key (optional)" hint="Used for HMAC identity verification — keeps chat sessions secure">
+            <Input type="password" placeholder="••••••••••" />
+          </Field>
+        </Grid2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: `1px solid ${C.border}`, marginTop: 8 }}>
+          <div>
+            <p style={{ fontSize: "0.8rem", fontWeight: 600, color: C.text, margin: 0 }}>Enable Live Chat Widget</p>
+            <p style={{ fontSize: "0.7rem", color: C.muted, margin: "2px 0 0" }}>Show Tawk.to chat bubble on customer-facing pages</p>
+          </div>
+          <Toggle on={tawkEnabled} onChange={setTawkEnabled} />
+        </div>
+        <Row><SaveBtn label="Save Chat Settings" /></Row>
+      </Card>
     </>
   );
 }
@@ -176,6 +201,7 @@ function BillingTab() {
   const [vatEnabled, setVatEnabled] = useState(true);
   const [gracePeriod, setGracePeriod] = useState(true);
   const [autoRenew, setAutoRenew] = useState(false);
+  const [installments, setInstallments] = useState(false);
   const [gateway, setGateway] = useState(() => {
     try { return localStorage.getItem("ochola_payment_gateway") || "mpesa"; } catch { return "mpesa"; }
   });
@@ -368,6 +394,7 @@ function BillingTab() {
             { label: "Enable VAT / Tax on Invoices", desc: "Apply 16% VAT to all customer invoices", val: vatEnabled, fn: setVatEnabled },
             { label: "Grace Period After Expiry", desc: "Allow 3-day grace before cutting off service", val: gracePeriod, fn: setGracePeriod },
             { label: "Auto-Renew Active Plans", desc: "Automatically renew plans if M-Pesa balance is available", val: autoRenew, fn: setAutoRenew },
+          { label: "Enable Installment Payments", desc: "Allow customers to pay plans in multiple installments (e.g. 3 parts)", val: installments, fn: setInstallments },
           ].map((item, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
               <div>
@@ -460,6 +487,63 @@ function SmsEmailTab() {
           </button>
           <SaveBtn label="Save SMTP Settings" />
         </div>
+      </Card>
+
+      <Card title="Test Messaging" desc="Send a test message through each configured channel to verify delivery">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Test SMS", desc: "Send a test SMS via your configured gateway", icon: Smartphone, color: "#22d3ee" },
+            { label: "Test WhatsApp", desc: "Send a test WhatsApp message", icon: MessageCircle, color: "#25d366" },
+            { label: "Test Telegram", desc: "Send a test message to your Telegram bot", icon: Send, color: "#0088cc" },
+            { label: "Test Email", desc: "Send a test email via SMTP", icon: Mail, color: "#f59e0b" },
+          ].map((ch, i) => {
+            const Icon = ch.icon;
+            return (
+              <button key={i} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+                background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`,
+                borderRadius: 10, cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                transition: "border-color 0.2s",
+              }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: `${ch.color}15`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Icon size={16} style={{ color: ch.color }} />
+                </div>
+                <div>
+                  <p style={{ fontSize: "0.8rem", fontWeight: 700, color: C.text, margin: 0 }}>{ch.label}</p>
+                  <p style={{ fontSize: "0.68rem", color: C.muted, margin: "2px 0 0" }}>{ch.desc}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <Field label="Test Recipient Number / Email" hint="Enter the phone number or email to receive the test message">
+          <Input placeholder="+254 700 000 000 or admin@example.com" style={{ marginTop: 8 }} />
+        </Field>
+      </Card>
+
+      <Card title="WhatsApp Business" desc="WhatsApp messaging integration for customer notifications">
+        <Grid2>
+          <Field label="WhatsApp API Provider">
+            <Select defaultValue="wabiz">
+              <option value="wabiz">WhatsApp Business API</option>
+              <option value="fonnte">Fonnte</option>
+              <option value="dripsender">DripSender</option>
+              <option value="custom">Custom HTTP API</option>
+            </Select>
+          </Field>
+          <Field label="API Token"><Input type="password" placeholder="••••••••••" /></Field>
+          <Field label="From Number"><Input placeholder="+254 700 000 000" /></Field>
+          <Field label="Webhook URL (optional)"><Input placeholder="https://yourdomain.com/api/webhooks/whatsapp" /></Field>
+        </Grid2>
+        <Row><SaveBtn label="Save WhatsApp Settings" /></Row>
+      </Card>
+
+      <Card title="Telegram Bot" desc="Receive admin alerts and send notifications via Telegram">
+        <Grid2>
+          <Field label="Bot Token" hint="Get from @BotFather on Telegram"><Input type="password" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" /></Field>
+          <Field label="Chat ID" hint="Your Telegram chat/group ID for receiving alerts"><Input placeholder="e.g. -1001234567890" /></Field>
+        </Grid2>
+        <Row><SaveBtn label="Save Telegram Settings" /></Row>
       </Card>
 
       <Card title="Notification Templates" desc="Customise the message sent to customers for each event">
@@ -767,6 +851,9 @@ function NotificationsTab() {
   const [ticket, setTicket]   = useState(true);
   const [lowBal, setLowBal]   = useState(false);
   const [slack, setSlack]     = useState(false);
+  const [remind1Day, setRemind1Day] = useState(true);
+  const [remind3Day, setRemind3Day] = useState(true);
+  const [remind7Day, setRemind7Day] = useState(false);
 
   return (
     <>
@@ -818,6 +905,40 @@ function NotificationsTab() {
         ))}
         <Row><SaveBtn label="Save Notification Settings" /></Row>
       </Card>
+
+      <Card title="Customer Expiry Reminders" desc="Automatically notify customers before their plan expires">
+        {[
+          { label: "1-Day Reminder", desc: "Send a reminder 1 day before the plan expires", val: remind1Day, fn: setRemind1Day },
+          { label: "3-Day Reminder", desc: "Send a reminder 3 days before the plan expires", val: remind3Day, fn: setRemind3Day },
+          { label: "7-Day Reminder", desc: "Send a reminder 7 days before the plan expires", val: remind7Day, fn: setRemind7Day },
+        ].map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(245,158,11,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Clock size={15} style={{ color: "#f59e0b" }} />
+              </div>
+              <div>
+                <p style={{ fontSize: "0.8rem", fontWeight: 600, color: C.text, margin: 0 }}>{item.label}</p>
+                <p style={{ fontSize: "0.7rem", color: C.muted, margin: "2px 0 0" }}>{item.desc}</p>
+              </div>
+            </div>
+            <Toggle on={item.val} onChange={item.fn} />
+          </div>
+        ))}
+        <Field label="Reminder Message Template" hint="Variables: {name}, {plan}, {days}, {expiry_date}">
+          <textarea rows={2} defaultValue="Hi {name}, your {plan} plan expires in {days} day(s) on {expiry_date}. Please renew to avoid disconnection." style={{ width: "100%", background: C.input, border: `1px solid ${C.inputBdr}`, borderRadius: 8, color: C.text, fontSize: "0.78rem", padding: "0.45rem 0.75rem", fontFamily: "inherit", resize: "none", outline: "none", boxSizing: "border-box" }} />
+        </Field>
+        <Field label="Reminder Channel">
+          <Select defaultValue="both">
+            <option value="sms">SMS Only</option>
+            <option value="email">Email Only</option>
+            <option value="whatsapp">WhatsApp Only</option>
+            <option value="both">SMS + Email</option>
+            <option value="all">All Channels</option>
+          </Select>
+        </Field>
+        <Row><SaveBtn label="Save Reminder Settings" /></Row>
+      </Card>
     </>
   );
 }
@@ -829,6 +950,69 @@ function SystemTab() {
 
   return (
     <>
+      <Card title="Dashboard Widgets" desc="Choose which widgets are visible on your admin dashboard">
+        {[
+          { label: "Monthly Revenue Chart", key: "hide_mrc", desc: "Revenue trend graph on the dashboard", val: true },
+          { label: "Top-Up / M-Pesa Summary", key: "hide_tms", desc: "Recent M-Pesa transactions summary", val: true },
+          { label: "Activity Log", key: "hide_al", desc: "Latest admin actions and events", val: true },
+          { label: "User Expiry Timeline", key: "hide_uet", desc: "Customers expiring soon timeline", val: true },
+          { label: "Voucher Stats", key: "hide_vs", desc: "Active / used / expired voucher counts", val: true },
+          { label: "Payment Gateway Status", key: "hide_pg", desc: "Current payment gateway health", val: false },
+          { label: "Active Users Info", key: "hide_aui", desc: "Real-time connected users count", val: true },
+        ].map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderTop: i > 0 ? `1px solid ${C.border}` : "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <LayoutDashboard size={14} style={{ color: C.cyan, flexShrink: 0 }} />
+              <div>
+                <p style={{ fontSize: "0.8rem", fontWeight: 600, color: C.text, margin: 0 }}>{item.label}</p>
+                <p style={{ fontSize: "0.7rem", color: C.muted, margin: "2px 0 0" }}>{item.desc}</p>
+              </div>
+            </div>
+            <Toggle on={item.val} onChange={() => {}} />
+          </div>
+        ))}
+        <Row><SaveBtn label="Save Dashboard Layout" /></Row>
+      </Card>
+
+      <Card title="Theme & Appearance" desc="Customize the look and feel of the admin panel">
+        <Grid2>
+          <Field label="Admin Panel Theme">
+            <Select defaultValue="dark-cyan">
+              <option value="dark-cyan">Dark Cyan (Default)</option>
+              <option value="dark-blue">Dark Blue</option>
+              <option value="dark-green">Dark Green</option>
+              <option value="dark-purple">Dark Purple</option>
+              <option value="light">Light Mode</option>
+              <option value="auto">System Auto</option>
+            </Select>
+          </Field>
+          <Field label="Customer Portal Theme">
+            <Select defaultValue="modern-dark">
+              <option value="modern-dark">Modern Dark</option>
+              <option value="modern-light">Modern Light</option>
+              <option value="classic">Classic</option>
+              <option value="minimal">Minimal</option>
+              <option value="branded">Branded (uses ISP colors)</option>
+            </Select>
+          </Field>
+          <Field label="Accent Color" hint="Primary color used for buttons, links, and highlights">
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {["#06b6d4","#3b82f6","#8b5cf6","#ec4899","#10b981","#f59e0b","#ef4444"].map(color => (
+                <button key={color} style={{ width: 32, height: 32, borderRadius: 8, background: color, border: color === "#06b6d4" ? "2px solid white" : "2px solid transparent", cursor: "pointer", transition: "transform 0.1s" }} />
+              ))}
+            </div>
+          </Field>
+          <Field label="Sidebar Style">
+            <Select defaultValue="collapsed">
+              <option value="expanded">Always Expanded</option>
+              <option value="collapsed">Collapsed (hover to expand)</option>
+              <option value="compact">Compact Icons Only</option>
+            </Select>
+          </Field>
+        </Grid2>
+        <Row><SaveBtn label="Save Theme" /></Row>
+      </Card>
+
       <Card title="System Preferences" desc="Timezone, date format, and localisation">
         <Grid2>
           <Field label="System Timezone">
@@ -930,6 +1114,74 @@ function SystemTab() {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
+function PluginsTab() {
+  const PLUGINS = [
+    { name: "MikrotikHotspot", desc: "Hotspot authentication and session management for MikroTik routers", author: "OcholaSupernet", status: "active", version: "2.1.0" },
+    { name: "MikrotikPPPoE", desc: "PPPoE server configuration and user provisioning", author: "OcholaSupernet", status: "active", version: "2.0.3" },
+    { name: "Radius", desc: "FreeRADIUS integration for centralised authentication", author: "OcholaSupernet", status: "inactive", version: "1.5.0" },
+    { name: "MpesaDaraja", desc: "Safaricom M-Pesa STK Push and C2B payment processing", author: "OcholaSupernet", status: "active", version: "3.0.1" },
+    { name: "SmsGateway", desc: "SMS notification gateway (Africa's Talking, Twilio, Vonage)", author: "OcholaSupernet", status: "active", version: "1.2.0" },
+    { name: "VoucherEngine", desc: "Bulk voucher generation, validation, and redemption", author: "OcholaSupernet", status: "active", version: "2.0.0" },
+    { name: "OpenVPNBridge", desc: "OpenVPN tunnel management for remote router access", author: "OcholaSupernet", status: "active", version: "1.1.0" },
+    { name: "CustomerPortal", desc: "Self-service customer portal with account management", author: "OcholaSupernet", status: "active", version: "2.3.0" },
+  ];
+
+  return (
+    <>
+      <Card title="Installed Plugins" desc="Device drivers and feature modules loaded by the platform">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {PLUGINS.map((p, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "12px 14px", borderRadius: 10,
+              background: p.status === "active" ? "rgba(6,182,212,0.04)" : "rgba(255,255,255,0.02)",
+              border: `1px solid ${p.status === "active" ? "rgba(6,182,212,0.15)" : C.border}`,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: 10,
+                  background: p.status === "active" ? "rgba(6,182,212,0.12)" : "rgba(255,255,255,0.05)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <Puzzle size={16} style={{ color: p.status === "active" ? C.cyan : C.muted }} />
+                </div>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <p style={{ fontSize: "0.84rem", fontWeight: 700, color: C.text, margin: 0 }}>{p.name}</p>
+                    <span style={{
+                      fontSize: "0.6rem", fontWeight: 700, borderRadius: 4, padding: "1px 6px",
+                      background: p.status === "active" ? "rgba(16,185,129,0.15)" : "rgba(255,255,255,0.06)",
+                      color: p.status === "active" ? "#10b981" : C.muted,
+                    }}>
+                      {p.status === "active" ? "Active" : "Inactive"}
+                    </span>
+                    <span style={{ fontSize: "0.62rem", color: C.muted, fontFamily: "monospace" }}>v{p.version}</span>
+                  </div>
+                  <p style={{ fontSize: "0.72rem", color: C.muted, margin: "2px 0 0" }}>{p.desc}</p>
+                  <p style={{ fontSize: "0.62rem", color: C.muted, margin: "2px 0 0", opacity: 0.7 }}>by {p.author}</p>
+                </div>
+              </div>
+              <Toggle on={p.status === "active"} onChange={() => {}} />
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Add Plugin" desc="Upload or install additional device drivers and modules">
+        <div style={{
+          border: `2px dashed ${C.border}`, borderRadius: 12, padding: "2rem",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+          cursor: "pointer", transition: "border-color 0.2s",
+        }}>
+          <Upload size={24} style={{ color: C.muted }} />
+          <p style={{ fontSize: "0.84rem", fontWeight: 600, color: C.text, margin: 0 }}>Upload Plugin Package</p>
+          <p style={{ fontSize: "0.72rem", color: C.muted, margin: 0 }}>Drag and drop a .zip plugin file or click to browse</p>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 const TABS = [
   { id: "profile",       label: "ISP Profile",     icon: Building2    },
   { id: "billing",       label: "Billing & M-Pesa", icon: CreditCard   },
@@ -939,6 +1191,7 @@ const TABS = [
   { id: "security",      label: "Security",         icon: Shield       },
   { id: "notifications", label: "Notifications",    icon: Bell         },
   { id: "system",        label: "System",           icon: Wrench       },
+  { id: "plugins",       label: "Plugins",          icon: Puzzle       },
 ];
 
 export default function AdminSettings() {
@@ -991,6 +1244,7 @@ export default function AdminSettings() {
           {tab === "security"      && <SecurityTab />}
           {tab === "notifications" && <NotificationsTab />}
           {tab === "system"        && <SystemTab />}
+          {tab === "plugins"       && <PluginsTab />}
         </div>
       </div>
     </AdminLayout>

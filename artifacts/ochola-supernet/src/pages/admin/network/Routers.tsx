@@ -255,7 +255,7 @@ export default function Routers() {
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "" });
+  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "", coordinates: "", coverage: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
@@ -271,6 +271,8 @@ export default function Routers() {
       bridge_interface: r.bridge_interface   ?? "",
       router_username:  r.router_username    ?? "admin",
       router_secret:    r.router_secret      ?? "",
+      coordinates:      (r as any).coordinates ?? "",
+      coverage:         (r as any).coverage    ?? "",
     });
     setEditError(null);
     setDetectResult(null);
@@ -315,6 +317,8 @@ export default function Routers() {
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
           router_username:  editForm.router_username.trim()  || "admin",
           router_secret:    editForm.router_secret.trim()    || null,
+          coordinates:      editForm.coordinates.trim()      || null,
+          coverage:         editForm.coverage.trim()         || null,
           updated_at:       new Date().toISOString(),
         })
         .eq("id", editRouter.id);
@@ -982,7 +986,7 @@ export default function Routers() {
             <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
               <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and only set the <em>VPN Tunnel IP</em>. The system uses the VPN IP to reach the router. Seeing the same IP in both fields is normal.
             </div>
-            {(["name", "host", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret"] as const).map((field) => {
+            {(["name", "host", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret", "coordinates", "coverage"] as const).map((field) => {
               const labels: Record<string, string> = {
                 name:             "Router Name",
                 host:             "WAN / Public IP (optional — leave empty if no public IP)",
@@ -991,6 +995,8 @@ export default function Routers() {
                 bridge_interface: "Hotspot Bridge Interface",
                 router_username:  "API Username",
                 router_secret:    "API Password",
+                coordinates:      "GPS Coordinates (Latitude, Longitude)",
+                coverage:         "Coverage Radius (meters)",
               };
               const placeholders: Record<string, string> = {
                 name:             "e.g. come1",
@@ -1000,6 +1006,8 @@ export default function Routers() {
                 bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",
                 router_secret:    "••••••••",
+                coordinates:      "e.g. -1.2921, 36.8219 (Nairobi)",
+                coverage:         "e.g. 500",
               };
 
               const inputStyle: React.CSSProperties = {
@@ -1064,6 +1072,61 @@ export default function Routers() {
                     )}
                     <p style={{ margin: "3px 0 0", fontSize: "0.65rem", color: "var(--isp-text-muted)" }}>
                       Detected automatically from the router's /interface/bridge. Used by hotspot setup scripts.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (field === "coordinates") {
+                const hasCoords = editForm.coordinates.trim().length > 0;
+                const [lat, lng] = editForm.coordinates.split(",").map(s => s.trim());
+                const validCoords = hasCoords && !isNaN(Number(lat)) && !isNaN(Number(lng));
+                return (
+                  <div key={field}>
+                    <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border)", paddingBottom: "0.375rem", marginBottom: "0.5rem" }}>
+                      Location & Coverage
+                    </div>
+                    <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+                      {labels[field]}
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.coordinates}
+                      onChange={e => setEditForm(p => ({ ...p, coordinates: e.target.value }))}
+                      placeholder={placeholders[field]}
+                      style={inputStyle}
+                    />
+                    <p style={{ margin: "3px 0 0", fontSize: "0.65rem", color: "var(--isp-text-muted)" }}>
+                      Used for the network coverage map. Format: latitude, longitude
+                    </p>
+                    {validCoords && (
+                      <div style={{ marginTop: 8, borderRadius: 8, overflow: "hidden", border: "1px solid var(--isp-border)", height: 140 }}>
+                        <iframe
+                          title="Router location"
+                          width="100%" height="140" frameBorder="0" style={{ border: 0 }}
+                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(lng)-0.01},${Number(lat)-0.01},${Number(lng)+0.01},${Number(lat)+0.01}&layer=mapnik&marker=${lat},${lng}`}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (field === "coverage") {
+                return (
+                  <div key={field}>
+                    <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
+                      {labels[field]}
+                    </label>
+                    <input
+                      type="number"
+                      value={editForm.coverage}
+                      onChange={e => setEditForm(p => ({ ...p, coverage: e.target.value }))}
+                      placeholder={placeholders[field]}
+                      style={inputStyle}
+                    />
+                    <p style={{ margin: "3px 0 0", fontSize: "0.65rem", color: "var(--isp-text-muted)" }}>
+                      Approximate coverage radius in meters. Displayed as a circle on the network map.
                     </p>
                   </div>
                 );
