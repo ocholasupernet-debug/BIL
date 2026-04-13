@@ -1,0 +1,10 @@
+{
+  "mpesa": {
+    "consumerKey": "P0IVV6yGy5Ci3KDc4UbcfL1RVKOGeyCxOFiNQapsdjNCeOak",
+    "consumerSecret": "rB80ieyQSU0xn89osFyOoS7tIP6TX0et3NCIAKU94vGnMisgZbMrCvFEbxh3GS6R",
+    "shortcode": "41764011",
+    "passkey": "",
+    "callbackUrl": "",
+    "env": "sandbox"
+  }
+}
