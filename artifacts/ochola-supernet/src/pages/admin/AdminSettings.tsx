@@ -5,9 +5,9 @@ import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
   Bell, Wrench, Check, Eye, EyeOff, Copy, Trash2, Plus,
   Upload, RefreshCw, AlertTriangle, Terminal, Save, Key,
-  LogOut, Monitor, ChevronDown, Smartphone, Mail, Puzzle,
+  LogOut, Monitor, ChevronDown, ChevronUp, Smartphone, Mail, Puzzle,
   Send, MessageCircle, Phone, Palette, LayoutDashboard,
-  MapPin, Clock, Users, Zap,
+  MapPin, Clock, Users, Zap, Wallet, Landmark, Banknote,
 } from "lucide-react";
 
 // ─── shared primitives ───────────────────────────────────────────────────────
@@ -202,10 +202,6 @@ function BillingTab() {
   const [gracePeriod, setGracePeriod] = useState(true);
   const [autoRenew, setAutoRenew] = useState(false);
   const [installments, setInstallments] = useState(false);
-  const [gateway, setGateway] = useState(() => {
-    try { return localStorage.getItem("ochola_payment_gateway") || "mpesa"; } catch { return "mpesa"; }
-  });
-  const [gatewaySaved, setGatewaySaved] = useState(false);
 
   /* ── M-Pesa state ── */
   const [mp, setMp] = useState({
@@ -264,37 +260,8 @@ function BillingTab() {
     }
   };
 
-  const saveGateway = () => {
-    try { localStorage.setItem("ochola_payment_gateway", gateway); } catch {}
-    setGatewaySaved(true);
-    setTimeout(() => setGatewaySaved(false), 2000);
-  };
-
-  const GATEWAY_OPTIONS = [
-    { id: "mpesa",       label: "M-Pesa STK Push (Safaricom Daraja)" },
-    { id: "airtel",      label: "Airtel Money" },
-    { id: "stripe",      label: "Stripe" },
-    { id: "flutterwave", label: "Flutterwave" },
-    { id: "paypal",      label: "PayPal" },
-    { id: "pesalink",    label: "PesaLink" },
-    { id: "manual",      label: "Cash / Manual Collection" },
-  ];
-
   return (
     <>
-      <Card title="Active Payment Gateway" desc="Select the payment gateway your ISP uses to collect payments">
-        <Field label="Payment Gateway">
-          <Select value={gateway} onChange={e => setGateway(e.target.value)}>
-            {GATEWAY_OPTIONS.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
-          </Select>
-        </Field>
-        <Row>
-          <button onClick={saveGateway} style={{ display: "flex", alignItems: "center", gap: 6, background: gatewaySaved ? "#10b981" : C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s" }}>
-            {gatewaySaved ? "✓ Saved!" : "Save Gateway"}
-          </button>
-        </Row>
-      </Card>
-
       <Card
         title="M-Pesa Integration"
         desc="Safaricom Daraja API credentials for STK push and C2B payments"
@@ -1186,16 +1153,399 @@ function PluginsTab() {
   );
 }
 
+// ─── Payment Gateways Tab ────────────────────────────────────────────────────
+
+interface GatewayDef {
+  id: string;
+  name: string;
+  category: string;
+  color: string;
+  icon: React.ElementType;
+  fields: { key: string; label: string; hint?: string; secret?: boolean }[];
+}
+
+const GATEWAYS: GatewayDef[] = [
+  {
+    id: "mpesa_stk", name: "M-Pesa STK Push (Safaricom Daraja)", category: "Mobile Money", color: "#00a651", icon: Phone,
+    fields: [
+      { key: "consumerKey", label: "Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Consumer Secret", secret: true },
+      { key: "shortcode", label: "Business Short Code", hint: "Paybill number e.g. 174379 (sandbox) or your live paybill" },
+      { key: "passkey", label: "Lipa Na M-Pesa Passkey", secret: true },
+      { key: "callbackUrl", label: "Callback URL", hint: "e.g. https://yourdomain.com/api/mpesa/callback" },
+    ],
+  },
+  {
+    id: "mpesa_till", name: "M-Pesa Till (Buy Goods)", category: "Mobile Money", color: "#00a651", icon: Phone,
+    fields: [
+      { key: "tillNumber", label: "Till Number", hint: "Your Safaricom Buy Goods till number" },
+      { key: "storeNumber", label: "Store Number", hint: "Head Office number (usually same as till)" },
+      { key: "consumerKey", label: "Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Consumer Secret", secret: true },
+      { key: "passkey", label: "Passkey", secret: true },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "airtel", name: "Airtel Money", category: "Mobile Money", color: "#e4002b", icon: Phone,
+    fields: [
+      { key: "clientId", label: "Client ID", secret: true },
+      { key: "clientSecret", label: "Client Secret", secret: true },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "kcb", name: "KCB Bank", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "apiSecret", label: "API Secret", secret: true },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "merchantCode", label: "Merchant Code" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "kcb_biz", name: "KCB Business (KCB MobiGo)", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
+    fields: [
+      { key: "businessAccountNo", label: "Business Account Number" },
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "apiSecret", label: "API Secret", secret: true },
+      { key: "merchantId", label: "Merchant ID" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "equity", name: "Equity Bank (Jenga API)", category: "Kenyan Banks", color: "#8b0000", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "merchantCode", label: "Merchant Code" },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "coop", name: "Co-operative Bank (Connect API)", category: "Kenyan Banks", color: "#004d26", icon: Landmark,
+    fields: [
+      { key: "consumerKey", label: "Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Consumer Secret", secret: true },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "ncba", name: "NCBA Bank", category: "Kenyan Banks", color: "#1a237e", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "apiSecret", label: "API Secret", secret: true },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "merchantCode", label: "Merchant Code" },
+    ],
+  },
+  {
+    id: "absa", name: "Absa Bank Kenya", category: "Kenyan Banks", color: "#af0c22", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "clientId", label: "Client ID", secret: true },
+      { key: "clientSecret", label: "Client Secret", secret: true },
+      { key: "accountNumber", label: "Account Number" },
+    ],
+  },
+  {
+    id: "im", name: "I&M Bank", category: "Kenyan Banks", color: "#003366", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "merchantId", label: "Merchant ID" },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "stanbic", name: "Stanbic Bank", category: "Kenyan Banks", color: "#003087", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "apiSecret", label: "API Secret", secret: true },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "dtb", name: "DTB (Diamond Trust Bank)", category: "Kenyan Banks", color: "#003366", icon: Landmark,
+    fields: [
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "merchantId", label: "Merchant ID" },
+      { key: "accountNumber", label: "Account Number" },
+    ],
+  },
+  {
+    id: "stripe", name: "Stripe", category: "International", color: "#635bff", icon: CreditCard,
+    fields: [
+      { key: "publishableKey", label: "Publishable Key" },
+      { key: "secretKey", label: "Secret Key", secret: true },
+      { key: "webhookSecret", label: "Webhook Secret", secret: true },
+    ],
+  },
+  {
+    id: "flutterwave", name: "Flutterwave", category: "International", color: "#f5a623", icon: CreditCard,
+    fields: [
+      { key: "publicKey", label: "Public Key" },
+      { key: "secretKey", label: "Secret Key", secret: true },
+      { key: "encryptionKey", label: "Encryption Key", secret: true },
+    ],
+  },
+  {
+    id: "paypal", name: "PayPal", category: "International", color: "#003087", icon: CreditCard,
+    fields: [
+      { key: "clientId", label: "Client ID", secret: true },
+      { key: "clientSecret", label: "Client Secret", secret: true },
+      { key: "webhookUrl", label: "Webhook URL" },
+    ],
+  },
+  {
+    id: "pesalink", name: "PesaLink", category: "International", color: "#e63946", icon: Banknote,
+    fields: [
+      { key: "institutionCode", label: "Institution Code" },
+      { key: "apiKey", label: "API Key", secret: true },
+      { key: "apiSecret", label: "API Secret", secret: true },
+      { key: "callbackUrl", label: "Callback URL" },
+    ],
+  },
+  {
+    id: "manual", name: "Cash / Manual Collection", category: "Manual", color: "#64748b", icon: Banknote,
+    fields: [
+      { key: "bankName", label: "Bank Name" },
+      { key: "accountName", label: "Account Name" },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "branchCode", label: "Branch Code" },
+      { key: "paymentInstructions", label: "Payment Instructions", hint: "Instructions shown to customers on how to pay" },
+    ],
+  },
+];
+
+function PaymentGatewaysTab() {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [enabled, setEnabled] = useState<Record<string, boolean>>(() => {
+    try {
+      const s = localStorage.getItem("ochola_gw_enabled");
+      return s ? JSON.parse(s) : { mpesa_stk: true };
+    } catch { return { mpesa_stk: true }; }
+  });
+  const [sandbox, setSandbox] = useState<Record<string, boolean>>(() => {
+    try {
+      const s = localStorage.getItem("ochola_gw_sandbox");
+      return s ? JSON.parse(s) : {};
+    } catch { return {}; }
+  });
+  const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
+    try {
+      const s = localStorage.getItem("ochola_gw_fields");
+      return s ? JSON.parse(s) : {};
+    } catch { return {}; }
+  });
+  const [saved, setSaved] = useState<string | null>(null);
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  const toggleEnabled = (id: string) => {
+    setEnabled(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { localStorage.setItem("ochola_gw_enabled", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const toggleSandbox = (id: string) => {
+    setSandbox(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { localStorage.setItem("ochola_gw_sandbox", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const updateField = (gwId: string, fieldKey: string, value: string) => {
+    setFields(prev => ({
+      ...prev,
+      [gwId]: { ...(prev[gwId] || {}), [fieldKey]: value },
+    }));
+  };
+
+  const saveGateway = (gwId: string) => {
+    try { localStorage.setItem("ochola_gw_fields", JSON.stringify(fields)); } catch {}
+    setSaved(gwId);
+    setTimeout(() => setSaved(null), 2000);
+  };
+
+  const categories = [...new Set(GATEWAYS.map(g => g.category))];
+
+  return (
+    <>
+      {categories.map(cat => (
+        <div key={cat} style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: "0.7rem", fontWeight: 700, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.08em" }}>{cat}</span>
+            <div style={{ flex: 1, height: 1, background: C.border }} />
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {GATEWAYS.filter(g => g.category === cat).map(gw => {
+              const isExpanded = expanded === gw.id;
+              const isEnabled = !!enabled[gw.id];
+              const isSandbox = sandbox[gw.id] !== false;
+              const GwIcon = gw.icon;
+
+              return (
+                <div key={gw.id} style={{
+                  background: C.card,
+                  borderTop: `1px solid ${isEnabled ? `${gw.color}33` : C.border}`,
+                  borderRight: `1px solid ${isEnabled ? `${gw.color}33` : C.border}`,
+                  borderBottom: `1px solid ${isEnabled ? `${gw.color}33` : C.border}`,
+                  borderLeft: `3px solid ${isEnabled ? gw.color : C.border}`,
+                  borderRadius: 12,
+                  overflow: "hidden",
+                  transition: "border-color 0.2s",
+                }}>
+                  <div
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "12px 16px", cursor: "pointer",
+                    }}
+                    onClick={() => setExpanded(isExpanded ? null : gw.id)}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
+                      <div style={{
+                        width: 38, height: 38, borderRadius: 10,
+                        background: `${gw.color}18`,
+                        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      }}>
+                        <GwIcon size={16} style={{ color: gw.color }} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: "0.84rem", fontWeight: 700, color: C.text }}>{gw.name}</span>
+                          {isEnabled && (
+                            <span style={{
+                              fontSize: "0.6rem", fontWeight: 700, borderRadius: 4, padding: "1px 6px",
+                              background: "rgba(16,185,129,0.15)", color: "#10b981",
+                            }}>
+                              Active
+                            </span>
+                          )}
+                          {isEnabled && gw.id !== "manual" && (
+                            <span style={{
+                              fontSize: "0.58rem", fontWeight: 600, borderRadius: 4, padding: "1px 6px",
+                              background: isSandbox ? "rgba(245,158,11,0.1)" : "rgba(16,185,129,0.1)",
+                              color: isSandbox ? "#f59e0b" : "#10b981",
+                            }}>
+                              {isSandbox ? "Sandbox" : "Production"}
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: "0.7rem", color: C.muted }}>
+                          {gw.fields.length} configuration field{gw.fields.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div onClick={e => e.stopPropagation()}>
+                        <Toggle on={isEnabled} onChange={() => toggleEnabled(gw.id)} />
+                      </div>
+                      {isExpanded ? <ChevronUp size={16} style={{ color: C.muted }} /> : <ChevronDown size={16} style={{ color: C.muted }} />}
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
+                      {gw.id !== "manual" && (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", marginBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+                          <div>
+                            <p style={{ fontSize: "0.8rem", fontWeight: 600, color: C.text, margin: 0 }}>Environment Mode</p>
+                            <p style={{ fontSize: "0.7rem", color: C.muted, margin: "2px 0 0" }}>
+                              {isSandbox ? "Using sandbox/test credentials — no real money is charged" : "Using production credentials — live payments"}
+                            </p>
+                          </div>
+                          <Select
+                            value={isSandbox ? "sandbox" : "production"}
+                            onChange={e => {
+                              setSandbox(prev => {
+                                const next = { ...prev, [gw.id]: e.target.value === "sandbox" };
+                                try { localStorage.setItem("ochola_gw_sandbox", JSON.stringify(next)); } catch {}
+                                return next;
+                              });
+                            }}
+                            style={{ width: 160 }}
+                          >
+                            <option value="sandbox">Sandbox (Testing)</option>
+                            <option value="production">Production (Live)</option>
+                          </Select>
+                        </div>
+                      )}
+
+                      <Grid2>
+                        {gw.fields.map(f => (
+                          <Field key={f.key} label={f.label} hint={f.hint}>
+                            {f.secret ? (
+                              <div style={{ position: "relative" }}>
+                                <Input
+                                  type={showSecrets[`${gw.id}_${f.key}`] ? "text" : "password"}
+                                  value={fields[gw.id]?.[f.key] || ""}
+                                  onChange={e => updateField(gw.id, f.key, e.target.value)}
+                                  placeholder="••••••••••••••••"
+                                  style={{ paddingRight: 36 }}
+                                />
+                                <button
+                                  onClick={() => setShowSecrets(prev => ({ ...prev, [`${gw.id}_${f.key}`]: !prev[`${gw.id}_${f.key}`] }))}
+                                  style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 2 }}
+                                >
+                                  {showSecrets[`${gw.id}_${f.key}`] ? <EyeOff size={13} /> : <Eye size={13} />}
+                                </button>
+                              </div>
+                            ) : (
+                              <Input
+                                value={fields[gw.id]?.[f.key] || ""}
+                                onChange={e => updateField(gw.id, f.key, e.target.value)}
+                                placeholder={`Enter ${f.label.toLowerCase()}`}
+                              />
+                            )}
+                          </Field>
+                        ))}
+                      </Grid2>
+
+                      <Row>
+                        <button
+                          onClick={() => saveGateway(gw.id)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 6,
+                            background: saved === gw.id ? "#10b981" : C.cyan,
+                            border: "none", cursor: "pointer", color: "white",
+                            fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem",
+                            borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s",
+                          }}
+                        >
+                          {saved === gw.id ? <><Check size={13} /> Saved!</> : <><Save size={13} /> Save {gw.name.split(" (")[0]} Settings</>}
+                        </button>
+                      </Row>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 const TABS = [
-  { id: "profile",       label: "ISP Profile",     icon: Building2    },
-  { id: "billing",       label: "Billing & M-Pesa", icon: CreditCard   },
-  { id: "sms",           label: "SMS & Email",      icon: MessageSquare},
-  { id: "network",       label: "Network",          icon: Radio        },
-  { id: "hotspot",       label: "Hotspot",          icon: Wifi         },
-  { id: "security",      label: "Security",         icon: Shield       },
-  { id: "notifications", label: "Notifications",    icon: Bell         },
-  { id: "system",        label: "System",           icon: Wrench       },
-  { id: "plugins",       label: "Plugins",          icon: Puzzle       },
+  { id: "profile",       label: "ISP Profile",       icon: Building2    },
+  { id: "billing",       label: "Billing & M-Pesa",  icon: CreditCard   },
+  { id: "gateways",      label: "Payment Gateways",  icon: Wallet       },
+  { id: "sms",           label: "SMS & Email",        icon: MessageSquare},
+  { id: "network",       label: "Network",            icon: Radio        },
+  { id: "hotspot",       label: "Hotspot",            icon: Wifi         },
+  { id: "security",      label: "Security",           icon: Shield       },
+  { id: "notifications", label: "Notifications",      icon: Bell         },
+  { id: "system",        label: "System",             icon: Wrench       },
+  { id: "plugins",       label: "Plugins",            icon: Puzzle       },
 ];
 
 export default function AdminSettings() {
@@ -1217,8 +1567,9 @@ export default function AdminSettings() {
               <button key={t.id} onClick={() => setTab(t.id)} style={{
                 display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 16px",
                 background: active ? "rgba(6,182,212,0.1)" : "transparent",
+                borderTop: "none", borderRight: "none",
                 borderLeft: active ? `3px solid ${C.cyan}` : "3px solid transparent",
-                border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer",
+                borderBottom: `1px solid ${C.border}`, cursor: "pointer",
                 color: active ? C.cyan : C.muted, fontSize: "0.78rem", fontWeight: active ? 700 : 400,
                 textAlign: "left", fontFamily: "inherit", transition: "all 0.15s",
               }}>
@@ -1242,6 +1593,7 @@ export default function AdminSettings() {
 
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
+          {tab === "gateways"      && <PaymentGatewaysTab />}
           {tab === "sms"           && <SmsEmailTab />}
           {tab === "network"       && <NetworkTab />}
           {tab === "hotspot"       && <HotspotTab />}
