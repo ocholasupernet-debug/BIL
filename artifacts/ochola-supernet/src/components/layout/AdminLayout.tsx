@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
-import { clearAdminAuth, getAdminName, isImpersonating, getImpersonatedName, stopImpersonation } from "@/lib/supabase";
+import { clearAdminAuth, getAdminName } from "@/lib/supabase";
 
 interface NavItem {
   name: string;
@@ -184,8 +184,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const brand                            = useBrand();
   const adminName                        = getAdminName();
   const queryClient                      = useQueryClient();
-  const impersonating                    = isImpersonating();
-  const impersonatedName                 = getImpersonatedName();
 
   const handleLogout = () => {
     clearAdminAuth();
@@ -210,11 +208,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
-  const handleExitImpersonation = () => {
-    stopImpersonation();
-    queryClient.clear();
-    setLocation("/super-admin/admins");
-  };
 
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
@@ -649,35 +642,6 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
-
-        {/* ── Impersonation banner ─────────────────────────────── */}
-        {impersonating && (
-          <div style={{
-            background: "linear-gradient(90deg,#92400e,#78350f)",
-            borderBottom: "1px solid rgba(251,191,36,0.3)",
-            padding: "8px 24px",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            flexShrink: 0,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span>⚠️</span>
-              <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "#fde68a" }}>
-                Super Admin Mode — Impersonating: <span style={{ color: "white" }}>{impersonatedName}</span>
-              </span>
-            </div>
-            <button
-              onClick={handleExitImpersonation}
-              style={{
-                padding: "4px 14px", borderRadius: 8,
-                background: "rgba(251,191,36,0.2)", border: "1px solid rgba(251,191,36,0.4)",
-                color: "#fde68a", fontSize: "0.75rem", fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit",
-              }}
-            >
-              Exit Impersonation
-            </button>
-          </div>
-        )}
 
         {/* ── Page content ────────────────────────────────────── */}
         <main style={{ flex: 1, padding: "24px", overflowY: "auto" }}>
