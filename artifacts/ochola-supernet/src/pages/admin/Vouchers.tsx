@@ -149,8 +149,8 @@ async function deleteVouchers(codes: string[]): Promise<void> {
 /* ─────────────────────────── Print Component ─────────────────── */
 function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
   return (
-    <div style={{ width: 220, border: "1.5px dashed #2563EB", borderRadius: 10, padding: "0.875rem", background: "white", color: "#0f172a", fontFamily: "monospace", pageBreakInside: "avoid", display: "inline-block", margin: "0.5rem" }}>
-      <div style={{ textAlign: "center", fontWeight: 800, fontSize: "0.75rem", color: "#2563EB", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "0.375rem" }}>
+    <div style={{ width: 220, border: "1.5px dashed var(--isp-accent)", borderRadius: 10, padding: "0.875rem", background: "white", color: "#0f172a", fontFamily: "monospace", pageBreakInside: "avoid", display: "inline-block", margin: "0.5rem" }}>
+      <div style={{ textAlign: "center", fontWeight: 800, fontSize: "0.75rem", color: "var(--isp-accent)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "0.375rem" }}>
         {v.router_name !== "—" ? v.router_name : "WIFI VOUCHER"}
       </div>
       <div style={{ textAlign: "center", fontSize: "1.375rem", fontWeight: 900, letterSpacing: "0.12em", color: "#0f172a", marginBottom: "0.35rem" }}>
@@ -200,7 +200,7 @@ function GenerateModal({
       <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 500, padding: "1.75rem", boxShadow: "0 25px 60px rgba(0,0,0,0.5)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--isp-accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Ticket size={18} style={{ color: "white" }} />
             </div>
             <div>
@@ -254,7 +254,7 @@ function GenerateModal({
                 ["Speed",    `${plan.speed_down}/${plan.speed_up} Mbps`],
               ].map(([k, v]) => (
                 <div key={k}>
-                  <div style={{ fontSize: "0.65rem", color: "#3b82f6", fontWeight: 600, textTransform: "uppercase" }}>{k}</div>
+                  <div style={{ fontSize: "0.65rem", color: "var(--isp-accent)", fontWeight: 600, textTransform: "uppercase" }}>{k}</div>
                   <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{v}</div>
                 </div>
               ))}
@@ -291,7 +291,7 @@ function GenerateModal({
           {/* Preview code */}
           <div style={{ background: "var(--isp-inner-card)", borderRadius: 8, padding: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>Sample code:</span>
-            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "#3b82f6", letterSpacing: "0.12em" }}>{genCode(prefix)}</code>
+            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.12em" }}>{genCode(prefix)}</code>
           </div>
 
           {/* Actions */}
@@ -302,7 +302,7 @@ function GenerateModal({
             <button
               onClick={handleGenerate}
               disabled={generating || !plan}
-              style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: generating ? "rgba(37,99,235,0.4)" : "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+              style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: generating ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
               {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Ticket size={15} />}
               {generating ? "Generating…" : `Generate ${qty} Voucher${qty !== 1 ? "s" : ""}`}
             </button>
@@ -333,7 +333,7 @@ function PrintModal({ vouchers, onClose }: { vouchers: VoucherRow[]; onClose: ()
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.125rem 1.5rem", borderBottom: "1px solid var(--isp-border)" }}>
           <span style={{ fontWeight: 700, color: "var(--isp-text)" }}>Print Preview — {vouchers.length} voucher{vouchers.length !== 1 ? "s" : ""}</span>
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button onClick={doPrint} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#2563EB", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <button onClick={doPrint} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "var(--isp-accent)", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <Printer size={14} /> Print
             </button>
             <button onClick={onClose} style={{ background: "rgba(255,255,255,0.07)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
@@ -503,7 +503,7 @@ export default function Vouchers() {
             </button>
             {selected.size > 0 && (
               <>
-                <button onClick={() => setShowPrint(true)} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.25)", color: "#3b82f6", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                <button onClick={() => setShowPrint(true)} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.25)", color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
                   <Printer size={13} /> Print {selected.size}
                 </button>
                 <button
@@ -516,7 +516,7 @@ export default function Vouchers() {
             <button onClick={() => { setShowPrint(true); }} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <Printer size={13} /> Print All
             </button>
-            <button onClick={() => setShowGenerate(true)} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1.125rem", borderRadius: 8, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 12px rgba(37,99,235,0.3)" }}>
+            <button onClick={() => setShowGenerate(true)} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1.125rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 12px var(--isp-accent-border)" }}>
               <Plus size={15} /> Generate Vouchers
             </button>
           </div>
@@ -557,7 +557,7 @@ export default function Vouchers() {
                       <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)" }}>{r.name}</div>
                       <div style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", fontFamily: "monospace" }}>{r.host}</div>
                     </div>
-                    <div style={{ marginLeft: "0.5rem", fontSize: "0.7rem", padding: "0.15rem 0.5rem", borderRadius: 20, background: "rgba(37,99,235,0.1)", color: "#3b82f6", fontWeight: 700 }}>
+                    <div style={{ marginLeft: "0.5rem", fontSize: "0.7rem", padding: "0.15rem 0.5rem", borderRadius: 20, background: "rgba(37,99,235,0.1)", color: "var(--isp-accent)", fontWeight: 700 }}>
                       {rVouchers.length} vouchers
                     </div>
                   </div>
@@ -573,7 +573,7 @@ export default function Vouchers() {
           description="Push all unused voucher codes as MikroTik hotspot users so they can be authenticated locally on the router (useful as a RADIUS fallback)."
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
-          color="#2563EB"
+          color="var(--isp-accent)"
           buildPayload={() => ({
             users: vouchers.filter(v => !v.used).map(v => ({
               username:  v.code,
@@ -628,7 +628,7 @@ export default function Vouchers() {
                 <tr style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
                   <th style={{ padding: "0.75rem 1rem", textAlign: "center", width: 40 }}>
                     <input type="checkbox" checked={allSelected} onChange={toggleAll}
-                      style={{ accentColor: "#2563EB", width: 14, height: 14 }} />
+                      style={{ accentColor: "var(--isp-accent)", width: 14, height: 14 }} />
                   </th>
                   {["Code", "Plan", "Router", "Price", "Speed", "Expiry", "Status", "Actions"].map(h => (
                     <th key={h} style={{ textAlign: "left", padding: "0.75rem 1rem", color: "var(--isp-text-sub)", fontWeight: 600, fontSize: "0.6875rem", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
@@ -645,8 +645,8 @@ export default function Vouchers() {
                 ) : filtered.length === 0 ? (
                   <tr><td colSpan={9} style={{ textAlign: "center", padding: "4rem 1rem" }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
-                      <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(37,99,235,0.08)", border: "1.5px dashed rgba(37,99,235,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <Ticket size={24} style={{ color: "#2563EB", opacity: 0.6 }} />
+                      <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(37,99,235,0.08)", border: "1.5px dashed var(--isp-accent-border)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Ticket size={24} style={{ color: "var(--isp-accent)", opacity: 0.6 }} />
                       </div>
                       <div>
                         <div style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.25rem" }}>
@@ -659,7 +659,7 @@ export default function Vouchers() {
                         </div>
                       </div>
                       {vouchers.length === 0 && (
-                        <button onClick={() => setShowGenerate(true)} style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                        <button onClick={() => setShowGenerate(true)} style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
                           <Plus size={14} /> Generate Vouchers
                         </button>
                       )}
@@ -674,17 +674,17 @@ export default function Vouchers() {
                       onClick={() => toggleOne(v.code)}>
                       <td style={{ padding: "0.7rem 1rem", textAlign: "center" }} onClick={e => { e.stopPropagation(); toggleOne(v.code); }}>
                         <input type="checkbox" checked={isSelected} onChange={() => toggleOne(v.code)}
-                          style={{ accentColor: "#2563EB", width: 14, height: 14 }} />
+                          style={{ accentColor: "var(--isp-accent)", width: 14, height: 14 }} />
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                          <code style={{ fontFamily: "monospace", fontWeight: 700, color: "#3b82f6", letterSpacing: "0.1em", fontSize: "0.875rem", filter: showCodes ? "none" : "blur(5px)", userSelect: showCodes ? "auto" : "none", transition: "filter 0.2s" }}>
+                          <code style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.1em", fontSize: "0.875rem", filter: showCodes ? "none" : "blur(5px)", userSelect: showCodes ? "auto" : "none", transition: "filter 0.2s" }}>
                             {v.code}
                           </code>
                         </div>
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
-                        <span style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem", borderRadius: 6, background: "rgba(37,99,235,0.1)", color: "#3b82f6", fontWeight: 600 }}>{v.plan_name}</span>
+                        <span style={{ fontSize: "0.8rem", padding: "0.2rem 0.6rem", borderRadius: 6, background: "rgba(37,99,235,0.1)", color: "var(--isp-accent)", fontWeight: 600 }}>{v.plan_name}</span>
                       </td>
                       <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                         {v.router_name !== "—" ? (
@@ -736,7 +736,7 @@ export default function Vouchers() {
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {selected.size === 0 && (
                   <button onClick={() => setSelected(new Set(filtered.map(v => v.code)))}
-                    style={{ background: "none", border: "none", color: "#2563EB", fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit", padding: 0, fontWeight: 600 }}>
+                    style={{ background: "none", border: "none", color: "var(--isp-accent)", fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit", padding: 0, fontWeight: 600 }}>
                     Select all {filtered.length}
                   </button>
                 )}

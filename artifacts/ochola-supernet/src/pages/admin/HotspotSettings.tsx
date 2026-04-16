@@ -333,7 +333,7 @@ export default function HotspotSettings() {
             </button>
             <button
               onClick={handleSave}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
@@ -343,7 +343,7 @@ export default function HotspotSettings() {
 
         {/* General Settings */}
         <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#2563EB" }} /> General Settings</div>
+          <div style={SECTION_HEAD}><Info size={16} style={{ color: "var(--isp-accent)" }} /> General Settings</div>
           <div style={SECTION_BODY}>
             <FieldRow label="Hotspot Page Title" icon={<span style={{ fontSize: 12 }}>H</span>}
               hint="Your ISP company name — appears as the main title on the hotspot page.">
@@ -488,7 +488,7 @@ export default function HotspotSettings() {
           <button onClick={() => setShowPreview(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Eye size={14} /> Preview Login Page
           </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
             {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
           </button>

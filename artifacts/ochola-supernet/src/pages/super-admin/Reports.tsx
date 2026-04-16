@@ -57,7 +57,7 @@ export default function SuperAdminReports() {
         {/* KPI Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16, marginBottom: 28 }}>
           <Kpi label="Total ISPs" value={admins.length} sub={`${activeAdmins} active`} color="#6366f1" icon={Users} loading={la} />
-          <Kpi label="Total Customers" value={customers.length} sub={`${activeCustomers} active`} color="#2563EB" icon={Globe} loading={lc} />
+          <Kpi label="Total Customers" value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe} loading={lc} />
           <Kpi label="Total Routers" value={routers.length} sub={`${onlineRouters} online`} color="#8b5cf6" icon={Router} loading={lr} />
           <Kpi label="Total Plans" value={plans.length} sub={`${hotspotPlans} hotspot`} color="#f59e0b" icon={BarChart3} loading={lp} />
           <Kpi label="PPPoE Customers" value={pppoeCustomers} sub="across all ISPs" color="#10b981" icon={TrendingUp} loading={lc} />
@@ -128,7 +128,7 @@ export default function SuperAdminReports() {
             {lc ? <div style={{ color: C.muted, textAlign: "center" }}>Loading…</div> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {[
-                  { label: "Hotspot", count: customers.filter(c => c.type === "hotspot" || !c.type).length, color: "#2563EB" },
+                  { label: "Hotspot", count: customers.filter(c => c.type === "hotspot" || !c.type).length, color: "var(--isp-accent)" },
                   { label: "PPPoE", count: customers.filter(c => c.type === "pppoe").length, color: "#8b5cf6" },
                   { label: "Other", count: customers.filter(c => c.type && c.type !== "hotspot" && c.type !== "pppoe").length, color: "#f59e0b" },
                 ].map(t => (
@@ -151,7 +151,7 @@ export default function SuperAdminReports() {
             {lp ? <div style={{ color: C.muted, textAlign: "center" }}>Loading…</div> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {[
-                  { label: "Hotspot", count: plans.filter(p => p.type === "hotspot").length, color: "#2563EB" },
+                  { label: "Hotspot", count: plans.filter(p => p.type === "hotspot").length, color: "var(--isp-accent)" },
                   { label: "PPPoE", count: plans.filter(p => p.type === "pppoe").length, color: "#8b5cf6" },
                   { label: "Data", count: plans.filter(p => p.type === "data").length, color: "#10b981" },
                   { label: "Other", count: plans.filter(p => !["hotspot","pppoe","data"].includes(p.type)).length, color: "#f59e0b" },

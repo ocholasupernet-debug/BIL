@@ -177,12 +177,12 @@ export function RouterLiveStats({
   const updatedSec = dataUpdatedAt ? Math.round((Date.now() - dataUpdatedAt) / 1000) : null;
 
   return (
-    <div style={{ borderTop: "1px solid rgba(37,99,235,0.15)", padding: "1rem 1.25rem 1.25rem" }}>
+    <div style={{ borderTop: "1px solid var(--isp-accent-glow)", padding: "1rem 1.25rem 1.25rem" }}>
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.875rem" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Activity size={13} color="#2563EB" />
-          <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <Activity size={13} color="var(--isp-accent)" />
+          <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             Live Stats {routerName ? `— ${routerName}` : ""}
           </span>
         </div>
@@ -241,7 +241,7 @@ export function RouterLiveStats({
                 <div key={t.iface} style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                   <span style={{ fontSize: "0.7rem", fontFamily: "monospace", color: "#94a3b8", minWidth: 90, flexShrink: 0 }}>{t.iface}</span>
                   <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: "linear-gradient(90deg,#2563EB,#818cf8)", borderRadius: 3, transition: "width 0.6s ease" }} />
+                    <div style={{ width: `${pct}%`, height: "100%", background: "var(--isp-accent)", borderRadius: 3, transition: "width 0.6s ease" }} />
                   </div>
                   <span style={{ fontSize: "0.68rem", color: "#38bdf8", minWidth: 72, textAlign: "right", fontFamily: "monospace" }}>
                     ↓{fmtBits(t.rxBitsPerSecond)}

@@ -43,7 +43,7 @@ function LogPanel({
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs]);
-  const color = ok === null ? "#3b82f6" : ok ? "#4ade80" : "#f87171";
+  const color = ok === null ? "var(--isp-accent)" : ok ? "#4ade80" : "#f87171";
   return (
     <div style={{
       marginTop: "0.5rem",
@@ -72,7 +72,7 @@ function LogPanel({
           const c = line.startsWith("✅") ? "#4ade80"
             : line.startsWith("❌") ? "#f87171"
             : line.startsWith("✓") ? "#a3e635"
-            : line.startsWith("▶") ? "#3b82f6"
+            : line.startsWith("▶") ? "var(--isp-accent)"
             : "#64748b";
           return <div key={i} style={{ color: c }}>{line || " "}</div>;
         })}
@@ -157,9 +157,9 @@ function SyncFailedActions({
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.3rem",
             padding: "0.3rem 0.875rem", borderRadius: 7,
-            background: fixing ? "rgba(37,99,235,0.08)" : "rgba(37,99,235,0.15)",
-            border: "1px solid rgba(37,99,235,0.4)",
-            color: "#3b82f6", fontWeight: 700, fontSize: "0.76rem",
+            background: fixing ? "rgba(37,99,235,0.08)" : "var(--isp-accent-glow)",
+            border: "1px solid var(--isp-accent-border)",
+            color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.76rem",
             cursor: fixing || rebooting ? "not-allowed" : "pointer",
             fontFamily: "inherit", transition: "all 0.15s",
           }}
@@ -266,14 +266,14 @@ function SyncLogPanel({
 
   const borderColor = ok === false ? "rgba(248,113,113,0.3)" : ok === true ? "rgba(74,222,128,0.3)" : "rgba(37,99,235,0.25)";
   const headerBg    = ok === false ? "rgba(248,113,113,0.06)" : ok === true ? "rgba(74,222,128,0.06)" : "rgba(37,99,235,0.05)";
-  const iconColor   = ok === false ? "#f87171" : ok === true ? "#4ade80" : "#3b82f6";
+  const iconColor   = ok === false ? "#f87171" : ok === true ? "#4ade80" : "var(--isp-accent)";
   const label       = ok === null ? "Syncing…" : ok === true ? "Sync Complete" : "Sync Failed";
 
   return (
     <div style={{ border: `1px solid ${borderColor}`, borderRadius: 12, overflow: "hidden", marginTop: "0.75rem" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.65rem 1rem", background: headerBg }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          {ok === null  && <Loader2 size={14} style={{ color: "#3b82f6", animation: "spin 1s linear infinite" }} />}
+          {ok === null  && <Loader2 size={14} style={{ color: "var(--isp-accent)", animation: "spin 1s linear infinite" }} />}
           {ok === true  && <CheckCircle2 size={14} style={{ color: "#4ade80" }} />}
           {ok === false && <AlertTriangle size={14} style={{ color: "#f87171" }} />}
           <span style={{ fontWeight: 700, fontSize: "0.8rem", color: iconColor }}>{label}</span>
@@ -289,7 +289,7 @@ function SyncLogPanel({
           const c = line.startsWith("✅") ? "#4ade80"
             : line.startsWith("❌") ? "#f87171"
             : line.startsWith("✓")  ? "#a3e635"
-            : line.startsWith("▶")  ? "#3b82f6"
+            : line.startsWith("▶")  ? "var(--isp-accent)"
             : line.startsWith("  ") ? "#64748b"
             : "#94a3b8";
           return <div key={i} style={{ color: c }}>{line || " "}</div>;
@@ -324,7 +324,7 @@ export interface RouterSyncBarProps {
   color?: string;
 }
 
-export function RouterSyncBar({ label, description, icon, endpoint, buildPayload, color = "#2563EB" }: RouterSyncBarProps) {
+export function RouterSyncBar({ label, description, icon, endpoint, buildPayload, color = "var(--isp-accent)" }: RouterSyncBarProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [syncing,    setSyncing]    = useState(false);
   const [result,     setResult]     = useState<{ logs: string[]; ok: boolean; error?: string } | null>(null);
@@ -431,7 +431,7 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         </div>
       )}
       {selectedRouter && !selectedRouter.host && selectedRouter.bridge_ip && (
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, fontSize: "0.75rem", color: "#3b82f6" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, fontSize: "0.75rem", color: "var(--isp-accent)" }}>
           <span>Using VPN tunnel IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.bridge_ip}</strong></span>
         </div>
       )}

@@ -13,8 +13,8 @@ import {
 // ─── shared primitives ───────────────────────────────────────────────────────
 
 const C = {
-  cyan:      "#2563EB",
-  cyanDark:  "#1D4ED8",
+  cyan:      "var(--isp-accent)",
+  cyanDark:  "var(--isp-accent)",
   sidebar:   "#131929",
   card:      "var(--isp-card)",
   border:    "var(--isp-border-subtle)",
@@ -459,7 +459,7 @@ function SmsEmailTab() {
       <Card title="Test Messaging" desc="Send a test message through each configured channel to verify delivery">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {[
-            { label: "Test SMS", desc: "Send a test SMS via your configured gateway", icon: Smartphone, color: "#3b82f6" },
+            { label: "Test SMS", desc: "Send a test SMS via your configured gateway", icon: Smartphone, color: "var(--isp-accent)" },
             { label: "Test WhatsApp", desc: "Send a test WhatsApp message", icon: MessageCircle, color: "#25d366" },
             { label: "Test Telegram", desc: "Send a test message to your Telegram bot", icon: Send, color: "#0088cc" },
             { label: "Test Email", desc: "Send a test email via SMTP", icon: Mail, color: "#f59e0b" },
@@ -711,7 +711,7 @@ function SecurityTab() {
         </div>
         {twoFa && (
           <div style={{ background: "rgba(37,99,235,0.07)", border: `1px solid rgba(37,99,235,0.25)`, borderRadius: 10, padding: 16, marginTop: 14, display: "flex", alignItems: "flex-start", gap: 16 }}>
-            <div style={{ width: 72, height: 72, background: "rgba(255,255,255,0.05)", border: `2px solid rgba(37,99,235,0.3)`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 72, height: 72, background: "rgba(255,255,255,0.05)", border: `2px solid var(--isp-accent-border)`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <span style={{ fontSize: "2rem" }}>📱</span>
             </div>
             <div>
@@ -968,8 +968,8 @@ function SystemTab() {
           </Field>
           <Field label="Accent Color" hint="Primary color used for buttons, links, and highlights">
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {["#2563EB","#3b82f6","#8b5cf6","#ec4899","#10b981","#f59e0b","#ef4444"].map(color => (
-                <button key={color} style={{ width: 32, height: 32, borderRadius: 8, background: color, border: color === "#2563EB" ? "2px solid white" : "2px solid transparent", cursor: "pointer", transition: "transform 0.1s" }} />
+              {["var(--isp-accent)","var(--isp-accent)","#8b5cf6","#ec4899","#10b981","#f59e0b","#ef4444"].map(color => (
+                <button key={color} style={{ width: 32, height: 32, borderRadius: 8, background: color, border: color === "var(--isp-accent)" ? "2px solid white" : "2px solid transparent", cursor: "pointer", transition: "transform 0.1s" }} />
               ))}
             </div>
           </Field>
@@ -1106,12 +1106,12 @@ function PluginsTab() {
               display: "flex", alignItems: "center", justifyContent: "space-between",
               padding: "12px 14px", borderRadius: 10,
               background: p.status === "active" ? "rgba(37,99,235,0.04)" : "rgba(255,255,255,0.02)",
-              border: `1px solid ${p.status === "active" ? "rgba(37,99,235,0.15)" : C.border}`,
+              border: `1px solid ${p.status === "active" ? "var(--isp-accent-glow)" : C.border}`,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{
                   width: 38, height: 38, borderRadius: 10,
-                  background: p.status === "active" ? "rgba(37,99,235,0.12)" : "rgba(255,255,255,0.05)",
+                  background: p.status === "active" ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.05)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                   <Puzzle size={16} style={{ color: p.status === "active" ? C.cyan : C.muted }} />

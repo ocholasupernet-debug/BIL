@@ -118,7 +118,7 @@ function InvoicePreview({ invoice, onClose }: { invoice: Invoice; onClose: () =>
             <tfoot>
               <tr>
                 <td style={{ padding: "12px 0", fontSize: "0.95rem", fontWeight: 800, color: "var(--isp-text)" }}>Total</td>
-                <td style={{ textAlign: "right", fontSize: "0.95rem", fontWeight: 800, color: "#2563EB" }}>{fmtMoney(invoice.total)}</td>
+                <td style={{ textAlign: "right", fontSize: "0.95rem", fontWeight: 800, color: "var(--isp-accent)" }}>{fmtMoney(invoice.total)}</td>
               </tr>
             </tfoot>
           </table>
@@ -130,13 +130,13 @@ function InvoicePreview({ invoice, onClose }: { invoice: Invoice; onClose: () =>
           )}
 
           <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)", color: "#2563EB", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Printer size={14} /> Print
             </button>
-            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)", color: "#2563EB", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Download size={14} /> Download PDF
             </button>
-            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)", color: "#2563EB", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <button style={{ flex: 1, padding: "0.6rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Send size={14} /> Email
             </button>
           </div>
@@ -181,16 +181,16 @@ export default function Invoices() {
             <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "var(--isp-text)", margin: 0 }}>Invoices</h1>
             <p style={{ fontSize: "0.82rem", color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Generate and manage customer invoices</p>
           </div>
-          <button style={{ padding: "0.55rem 1.25rem", borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+          <button style={{ padding: "0.55rem 1.25rem", borderRadius: 10, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
             <FileText size={14} /> Generate Invoice
           </button>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
           {[
-            { label: "Total Invoices", value: stats.count, icon: <FileText size={18} />, color: "#2563EB" },
+            { label: "Total Invoices", value: stats.count, icon: <FileText size={18} />, color: "var(--isp-accent)" },
             { label: "Total Revenue", value: fmtMoney(stats.total), icon: <DollarSign size={18} />, color: "#34d399" },
-            { label: "Collected", value: fmtMoney(stats.paid), icon: <TrendingUp size={18} />, color: "#3b82f6" },
+            { label: "Collected", value: fmtMoney(stats.paid), icon: <TrendingUp size={18} />, color: "var(--isp-accent)" },
             { label: "Outstanding", value: fmtMoney(stats.unpaid), icon: <AlertTriangle size={18} />, color: "#f59e0b" },
           ].map((s, i) => (
             <div key={i} style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "1rem 1.25rem" }}>
@@ -235,7 +235,7 @@ export default function Invoices() {
                 const sm = STATUS_META[inv.status];
                 return (
                   <tr key={inv.id} style={{ borderBottom: "1px solid var(--isp-border)" }}>
-                    <td style={{ padding: "0.65rem 1rem", fontSize: "0.82rem", fontWeight: 700, color: "#2563EB", fontFamily: "monospace" }}>{inv.invoice_number}</td>
+                    <td style={{ padding: "0.65rem 1rem", fontSize: "0.82rem", fontWeight: 700, color: "var(--isp-accent)", fontFamily: "monospace" }}>{inv.invoice_number}</td>
                     <td style={{ padding: "0.65rem 1rem" }}>
                       <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--isp-text)", margin: 0 }}>{inv.customer_name}</p>
                       <p style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", margin: "1px 0 0" }}>{inv.customer_email}</p>
@@ -251,7 +251,7 @@ export default function Invoices() {
                     <td style={{ padding: "0.65rem 1rem", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>{fmtDate(inv.due_date)}</td>
                     <td style={{ padding: "0.65rem 1rem" }}>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button onClick={() => setPreview(inv)} style={{ padding: "5px 8px", borderRadius: 6, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "#2563EB", cursor: "pointer" }} title="View">
+                        <button onClick={() => setPreview(inv)} style={{ padding: "5px 8px", borderRadius: 6, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "var(--isp-accent)", cursor: "pointer" }} title="View">
                           <Eye size={13} />
                         </button>
                         <button style={{ padding: "5px 8px", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer" }} title="Download">

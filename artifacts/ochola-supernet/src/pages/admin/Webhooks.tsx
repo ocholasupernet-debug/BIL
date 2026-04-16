@@ -41,7 +41,7 @@ function timeAgo(iso: string): string {
 function statusColor(s: string): { bg: string; text: string; border: string } {
   const m: Record<string, { bg: string; text: string; border: string }> = {
     processed: { bg: "rgba(74,222,128,0.1)",  text: "#4ade80", border: "rgba(74,222,128,0.3)"  },
-    received:  { bg: "rgba(37,99,235,0.1)",   text: "#2563EB", border: "rgba(37,99,235,0.3)"   },
+    received:  { bg: "rgba(37,99,235,0.1)",   text: "var(--isp-accent)", border: "var(--isp-accent-border)"   },
     ignored:   { bg: "rgba(251,191,36,0.1)",  text: "#fbbf24", border: "rgba(251,191,36,0.3)"  },
     error:     { bg: "rgba(248,113,113,0.1)", text: "#f87171", border: "rgba(248,113,113,0.3)" },
   };
@@ -92,7 +92,7 @@ function EndpointRow({
   const full = `https://102.212.246.158:8080${path}`;
 
   const methColor = method === "POST"
-    ? { bg: "rgba(37,99,235,0.12)", text: "#2563EB" }
+    ? { bg: "var(--isp-accent-glow)", text: "var(--isp-accent)" }
     : { bg: "rgba(74,222,128,0.1)", text: "#4ade80" };
 
   return (
@@ -198,7 +198,7 @@ export default function Webhooks() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 4 }}>
-              <Webhook size={20} style={{ color: "#2563EB" }} />
+              <Webhook size={20} style={{ color: "var(--isp-accent)" }} />
               <h1 style={{ margin: 0, fontWeight: 800, fontSize: "1.4rem", color: "var(--isp-text)" }}>Payment Webhooks</h1>
             </div>
             <p style={{ margin: 0, fontSize: 13, color: "var(--isp-text-muted)" }}>
@@ -234,8 +234,8 @@ export default function Webhooks() {
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "8px 16px", border: "none", background: "none",
                 fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer",
-                color: activeTab === t.id ? "#2563EB" : "var(--isp-text-muted)",
-                borderBottom: activeTab === t.id ? "2px solid #2563EB" : "2px solid transparent",
+                color: activeTab === t.id ? "var(--isp-accent)" : "var(--isp-text-muted)",
+                borderBottom: activeTab === t.id ? "2px solid var(--isp-accent)" : "2px solid transparent",
                 marginBottom: -1,
               }}
             >
@@ -352,7 +352,7 @@ export default function Webhooks() {
 
             {/* Step 1 — VPS firewall */}
             <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "18px 20px" }}>
-              <StepHeader n={1} title="Open VPS Firewall Port" color="#2563EB" />
+              <StepHeader n={1} title="Open VPS Firewall Port" color="var(--isp-accent)" />
               <p style={{ margin: "8px 0", fontSize: 12, color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
                 Safaricom and other gateways need to reach your VPS on port 8080. Run these on your VPS:
               </p>
@@ -568,7 +568,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
               </div>
 
               <button onClick={sendTest} disabled={testing || !testPhone}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px", borderRadius: 9, background: "rgba(37,99,235,0.12)", border: "1px solid rgba(37,99,235,0.35)", color: "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
                 {testing ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
                 {testing ? "Firing…" : "Fire Test Webhook"}
               </button>

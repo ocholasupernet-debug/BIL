@@ -82,7 +82,7 @@ const DEFAULT_TEMPLATES: Template[] = [
 ];
 
 const CHANNEL_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  sms:      { label: "SMS",      color: "#2563EB", icon: <Phone size={11} /> },
+  sms:      { label: "SMS",      color: "var(--isp-accent)", icon: <Phone size={11} /> },
   whatsapp: { label: "WhatsApp", color: "#25d366", icon: <MessageSquare size={11} /> },
   email:    { label: "Email",    color: "#f59e0b", icon: <Mail size={11} /> },
   telegram: { label: "Telegram", color: "#0088cc", icon: <Send size={11} /> },
@@ -170,7 +170,7 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <label style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase" }}>Message Body</label>
-              <button onClick={() => setShowPreview(!showPreview)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: "#2563EB", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+              <button onClick={() => setShowPreview(!showPreview)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: "var(--isp-accent)", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 <Eye size={12} /> {showPreview ? "Hide" : "Show"} Preview
               </button>
             </div>
@@ -183,8 +183,8 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
           </div>
 
           {showPreview && (
-            <div style={{ padding: "1rem", borderRadius: 10, background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)" }}>
-              <p style={{ fontSize: "0.68rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", margin: "0 0 6px" }}>Preview</p>
+            <div style={{ padding: "1rem", borderRadius: 10, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-accent-glow)" }}>
+              <p style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", margin: "0 0 6px" }}>Preview</p>
               <p style={{ fontSize: "0.82rem", color: "var(--isp-text)", margin: 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{previewBody}</p>
             </div>
           )}
@@ -212,7 +212,7 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
             <button onClick={onClose} style={{ flex: 1, padding: "0.6rem", borderRadius: 10, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
               Cancel
             </button>
-            <button onClick={() => onSave(form)} style={{ flex: 2, padding: "0.6rem", borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            <button onClick={() => onSave(form)} style={{ flex: 2, padding: "0.6rem", borderRadius: 10, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Save size={14} /> Save Template
             </button>
           </div>
@@ -242,7 +242,7 @@ export default function MessageTemplates() {
           <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "var(--isp-text)", margin: 0 }}>Message Templates</h1>
           <p style={{ fontSize: "0.82rem", color: "var(--isp-text-muted)", margin: "4px 0 0" }}>
             Customize notification messages sent to customers via SMS, WhatsApp, Email, and Telegram.
-            Use variables like <code style={{ background: "rgba(37,99,235,0.1)", padding: "1px 5px", borderRadius: 4, fontSize: "0.75rem", color: "#2563EB" }}>[[name]]</code> to personalize messages.
+            Use variables like <code style={{ background: "rgba(37,99,235,0.1)", padding: "1px 5px", borderRadius: 4, fontSize: "0.75rem", color: "var(--isp-accent)" }}>[[name]]</code> to personalize messages.
           </p>
         </div>
 
@@ -274,7 +274,7 @@ export default function MessageTemplates() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                 <button onClick={() => toggleEnabled(t.id)} style={{
                   width: 40, height: 22, borderRadius: 11, cursor: "pointer", border: "none", position: "relative",
-                  background: t.enabled ? "#2563EB" : "rgba(255,255,255,0.1)",
+                  background: t.enabled ? "var(--isp-accent)" : "rgba(255,255,255,0.1)",
                   transition: "background 0.2s",
                 }}>
                   <div style={{
@@ -283,7 +283,7 @@ export default function MessageTemplates() {
                     transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
                   }} />
                 </button>
-                <button onClick={() => setEditing(t)} style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "#2563EB", fontWeight: 700, fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit" }}>
+                <button onClick={() => setEditing(t)} style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit" }}>
                   Edit
                 </button>
               </div>

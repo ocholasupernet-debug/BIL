@@ -165,7 +165,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       borderRadius: "0 0 10px 10px",
     }}>
       <div style={{ marginBottom: "0.875rem" }}>
-        <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+        <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
           API Connection Settings — port 8728
         </div>
       </div>
@@ -183,7 +183,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
             value={host}
             onChange={e => setHost(e.target.value)}
             placeholder="192.168.88.1"
-            onFocus={e => (e.target.style.borderColor = "#2563EB")}
+            onFocus={e => (e.target.style.borderColor = "var(--isp-accent)")}
             onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
           />
         </label>
@@ -198,7 +198,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
             value={user}
             onChange={e => setUser(e.target.value)}
             placeholder={router.name || "admin"}
-            onFocus={e => (e.target.style.borderColor = "#2563EB")}
+            onFocus={e => (e.target.style.borderColor = "var(--isp-accent)")}
             onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
           />
         </label>
@@ -215,7 +215,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
               value={pass}
               onChange={e => setPass(e.target.value)}
               placeholder="ocholasupernet"
-              onFocus={e => (e.target.style.borderColor = "#2563EB")}
+              onFocus={e => (e.target.style.borderColor = "var(--isp-accent)")}
               onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
             />
             <button
@@ -258,13 +258,13 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.375rem",
             padding: "0.45rem 1rem", borderRadius: 7,
-            background: saved ? "rgba(34,197,94,0.15)" : dirty ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.05)",
+            background: saved ? "rgba(34,197,94,0.15)" : dirty ? "var(--isp-accent)" : "rgba(255,255,255,0.05)",
             border: saved ? "1px solid rgba(34,197,94,0.4)" : "none",
             color: saved ? "#4ade80" : dirty ? "white" : "var(--isp-text-muted)",
             fontWeight: 700, fontSize: "0.8rem",
             cursor: (saving || !dirty) ? "not-allowed" : "pointer",
             fontFamily: "inherit",
-            boxShadow: dirty && !saved ? "0 3px 10px rgba(37,99,235,0.3)" : "none",
+            boxShadow: dirty && !saved ? "0 3px 10px var(--isp-accent-border)" : "none",
           }}
         >
           {saving   ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Saving…</>
@@ -463,7 +463,7 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
       {host ? (
         <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginBottom: "0.75rem" }}>
           <Globe size={11} style={{ color: "#64748b" }} />
-          <code style={{ fontSize: "0.76rem", color: "#2563EB", fontFamily: "monospace" }}>{host}</code>
+          <code style={{ fontSize: "0.76rem", color: "var(--isp-accent)", fontFamily: "monospace" }}>{host}</code>
         </div>
       ) : (
         <div style={{ fontSize: "0.74rem", color: "#f87171", background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 7, padding: "0.4rem 0.625rem", marginBottom: "0.75rem" }}>
@@ -679,9 +679,9 @@ function RouterRow({ router, index, onReconfigure, onPorts, onSaved }: {
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.35rem",
             padding: "0.43rem 0.75rem", borderRadius: 7,
-            background: expanded ? "rgba(37,99,235,0.15)" : "rgba(255,255,255,0.05)",
-            border: `1px solid ${expanded ? "rgba(37,99,235,0.4)" : "rgba(255,255,255,0.1)"}`,
-            color: expanded ? "#2563EB" : "var(--isp-text-muted)",
+            background: expanded ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.05)",
+            border: `1px solid ${expanded ? "var(--isp-accent-border)" : "rgba(255,255,255,0.1)"}`,
+            color: expanded ? "var(--isp-accent)" : "var(--isp-text-muted)",
             fontWeight: 700, fontSize: "0.78rem",
             cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
             transition: "all 0.15s",
@@ -717,8 +717,8 @@ function RouterRow({ router, index, onReconfigure, onPorts, onSaved }: {
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.35rem",
             padding: "0.43rem 0.75rem", borderRadius: 7,
-            background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)",
-            color: "#2563EB", fontWeight: 700, fontSize: "0.78rem",
+            background: "rgba(37,99,235,0.1)", border: "1px solid var(--isp-accent-border)",
+            color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.78rem",
             cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
             transition: "background 0.15s",
           }}
@@ -769,7 +769,7 @@ export default function ReplaceRouter() {
           </h1>
           <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", margin: 0 }}>
             {routers.length} router{routers.length !== 1 ? "s" : ""} · {onlineCount} online
-            {" · "}Click <strong style={{ color: "#2563EB" }}>API</strong> on any row to set credentials and test the connection.
+            {" · "}Click <strong style={{ color: "var(--isp-accent)" }}>API</strong> on any row to set credentials and test the connection.
           </p>
         </div>
 
@@ -778,7 +778,7 @@ export default function ReplaceRouter() {
         {/* Router rows */}
         {isLoading ? (
           <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", padding: "2rem", color: "var(--isp-text-muted)", fontSize: "0.85rem" }}>
-            <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#2563EB" }} />
+            <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "var(--isp-accent)" }} />
             Loading routers…
           </div>
         ) : routers.length === 0 ? (
@@ -792,7 +792,7 @@ export default function ReplaceRouter() {
             <div style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>Use <strong>Self Install</strong> to add your first router.</div>
             <button
               onClick={() => navigate("/admin/network/self-install")}
-              style={{ marginTop: "0.25rem", padding: "0.5rem 1.25rem", borderRadius: 7, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit" }}
+              style={{ marginTop: "0.25rem", padding: "0.5rem 1.25rem", borderRadius: 7, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit" }}
             >
               Go to Self Install
             </button>
@@ -815,9 +815,9 @@ export default function ReplaceRouter() {
         {/* Legend */}
         <div style={{ background: "rgba(37,99,235,0.04)", border: "1px solid rgba(37,99,235,0.14)", borderRadius: 8, padding: "0.75rem 1rem", fontSize: "0.76rem", color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
           <strong style={{ color: "#818cf8" }}>Access</strong> — log into the router via WebFig (browser UI) or get Winbox credentials.{" "}
-          <strong style={{ color: "#2563EB" }}>API</strong> — set the router IP, API username and password, then click <em>Test Connection</em> to verify the MikroTik API is reachable on port 8728.{" "}
+          <strong style={{ color: "var(--isp-accent)" }}>API</strong> — set the router IP, API username and password, then click <em>Test Connection</em> to verify the MikroTik API is reachable on port 8728.{" "}
           <strong style={{ color: "#fbbf24" }}>Reconfigure</strong> — re-apply the setup script.{" "}
-          <strong style={{ color: "#2563EB" }}>Ports</strong> — assign bridge ports for the hotspot.
+          <strong style={{ color: "var(--isp-accent)" }}>Ports</strong> — assign bridge ports for the hotspot.
         </div>
 
       </div>

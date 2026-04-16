@@ -259,10 +259,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
               width: 32, height: 32, borderRadius: 8,
-              background: "linear-gradient(135deg,#2563EB,#1D4ED8)",
+              background: "var(--isp-accent)",
               display: "flex", alignItems: "center", justifyContent: "center",
               flexShrink: 0,
-              boxShadow: "0 2px 8px rgba(37,99,235,0.4)",
+              boxShadow: "0 2px 8px var(--isp-accent-border)",
             }}>
               <Zap size={16} style={{ color: "white" }} />
             </div>
@@ -368,7 +368,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                       {item.badge && (
                         <span style={{
                           fontSize: "0.5rem", padding: "1px 5px", borderRadius: 99,
-                          background: "#2563EB", color: "white",
+                          background: "var(--isp-accent)", color: "white",
                           fontWeight: 800, letterSpacing: "0.06em",
                         }}>
                           {item.badge}
@@ -437,7 +437,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         }}>
           <div style={{
             width: 32, height: 32, borderRadius: 8,
-            background: "linear-gradient(135deg,#2563EB,#1E40AF)",
+            background: "var(--isp-accent)",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: "0.78rem", fontWeight: 700, color: "white", flexShrink: 0,
           }}>
@@ -524,8 +524,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             transition: "border-color 0.15s, box-shadow 0.15s",
           }}
             onFocusCapture={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = "#2563EB";
-              (e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 3px rgba(37,99,235,0.12)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-accent)";
+              (e.currentTarget as HTMLElement).style.boxShadow = "0 0 0 3px var(--isp-accent-glow)";
             }}
             onBlurCapture={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "var(--isp-border)";
@@ -610,7 +610,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             }}>
               <div style={{
                 width: 26, height: 26, borderRadius: "50%",
-                background: "linear-gradient(135deg,#2563EB,#1E40AF)",
+                background: "var(--isp-accent)",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: "0.72rem", fontWeight: 700, color: "white", flexShrink: 0,
               }}>

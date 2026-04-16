@@ -118,7 +118,7 @@ function RouterStatusCard({ router, onTest }: { router: DbRouter; onTest: (id: n
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{ width: 36, height: 36, borderRadius: 9, background: "rgba(37,99,235,0.1)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Server size={16} style={{ color: "#2563EB" }} />
+            <Server size={16} style={{ color: "var(--isp-accent)" }} />
           </div>
           <div>
             <p style={{ margin: 0, fontWeight: 800, fontSize: 14, color: "var(--isp-text)" }}>{router.name}</p>
@@ -129,7 +129,7 @@ function RouterStatusCard({ router, onTest }: { router: DbRouter; onTest: (id: n
         </div>
         <button
           onClick={() => onTest(router.id)}
-          style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 7, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "#2563EB", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+          style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 7, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", color: "var(--isp-accent)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
         >
           <RefreshCw size={11} /> Test
         </button>
@@ -289,7 +289,7 @@ function RouterForm({
     <div style={{ background: "var(--isp-section)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 12, padding: "22px 26px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <Settings size={15} style={{ color: "#2563EB" }} />
+          <Settings size={15} style={{ color: "var(--isp-accent)" }} />
           <span style={{ fontWeight: 800, fontSize: 15, color: "var(--isp-text)" }}>
             {routerId ? "Edit Router API Credentials" : "Add New Router"}
           </span>
@@ -333,9 +333,9 @@ function RouterForm({
 
       {/* ── Interfaces section ─────────────────────────────────── */}
       <div style={{ margin: "4px 0 18px", borderRadius: 10, border: "1px solid rgba(37,99,235,0.18)", overflow: "hidden" }}>
-        <div style={{ background: "rgba(37,99,235,0.06)", padding: "9px 14px", borderBottom: "1px solid rgba(37,99,235,0.15)", display: "flex", alignItems: "center", gap: 7 }}>
-          <Terminal size={12} style={{ color: "#2563EB" }} />
-          <span style={{ fontSize: 11, fontWeight: 800, color: "#2563EB", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>Interfaces</span>
+        <div style={{ background: "rgba(37,99,235,0.06)", padding: "9px 14px", borderBottom: "1px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", gap: 7 }}>
+          <Terminal size={12} style={{ color: "var(--isp-accent)" }} />
+          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--isp-accent)", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>Interfaces</span>
           <span style={{ fontSize: 10, color: "var(--isp-text-muted)", marginLeft: 4 }}>— each interface has its own IP and purpose</span>
         </div>
 
@@ -343,8 +343,8 @@ function RouterForm({
           {/* 1 — Main bridge */}
           <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(37,99,235,0.1)", borderBottom: "1px solid rgba(37,99,235,0.1)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3b82f6", flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#3b82f6" }}>Main Bridge</span>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--isp-accent)", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-accent)" }}>Main Bridge</span>
               <span style={{ fontSize: 9, fontWeight: 600, color: "#64748b", background: "rgba(100,116,139,0.12)", border: "1px solid rgba(100,116,139,0.2)", padding: "1px 5px", borderRadius: 3 }}>Normal Internet</span>
             </div>
             <input
@@ -584,11 +584,11 @@ function AdminRouterCard({
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
           {/* Interfaces panel */}
           <div style={{ padding: "12px 18px", borderBottom: "1px solid rgba(37,99,235,0.08)" }}>
-            <p style={{ margin: "0 0 10px", fontSize: 10, fontWeight: 800, color: "#2563EB", letterSpacing: "0.09em", textTransform: "uppercase" as const }}>Interfaces</p>
+            <p style={{ margin: "0 0 10px", fontSize: 10, fontWeight: 800, color: "var(--isp-accent)", letterSpacing: "0.09em", textTransform: "uppercase" as const }}>Interfaces</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
               {[
                 {
-                  color: "#3b82f6", label: "Main Bridge", role: "Normal internet · all LAN clients",
+                  color: "var(--isp-accent)", label: "Main Bridge", role: "Normal internet · all LAN clients",
                   value: router.main_bridge_interface || "bridge",
                   ip: null,
                 },
@@ -777,7 +777,7 @@ export default function RouterAPIConfig() {
           </div>
           {!showAddForm && !editingRouter && (
             <button onClick={() => setShowAddForm(true)}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9, background: "rgba(37,99,235,0.12)", border: "1px solid rgba(37,99,235,0.35)", color: "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
               <Plus size={14} /> Add Router
             </button>
           )}
@@ -787,10 +787,10 @@ export default function RouterAPIConfig() {
         <NetworkTabs active="router-api-config" />
 
         {/* Security notice */}
-        <div style={{ background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.15)", borderRadius: 10, padding: "12px 16px" }}>
+        <div style={{ background: "rgba(37,99,235,0.05)", border: "1px solid var(--isp-accent-glow)", borderRadius: 10, padding: "12px 16px" }}>
           <div style={{ display: "flex", gap: 10 }}>
-            <Lock size={13} style={{ color: "#2563EB", flexShrink: 0, marginTop: 1 }} />
-            <div style={{ fontSize: 11, color: "#2563EB", lineHeight: 1.7 }}>
+            <Lock size={13} style={{ color: "var(--isp-accent)", flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: 11, color: "var(--isp-accent)", lineHeight: 1.7 }}>
               <strong>Security best practice:</strong> Create a dedicated MikroTik API user with PPP + Hotspot permissions only (not full admin).
               On RouterOS: <code style={{ fontFamily: "monospace", background: "rgba(37,99,235,0.1)", padding: "1px 4px", borderRadius: 3 }}>
                 /user add name=api-user group=read password=StrongPass
@@ -846,7 +846,7 @@ export default function RouterAPIConfig() {
                   Add your first MikroTik router to enable automatic PPPoE and Hotspot account management.
                 </p>
                 <button onClick={() => setShowAddForm(true)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 20px", borderRadius: 9, background: "rgba(37,99,235,0.12)", border: "1px solid rgba(37,99,235,0.35)", color: "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 20px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
                   <Plus size={14} /> Add First Router
                 </button>
               </div>

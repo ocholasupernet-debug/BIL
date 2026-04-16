@@ -28,8 +28,8 @@ export function NetworkTabs({ active }: { active: string }) {
               padding: "0.45rem 1rem", borderRadius: 8, fontSize: "0.8125rem", fontWeight: 600,
               whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
               background: isActive ? "rgba(37,99,235,0.1)" : "var(--isp-section)",
-              border: isActive ? "1.5px solid rgba(37,99,235,0.35)" : "1px solid var(--isp-border)",
-              color: isActive ? "#2563EB" : "var(--isp-text-muted)",
+              border: isActive ? "1.5px solid var(--isp-accent-border)" : "1px solid var(--isp-border)",
+              color: isActive ? "var(--isp-accent)" : "var(--isp-text-muted)",
               boxShadow: isActive ? "0 0 0 3px rgba(37,99,235,0.07)" : "none",
             }}>
               <t.icon style={{ width: 13, height: 13 }} />

@@ -131,7 +131,7 @@ function SelfInstallTab() {
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button
             onClick={handleCopy}
-            style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 0.875rem", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: copied ? "rgba(34,197,94,0.12)" : "rgba(37,99,235,0.10)", border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "rgba(37,99,235,0.25)"}`, color: copied ? "#22c55e" : "#2563EB", transition: "all 0.2s" }}
+            style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 0.875rem", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: copied ? "rgba(34,197,94,0.12)" : "rgba(37,99,235,0.10)", border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "rgba(37,99,235,0.25)"}`, color: copied ? "#22c55e" : "var(--isp-accent)", transition: "all 0.2s" }}
           >
             {copied ? <Check style={{ width: 14, height: 14 }} /> : <Copy style={{ width: 14, height: 14 }} />}
             {copied ? "Copied!" : "Copy Script"}
@@ -240,8 +240,8 @@ function SelfInstallTab() {
           {/* Tips callout */}
           <div style={{ borderRadius: 10, background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", padding: "0.875rem 1.125rem" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
-              <Settings2 style={{ width: 14, height: 14, color: "#2563EB" }} />
-              <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#2563EB" }}>Before you run the script</span>
+              <Settings2 style={{ width: 14, height: 14, color: "var(--isp-accent)" }} />
+              <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-accent)" }}>Before you run the script</span>
             </div>
             <ul style={{ margin: 0, paddingLeft: "1.125rem", fontSize: "0.775rem", color: "var(--isp-text-muted)", lineHeight: 1.75, display: "flex", flexDirection: "column", gap: "0.1rem" }}>
               <li>Ensure the router is online and reachable via Winbox or WebFig.</li>
@@ -256,13 +256,13 @@ function SelfInstallTab() {
       {/* Step-by-step installation guide */}
       <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
         <div style={{ padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <ClipboardList style={{ width: 15, height: 15, color: "#2563EB" }} />
+          <ClipboardList style={{ width: 15, height: 15, color: "var(--isp-accent)" }} />
           <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "var(--isp-text)" }}>Installation Guide</span>
         </div>
         <div style={{ padding: "1rem 1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
           {STEPS.map((step) => (
             <div key={step.n} style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(37,99,235,0.12)", border: "1.5px solid rgba(37,99,235,0.35)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "0.75rem", fontWeight: 800, color: "#2563EB" }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "1.5px solid var(--isp-accent-border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "0.75rem", fontWeight: 800, color: "var(--isp-accent)" }}>
                 {step.n}
               </div>
               <div>
@@ -278,7 +278,7 @@ function SelfInstallTab() {
       <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
         <div style={{ padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <RefreshCw style={{ width: 14, height: 14, color: "#2563EB" }} />
+            <RefreshCw style={{ width: 14, height: 14, color: "var(--isp-accent)" }} />
             <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "var(--isp-text)" }}>Recent Installations</span>
           </div>
           <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>Last 5 self-install events</span>
@@ -297,7 +297,7 @@ function SelfInstallTab() {
                 <tr key={i} style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
                   <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.customer}</td>
                   <td style={{ padding: "0.625rem 1.25rem" }}>
-                    <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.5rem", borderRadius: 4, background: "rgba(37,99,235,0.08)", color: "#3b82f6", fontWeight: 700, fontFamily: "monospace" }}>{r.router}</span>
+                    <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.5rem", borderRadius: 4, background: "rgba(37,99,235,0.08)", color: "var(--isp-accent)", fontWeight: 700, fontFamily: "monospace" }}>{r.router}</span>
                   </td>
                   <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: "0.75rem" }}>{r.ip}</td>
                   <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>{r.time}</td>
@@ -311,7 +311,7 @@ function SelfInstallTab() {
                     </span>
                   </td>
                   <td style={{ padding: "0.625rem 1.25rem" }}>
-                    <button style={{ fontSize: "0.7rem", color: "#2563EB", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontFamily: "inherit" }}>
+                    <button style={{ fontSize: "0.7rem", color: "var(--isp-accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontFamily: "inherit" }}>
                       Re-run →
                     </button>
                   </td>
@@ -350,7 +350,7 @@ export default function Network() {
             Network — <span style={{ textTransform: "capitalize" }}>{tabs.find(t => t.id === activeTab)?.name ?? activeTab}</span>
           </h1>
           {activeTab === "routers" && (
-            <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "#2563EB", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "var(--isp-accent)", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <Plus style={{ width: 15, height: 15 }} /> Add Router
             </button>
           )}
@@ -374,8 +374,8 @@ export default function Network() {
                   padding: "0.45rem 1rem", borderRadius: 8, fontSize: "0.8125rem", fontWeight: 600,
                   whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
                   background: active ? "rgba(37,99,235,0.1)" : "var(--isp-section)",
-                  border: active ? "1px solid rgba(37,99,235,0.3)" : "1px solid var(--isp-border)",
-                  color: active ? "#2563EB" : "var(--isp-text-muted)",
+                  border: active ? "1px solid var(--isp-accent-border)" : "1px solid var(--isp-border)",
+                  color: active ? "var(--isp-accent)" : "var(--isp-text-muted)",
                 }}
               >
                 <t.icon style={{ width: 14, height: 14 }} />
@@ -414,7 +414,7 @@ export default function Network() {
                       </td>
                       <td style={{ padding: "0.75rem 1.25rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: "0.75rem" }}>{r.uptime}</td>
                       <td style={{ padding: "0.75rem 1.25rem" }}>
-                        <button style={{ fontSize: "0.75rem", color: r.online ? "#2563EB" : "var(--isp-text-sub)", background: "none", border: "none", cursor: r.online ? "pointer" : "not-allowed", fontWeight: 600, fontFamily: "inherit" }}>
+                        <button style={{ fontSize: "0.75rem", color: r.online ? "var(--isp-accent)" : "var(--isp-text-sub)", background: "none", border: "none", cursor: r.online ? "pointer" : "not-allowed", fontWeight: 600, fontFamily: "inherit" }}>
                           Connect
                         </button>
                       </td>

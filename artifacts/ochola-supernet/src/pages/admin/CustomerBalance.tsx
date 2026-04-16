@@ -95,9 +95,9 @@ function BalanceActionModal({ customer, onClose }: { customer: CustomerWallet; o
             {(["topup", "deduct", "transfer"] as const).map(a => (
               <button key={a} onClick={() => setAction(a)} style={{
                 flex: 1, padding: "0.5rem", borderRadius: 8, fontWeight: 700, fontSize: "0.78rem", cursor: "pointer", fontFamily: "inherit",
-                background: action === a ? "rgba(37,99,235,0.15)" : "rgba(255,255,255,0.04)",
-                border: `1px solid ${action === a ? "rgba(37,99,235,0.4)" : "var(--isp-border)"}`,
-                color: action === a ? "#2563EB" : "var(--isp-text-muted)",
+                background: action === a ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${action === a ? "var(--isp-accent-border)" : "var(--isp-border)"}`,
+                color: action === a ? "var(--isp-accent)" : "var(--isp-text-muted)",
               }}>
                 {a === "topup" ? <><Plus size={12} /> Add</> : a === "deduct" ? <><Minus size={12} /> Deduct</> : <><ArrowRightLeft size={12} /> Transfer</>}
               </button>
@@ -131,7 +131,7 @@ function BalanceActionModal({ customer, onClose }: { customer: CustomerWallet; o
           ) : (
             <button onClick={handleSubmit} disabled={saving || !amount} style={{
               padding: "0.65rem", borderRadius: 10, fontWeight: 700, fontSize: "0.85rem", cursor: saving || !amount ? "not-allowed" : "pointer", fontFamily: "inherit",
-              background: saving || !amount ? "rgba(37,99,235,0.3)" : "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white",
+              background: saving || !amount ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white",
               display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
             }}>
               {saving ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Wallet size={14} />}
@@ -168,7 +168,7 @@ export default function CustomerBalance() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
           {[
-            { label: "Total Wallet Balance", value: `KES ${totalBalance.toLocaleString()}`, icon: <Wallet size={18} />, color: "#2563EB" },
+            { label: "Total Wallet Balance", value: `KES ${totalBalance.toLocaleString()}`, icon: <Wallet size={18} />, color: "var(--isp-accent)" },
             { label: "Active Wallets", value: customers.filter(c => c.balance > 0).length, icon: <Users size={18} />, color: "#34d399" },
             { label: "Total Spent (All Time)", value: `KES ${totalSpent.toLocaleString()}`, icon: <TrendingUp size={18} />, color: "#a78bfa" },
           ].map((s, i) => (
@@ -200,7 +200,7 @@ export default function CustomerBalance() {
                 <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.75rem 1rem", borderBottom: "1px solid var(--isp-border)", cursor: "pointer" }}
                   onClick={() => setSelectedCustomer(c)}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(37,99,235,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.72rem", color: "#2563EB" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(37,99,235,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.72rem", color: "var(--isp-accent)" }}>
                       {c.name.split(" ").map(w => w[0]).join("").toUpperCase()}
                     </div>
                     <div>

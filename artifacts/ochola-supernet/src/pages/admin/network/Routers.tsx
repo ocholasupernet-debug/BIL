@@ -558,7 +558,7 @@ export default function Routers() {
           <button
             onClick={() => { setSearch(searchInput); setPage(1); }}
             style={{
-              padding: "0.45rem 1.25rem", background: "#2563EB", border: "none",
+              padding: "0.45rem 1.25rem", background: "var(--isp-accent)", border: "none",
               borderRadius: 7, color: "#fff", fontWeight: 700, fontSize: "0.8rem",
               cursor: "pointer", fontFamily: "inherit",
             }}
@@ -593,8 +593,8 @@ export default function Routers() {
             style={{
               display: "flex", alignItems: "center", gap: "0.3rem", padding: "0.45rem 0.85rem",
               background: pingingAll ? "rgba(37,99,235,0.08)" : "rgba(37,99,235,0.05)",
-              border: "1px solid rgba(37,99,235,0.3)",
-              borderRadius: 7, color: "#2563EB", fontSize: "0.78rem",
+              border: "1px solid var(--isp-accent-border)",
+              borderRadius: 7, color: "var(--isp-accent)", fontSize: "0.78rem",
               cursor: pingingAll ? "default" : "pointer", fontFamily: "inherit", fontWeight: 600,
             }}
           >
@@ -657,7 +657,7 @@ export default function Routers() {
                     <tr>
                       <td colSpan={15} style={{ padding: "3rem 1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.875rem" }}>
                         {search ? `No routers matching "${search}"` : (
-                          <>No routers added yet. <a href="/admin/network/add-router" style={{ color: "#2563EB", textDecoration: "underline", fontWeight: 600 }}>Add your first router</a></>
+                          <>No routers added yet. <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", textDecoration: "underline", fontWeight: 600 }}>Add your first router</a></>
                         )}
                       </td>
                     </tr>
@@ -684,7 +684,7 @@ export default function Routers() {
                         </td>
 
                         {/* IP ADDRESS */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "#2563EB", fontSize: "0.75rem" }}>
+                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>
                           {r.host || r.ip_address || "—"}
                         </td>
 
@@ -760,7 +760,7 @@ export default function Routers() {
                         {/* STATE */}
                         <td style={{ padding: "0.65rem 0.75rem", verticalAlign: "top" }}>
                           {pingSt === "pinging"
-                            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.72rem", color: "#3b82f6" }}>
+                            ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.72rem", color: "var(--isp-accent)" }}>
                                 <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
                               </span>
                             : pingSt === "online"
@@ -848,7 +848,7 @@ export default function Routers() {
                               label="Edit"
                               icon={<Edit2 size={10} />}
                               onClick={() => openEdit(r)}
-                              color="#60a5fa" bg="rgba(37,99,235,0.15)" border="rgba(37,99,235,0.35)"
+                              color="#60a5fa" bg="var(--isp-accent-glow)" border="var(--isp-accent-border)"
                             />
                             {delSt === "confirm" ? (
                               <>
@@ -866,7 +866,7 @@ export default function Routers() {
                               />
                             )}
                             {pingSt === "pinging" ? (
-                              <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "#2563EB" }}>
+                              <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "var(--isp-accent)" }}>
                                 <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
                               </span>
                             ) : pingSt === "online" ? (
@@ -888,9 +888,9 @@ export default function Routers() {
                                 label={online ? "Ping" : "Re-check"}
                                 icon={online ? <Radio size={10} /> : <RefreshCw size={10} />}
                                 onClick={() => pingOneRouter(r)}
-                                color={online ? "#2563EB" : "#f87171"}
+                                color={online ? "var(--isp-accent)" : "#f87171"}
                                 bg={online ? "rgba(37,99,235,0.08)" : "rgba(248,113,113,0.12)"}
-                                border={online ? "rgba(37,99,235,0.3)" : "rgba(248,113,113,0.35)"}
+                                border={online ? "var(--isp-accent-border)" : "rgba(248,113,113,0.35)"}
                               />
                             )}
                             <Btn
@@ -947,9 +947,9 @@ export default function Routers() {
                   onClick={() => setPage(p)}
                   style={{
                     padding: "0.3rem 0.65rem", borderRadius: 5, fontSize: "0.72rem", fontFamily: "inherit", cursor: "pointer",
-                    border: `1px solid ${p === currentPage ? "#2563EB" : "var(--isp-border)"}`,
-                    background: p === currentPage ? "rgba(37,99,235,0.15)" : "var(--isp-section)",
-                    color: p === currentPage ? "#2563EB" : "var(--isp-text-muted)",
+                    border: `1px solid ${p === currentPage ? "var(--isp-accent)" : "var(--isp-border)"}`,
+                    background: p === currentPage ? "var(--isp-accent-glow)" : "var(--isp-section)",
+                    color: p === currentPage ? "var(--isp-accent)" : "var(--isp-text-muted)",
                     fontWeight: p === currentPage ? 700 : 400,
                   }}
                 >
@@ -1083,7 +1083,7 @@ export default function Routers() {
                 const validCoords = hasCoords && !isNaN(Number(lat)) && !isNaN(Number(lng));
                 return (
                   <div key={field}>
-                    <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border)", paddingBottom: "0.375rem", marginBottom: "0.5rem" }}>
+                    <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border)", paddingBottom: "0.375rem", marginBottom: "0.5rem" }}>
                       Location & Coverage
                     </div>
                     <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.3rem", textTransform: "uppercase" as const, letterSpacing: "0.04em" }}>
@@ -1162,7 +1162,7 @@ export default function Routers() {
               <button
                 onClick={saveEdit}
                 disabled={editSaving}
-                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.45rem 1.25rem", borderRadius: 6, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontSize: "0.8rem", fontWeight: 700, cursor: editSaving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: editSaving ? 0.7 : 1 }}
+                style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.45rem 1.25rem", borderRadius: 6, background: "var(--isp-accent)", border: "none", color: "white", fontSize: "0.8rem", fontWeight: 700, cursor: editSaving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: editSaving ? 0.7 : 1 }}
               >
                 {editSaving ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={12} />}
                 {editSaving ? "Saving…" : "Save"}
@@ -1293,7 +1293,7 @@ export default function Routers() {
                       {Object.entries(autoFixResults.vpnClients).map(([name, ip]) => (
                         <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                           <span style={{ fontSize: "0.75rem", color: "var(--isp-text)" }}>{name}</span>
-                          <code style={{ fontSize: "0.73rem", color: "#2563EB", fontFamily: "monospace" }}>{ip}</code>
+                          <code style={{ fontSize: "0.73rem", color: "var(--isp-accent)", fontFamily: "monospace" }}>{ip}</code>
                         </div>
                       ))}
                     </div>
@@ -1323,7 +1323,7 @@ export default function Routers() {
                           <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
                             Matched <strong style={{ color: "#a78bfa" }}>{r.clientName}</strong>
                             {" → "}
-                            <code style={{ fontFamily: "monospace", color: "#2563EB" }}>{r.newIp}</code>
+                            <code style={{ fontFamily: "monospace", color: "var(--isp-accent)" }}>{r.newIp}</code>
                             {r.pingOk
                               ? <span style={{ color: "#4ade80" }}> · Online ✓ {r.identity && `(${r.identity})`} {r.uptime && `· up ${formatUptime(r.uptime)}`}</span>
                               : r.pingError ? <PingErrorHint error={r.pingError} /> : null}

@@ -229,7 +229,7 @@ export default function PPPoE() {
         {/* ── Header banner ── */}
         <div style={{
           background: "linear-gradient(135deg,rgba(37,99,235,0.18),rgba(2,132,199,0.22))",
-          border: "1px solid rgba(37,99,235,0.35)",
+          border: "1px solid var(--isp-accent-border)",
           borderRadius: 12, padding: "0.875rem 1.25rem",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem",
         }}>
@@ -343,8 +343,8 @@ export default function PPPoE() {
                 display: "inline-flex", alignItems: "center", gap: "0.35rem",
                 padding: "0.4rem 0.875rem", borderRadius: 7,
                 background: "rgba(37,99,235,0.1)",
-                border: "1px solid rgba(37,99,235,0.35)",
-                color: "#3b82f6", fontWeight: 700, fontSize: "0.75rem",
+                border: "1px solid var(--isp-accent-border)",
+                color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.75rem",
                 cursor: router ? "pointer" : "not-allowed",
                 fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap",
                 opacity: !router ? 0.5 : 1,
@@ -394,7 +394,7 @@ export default function PPPoE() {
                       display: "flex", alignItems: "center", gap: "0.5rem",
                       padding: "0.45rem 0.875rem", borderRadius: 8, cursor: "pointer",
                       background: active ? "rgba(37,99,235,0.1)" : "transparent",
-                      border: `1px solid ${active ? "rgba(37,99,235,0.4)" : "transparent"}`,
+                      border: `1px solid ${active ? "var(--isp-accent-border)" : "transparent"}`,
                       transition: "all 0.14s",
                     }}
                   >
@@ -404,11 +404,11 @@ export default function PPPoE() {
                       value={opt.id}
                       checked={active}
                       onChange={() => { setMode(opt.id); setIfaceMsg(null); }}
-                      style={{ accentColor: "#2563EB", width: 14, height: 14, cursor: "pointer" }}
+                      style={{ accentColor: "var(--isp-accent)", width: 14, height: 14, cursor: "pointer" }}
                     />
                     <span style={{
                       fontSize: "0.82rem", fontWeight: active ? 700 : 500,
-                      color: active ? "#2563EB" : "var(--isp-text)",
+                      color: active ? "var(--isp-accent)" : "var(--isp-text)",
                     }}>{opt.label}</span>
                   </label>
                 );
@@ -492,9 +492,9 @@ export default function PPPoE() {
                     style={{
                       padding: "0.25rem 0.75rem", borderRadius: 6, fontFamily: "inherit",
                       fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", transition: "all 0.14s",
-                      background: active ? "rgba(37,99,235,0.15)" : "var(--isp-inner-card)",
+                      background: active ? "var(--isp-accent-glow)" : "var(--isp-inner-card)",
                       border: `1px solid ${active ? "rgba(37,99,235,0.5)" : "var(--isp-border)"}`,
-                      color: active ? "#2563EB" : "var(--isp-text-muted)",
+                      color: active ? "var(--isp-accent)" : "var(--isp-text-muted)",
                     }}
                   >
                     ROS {v}
@@ -592,7 +592,7 @@ export default function PPPoE() {
                   {loadingRouters ? "Loading routers…" : "Select a router above to generate commands"}
                 </p>
                 {!loadingRouters && routers.length === 0 && (
-                  <a href="/admin/network/add-router" style={{ color: "#2563EB", fontWeight: 600, fontSize: "0.8rem" }}>
+                  <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8rem" }}>
                     Add a router first →
                   </a>
                 )}

@@ -158,7 +158,7 @@ function classifyIface(name: string, type: string): IfaceKind {
 /* ── icon for interface type ── */
 function IfaceIcon({ name, type, running }: { name: string; type: string; running: boolean }) {
   const kind = classifyIface(name, type);
-  const color = running ? "#3b82f6" : "#475569";
+  const color = running ? "var(--isp-accent)" : "#475569";
   if (kind === "wlan") return <Wifi size={14} style={{ color }} />;
   if (kind === "bridge" || kind === "hotspot-bridge") return <Network size={14} style={{ color }} />;
   if (kind === "vpn-main" || kind === "vpn-proxy") return <Shield size={14} style={{ color: running ? "#818cf8" : "#475569" }} />;
@@ -181,7 +181,7 @@ function BridgeBadge({ bridge }: { bridge: string | null }) {
   const type = bridgeType(bridge);
   const cfg: Record<string, { bg: string; border: string; color: string; label: string }> = {
     hotspot:   { bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.3)",   color: "#4ade80", label: "Hotspot Bridge"      },
-    pppoe:     { bg: "rgba(37,99,235,0.12)",   border: "rgba(37,99,235,0.3)",   color: "#3b82f6", label: "PPPoE Bridge"        },
+    pppoe:     { bg: "var(--isp-accent-glow)",   border: "var(--isp-accent-border)",   color: "var(--isp-accent)", label: "PPPoE Bridge"        },
     "vpn-main":  { bg: "rgba(129,140,248,0.12)", border: "rgba(129,140,248,0.3)", color: "#818cf8", label: "VPN Remote Access"   },
     "vpn-proxy": { bg: "rgba(251,146,60,0.12)",  border: "rgba(251,146,60,0.3)",  color: "#fb923c", label: "Proxy · ocholasuperproxy" },
     unknown:   { bg: "rgba(251,191,36,0.10)",  border: "rgba(251,191,36,0.3)",  color: "#fbbf24", label: "Unknown Bridge"      },
@@ -202,7 +202,7 @@ function BridgeBadge({ bridge }: { bridge: string | null }) {
 function IfaceKindBadge({ name, type }: { name: string; type: string }) {
   const kind = classifyIface(name, type);
   const cfg: Record<IfaceKind, { color: string; label: string } | null> = {
-    "bridge":        { color: "#3b82f6", label: "Bridge" },
+    "bridge":        { color: "var(--isp-accent)", label: "Bridge" },
     "hotspot-bridge":{ color: "#4ade80", label: "Hotspot Bridge" },
     "vpn-main":      { color: "#818cf8", label: "VPN · Remote Access" },
     "vpn-proxy":     { color: "#fb923c", label: "ocholasuperproxy · Backup" },
@@ -568,7 +568,7 @@ export default function BridgePorts() {
               display: "flex", alignItems: "center", gap: "0.75rem",
               padding: "1rem 1.25rem", borderRadius: 10,
               background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)",
-              color: "#3b82f6", fontSize: "0.875rem",
+              color: "var(--isp-accent)", fontSize: "0.875rem",
             }}>
               <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
               Connecting to router and reading interfaces…
@@ -616,13 +616,13 @@ export default function BridgePorts() {
               {/* Two-bridge architecture info banner */}
               <div style={{
                 display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
-                background: "rgba(255,255,255,0.02)", border: "1px solid rgba(37,99,235,0.15)",
+                background: "rgba(255,255,255,0.02)", border: "1px solid var(--isp-accent-glow)",
                 borderRadius: 10, padding: "12px 14px",
               }}>
                 {[
                   {
-                    color: "#3b82f6",
-                    icon: <Network size={12} style={{ color: "#3b82f6", flexShrink: 0 }} />,
+                    color: "var(--isp-accent)",
+                    icon: <Network size={12} style={{ color: "var(--isp-accent)", flexShrink: 0 }} />,
                     label: "bridge",
                     pill: "Normal Internet",
                     pillColor: "#64748b",
@@ -661,7 +661,7 @@ export default function BridgePorts() {
                 borderRadius: 10, padding: "0.875rem 1.25rem",
                 fontSize: "0.82rem", color: "#67e8f9", lineHeight: 1.7,
               }}>
-                <Shield size={13} style={{ display: "inline", marginRight: "0.4rem", color: "#3b82f6" }} />
+                <Shield size={13} style={{ display: "inline", marginRight: "0.4rem", color: "var(--isp-accent)" }} />
                 Select which ports to assign to <strong>{selectedBridge || "hotspot-bridge"}</strong>. WAN (<strong>ether1</strong>) is always excluded.
                 After you click <strong>Finish</strong>, to re-add your customers please do this in order:{" "}
                 <strong>Step 1</strong>: Networks → pools and sync by router &nbsp;
@@ -679,9 +679,9 @@ export default function BridgePorts() {
                       onChange={e => setSelectedBridge(e.target.value)}
                       style={{
                         background: "var(--isp-input-bg,rgba(255,255,255,0.05))",
-                        border: "1px solid rgba(37,99,235,0.35)",
+                        border: "1px solid var(--isp-accent-border)",
                         borderRadius: 7, padding: "0.4rem 2rem 0.4rem 0.75rem",
-                        color: "#2563EB", fontSize: "0.82rem", fontWeight: 700,
+                        color: "var(--isp-accent)", fontSize: "0.82rem", fontWeight: 700,
                         fontFamily: "monospace", outline: "none", cursor: "pointer", appearance: "none",
                       }}
                     >
@@ -694,7 +694,7 @@ export default function BridgePorts() {
                         );
                       })}
                     </select>
-                    <ChevronDown size={12} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#2563EB", pointerEvents: "none" }} />
+                    <ChevronDown size={12} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "var(--isp-accent)", pointerEvents: "none" }} />
                   </div>
                 </div>
               )}
@@ -729,8 +729,8 @@ export default function BridgePorts() {
                       {/* Checkbox */}
                       <div style={{
                         width: 20, height: 20, borderRadius: 5, flexShrink: 0,
-                        background: inBridge ? "#2563EB" : "rgba(255,255,255,0.06)",
-                        border: `2px solid ${inBridge ? "#2563EB" : "rgba(255,255,255,0.18)"}`,
+                        background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
+                        border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.18)"}`,
                         display: "flex", alignItems: "center", justifyContent: "center",
                         transition: "all 0.15s",
                       }}>
@@ -870,8 +870,8 @@ export default function BridgePorts() {
           </h1>
           {activeRouter && (
             <span style={{
-              background: "rgba(37,99,235,0.12)", border: "1px solid rgba(37,99,235,0.3)",
-              color: "#2563EB", borderRadius: 6, padding: "0.2rem 0.625rem",
+              background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)",
+              color: "var(--isp-accent)", borderRadius: 6, padding: "0.2rem 0.625rem",
               fontFamily: "monospace", fontSize: "0.8rem", fontWeight: 700,
             }}>
               {activeRouter.name}{effectiveHost(activeRouter) ? ` — ${effectiveHost(activeRouter)}` : " — IP needed"}
@@ -932,9 +932,9 @@ export default function BridgePorts() {
                   value={selectedBridge}
                   onChange={e => setSelectedBridge(e.target.value)}
                   style={{
-                    background: "var(--isp-input-bg,rgba(255,255,255,0.05))", border: "1px solid rgba(37,99,235,0.35)",
+                    background: "var(--isp-input-bg,rgba(255,255,255,0.05))", border: "1px solid var(--isp-accent-border)",
                     borderRadius: 7, padding: "0.4rem 2rem 0.4rem 0.75rem",
-                    color: "#2563EB", fontSize: "0.8rem", fontWeight: 700,
+                    color: "var(--isp-accent)", fontSize: "0.8rem", fontWeight: 700,
                     cursor: "pointer", fontFamily: "monospace", outline: "none", appearance: "none",
                   }}
                 >
@@ -942,7 +942,7 @@ export default function BridgePorts() {
                     <option key={b.name} value={b.name}>{b.name}</option>
                   ))}
                 </select>
-                <ChevronDown size={12} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#2563EB", pointerEvents: "none" }} />
+                <ChevronDown size={12} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "var(--isp-accent)", pointerEvents: "none" }} />
               </div>
             </div>
           )}
@@ -979,7 +979,7 @@ export default function BridgePorts() {
         )}
 
         {loading && (
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", justifyContent: "center", padding: "2.5rem 1rem", color: "#3b82f6", fontSize: "0.875rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", justifyContent: "center", padding: "2.5rem 1rem", color: "var(--isp-accent)", fontSize: "0.875rem" }}>
             <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} />
             Connecting to router and reading interfaces…
           </div>
@@ -1016,8 +1016,8 @@ export default function BridgePorts() {
                       disabled={isBridgeType}
                       style={{
                         width: 20, height: 20, borderRadius: 5, flexShrink: 0,
-                        background: inBridge ? "#2563EB" : "rgba(255,255,255,0.06)",
-                        border: `2px solid ${inBridge ? "#2563EB" : "rgba(255,255,255,0.2)"}`,
+                        background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
+                        border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.2)"}`,
                         display: "flex", alignItems: "center", justifyContent: "center",
                         cursor: isBridgeType ? "not-allowed" : "pointer", transition: "all 0.15s",
                       }}
@@ -1056,12 +1056,12 @@ export default function BridgePorts() {
               style={{
                 alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: "0.5rem",
                 padding: "0.65rem 1.875rem", borderRadius: 9,
-                background: applying ? "rgba(37,99,235,0.15)" : "linear-gradient(135deg,#2563EB,#0284c7)",
+                background: applying ? "var(--isp-accent-glow)" : "var(--isp-accent)",
                 border: "none", color: applying ? "#67e8f9" : "white",
                 fontWeight: 700, fontSize: "0.9rem",
                 cursor: applying || !selectedBridge ? "not-allowed" : "pointer",
                 fontFamily: "inherit",
-                boxShadow: applying ? "none" : "0 4px 14px rgba(37,99,235,0.35)",
+                boxShadow: applying ? "none" : "0 4px 14px var(--isp-accent-border)",
               }}
             >
               {applying

@@ -161,7 +161,7 @@ function RouterErrorActions({
         <AlertTriangle size={13} style={{ color: "#f87171", flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 700, color: "#f87171", flex: 1 }}>{errLabel}</span>
 
-        <button onClick={handleFix} disabled={fixing || rebooting} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 7, background: "rgba(37,99,235,0.15)", border: "1px solid rgba(37,99,235,0.4)", color: "#3b82f6", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+        <button onClick={handleFix} disabled={fixing || rebooting} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 7, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
           {fixing ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Fixing…</> : <><Wrench size={11} /> Auto-fix</>}
         </button>
 
@@ -178,7 +178,7 @@ function RouterErrorActions({
       {(fixing || fixLog.length > 0) && (
         <div style={{ marginTop: 8, background: "#040810", borderRadius: 7, padding: "6px 10px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.8, maxHeight: 120, overflow: "auto" }}>
           {(fixing && fixLog.length === 0 ? ["▶ Connecting…"] : fixLog).map((l, i) => (
-            <div key={i} style={{ color: l.startsWith("✅") ? "#4ade80" : l.startsWith("✓") ? "#a3e635" : l.startsWith("▶") ? "#3b82f6" : l.startsWith("❌") ? "#f87171" : "#64748b" }}>{l}</div>
+            <div key={i} style={{ color: l.startsWith("✅") ? "#4ade80" : l.startsWith("✓") ? "#a3e635" : l.startsWith("▶") ? "var(--isp-accent)" : l.startsWith("❌") ? "#f87171" : "#64748b" }}>{l}</div>
           ))}
         </div>
       )}
@@ -214,7 +214,7 @@ function Badge({ label, color }: { label: string; color: string }) {
   const map: Record<string, { bg: string; text: string; border: string }> = {
     green:  { bg: "rgba(74,222,128,0.12)", text: "#4ade80", border: "rgba(74,222,128,0.3)" },
     red:    { bg: "rgba(248,113,113,0.12)", text: "#f87171", border: "rgba(248,113,113,0.3)" },
-    cyan:   { bg: "rgba(37,99,235,0.12)",  text: "#2563EB", border: "rgba(37,99,235,0.3)" },
+    cyan:   { bg: "var(--isp-accent-glow)",  text: "var(--isp-accent)", border: "var(--isp-accent-border)" },
     amber:  { bg: "rgba(251,191,36,0.12)", text: "#fbbf24", border: "rgba(251,191,36,0.3)" },
     violet: { bg: "rgba(167,139,250,0.12)",text: "#a78bfa", border: "rgba(167,139,250,0.3)" },
   };
@@ -259,7 +259,7 @@ function AddSecretModal({
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Plus size={16} style={{ color: "#2563EB" }} />
+            <Plus size={16} style={{ color: "var(--isp-accent)" }} />
             <span style={{ fontWeight: 700, fontSize: 15, color: "var(--isp-text)" }}>Add PPP User</span>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 4 }}><X size={16} /></button>
@@ -285,7 +285,7 @@ function AddSecretModal({
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--isp-text-muted)", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-          <button onClick={handleSave} disabled={saving} style={{ padding: "8px 18px", borderRadius: 8, background: "rgba(37,99,235,0.15)", border: "1px solid rgba(37,99,235,0.35)", color: "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={handleSave} disabled={saving} style={{ padding: "8px 18px", borderRadius: 8, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
             {saving ? "Adding…" : "Add User"}
           </button>
@@ -485,7 +485,7 @@ export default function NetworkPPP() {
           {tab === "secrets" && rid && (
             <button
               onClick={() => setShowAdd(true)}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9, background: "rgba(37,99,235,0.12)", border: "1px solid rgba(37,99,235,0.35)", color: "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
             >
               <Plus size={14} /> Add PPP User
             </button>
@@ -501,7 +501,7 @@ export default function NetworkPPP() {
             <select
               value={routerId ?? ""}
               onChange={e => { setRouterId(Number(e.target.value)); setSearch(""); }}
-              style={{ ...sel, borderColor: "rgba(37,99,235,0.3)", color: "#2563EB" }}
+              style={{ ...sel, borderColor: "var(--isp-accent-border)", color: "var(--isp-accent)" }}
             >
               <option value="" disabled>— Select router —</option>
               {routers.map(r => <option key={r.id} value={r.id}>{r.name}{r.host ? ` (${r.host})` : ""}</option>)}
@@ -526,14 +526,14 @@ export default function NetworkPPP() {
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "8px 16px", border: "none", background: "none",
                 fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer",
-                color: tab === t.id ? "#2563EB" : "var(--isp-text-muted)",
-                borderBottom: tab === t.id ? "2px solid #2563EB" : "2px solid transparent",
+                color: tab === t.id ? "var(--isp-accent)" : "var(--isp-text-muted)",
+                borderBottom: tab === t.id ? "2px solid var(--isp-accent)" : "2px solid transparent",
                 marginBottom: -1,
               }}
             >
               <t.icon size={14} /> {t.label}
               {t.id === "active" && sessions.length > 0 && (
-                <span style={{ background: "rgba(37,99,235,0.15)", color: "#2563EB", borderRadius: 99, padding: "1px 7px", fontSize: 10, fontWeight: 800 }}>{sessions.length}</span>
+                <span style={{ background: "var(--isp-accent-glow)", color: "var(--isp-accent)", borderRadius: 99, padding: "1px 7px", fontSize: 10, fontWeight: 800 }}>{sessions.length}</span>
               )}
             </button>
           ))}
@@ -662,7 +662,7 @@ export default function NetworkPPP() {
                     ) : filteredSessions.map(s => (
                       <tr key={s.id}>
                         <td style={TD}><span style={{ fontWeight: 700, fontFamily: "monospace", fontSize: 13 }}>{s.name}</span></td>
-                        <td style={TD}><span style={{ fontFamily: "monospace", fontSize: 12, color: "#2563EB" }}>{s.address || "—"}</span></td>
+                        <td style={TD}><span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--isp-accent)" }}>{s.address || "—"}</span></td>
                         <td style={TD}><div style={{ display: "flex", alignItems: "center", gap: 5 }}><Clock size={12} style={{ color: "var(--isp-text-muted)" }} />{s.uptime || "—"}</div></td>
                         <td style={TD}><Badge label={s.service.toUpperCase()} color="cyan" /></td>
                         <td style={TD}><div style={{ display: "flex", alignItems: "center", gap: 4 }}><Zap size={12} style={{ color: "#4ade80" }} />{fmtBytes(s.bytesIn)}</div></td>

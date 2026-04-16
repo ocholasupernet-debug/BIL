@@ -364,7 +364,7 @@ export default function PPPoESettings() {
             <button onClick={() => setShowPreview(true)} style={{ ...actBtnBase, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
               <Eye size={14} /> Preview Login Page
             </button>
-            <button onClick={handleSave} style={{ ...actBtnBase, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB" }}>
+            <button onClick={handleSave} style={{ ...actBtnBase, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB" }}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
             </button>
@@ -373,7 +373,7 @@ export default function PPPoESettings() {
 
         {/* General Settings */}
         <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#2563EB" }} /> General Settings</div>
+          <div style={SECTION_HEAD}><Info size={16} style={{ color: "var(--isp-accent)" }} /> General Settings</div>
           <div style={SECTION_BODY}>
             <FieldRow label="PPPoE Page Title" hint="Your ISP name — displayed as the main heading on the PPPoE login page.">
               <input value={s.ispName} onChange={e => upd("ispName", e.target.value)} style={INPUT} />
@@ -506,7 +506,7 @@ export default function PPPoESettings() {
           <button onClick={() => setShowPreview(true)} style={{ ...{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" }, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
             <Eye size={14} /> Preview Login Page
           </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
             {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
           </button>
