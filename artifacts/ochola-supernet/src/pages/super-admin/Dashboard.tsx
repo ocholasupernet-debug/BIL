@@ -143,7 +143,7 @@ export default function SuperAdminDashboard() {
         {/* ── Stat Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16, marginBottom: 28 }}>
           <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="var(--isp-accent)" icon={Users}    loading={loadingAdmins}    />
-          <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="#8b5cf6" icon={Router}   loading={loadingRouters}   />
+          <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="var(--isp-accent)" icon={Router}   loading={loadingRouters}   />
           <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe}    loading={loadingCustomers} />
           <StatCard C={C} label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
         </div>
@@ -186,7 +186,7 @@ export default function SuperAdminDashboard() {
                       >
                         <td style={{ padding: "12px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,var(--isp-accent),var(--isp-accent))", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                               <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "white" }}>{(a.name || a.username || "?")[0].toUpperCase()}</span>
                             </div>
                             <span style={{ fontWeight: 700, color: C.text }}>{a.name || a.username}</span>
@@ -200,7 +200,7 @@ export default function SuperAdminDashboard() {
                           }
                         </td>
                         <td style={{ padding: "12px 16px" }}>
-                          <span style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
+                          <span style={{ background: "var(--isp-accent-glow)", color: "var(--isp-accent)", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
                             {a.role || "admin"}
                           </span>
                         </td>

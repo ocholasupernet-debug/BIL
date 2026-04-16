@@ -968,7 +968,7 @@ function SystemTab() {
           </Field>
           <Field label="Accent Color" hint="Primary color used for buttons, links, and highlights">
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {["var(--isp-accent)","var(--isp-accent)","#8b5cf6","#ec4899","#10b981","#f59e0b","#ef4444"].map(color => (
+              {["var(--isp-accent)","#8b5cf6","#ec4899","#10b981","#f59e0b","#ef4444"].map(color => (
                 <button key={color} style={{ width: 32, height: 32, borderRadius: 8, background: color, border: color === "var(--isp-accent)" ? "2px solid white" : "2px solid transparent", cursor: "pointer", transition: "transform 0.1s" }} />
               ))}
             </div>

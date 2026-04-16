@@ -57,7 +57,7 @@ export default function SuperAdminBackups() {
             { label: "Total Backups", value: backups.length, color: "var(--isp-accent)", icon: Database },
             { label: "Completed", value: backups.filter(b => b.status === "completed").length, color: "#4ade80", icon: CheckCircle2 },
             { label: "Failed", value: backups.filter(b => b.status === "failed").length, color: "#f87171", icon: AlertTriangle },
-            { label: "Total Size", value: `${totalSize.toFixed(1)} MB`, color: "#8b5cf6", icon: HardDrive },
+            { label: "Total Size", value: `${totalSize.toFixed(1)} MB`, color: "var(--isp-accent)", icon: HardDrive },
           ].map(s => (
             <div key={s.label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 18px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
@@ -74,7 +74,7 @@ export default function SuperAdminBackups() {
           <Clock size={16} color={C.accent} />
           <div>
             <p style={{ fontWeight: 700, color: "white", margin: 0, fontSize: "0.85rem" }}>Automatic Schedule</p>
-            <p style={{ fontSize: "0.72rem", color: C.sub, margin: "2px 0 0" }}>Daily at <strong style={{ color: C.accent }}>02:00 EAT</strong> · Cron: <code style={{ fontFamily: "monospace", color: "#c4b5fd" }}>0 2 * * *</code> · Storage: Local + S3 · Retention: 30 days</p>
+            <p style={{ fontSize: "0.72rem", color: C.sub, margin: "2px 0 0" }}>Daily at <strong style={{ color: C.accent }}>02:00 EAT</strong> · Cron: <code style={{ fontFamily: "monospace", color: "var(--isp-accent)" }}>0 2 * * *</code> · Storage: Local + S3 · Retention: 30 days</p>
           </div>
         </div>
 
@@ -98,7 +98,7 @@ export default function SuperAdminBackups() {
                     </div>
                   </td>
                   <td style={{ padding: "13px 16px" }}>
-                    <span style={{ padding: "2px 8px", borderRadius: 8, fontSize: "0.67rem", fontWeight: 700, background: b.type === "auto" ? "var(--isp-accent-glow)" : "rgba(139,92,246,0.1)", color: b.type === "auto" ? "var(--isp-accent)" : "#c4b5fd" }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 8, fontSize: "0.67rem", fontWeight: 700, background: b.type === "auto" ? "var(--isp-accent-glow)" : "rgba(139,92,246,0.1)", color: b.type === "auto" ? "var(--isp-accent)" : "var(--isp-accent)" }}>
                       {b.type}
                     </span>
                   </td>

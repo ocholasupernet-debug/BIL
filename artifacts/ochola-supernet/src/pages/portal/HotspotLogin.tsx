@@ -196,32 +196,24 @@ export default function HotspotLogin() {
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes breathe { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.05); opacity: 0.8; } }
-        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-        @keyframes glow-pulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 
         .hp-root {
           min-height: 100vh;
           font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-          background: #0f0f1a;
+          background: var(--isp-bg);
           color: #fff;
           overflow-x: hidden;
           position: relative;
         }
 
-        .hp-bg-orb {
-          position: fixed;
-          border-radius: 50%;
-          filter: blur(80px);
-          pointer-events: none;
-          animation: breathe 8s ease-in-out infinite;
-        }
+        .hp-bg-orb { display: none; }
 
         .hp-header {
           position: sticky; top: 0; z-index: 50;
           display: flex; align-items: center; justify-content: space-between;
           padding: 0 20px; height: 60px;
-          background: rgba(15,15,26,0.6);
+          background: var(--isp-card);
           backdrop-filter: blur(24px);
           border-bottom: 1px solid rgba(255,255,255,0.05);
         }
@@ -229,7 +221,7 @@ export default function HotspotLogin() {
         .hp-logo { display: flex; align-items: center; gap: 12px; }
         .hp-logo-icon {
           width: 40px; height: 40px; border-radius: 12px;
-          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
+          background: var(--isp-accent);
           display: flex; align-items: center; justify-content: center;
           box-shadow: 0 4px 16px var(--isp-accent-border);
         }
@@ -267,7 +259,7 @@ export default function HotspotLogin() {
           border: 1.5px solid var(--isp-accent-border);
           display: flex; align-items: center; justify-content: center;
           position: relative; z-index: 2;
-          animation: float 5s ease-in-out infinite, glow-pulse 3s ease-in-out infinite;
+          animation: float 5s ease-in-out infinite;
         }
 
         .hp-title {
@@ -300,9 +292,8 @@ export default function HotspotLogin() {
           background: transparent; color: rgba(255,255,255,0.35);
         }
         .hp-tab.active {
-          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
+          background: var(--isp-accent);
           color: #fff;
-          box-shadow: 0 4px 20px var(--isp-accent-border);
         }
         .hp-tab:not(.active):hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); }
 
@@ -439,7 +430,7 @@ export default function HotspotLogin() {
           color: #fff; box-shadow: 0 4px 24px rgba(22,163,74,0.35);
         }
         .hp-btn-primary {
-          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
+          background: var(--isp-accent);
           color: #fff; box-shadow: 0 4px 24px var(--isp-accent-border);
         }
         .hp-btn-voucher {
@@ -522,7 +513,7 @@ export default function HotspotLogin() {
       <div className="hp-root">
         {/* Ambient background orbs */}
         <div className="hp-bg-orb" style={{ width: 400, height: 400, top: -100, left: -100, background: "var(--isp-accent-glow)" }} />
-        <div className="hp-bg-orb" style={{ width: 350, height: 350, bottom: -80, right: -80, background: "rgba(139,92,246,0.08)", animationDelay: "4s" }} />
+        <div className="hp-bg-orb" style={{ width: 350, height: 350, bottom: -80, right: -80, background: "var(--isp-accent-glow)", animationDelay: "4s" }} />
         <div className="hp-bg-orb" style={{ width: 250, height: 250, top: "40%", left: "60%", background: "rgba(236,72,153,0.06)", animationDelay: "2s" }} />
 
         {/* Header */}
@@ -548,7 +539,7 @@ export default function HotspotLogin() {
           <div className="hp-hero">
             <div className="hp-wifi-wrap">
               <div className="hp-wifi-box">
-                <Wifi size={36} color="#a5b4fc" strokeWidth={2} />
+                <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
               </div>
             </div>
             <h1 className="hp-title">Get Connected</h1>
@@ -601,7 +592,7 @@ export default function HotspotLogin() {
                     ) : (
                       <>
                         <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "2px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-                          <Loader2 size={28} color="#818cf8" style={{ animation: "spin 1.5s linear infinite" }} />
+                          <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1.5s linear infinite" }} />
                         </div>
                         <h3>Waiting for Payment</h3>
                         <p>An STK push has been sent to <strong style={{ color: "#fff" }}>{phone}</strong></p>
@@ -786,7 +777,7 @@ export default function HotspotLogin() {
               <div className="hp-glass">
                 <div className="hp-glass-header">
                   <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
-                    <User size={16} color="#818cf8" />
+                    <User size={16} color="var(--isp-accent)" />
                   </div>
                   <div>
                     <div className="hp-glass-title">Member Login</div>

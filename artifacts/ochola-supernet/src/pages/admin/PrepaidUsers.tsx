@@ -37,7 +37,7 @@ function isExpired(d?: string | null) {
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
   hotspot: { label: "Hotspot", color: "var(--isp-accent)", bg: "var(--isp-accent-glow)",  icon: <Wifi    size={10} /> },
-  pppoe:   { label: "PPPoE",   color: "#a78bfa", bg: "rgba(139,92,246,0.12)", icon: <Network size={10} /> },
+  pppoe:   { label: "PPPoE",   color: "var(--isp-accent)", bg: "var(--isp-accent-glow)", icon: <Network size={10} /> },
   static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)", icon: <Globe   size={10} /> },
 };
 

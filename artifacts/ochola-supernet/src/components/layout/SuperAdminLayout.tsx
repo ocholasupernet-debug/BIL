@@ -20,7 +20,7 @@ const DARK = {
   card:    "rgba(255,255,255,0.04)",
   navActive:   "var(--isp-accent-glow)",
   navActiveBorder: "var(--isp-accent-glow)",
-  navActiveText:   "#a5b4fc",
+  navActiveText:   "var(--isp-accent)",
   navHover:    "rgba(255,255,255,0.05)",
   footerBg:    "#0c1120",
 };
@@ -288,7 +288,7 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
         <div style={{ padding: collapsed ? "12px 8px" : "16px 16px", borderTop: `1px solid ${S.border}`, flexShrink: 0, background: S.footerBg }}>
           {!collapsed && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "var(--isp-accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "white" }}>SA</span>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>

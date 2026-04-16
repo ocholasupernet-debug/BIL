@@ -327,7 +327,7 @@ export default function HotspotSettings() {
           <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={() => setShowPreview(true)}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
             >
               <Eye size={14} /> Preview Login Page
             </button>
@@ -433,10 +433,10 @@ export default function HotspotSettings() {
 
         {/* Color Scheme */}
         <div style={SECTION}>
-          <div style={SECTION_HEAD}><Palette size={16} style={{ color: "#a78bfa" }} /> Colour Scheme</div>
+          <div style={SECTION_HEAD}><Palette size={16} style={{ color: "var(--isp-accent)" }} /> Colour Scheme</div>
           <div style={{ padding: "24px" }}>
             <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20 }}>
-              Customise the colours of your hotspot login page. Click <strong style={{ color: "#a78bfa" }}>Preview Login Page</strong> above to see changes live before saving.
+              Customise the colours of your hotspot login page. Click <strong style={{ color: "var(--isp-accent)" }}>Preview Login Page</strong> above to see changes live before saving.
             </p>
             <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
               <ColorPicker label="Background (Top)"    value={s.colors.bgColor}     onChange={v => updColor("bgColor", v)} />
@@ -485,7 +485,7 @@ export default function HotspotSettings() {
 
         {/* Bottom save */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button onClick={() => setShowPreview(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <button onClick={() => setShowPreview(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Eye size={14} /> Preview Login Page
           </button>
           <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>

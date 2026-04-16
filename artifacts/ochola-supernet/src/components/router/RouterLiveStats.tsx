@@ -221,7 +221,7 @@ export function RouterLiveStats({
         {/* Upload */}
         <div style={card}>
           <div style={label}><ArrowUp size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />Upload</div>
-          <div style={{ ...bigNum, fontSize: "1.4rem", color: "#a78bfa" }}>{fmtBits(totalTx)}</div>
+          <div style={{ ...bigNum, fontSize: "1.4rem", color: "var(--isp-accent)" }}>{fmtBits(totalTx)}</div>
           <div style={sub}>total outbound traffic</div>
         </div>
       </div>
@@ -246,7 +246,7 @@ export function RouterLiveStats({
                   <span style={{ fontSize: "0.68rem", color: "#38bdf8", minWidth: 72, textAlign: "right", fontFamily: "monospace" }}>
                     ↓{fmtBits(t.rxBitsPerSecond)}
                   </span>
-                  <span style={{ fontSize: "0.68rem", color: "#a78bfa", minWidth: 72, textAlign: "right", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: "0.68rem", color: "var(--isp-accent)", minWidth: 72, textAlign: "right", fontFamily: "monospace" }}>
                     ↑{fmtBits(t.txBitsPerSecond)}
                   </span>
                 </div>
@@ -274,7 +274,7 @@ export function RouterLiveStats({
             ))}
             {data.pppoeUsers.map((u) => (
               <div key={u.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.35rem 0.6rem", background: "rgba(255,255,255,0.03)", borderRadius: 6, fontSize: "0.72rem" }}>
-                <span style={{ color: "#818cf8", fontSize: "0.6rem", fontWeight: 700, background: "rgba(129,140,248,0.12)", padding: "0.1rem 0.4rem", borderRadius: 4 }}>PPP</span>
+                <span style={{ color: "var(--isp-accent)", fontSize: "0.6rem", fontWeight: 700, background: "var(--isp-accent-glow)", padding: "0.1rem 0.4rem", borderRadius: 4 }}>PPP</span>
                 <span style={{ color: "#e2e8f0", fontWeight: 600, minWidth: 100 }}>{u.name}</span>
                 <span style={{ color: "#64748b", fontFamily: "monospace" }}>{u.address}</span>
                 <span style={{ color: "#94a3b8", marginLeft: "auto" }}>{u.uptime}</span>

@@ -138,7 +138,7 @@ function SelfInstallTab() {
           </button>
           <button
             onClick={handleDownload}
-            style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 0.875rem", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: "rgba(139,92,246,0.10)", border: "1px solid rgba(139,92,246,0.25)", color: "#a78bfa", transition: "all 0.2s" }}
+            style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 0.875rem", borderRadius: 8, fontSize: "0.8rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: "rgba(139,92,246,0.10)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", transition: "all 0.2s" }}
           >
             <Download style={{ width: 14, height: 14 }} />
             Download .rsc
@@ -355,7 +355,7 @@ export default function Network() {
             </button>
           )}
           {activeTab === "self-install" && (
-            <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.25)", borderRadius: 8, padding: "0.5rem 1rem", color: "#a78bfa", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", borderRadius: 8, padding: "0.5rem 1rem", color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <MonitorSmartphone style={{ width: 15, height: 15 }} /> New Device Setup
             </button>
           )}

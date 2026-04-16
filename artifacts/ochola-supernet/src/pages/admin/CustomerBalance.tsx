@@ -58,7 +58,7 @@ function fmtMoney(n: number) {
 const TYPE_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   topup:     { label: "Top Up",     color: "#34d399", icon: <ArrowDownRight size={12} /> },
   deduction: { label: "Deduction",  color: "#f87171", icon: <ArrowUpRight size={12} /> },
-  transfer:  { label: "Transfer",   color: "#a78bfa", icon: <ArrowRightLeft size={12} /> },
+  transfer:  { label: "Transfer",   color: "var(--isp-accent)", icon: <ArrowRightLeft size={12} /> },
   payment:   { label: "Payment",    color: "#f59e0b", icon: <DollarSign size={12} /> },
 };
 
@@ -170,7 +170,7 @@ export default function CustomerBalance() {
           {[
             { label: "Total Wallet Balance", value: `KES ${totalBalance.toLocaleString()}`, icon: <Wallet size={18} />, color: "var(--isp-accent)" },
             { label: "Active Wallets", value: customers.filter(c => c.balance > 0).length, icon: <Users size={18} />, color: "#34d399" },
-            { label: "Total Spent (All Time)", value: `KES ${totalSpent.toLocaleString()}`, icon: <TrendingUp size={18} />, color: "#a78bfa" },
+            { label: "Total Spent (All Time)", value: `KES ${totalSpent.toLocaleString()}`, icon: <TrendingUp size={18} />, color: "var(--isp-accent)" },
           ].map((s, i) => (
             <div key={i} style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "1rem 1.25rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>

@@ -58,7 +58,7 @@ export default function SuperAdminReports() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16, marginBottom: 28 }}>
           <Kpi label="Total ISPs" value={admins.length} sub={`${activeAdmins} active`} color="var(--isp-accent)" icon={Users} loading={la} />
           <Kpi label="Total Customers" value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe} loading={lc} />
-          <Kpi label="Total Routers" value={routers.length} sub={`${onlineRouters} online`} color="#8b5cf6" icon={Router} loading={lr} />
+          <Kpi label="Total Routers" value={routers.length} sub={`${onlineRouters} online`} color="var(--isp-accent)" icon={Router} loading={lr} />
           <Kpi label="Total Plans" value={plans.length} sub={`${hotspotPlans} hotspot`} color="#f59e0b" icon={BarChart3} loading={lp} />
           <Kpi label="PPPoE Customers" value={pppoeCustomers} sub="across all ISPs" color="#10b981" icon={TrendingUp} loading={lc} />
           <Kpi label="Hotspot Plans" value={hotspotPlans} sub={`of ${plans.length} total`} color="#f97316" icon={FileText} loading={lp} />
@@ -102,7 +102,7 @@ export default function SuperAdminReports() {
                         </div>
                       </td>
                       <td style={{ padding: "12px 18px" }}>
-                        <span style={{ fontWeight: 600, color: a.routers > 0 ? "#8b5cf6" : C.muted }}>{a.routers}</span>
+                        <span style={{ fontWeight: 600, color: a.routers > 0 ? "var(--isp-accent)" : C.muted }}>{a.routers}</span>
                       </td>
                       <td style={{ padding: "12px 18px" }}>
                         <span style={{
@@ -129,7 +129,7 @@ export default function SuperAdminReports() {
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {[
                   { label: "Hotspot", count: customers.filter(c => c.type === "hotspot" || !c.type).length, color: "var(--isp-accent)" },
-                  { label: "PPPoE", count: customers.filter(c => c.type === "pppoe").length, color: "#8b5cf6" },
+                  { label: "PPPoE", count: customers.filter(c => c.type === "pppoe").length, color: "var(--isp-accent)" },
                   { label: "Other", count: customers.filter(c => c.type && c.type !== "hotspot" && c.type !== "pppoe").length, color: "#f59e0b" },
                 ].map(t => (
                   <div key={t.label}>
@@ -152,7 +152,7 @@ export default function SuperAdminReports() {
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {[
                   { label: "Hotspot", count: plans.filter(p => p.type === "hotspot").length, color: "var(--isp-accent)" },
-                  { label: "PPPoE", count: plans.filter(p => p.type === "pppoe").length, color: "#8b5cf6" },
+                  { label: "PPPoE", count: plans.filter(p => p.type === "pppoe").length, color: "var(--isp-accent)" },
                   { label: "Data", count: plans.filter(p => p.type === "data").length, color: "#10b981" },
                   { label: "Other", count: plans.filter(p => !["hotspot","pppoe","data"].includes(p.type)).length, color: "#f59e0b" },
                 ].map(t => (

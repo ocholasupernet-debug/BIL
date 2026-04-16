@@ -161,7 +161,7 @@ function IfaceIcon({ name, type, running }: { name: string; type: string; runnin
   const color = running ? "var(--isp-accent)" : "#475569";
   if (kind === "wlan") return <Wifi size={14} style={{ color }} />;
   if (kind === "bridge" || kind === "hotspot-bridge") return <Network size={14} style={{ color }} />;
-  if (kind === "vpn-main" || kind === "vpn-proxy") return <Shield size={14} style={{ color: running ? "#818cf8" : "#475569" }} />;
+  if (kind === "vpn-main" || kind === "vpn-proxy") return <Shield size={14} style={{ color: running ? "var(--isp-accent)" : "#475569" }} />;
   return <Plug size={14} style={{ color }} />;
 }
 
@@ -182,7 +182,7 @@ function BridgeBadge({ bridge }: { bridge: string | null }) {
   const cfg: Record<string, { bg: string; border: string; color: string; label: string }> = {
     hotspot:   { bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.3)",   color: "#4ade80", label: "Hotspot Bridge"      },
     pppoe:     { bg: "var(--isp-accent-glow)",   border: "var(--isp-accent-border)",   color: "var(--isp-accent)", label: "PPPoE Bridge"        },
-    "vpn-main":  { bg: "rgba(129,140,248,0.12)", border: "rgba(129,140,248,0.3)", color: "#818cf8", label: "VPN Remote Access"   },
+    "vpn-main":  { bg: "var(--isp-accent-glow)", border: "var(--isp-accent-border)", color: "var(--isp-accent)", label: "VPN Remote Access"   },
     "vpn-proxy": { bg: "rgba(251,146,60,0.12)",  border: "rgba(251,146,60,0.3)",  color: "#fb923c", label: "Proxy · ocholasuperproxy" },
     unknown:   { bg: "rgba(251,191,36,0.10)",  border: "rgba(251,191,36,0.3)",  color: "#fbbf24", label: "Unknown Bridge"      },
   };
@@ -204,7 +204,7 @@ function IfaceKindBadge({ name, type }: { name: string; type: string }) {
   const cfg: Record<IfaceKind, { color: string; label: string } | null> = {
     "bridge":        { color: "var(--isp-accent)", label: "Bridge" },
     "hotspot-bridge":{ color: "#4ade80", label: "Hotspot Bridge" },
-    "vpn-main":      { color: "#818cf8", label: "VPN · Remote Access" },
+    "vpn-main":      { color: "var(--isp-accent)", label: "VPN · Remote Access" },
     "vpn-proxy":     { color: "#fb923c", label: "ocholasuperproxy · Backup" },
     "wlan":          { color: "#60a5fa", label: "Wireless" },
     "ether":         null,
@@ -967,7 +967,7 @@ export default function BridgePorts() {
 
         {/* VPN badge */}
         {connectedVia && (
-          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.375rem", fontSize: "0.72rem", color: "#a78bfa", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 6, padding: "0.3rem 0.75rem", alignSelf: "flex-start" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.375rem", fontSize: "0.72rem", color: "var(--isp-accent)", background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 6, padding: "0.3rem 0.75rem", alignSelf: "flex-start" }}>
             <Shield size={11} /> Connected via {connectedVia}
           </div>
         )}

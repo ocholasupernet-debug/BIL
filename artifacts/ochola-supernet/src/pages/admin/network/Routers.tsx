@@ -608,9 +608,9 @@ export default function Routers() {
             title="Auto-detect VPN IPs from OpenVPN ipp.txt and update router IP addresses"
             style={{
               display: "flex", alignItems: "center", gap: "0.3rem", padding: "0.45rem 0.85rem",
-              background: autoFixing ? "rgba(167,139,250,0.08)" : "rgba(167,139,250,0.05)",
-              border: "1px solid rgba(167,139,250,0.3)",
-              borderRadius: 7, color: "#a78bfa", fontSize: "0.78rem",
+              background: autoFixing ? "var(--isp-accent-glow)" : "rgba(167,139,250,0.05)",
+              border: "1px solid var(--isp-accent-border)",
+              borderRadius: 7, color: "var(--isp-accent)", fontSize: "0.78rem",
               cursor: autoFixing ? "default" : "pointer", fontFamily: "inherit", fontWeight: 600,
             }}
           >
@@ -1233,7 +1233,7 @@ export default function Routers() {
             {/* Header */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Wand2 size={16} style={{ color: "#a78bfa" }} />
+                <Wand2 size={16} style={{ color: "var(--isp-accent)" }} />
                 <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>Auto-fix VPN IPs — Results</span>
               </div>
               <button onClick={() => setAutoFixResults(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)", padding: 4 }}>
@@ -1272,7 +1272,7 @@ export default function Routers() {
                 <div style={{ display: "flex", gap: 8, marginBottom: "1rem", flexWrap: "wrap" }}>
                   {[
                     { label: "Routers found",  val: autoFixResults.summary.total,     color: "#94a3b8" },
-                    { label: "IPs updated",    val: autoFixResults.summary.updated,   color: "#a78bfa" },
+                    { label: "IPs updated",    val: autoFixResults.summary.updated,   color: "var(--isp-accent)" },
                     { label: "Now online",     val: autoFixResults.summary.online,    color: "#4ade80" },
                     { label: "No VPN match",   val: autoFixResults.summary.unmatched, color: "#f87171" },
                   ].map(p => (
@@ -1321,7 +1321,7 @@ export default function Routers() {
                         </p>
                         {r.matched ? (
                           <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
-                            Matched <strong style={{ color: "#a78bfa" }}>{r.clientName}</strong>
+                            Matched <strong style={{ color: "var(--isp-accent)" }}>{r.clientName}</strong>
                             {" → "}
                             <code style={{ fontFamily: "monospace", color: "var(--isp-accent)" }}>{r.newIp}</code>
                             {r.pingOk

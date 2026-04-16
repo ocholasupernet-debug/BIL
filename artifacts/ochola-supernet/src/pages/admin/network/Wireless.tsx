@@ -125,7 +125,7 @@ function WirelessCard({
     }
   };
 
-  const bandColor = iface.band?.includes("5") ? "#a78bfa" : "var(--isp-accent)";
+  const bandColor = iface.band?.includes("5") ? "var(--isp-accent)" : "var(--isp-accent)";
 
   return (
     <div style={{

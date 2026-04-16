@@ -269,7 +269,7 @@ function AddBindingModal({
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.625rem" }}>
             {(["user-mac", "bypass"] as const).map(t => {
               const active = btype === t;
-              const color = t === "user-mac" ? "var(--isp-accent)" : "#a78bfa";
+              const color = t === "user-mac" ? "var(--isp-accent)" : "var(--isp-accent)";
               return (
                 <button key={t} onClick={() => setBtype(t)}
                   style={{ padding: "0.75rem", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", border: active ? `1.5px solid ${color}` : "1.5px solid var(--isp-border)", background: active ? `${color}18` : "rgba(255,255,255,0.02)", textAlign: "left", transition: "all 0.14s" }}>
@@ -361,7 +361,7 @@ function SessionsTab() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.875rem" }}>
         {[
           { label: showActive ? "Active Sessions" : "Past Sessions", value: String(sessions.length), icon: <Activity size={18} />, color: "var(--isp-accent)" },
-          { label: "Unique Users", value: String(new Set(sessions.map(s => s.username)).size), icon: <Users size={18} />, color: "#a78bfa" },
+          { label: "Unique Users", value: String(new Set(sessions.map(s => s.username)).size), icon: <Users size={18} />, color: "var(--isp-accent)" },
           { label: "Data Upload", value: fmtBytes(totalIn), icon: <UploadCloud size={18} />, color: "#34d399" },
           { label: "Data Download", value: fmtBytes(totalOut), icon: <DownloadCloud size={18} />, color: "#f59e0b" },
         ].map(({ label, value, icon, color }) => (
@@ -630,7 +630,7 @@ export default function HotspotBinding() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.875rem" }}>
               {[
                 { label: "Total Bindings", value: String(totalBindings), icon: <Link2 size={18} />,    color: "var(--isp-accent)" },
-                { label: "User-MAC Locks", value: String(userMacCount),  icon: <Shield size={18} />,   color: "#a78bfa" },
+                { label: "User-MAC Locks", value: String(userMacCount),  icon: <Shield size={18} />,   color: "var(--isp-accent)" },
                 { label: "MAC Bypass",     value: String(bypassCount),   icon: <Monitor size={18} />,  color: "#34d399" },
                 { label: "Active",         value: String(activeCount),   icon: <Activity size={18} />, color: "#f59e0b" },
               ].map(({ label, value, icon, color }) => (
@@ -706,8 +706,8 @@ export default function HotspotBinding() {
                         {/* MAC */}
                         <td style={{ padding: "0.75rem 1.25rem" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                            <div style={{ width: 30, height: 30, borderRadius: 8, background: b.type === "bypass" ? "rgba(52,211,153,0.1)" : "rgba(167,139,250,0.1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              {b.type === "bypass" ? <Monitor size={13} style={{ color: "#34d399" }} /> : <Shield size={13} style={{ color: "#a78bfa" }} />}
+                            <div style={{ width: 30, height: 30, borderRadius: 8, background: b.type === "bypass" ? "rgba(52,211,153,0.1)" : "var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              {b.type === "bypass" ? <Monitor size={13} style={{ color: "#34d399" }} /> : <Shield size={13} style={{ color: "var(--isp-accent)" }} />}
                             </div>
                             <span style={{ fontFamily: "monospace", fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)", letterSpacing: "0.04em" }}>{b.mac}</span>
                           </div>
@@ -715,8 +715,8 @@ export default function HotspotBinding() {
                         {/* Type */}
                         <td style={{ padding: "0.75rem 1.25rem" }}>
                           <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", fontWeight: 700, padding: "0.2rem 0.6rem", borderRadius: 20,
-                            background: b.type === "bypass" ? "rgba(52,211,153,0.1)" : "rgba(167,139,250,0.1)",
-                            color: b.type === "bypass" ? "#34d399" : "#a78bfa" }}>
+                            background: b.type === "bypass" ? "rgba(52,211,153,0.1)" : "var(--isp-accent-glow)",
+                            color: b.type === "bypass" ? "#34d399" : "var(--isp-accent)" }}>
                             {b.type === "bypass" ? <Monitor size={10} /> : <Shield size={10} />}
                             {b.type === "bypass" ? "MAC Bypass" : "User-MAC Lock"}
                           </span>
@@ -760,7 +760,7 @@ export default function HotspotBinding() {
             {/* Info card */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
               {[
-                { icon: <Shield size={16} />, color: "#a78bfa", title: "User-MAC Lock", body: "Restricts a hotspot account to authenticate only from one specific device. Prevents credential sharing across multiple devices." },
+                { icon: <Shield size={16} />, color: "var(--isp-accent)", title: "User-MAC Lock", body: "Restricts a hotspot account to authenticate only from one specific device. Prevents credential sharing across multiple devices." },
                 { icon: <Monitor size={16} />, color: "#34d399", title: "MAC Bypass", body: "Whitelists a device so it can access the internet without going through the hotspot login page. Useful for internal devices, printers, cameras, etc." },
               ].map(({ icon, color, title, body }) => (
                 <div key={title} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid var(--isp-border-subtle)", borderRadius: 12, padding: "1rem 1.25rem", display: "flex", gap: "0.875rem" }}>

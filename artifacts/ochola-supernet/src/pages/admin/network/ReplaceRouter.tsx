@@ -293,7 +293,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
                 <CheckCircle2 size={14} style={{ color: "#22c55e" }} />
                 <span style={{ fontWeight: 700, fontSize: "0.83rem", color: "#22c55e" }}>Connected successfully</span>
                 {probe.connectedVia?.includes("VPN") && (
-                  <span style={{ fontSize: "0.67rem", fontWeight: 700, color: "#a78bfa", background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.3)", borderRadius: 4, padding: "0.1rem 0.45rem" }}>
+                  <span style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-accent)", background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", borderRadius: 4, padding: "0.1rem 0.45rem" }}>
                     via VPN
                   </span>
                 )}
@@ -494,7 +494,7 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                   padding: "0.55rem", borderRadius: 8, textDecoration: "none", fontWeight: 700,
-                  fontSize: "0.82rem", background: "linear-gradient(135deg,#4f46e5,#7c3aed)",
+                  fontSize: "0.82rem", background: "var(--isp-accent)",
                   color: "white", border: "none", cursor: "pointer",
                 }}
               >
@@ -545,7 +545,7 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
                 style={{
                   flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem",
                   padding: "0.5rem", borderRadius: 8, textDecoration: "none", fontWeight: 700,
-                  fontSize: "0.78rem", background: "linear-gradient(135deg,#4f46e5,#7c3aed)",
+                  fontSize: "0.78rem", background: "var(--isp-accent)",
                   color: "white", cursor: "pointer",
                 }}
                 title="Requires Winbox installed on your computer"

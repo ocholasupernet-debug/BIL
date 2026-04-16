@@ -200,7 +200,7 @@ export default function SuperAdminImpersonate() {
                       </td>
                       {/* Role */}
                       <td style={{ padding: "13px 16px" }}>
-                        <span style={{ background: "rgba(139,92,246,0.12)", color: "#c4b5fd", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
+                        <span style={{ background: "var(--isp-accent-glow)", color: "var(--isp-accent)", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
                           {a.role || "admin"}
                         </span>
                       </td>

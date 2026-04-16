@@ -34,7 +34,7 @@ function getAdminId(): number {
 /* ═══════════════════════ Visual config ═══════════════════════════ */
 const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string; Icon: React.ElementType }> = {
   router:    { label: "Router",      color: "#38bdf8", border: "rgba(56,189,248,0.3)",  bg: "rgba(56,189,248,0.08)",  Icon: Router   },
-  plan:      { label: "Plan",        color: "#a78bfa", border: "rgba(167,139,250,0.3)", bg: "rgba(167,139,250,0.08)", Icon: BookOpen },
+  plan:      { label: "Plan",        color: "var(--isp-accent)", border: "var(--isp-accent-border)", bg: "var(--isp-accent-glow)", Icon: BookOpen },
   customer:  { label: "Customer",    color: "#34d399", border: "rgba(52,211,153,0.3)",  bg: "rgba(52,211,153,0.08)",  Icon: Users    },
   provision: { label: "Provision",   color: "#fbbf24", border: "rgba(251,191,36,0.3)",  bg: "rgba(251,191,36,0.08)",  Icon: Zap      },
   system:    { label: "System",      color: "#94a3b8", border: "rgba(148,163,184,0.3)", bg: "rgba(148,163,184,0.08)", Icon: Settings },
@@ -47,7 +47,7 @@ const ACTION_CONFIG: Record<string, { Icon: React.ElementType; color: string }> 
   online:   { Icon: Wifi,       color: "#4ade80" },
   offline:  { Icon: WifiOff,    color: "#f87171" },
   payment:  { Icon: Zap,        color: "#fbbf24" },
-  provisioned: { Icon: Zap,     color: "#a78bfa" },
+  provisioned: { Icon: Zap,     color: "var(--isp-accent)" },
 };
 
 function getTypeConfig(type: string) {

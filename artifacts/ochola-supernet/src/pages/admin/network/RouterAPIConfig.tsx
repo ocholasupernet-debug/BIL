@@ -389,8 +389,8 @@ function RouterForm({
           {/* 3 — Main VPN (remote access) */}
           <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(37,99,235,0.1)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#818cf8", flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#818cf8" }}>VPN Remote Access IP</span>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--isp-accent)", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-accent)" }}>VPN Remote Access IP</span>
             </div>
             <input
               value={form.bridge_ip}
@@ -570,7 +570,7 @@ function AdminRouterCard({
           </button>
           <button onClick={() => onEdit(router)}
             title="Edit credentials"
-            style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
+            style={{ padding: "6px 10px", borderRadius: 7, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
             <Edit2 size={11} /> Edit
           </button>
           <button onClick={() => setExpanded(e => !e)}
@@ -598,7 +598,7 @@ function AdminRouterCard({
                   ip: null,
                 },
                 {
-                  color: "#818cf8", label: "VPN Remote Access", role: "Main OpenVPN — port 1194",
+                  color: "var(--isp-accent)", label: "VPN Remote Access", role: "Main OpenVPN — port 1194",
                   value: "ovpn-out1",
                   ip: router.bridge_ip || "—",
                 },
@@ -726,9 +726,9 @@ export default function RouterAPIConfig() {
           <NetworkTabs active="router-api-config" />
 
           {/* Access notice */}
-          <div style={{ background: "rgba(167,139,250,0.07)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 10, alignItems: "center" }}>
-            <Shield size={14} style={{ color: "#a78bfa", flexShrink: 0 }} />
-            <p style={{ margin: 0, fontSize: 12, color: "#a78bfa" }}>
+          <div style={{ background: "rgba(167,139,250,0.07)", border: "1px solid var(--isp-accent-glow)", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 10, alignItems: "center" }}>
+            <Shield size={14} style={{ color: "var(--isp-accent)", flexShrink: 0 }} />
+            <p style={{ margin: 0, fontSize: 12, color: "var(--isp-accent)" }}>
               <strong>Read-only view.</strong> Only SuperAdmins can edit router API credentials. Contact your platform administrator to update connection settings.
             </p>
           </div>
@@ -767,7 +767,7 @@ export default function RouterAPIConfig() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <h1 style={{ margin: 0, fontWeight: 800, fontSize: "1.4rem", color: "var(--isp-text)" }}>Router API Configuration</h1>
-              <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "rgba(167,139,250,0.12)", color: "#a78bfa", border: "1px solid rgba(167,139,250,0.3)" }}>
+              <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "var(--isp-accent-glow)", color: "var(--isp-accent)", border: "1px solid var(--isp-accent-border)" }}>
                 SuperAdmin
               </span>
             </div>
@@ -899,7 +899,7 @@ export default function RouterAPIConfig() {
         {/* How automatic ops work */}
         <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "18px 22px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <Terminal size={14} style={{ color: "#a78bfa" }} />
+            <Terminal size={14} style={{ color: "var(--isp-accent)" }} />
             <span style={{ fontWeight: 700, fontSize: 13, color: "var(--isp-text)" }}>How Automatic Operations Work</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 14 }}>

@@ -182,7 +182,7 @@ export default function Dashboard() {
 
   const userInsights = useMemo(() => [
     { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "var(--isp-accent)" },
-    { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "#8b5cf6" },
+    { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "var(--isp-accent)" },
     { label: "Static",  count: customers.filter(c => c.type === "static").length,  color: "var(--isp-green)" },
   ], [customers]);
 
@@ -248,12 +248,12 @@ export default function Dashboard() {
           <KpiCard label="Income Today" value={txLoading ? "…" : fmtKsh(incomeToday)} icon={<DollarSign size={20} />} />
           <KpiCard label="Income This Month" value={txLoading ? "…" : fmtKsh(incomeMonth)} icon={<TrendingUp size={20} />} accent="#16a34a" />
           <KpiCard label="Total Transactions" value={txLoading ? "…" : String(transactions.length)} icon={<CreditCard size={20} />} accent="#ea580c" />
-          <KpiCard label="Total Revenue" value={txLoading ? "…" : fmtKsh(transactions.filter(t => t.status === "completed").reduce((s, t) => s + t.amount, 0))} icon={<BarChart3 size={20} />} accent="#7c3aed" />
+          <KpiCard label="Total Revenue" value={txLoading ? "…" : fmtKsh(transactions.filter(t => t.status === "completed").reduce((s, t) => s + t.amount, 0))} icon={<BarChart3 size={20} />} accent="var(--isp-accent)" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
           <StatMiniCard label="Online Now" value="0" href="/admin/customers" dotColor="var(--isp-green)" />
-          <StatMiniCard label="Vouchers Left" value="0" href="/admin/vouchers" dotColor="#8b5cf6" />
+          <StatMiniCard label="Vouchers Left" value="0" href="/admin/vouchers" dotColor="var(--isp-accent)" />
           <StatMiniCard label="Support Tickets" value="0" href="/admin/support" dotColor="#0d9488" />
           <StatMiniCard label="Routers Online" value={routersLoading ? "0" : String(onlineRouters)} href="/admin/network" dotColor="#d97706" />
         </div>

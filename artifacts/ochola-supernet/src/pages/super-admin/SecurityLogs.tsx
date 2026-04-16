@@ -26,7 +26,7 @@ const LEVEL_STYLES: Record<LogLevel, { bg: string; color: string; icon: React.El
   success: { bg: "rgba(74,222,128,0.1)",  color: "#4ade80", icon: CheckCircle2  },
   warning: { bg: "rgba(251,191,36,0.1)",  color: "#fbbf24", icon: AlertTriangle },
   error:   { bg: "rgba(248,113,113,0.1)", color: "#f87171", icon: XCircle       },
-  info:    { bg: "var(--isp-accent-glow)",  color: "#a5b4fc", icon: Info          },
+  info:    { bg: "var(--isp-accent-glow)",  color: "var(--isp-accent)", icon: Info          },
 };
 
 export default function SuperAdminSecurityLogs() {
@@ -50,7 +50,7 @@ export default function SuperAdminSecurityLogs() {
     ["success", `Success (${counts.success})`, "#4ade80"],
     ["warning", `Warning (${counts.warning})`, "#fbbf24"],
     ["error",   `Error (${counts.error})`,     "#f87171"],
-    ["info",    `Info (${counts.info})`,        "#a5b4fc"],
+    ["info",    `Info (${counts.info})`,        "var(--isp-accent)"],
   ];
 
   return (

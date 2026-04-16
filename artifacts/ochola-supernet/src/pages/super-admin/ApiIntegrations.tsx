@@ -147,7 +147,7 @@ export default function SuperAdminApiIntegrations() {
               <tbody>
                 {WEBHOOKS.map(w => (
                   <tr key={w.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    <td style={{ padding: "13px 16px", fontFamily: "monospace", color: "#c4b5fd", fontSize: "0.75rem" }}>{w.event}</td>
+                    <td style={{ padding: "13px 16px", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>{w.event}</td>
                     <td style={{ padding: "13px 16px", fontFamily: "monospace", fontSize: "0.72rem", color: C.sub }}>{w.url}</td>
                     <td style={{ padding: "13px 16px", fontSize: "0.72rem", color: C.muted }}>{w.lastTriggered}</td>
                     <td style={{ padding: "13px 16px" }}>

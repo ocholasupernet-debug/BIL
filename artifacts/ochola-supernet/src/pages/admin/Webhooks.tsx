@@ -55,7 +55,7 @@ function gatewayLabel(g: string): { label: string; emoji: string; color: string 
     stripe:      { label: "Stripe",         emoji: "💳", color: "#635bff" },
     flutterwave: { label: "Flutterwave",    emoji: "🦋", color: "#f5a623" },
     generic:     { label: "Generic",        emoji: "🌐", color: "#64748b" },
-    direct_provision: { label: "Direct",   emoji: "⚡", color: "#a78bfa" },
+    direct_provision: { label: "Direct",   emoji: "⚡", color: "var(--isp-accent)" },
   };
   return m[g] ?? { label: g, emoji: "🔔", color: "#64748b" };
 }
@@ -366,7 +366,7 @@ iptables -A INPUT -p tcp --dport 8080 -j ACCEPT`} />
 
             {/* Step 2 — Environment variables */}
             <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "18px 20px" }}>
-              <StepHeader n={2} title="Set Environment Variables on VPS" color="#a78bfa" />
+              <StepHeader n={2} title="Set Environment Variables on VPS" color="var(--isp-accent)" />
               <p style={{ margin: "8px 0", fontSize: 12, color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
                 SSH into your VPS and set these variables. Restart the backend after each change.
               </p>
@@ -440,7 +440,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
 
             {/* Step 5 — Plan setup */}
             <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "18px 20px" }}>
-              <StepHeader n={5} title="Assign Routers to Plans" color="#a78bfa" />
+              <StepHeader n={5} title="Assign Routers to Plans" color="var(--isp-accent)" />
               <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
                 For auto-provisioning to work, each plan must have a router assigned to it.
                 Go to <strong style={{ color: "var(--isp-text)" }}>Packages/Plans → Edit Plan</strong> and select the router that handles that plan's connections.

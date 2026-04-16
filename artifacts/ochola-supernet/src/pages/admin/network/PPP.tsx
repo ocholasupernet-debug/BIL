@@ -216,7 +216,7 @@ function Badge({ label, color }: { label: string; color: string }) {
     red:    { bg: "rgba(248,113,113,0.12)", text: "#f87171", border: "rgba(248,113,113,0.3)" },
     cyan:   { bg: "var(--isp-accent-glow)",  text: "var(--isp-accent)", border: "var(--isp-accent-border)" },
     amber:  { bg: "rgba(251,191,36,0.12)", text: "#fbbf24", border: "rgba(251,191,36,0.3)" },
-    violet: { bg: "rgba(167,139,250,0.12)",text: "#a78bfa", border: "rgba(167,139,250,0.3)" },
+    violet: { bg: "var(--isp-accent-glow)",text: "var(--isp-accent)", border: "var(--isp-accent-border)" },
   };
   const c = map[color] ?? map.cyan;
   return (
@@ -323,7 +323,7 @@ function EditSecretModal({
       <div style={modal}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Edit2 size={15} style={{ color: "#a78bfa" }} />
+            <Edit2 size={15} style={{ color: "var(--isp-accent)" }} />
             <span style={{ fontWeight: 700, fontSize: 15, color: "var(--isp-text)" }}>Edit User — {secret.name}</span>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 4 }}><X size={16} /></button>
@@ -342,7 +342,7 @@ function EditSecretModal({
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--isp-text-muted)", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-          <button onClick={handleSave} disabled={saving} style={{ padding: "8px 18px", borderRadius: 8, background: "rgba(167,139,250,0.15)", border: "1px solid rgba(167,139,250,0.35)", color: "#a78bfa", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={handleSave} disabled={saving} style={{ padding: "8px 18px", borderRadius: 8, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
             {saving ? "Saving…" : "Save Changes"}
           </button>
@@ -616,7 +616,7 @@ export default function NetworkPPP() {
                             </button>
                             <button
                               onClick={() => setEditing(s)}
-                              style={{ padding: "4px 8px", borderRadius: 6, background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.3)", color: "#a78bfa", cursor: "pointer" }}
+                              style={{ padding: "4px 8px", borderRadius: 6, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", cursor: "pointer" }}
                             ><Edit2 size={12} /></button>
                             {deleting === s.id ? (
                               <div style={{ display: "flex", gap: 4 }}>
@@ -708,7 +708,7 @@ export default function NetworkPPP() {
                         <td style={TD}><span style={{ fontWeight: 700 }}>{p.name}</span></td>
                         <td style={TD}>{p.rateLimit ? <Badge label={p.rateLimit} color="cyan" /> : <span style={{ color: "var(--isp-text-muted)" }}>—</span>}</td>
                         <td style={TD}><span style={{ fontFamily: "monospace", fontSize: 12 }}>{p.localAddress || "—"}</span></td>
-                        <td style={TD}><span style={{ fontFamily: "monospace", fontSize: 12, color: "#a78bfa" }}>{p.remoteAddress || "—"}</span></td>
+                        <td style={TD}><span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--isp-accent)" }}>{p.remoteAddress || "—"}</span></td>
                         <td style={TD}>{p.sessionTimeout || "∞"}</td>
                         <td style={TD}>{p.idleTimeout || "∞"}</td>
                         <td style={TD}><span style={{ color: "var(--isp-text-muted)", fontSize: 12 }}>{p.comment || "—"}</span></td>

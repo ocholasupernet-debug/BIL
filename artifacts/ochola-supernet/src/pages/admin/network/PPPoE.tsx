@@ -421,7 +421,7 @@ export default function PPPoE() {
             <div style={{
               padding: "0.875rem 1.25rem",
               borderBottom: "1px solid var(--isp-border-subtle)",
-              background: "rgba(139,92,246,0.04)",
+              background: "var(--isp-accent-glow)",
               animation: "fadeIn 0.18s ease",
             }}>
               <p style={{
@@ -466,7 +466,7 @@ export default function PPPoE() {
               </div>
               <p style={{ margin: "0.5rem 0 0", fontSize: "0.73rem", color: "var(--isp-text-muted)" }}>
                 PPPoE runs on a VLAN on{" "}
-                <span style={{ color: "#a78bfa", fontWeight: 600 }}>
+                <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>
                   {baseBridge.trim() || "hotspot-bridge"}
                 </span>
               </p>

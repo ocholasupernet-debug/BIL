@@ -66,7 +66,7 @@ function fmtDay(key: string) {
   return `${d}/${m}`;
 }
 
-const PIE_COLORS = ["var(--isp-accent)", "#4ade80", "#f59e0b", "#f87171", "#a78bfa", "#fb923c", "#34d399"];
+const PIE_COLORS = ["var(--isp-accent)", "#4ade80", "#f59e0b", "#f87171", "var(--isp-accent)", "#fb923c", "#34d399"];
 
 /* ─── Comparison card ─── */
 function CompareCard({ title, current, previous, unit = "Ksh" }: {
