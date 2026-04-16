@@ -1202,7 +1202,7 @@ const GATEWAYS: GatewayDef[] = [
     ],
   },
   {
-    id: "bank_stk_push", name: "BankStkPush", category: "Bank Push", color: "#00529b", icon: Landmark,
+    id: "bank_stk_push", name: "BankStkPush", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
     fields: [
       { key: "bankAccountNumber", label: "Bank Account Number" },
       { key: "bankName", label: "Bank Name", type: "select", options: KENYAN_BANKS },
