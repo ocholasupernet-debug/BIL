@@ -71,9 +71,9 @@ function CopyBtn({ text, small }: { text: string; small?: boolean }) {
         padding: small ? "3px 8px" : "5px 10px",
         borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
         fontSize: small ? 11 : 12, fontWeight: 700, transition: "all 0.15s",
-        background: copied ? "rgba(74,222,128,0.12)" : "rgba(99,102,241,0.12)",
-        border: `1px solid ${copied ? "rgba(74,222,128,0.35)" : "rgba(99,102,241,0.35)"}`,
-        color: copied ? "#4ade80" : "#a5b4fc",
+        background: copied ? "rgba(74,222,128,0.12)" : "var(--isp-accent-glow)",
+        border: `1px solid ${copied ? "rgba(74,222,128,0.35)" : "var(--isp-accent-glow)"}`,
+        color: copied ? "#4ade80" : "var(--isp-accent)",
       }}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -104,7 +104,7 @@ function EndpointRow({
         <span style={{ padding: "2px 7px", borderRadius: 5, fontSize: 11, fontWeight: 800, background: methColor.bg, color: methColor.text, flexShrink: 0 }}>
           {method}
         </span>
-        <code style={{ fontSize: 12, color: "#a5b4fc", fontFamily: "monospace", flex: 1 }}>{path}</code>
+        <code style={{ fontSize: 12, color: "var(--isp-accent)", fontFamily: "monospace", flex: 1 }}>{path}</code>
         {badge && (
           <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 10, fontWeight: 700, background: "rgba(251,191,36,0.12)", color: "#fbbf24", border: "1px solid rgba(251,191,36,0.25)", flexShrink: 0 }}>
             {badge}
@@ -215,10 +215,10 @@ export default function Webhooks() {
         </div>
 
         {/* ── VPS URL banner ── */}
-        <div style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-          <Server size={14} style={{ color: "#a5b4fc", flexShrink: 0 }} />
+        <div style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+          <Server size={14} style={{ color: "var(--isp-accent)", flexShrink: 0 }} />
           <div style={{ flex: 1 }}>
-            <p style={{ margin: 0, fontSize: 12, color: "#a5b4fc" }}>
+            <p style={{ margin: 0, fontSize: 12, color: "var(--isp-accent)" }}>
               <strong>Your VPS base URL:</strong>
             </p>
             <code style={{ fontSize: 12, color: "#c7d2fe", fontFamily: "monospace" }}>{BASE}</code>

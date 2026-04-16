@@ -7,8 +7,8 @@ import {
   Loader2, Globe, RefreshCw, ToggleLeft, ToggleRight, X, Save,
 } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
-const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
 
 interface Admin {
   id: number; name: string; username: string; email: string | null;
@@ -25,8 +25,8 @@ const EMPTY: AdminForm = { name: "", username: "", email: "", phone: "", role: "
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ background: "#0f1629", border: "1px solid rgba(99,102,241,0.25)", borderRadius: 16, width: "100%", maxWidth: 520, maxHeight: "90vh", overflowY: "auto" }}>
-        <div style={{ padding: "18px 24px", borderBottom: "1px solid rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ background: "#0f1629", border: "1px solid var(--isp-accent-glow)", borderRadius: 16, width: "100%", maxWidth: 520, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontWeight: 700, color: "white", fontSize: "0.95rem" }}>{title}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}><X size={18} /></button>
         </div>
@@ -165,7 +165,7 @@ export default function SuperAdminAdmins() {
                     <tr key={a.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                       <td style={{ padding: "13px 16px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                             <span style={{ fontSize: "0.68rem", fontWeight: 800, color: "white" }}>{(a.name || a.username || "?")[0].toUpperCase()}</span>
                           </div>
                           <span style={{ fontWeight: 700, color: "white" }}>{a.name || "—"}</span>
@@ -193,7 +193,7 @@ export default function SuperAdminAdmins() {
                       </td>
                       <td style={{ padding: "13px 16px" }}>
                         <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => openEdit(a)} style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 7, padding: "5px 10px", color: C.accent, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: "0.72rem", fontWeight: 600 }}>
+                          <button onClick={() => openEdit(a)} style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 7, padding: "5px 10px", color: C.accent, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: "0.72rem", fontWeight: 600 }}>
                             <Edit2 size={11} /> Edit
                           </button>
                           <button onClick={() => setDeleting(a)} style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 7, padding: "5px 10px", color: "#f87171", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: "0.72rem", fontWeight: 600 }}>

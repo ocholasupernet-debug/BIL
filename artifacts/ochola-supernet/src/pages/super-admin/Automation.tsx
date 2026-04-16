@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Zap, Plus, Save, CheckCircle2, Play, Pause, Trash2, Clock, RefreshCw, Database, Mail, MessageSquare, X } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
-const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
 
 interface Task { id: number; name: string; trigger: string; action: string; schedule: string; enabled: boolean; lastRun: string; status: "success" | "failed" | "pending"; }
 
@@ -62,7 +62,7 @@ export default function SuperAdminAutomation() {
         {/* Summary */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
           {[
-            { label: "Total Tasks", value: tasks.length, color: "#6366f1" },
+            { label: "Total Tasks", value: tasks.length, color: "var(--isp-accent)" },
             { label: "Active", value: tasks.filter(t => t.enabled).length, color: "#4ade80" },
             { label: "Paused", value: tasks.filter(t => !t.enabled).length, color: "#fbbf24" },
             { label: "Last Failed", value: tasks.filter(t => t.status === "failed").length, color: "#f87171" },
@@ -79,14 +79,14 @@ export default function SuperAdminAutomation() {
           {tasks.map(task => {
             const Icon = getIcon(task.action);
             return (
-              <div key={task.id} style={{ background: C.card, border: `1px solid ${task.enabled ? "rgba(99,102,241,0.2)" : C.border}`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 38, height: 38, borderRadius: 9, background: task.enabled ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div key={task.id} style={{ background: C.card, border: `1px solid ${task.enabled ? "var(--isp-accent-glow)" : C.border}`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 9, background: task.enabled ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Icon size={16} color={task.enabled ? C.accent : C.muted} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontWeight: 700, color: task.enabled ? "white" : C.muted, fontSize: "0.85rem" }}>{task.name}</span>
-                    <span style={{ fontSize: "0.65rem", background: "rgba(99,102,241,0.1)", color: C.accent, padding: "1px 7px", borderRadius: 8, fontWeight: 700 }}>{task.trigger}</span>
+                    <span style={{ fontSize: "0.65rem", background: "var(--isp-accent-glow)", color: C.accent, padding: "1px 7px", borderRadius: 8, fontWeight: 700 }}>{task.trigger}</span>
                     <StatusChip status={task.status} />
                   </div>
                   <div style={{ display: "flex", gap: 16, marginTop: 4, flexWrap: "wrap" }}>
@@ -113,8 +113,8 @@ export default function SuperAdminAutomation() {
         {/* Add modal */}
         {showAdd && (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-            <div style={{ background: "#0f1629", border: "1px solid rgba(99,102,241,0.25)", borderRadius: 16, width: "100%", maxWidth: 480 }}>
-              <div style={{ padding: "18px 24px", borderBottom: "1px solid rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ background: "#0f1629", border: "1px solid var(--isp-accent-glow)", borderRadius: 16, width: "100%", maxWidth: 480 }}>
+              <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontWeight: 700, color: "white" }}>New Automation Task</span>
                 <button onClick={() => setShowAdd(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}><X size={18} /></button>
               </div>

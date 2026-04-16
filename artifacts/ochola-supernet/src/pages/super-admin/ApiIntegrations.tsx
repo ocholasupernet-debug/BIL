@@ -2,8 +2,8 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Plug, Plus, Copy, Trash2, CheckCircle2, Eye, EyeOff, RefreshCw, X, Globe, Zap, CheckCircle } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
-const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
 
 interface ApiKey { id: number; name: string; key: string; scope: string; createdAt: string; lastUsed: string; active: boolean; }
 
@@ -100,7 +100,7 @@ export default function SuperAdminApiIntegrations() {
                       </div>
                     </td>
                     <td style={{ padding: "13px 16px" }}>
-                      <span style={{ background: "rgba(99,102,241,0.1)", color: "#a5b4fc", padding: "2px 7px", borderRadius: 6, fontSize: "0.67rem", fontWeight: 700, fontFamily: "monospace" }}>{k.scope}</span>
+                      <span style={{ background: "var(--isp-accent-glow)", color: "#a5b4fc", padding: "2px 7px", borderRadius: 6, fontSize: "0.67rem", fontWeight: 700, fontFamily: "monospace" }}>{k.scope}</span>
                     </td>
                     <td style={{ padding: "13px 16px", fontSize: "0.72rem", color: C.muted }}>{k.lastUsed}</td>
                     <td style={{ padding: "13px 16px" }}>
@@ -164,8 +164,8 @@ export default function SuperAdminApiIntegrations() {
       {/* Add Key Modal */}
       {showAdd && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div style={{ background: "#0f1629", border: "1px solid rgba(99,102,241,0.25)", borderRadius: 16, width: "100%", maxWidth: 420 }}>
-            <div style={{ padding: "18px 24px", borderBottom: "1px solid rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ background: "#0f1629", border: "1px solid var(--isp-accent-glow)", borderRadius: 16, width: "100%", maxWidth: 420 }}>
+            <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontWeight: 700, color: "white" }}>Create API Key</span>
               <button onClick={() => setShowAdd(false)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer" }}><X size={18} /></button>
             </div>

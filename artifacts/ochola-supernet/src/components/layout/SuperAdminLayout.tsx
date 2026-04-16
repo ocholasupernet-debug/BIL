@@ -13,13 +13,13 @@ import {
 const DARK = {
   bg:      "#070b14",
   sidebar: "#0c1120",
-  border:  "rgba(99,102,241,0.15)",
-  accent:  "#6366f1",
+  border:  "var(--isp-accent-glow)",
+  accent:  "var(--isp-accent)",
   text:    "#e2e8f0",
   muted:   "#64748b",
   card:    "rgba(255,255,255,0.04)",
-  navActive:   "rgba(99,102,241,0.15)",
-  navActiveBorder: "rgba(99,102,241,0.25)",
+  navActive:   "var(--isp-accent-glow)",
+  navActiveBorder: "var(--isp-accent-glow)",
   navActiveText:   "#a5b4fc",
   navHover:    "rgba(255,255,255,0.05)",
   footerBg:    "#0c1120",
@@ -28,14 +28,14 @@ const DARK = {
 const LIGHT = {
   bg:      "#f1f5f9",
   sidebar: "#ffffff",
-  border:  "rgba(99,102,241,0.2)",
-  accent:  "#6366f1",
+  border:  "var(--isp-accent-glow)",
+  accent:  "var(--isp-accent)",
   text:    "#1e293b",
   muted:   "#64748b",
   card:    "rgba(0,0,0,0.03)",
-  navActive:   "rgba(99,102,241,0.1)",
-  navActiveBorder: "rgba(99,102,241,0.3)",
-  navActiveText:   "#6366f1",
+  navActive:   "var(--isp-accent-glow)",
+  navActiveBorder: "var(--isp-accent-border)",
+  navActiveText:   "var(--isp-accent)",
   navHover:    "rgba(0,0,0,0.04)",
   footerBg:    "#ffffff",
 };
@@ -288,7 +288,7 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
         <div style={{ padding: collapsed ? "12px 8px" : "16px 16px", borderTop: `1px solid ${S.border}`, flexShrink: 0, background: S.footerBg }}>
           {!collapsed && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "white" }}>SA</span>
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -350,18 +350,18 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
                 display: "flex", alignItems: "center", justifyContent: "center",
                 width: 34, height: 34, borderRadius: 8, cursor: "pointer",
                 border: `1px solid ${S.border}`,
-                background: isDark ? "rgba(255,255,255,0.06)" : "rgba(99,102,241,0.08)",
-                color: isDark ? "#94a3b8" : "#6366f1",
+                background: isDark ? "rgba(255,255,255,0.06)" : "var(--isp-accent-glow)",
+                color: isDark ? "#94a3b8" : "var(--isp-accent)",
                 transition: "all 0.2s",
                 flexShrink: 0,
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.background = isDark ? "rgba(255,255,255,0.12)" : "rgba(99,102,241,0.15)";
-                e.currentTarget.style.color = isDark ? "#e2e8f0" : "#6366f1";
+                e.currentTarget.style.background = isDark ? "rgba(255,255,255,0.12)" : "var(--isp-accent-glow)";
+                e.currentTarget.style.color = isDark ? "#e2e8f0" : "var(--isp-accent)";
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.background = isDark ? "rgba(255,255,255,0.06)" : "rgba(99,102,241,0.08)";
-                e.currentTarget.style.color = isDark ? "#94a3b8" : "#6366f1";
+                e.currentTarget.style.background = isDark ? "rgba(255,255,255,0.06)" : "var(--isp-accent-glow)";
+                e.currentTarget.style.color = isDark ? "#94a3b8" : "var(--isp-accent)";
               }}
             >
               {isDark ? <Sun size={15} /> : <Moon size={15} />}

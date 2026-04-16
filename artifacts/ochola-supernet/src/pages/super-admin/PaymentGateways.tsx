@@ -2,12 +2,12 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { CreditCard, Save, CheckCircle2, Eye, EyeOff, ChevronDown, ChevronUp } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
-const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={() => onChange(!on)} style={{ width: 42, height: 22, borderRadius: 11, background: on ? "#6366f1" : "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", position: "relative", padding: 0, flexShrink: 0 }}>
+    <button onClick={() => onChange(!on)} style={{ width: 42, height: 22, borderRadius: 11, background: on ? "var(--isp-accent)" : "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", position: "relative", padding: 0, flexShrink: 0 }}>
       <span style={{ position: "absolute", top: 3, left: on ? 22 : 3, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
     </button>
   );
@@ -103,7 +103,7 @@ export default function SuperAdminPaymentGateways() {
           const cfg = configs[gw.id] ?? {};
           const open = expanded === gw.id;
           return (
-            <div key={gw.id} style={{ background: C.card, border: `1px solid ${cfg.enabled ? "rgba(99,102,241,0.3)" : C.border}`, borderRadius: 14, marginBottom: 14, overflow: "hidden" }}>
+            <div key={gw.id} style={{ background: C.card, border: `1px solid ${cfg.enabled ? "var(--isp-accent-border)" : C.border}`, borderRadius: 14, marginBottom: 14, overflow: "hidden" }}>
               <div
                 style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
                 onClick={() => setExpanded(open ? "" : gw.id)}

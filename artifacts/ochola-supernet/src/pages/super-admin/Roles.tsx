@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { ShieldCheck, Check, X, Save, CheckCircle2 } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 const ROLES = ["Super Admin", "ISP Admin", "Sub Admin", "Reseller", "Support"];
 
@@ -55,7 +55,7 @@ export default function SuperAdminRoles() {
         <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
           {ROLES.map(r => (
             <div key={r} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: r === "Super Admin" ? "#6366f1" : r === "ISP Admin" ? "#8b5cf6" : r === "Sub Admin" ? "var(--isp-accent)" : r === "Reseller" ? "#f59e0b" : "#64748b" }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: r === "Super Admin" ? "var(--isp-accent)" : r === "ISP Admin" ? "#8b5cf6" : r === "Sub Admin" ? "var(--isp-accent)" : r === "Reseller" ? "#f59e0b" : "#64748b" }} />
               <span style={{ fontSize: "0.72rem", color: C.sub, fontWeight: 600 }}>{r}</span>
             </div>
           ))}
@@ -79,7 +79,7 @@ export default function SuperAdminRoles() {
               {PERMISSIONS.map(({ category, perms }) => (
                 <React.Fragment key={category}>
                   <tr>
-                    <td colSpan={ROLES.length + 1} style={{ padding: "10px 20px 6px", background: "rgba(99,102,241,0.06)", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+                    <td colSpan={ROLES.length + 1} style={{ padding: "10px 20px 6px", background: "var(--isp-accent-glow)", borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
                       <span style={{ fontSize: "0.65rem", fontWeight: 800, color: C.accent, textTransform: "uppercase", letterSpacing: "0.08em" }}>{category}</span>
                     </td>
                   </tr>
@@ -96,13 +96,13 @@ export default function SuperAdminRoles() {
                               title={locked ? "Super Admin has full access" : undefined}
                               style={{
                                 width: 26, height: 26, borderRadius: 6, border: "none", cursor: locked ? "not-allowed" : "pointer",
-                                background: has ? "rgba(99,102,241,0.2)" : "rgba(255,255,255,0.04)",
+                                background: has ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.04)",
                                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                                 transition: "all 0.15s", opacity: locked ? 0.7 : 1,
                               }}
                             >
                               {has
-                                ? <Check size={12} color="#a5b4fc" strokeWidth={3} />
+                                ? <Check size={12} color="var(--isp-accent)" strokeWidth={3} />
                                 : <X size={10} color="#64748b" strokeWidth={2.5} />
                               }
                             </button>

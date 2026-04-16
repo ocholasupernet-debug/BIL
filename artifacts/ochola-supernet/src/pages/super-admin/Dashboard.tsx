@@ -11,21 +11,21 @@ import {
 /* ── Theme tokens for page content ──────────────────────────── */
 const DARK_C = {
   card:   "rgba(255,255,255,0.04)",
-  border: "rgba(99,102,241,0.15)",
+  border: "var(--isp-accent-glow)",
   text:   "white",
   muted:  "#64748b",
   sub:    "#94a3b8",
-  accent: "#6366f1",
+  accent: "var(--isp-accent)",
   rowHover: "rgba(255,255,255,0.02)",
   rowBorder: "rgba(255,255,255,0.04)",
 };
 const LIGHT_C = {
   card:   "#ffffff",
-  border: "rgba(99,102,241,0.2)",
+  border: "var(--isp-accent-glow)",
   text:   "#0f172a",
   muted:  "#64748b",
   sub:    "#475569",
-  accent: "#6366f1",
+  accent: "var(--isp-accent)",
   rowHover: "rgba(0,0,0,0.02)",
   rowBorder: "rgba(0,0,0,0.05)",
 };
@@ -142,7 +142,7 @@ export default function SuperAdminDashboard() {
 
         {/* ── Stat Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16, marginBottom: 28 }}>
-          <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="#6366f1" icon={Users}    loading={loadingAdmins}    />
+          <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="var(--isp-accent)" icon={Users}    loading={loadingAdmins}    />
           <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="#8b5cf6" icon={Router}   loading={loadingRouters}   />
           <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe}    loading={loadingCustomers} />
           <StatCard C={C} label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
@@ -156,7 +156,7 @@ export default function SuperAdminDashboard() {
             <div style={{ padding: "18px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
               <Users size={16} color={C.accent} />
               <span style={{ fontWeight: 700, color: C.text, fontSize: "0.9rem" }}>Registered ISP Admins</span>
-              <span style={{ marginLeft: "auto", background: "rgba(99,102,241,0.12)", color: C.accent, fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 12 }}>
+              <span style={{ marginLeft: "auto", background: "var(--isp-accent-glow)", color: C.accent, fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 12 }}>
                 {admins.length}
               </span>
             </div>
@@ -186,7 +186,7 @@ export default function SuperAdminDashboard() {
                       >
                         <td style={{ padding: "12px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                               <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "white" }}>{(a.name || a.username || "?")[0].toUpperCase()}</span>
                             </div>
                             <span style={{ fontWeight: 700, color: C.text }}>{a.name || a.username}</span>
@@ -235,7 +235,7 @@ export default function SuperAdminDashboard() {
                         <span style={{ fontSize: "0.78rem", color: C.sub, fontFamily: "monospace" }}>{r.name}</span>
                         <span style={{
                           fontSize: "0.65rem", fontWeight: 700, padding: "2px 8px", borderRadius: 10,
-                          background: isOnline ? "rgba(74,222,128,0.12)" : "rgba(99,102,241,0.12)",
+                          background: isOnline ? "rgba(74,222,128,0.12)" : "var(--isp-accent-glow)",
                           color: isOnline ? "#16a34a" : C.accent,
                         }}>
                           {r.status || "unknown"}

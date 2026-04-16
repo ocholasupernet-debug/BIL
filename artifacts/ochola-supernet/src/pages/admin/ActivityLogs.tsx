@@ -177,8 +177,8 @@ export default function ActivityLogs() {
             style={{
               display: "flex", alignItems: "center", gap: 6,
               padding: "7px 14px", borderRadius: 8, cursor: "pointer",
-              background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
-              color: "#a5b4fc", fontSize: 13, fontWeight: 600,
+              background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)",
+              color: "var(--isp-accent)", fontSize: 13, fontWeight: 600,
             }}
           >
             <RefreshCw size={13} style={{ animation: isFetching ? "spin 1s linear infinite" : "none" }} />
@@ -200,9 +200,9 @@ export default function ActivityLogs() {
                   padding: "5px 14px", borderRadius: 20, cursor: "pointer",
                   fontSize: 12, fontWeight: 700, textTransform: "capitalize",
                   transition: "all 0.15s",
-                  background: active ? (tc?.bg ?? "rgba(99,102,241,0.18)") : "rgba(255,255,255,0.04)",
-                  border: `1px solid ${active ? (tc?.border ?? "rgba(99,102,241,0.4)") : "rgba(255,255,255,0.08)"}`,
-                  color: active ? (tc?.color ?? "#a5b4fc") : "#64748b",
+                  background: active ? (tc?.bg ?? "var(--isp-accent-glow)") : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${active ? (tc?.border ?? "var(--isp-accent-border)") : "rgba(255,255,255,0.08)"}`,
+                  color: active ? (tc?.color ?? "var(--isp-accent)") : "#64748b",
                 }}
               >
                 {t === "all" ? "All" : tc?.label}

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Bell, Save, CheckCircle2, Mail, MessageSquare, Zap, AlertTriangle } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -67,8 +67,8 @@ export default function SuperAdminNotifications() {
             { label: "Email Notifications", sub: "Send event alerts via email", on: globalEmail, set: setGlobalEmail, icon: Mail },
             { label: "SMS Notifications", sub: "Send event alerts via SMS", on: globalSms, set: setGlobalSms, icon: MessageSquare },
           ].map(g => (
-            <div key={g.label} style={{ background: C.card, border: `1px solid ${g.on ? "rgba(99,102,241,0.3)" : C.border}`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 9, background: g.on ? "rgba(99,102,241,0.15)" : "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div key={g.label} style={{ background: C.card, border: `1px solid ${g.on ? "var(--isp-accent-border)" : C.border}`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 9, background: g.on ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <g.icon size={16} color={g.on ? C.accent : C.muted} />
               </div>
               <div style={{ flex: 1 }}>

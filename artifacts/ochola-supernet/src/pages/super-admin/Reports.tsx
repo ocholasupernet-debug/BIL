@@ -4,7 +4,7 @@ import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { supabase } from "@/lib/supabase";
 import { BarChart3, Users, Router, Loader2, TrendingUp, Globe, FileText } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 function Kpi({ label, value, sub, color, icon: Icon, loading }: { label: string; value: string | number; sub?: string; color: string; icon: React.ElementType; loading?: boolean }) {
   return (
@@ -56,7 +56,7 @@ export default function SuperAdminReports() {
 
         {/* KPI Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16, marginBottom: 28 }}>
-          <Kpi label="Total ISPs" value={admins.length} sub={`${activeAdmins} active`} color="#6366f1" icon={Users} loading={la} />
+          <Kpi label="Total ISPs" value={admins.length} sub={`${activeAdmins} active`} color="var(--isp-accent)" icon={Users} loading={la} />
           <Kpi label="Total Customers" value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe} loading={lc} />
           <Kpi label="Total Routers" value={routers.length} sub={`${onlineRouters} online`} color="#8b5cf6" icon={Router} loading={lr} />
           <Kpi label="Total Plans" value={plans.length} sub={`${hotspotPlans} hotspot`} color="#f59e0b" icon={BarChart3} loading={lp} />
@@ -96,7 +96,7 @@ export default function SuperAdminReports() {
                       <td style={{ padding: "12px 18px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <div style={{ flex: 1, maxWidth: 100, height: 6, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-                            <div style={{ height: "100%", borderRadius: 3, background: "#6366f1", width: `${Math.min(100, (a.customers / Math.max(1, ...topAdmins.map(x => x.customers))) * 100)}%` }} />
+                            <div style={{ height: "100%", borderRadius: 3, background: "var(--isp-accent)", width: `${Math.min(100, (a.customers / Math.max(1, ...topAdmins.map(x => x.customers))) * 100)}%` }} />
                           </div>
                           <span style={{ fontWeight: 700, color: "#e2e8f0" }}>{a.customers}</span>
                         </div>

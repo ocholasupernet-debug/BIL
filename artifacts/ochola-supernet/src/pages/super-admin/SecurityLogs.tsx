@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Search, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Info, Shield } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", muted: "#64748b", sub: "#94a3b8" };
 
 type LogLevel = "success" | "warning" | "error" | "info";
 interface LogEntry { id: number; level: LogLevel; action: string; user: string; ip: string; time: string; details: string; }
@@ -26,7 +26,7 @@ const LEVEL_STYLES: Record<LogLevel, { bg: string; color: string; icon: React.El
   success: { bg: "rgba(74,222,128,0.1)",  color: "#4ade80", icon: CheckCircle2  },
   warning: { bg: "rgba(251,191,36,0.1)",  color: "#fbbf24", icon: AlertTriangle },
   error:   { bg: "rgba(248,113,113,0.1)", color: "#f87171", icon: XCircle       },
-  info:    { bg: "rgba(99,102,241,0.1)",  color: "#a5b4fc", icon: Info          },
+  info:    { bg: "var(--isp-accent-glow)",  color: "#a5b4fc", icon: Info          },
 };
 
 export default function SuperAdminSecurityLogs() {
@@ -46,7 +46,7 @@ export default function SuperAdminSecurityLogs() {
   };
 
   const FILTERS: [string, string, string][] = [
-    ["all",     "All Events",              "#6366f1"],
+    ["all",     "All Events",              "var(--isp-accent)"],
     ["success", `Success (${counts.success})`, "#4ade80"],
     ["warning", `Warning (${counts.warning})`, "#fbbf24"],
     ["error",   `Error (${counts.error})`,     "#f87171"],

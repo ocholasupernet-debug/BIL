@@ -4,7 +4,7 @@ import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { supabase } from "@/lib/supabase";
 import { Router, Search, Loader2, CheckCircle2, XCircle, Globe, Users } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 interface DbRouter { id: number; name: string; host: string; status: string | null; admin_id: number; model: string | null; ros_version: string | null; created_at: string; }
 interface DbAdmin { id: number; name: string; username: string; subdomain: string | null; }
@@ -64,7 +64,7 @@ export default function SuperAdminRouters() {
         {/* Stats row */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 24 }}>
           {[
-            { label: "Total Routers", value: routers.length, color: "#6366f1" },
+            { label: "Total Routers", value: routers.length, color: "var(--isp-accent)" },
             { label: "Online", value: onlineCount, color: "#4ade80" },
             { label: "Offline", value: routers.length - onlineCount, color: "#f87171" },
           ].map(s => (
@@ -79,7 +79,7 @@ export default function SuperAdminRouters() {
         <div style={{ position: "relative", marginBottom: 20, maxWidth: 340 }}>
           <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: C.muted }} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, host, ISP…"
-            style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "9px 14px 9px 36px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box" }} />
+            style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px 9px 36px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box" }} />
         </div>
 
         {/* Table */}
@@ -111,8 +111,8 @@ export default function SuperAdminRouters() {
                       <tr key={r.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                         <td style={{ padding: "13px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              <Router size={14} color="#6366f1" />
+                            <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <Router size={14} color="var(--isp-accent)" />
                             </div>
                             <span style={{ fontWeight: 700, color: "white" }}>{r.name}</span>
                           </div>

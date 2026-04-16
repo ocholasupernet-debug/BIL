@@ -238,9 +238,9 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.375rem",
             padding: "0.45rem 1rem", borderRadius: 7,
-            background: testing ? "rgba(255,255,255,0.06)" : "rgba(99,102,241,0.15)",
-            border: `1px solid ${testing ? "rgba(255,255,255,0.1)" : "rgba(99,102,241,0.4)"}`,
-            color: testing ? "var(--isp-text-muted)" : "#a5b4fc",
+            background: testing ? "rgba(255,255,255,0.06)" : "var(--isp-accent-glow)",
+            border: `1px solid ${testing ? "rgba(255,255,255,0.1)" : "var(--isp-accent-glow)"}`,
+            color: testing ? "var(--isp-text-muted)" : "var(--isp-accent)",
             fontWeight: 700, fontSize: "0.8rem",
             cursor: testing ? "not-allowed" : "pointer",
             fontFamily: "inherit",
@@ -397,8 +397,8 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
         flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "0.35rem",
         padding: "0.4rem 0.5rem", borderRadius: 7, border: "none", cursor: "pointer",
         fontFamily: "inherit", fontWeight: 700, fontSize: "0.76rem", transition: "all 0.15s",
-        background: tab === id ? "rgba(99,102,241,0.18)" : "transparent",
-        color:      tab === id ? "#a5b4fc" : "var(--isp-text-muted)",
+        background: tab === id ? "var(--isp-accent-glow)" : "transparent",
+        color:      tab === id ? "var(--isp-accent)" : "var(--isp-text-muted)",
       }}
     >
       {icon} {label}
@@ -441,15 +441,15 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
       ref={ref}
       style={{
         position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 200,
-        background: "var(--isp-card)", border: "1px solid rgba(99,102,241,0.3)",
+        background: "var(--isp-card)", border: "1px solid var(--isp-accent-glow)",
         borderRadius: 12, padding: "1rem", width: 320,
-        boxShadow: "0 16px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(99,102,241,0.1)",
+        boxShadow: "0 16px 48px rgba(0,0,0,0.5), 0 0 0 1px var(--isp-accent-glow)",
       }}
     >
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
-          <LogIn size={14} style={{ color: "#a5b4fc" }} />
+          <LogIn size={14} style={{ color: "var(--isp-accent)" }} />
           <span style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--isp-text)" }}>
             Access · {router.name}
           </span>
@@ -507,8 +507,8 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                   padding: "0.45rem", borderRadius: 8, textDecoration: "none", fontWeight: 700,
-                  fontSize: "0.78rem", background: "rgba(99,102,241,0.1)",
-                  color: "#a5b4fc", border: "1px solid rgba(99,102,241,0.3)", cursor: "pointer",
+                  fontSize: "0.78rem", background: "var(--isp-accent-glow)",
+                  color: "var(--isp-accent)", border: "1px solid var(--isp-accent-glow)", cursor: "pointer",
                 }}
               >
                 <ExternalLink size={11} /> Try HTTPS
@@ -520,7 +520,7 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
             </div>
           )}
 
-          <div style={{ background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: 8, padding: "0.5rem 0.625rem", fontSize: "0.7rem", color: "#818cf8", lineHeight: 1.6 }}>
+          <div style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "0.5rem 0.625rem", fontSize: "0.7rem", color: "var(--isp-accent)", lineHeight: 1.6 }}>
             <strong>Tip:</strong> Log in with the same credentials below. If the page doesn't load, confirm the router's firewall allows port 80/443 from your computer's IP.
           </div>
         </div>
@@ -568,7 +568,7 @@ function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => voi
             </a>
           </div>
 
-          <div style={{ background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.15)", borderRadius: 8, padding: "0.5rem 0.625rem", fontSize: "0.7rem", color: "#818cf8", lineHeight: 1.6 }}>
+          <div style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "0.5rem 0.625rem", fontSize: "0.7rem", color: "var(--isp-accent)", lineHeight: 1.6 }}>
             <strong>Tip:</strong> "Launch Winbox" only works if Winbox is installed. If it doesn't open, download Winbox and enter the IP + credentials manually.
           </div>
         </div>
@@ -656,15 +656,15 @@ function RouterRow({ router, index, onReconfigure, onPorts, onSaved }: {
             style={{
               display: "inline-flex", alignItems: "center", gap: "0.35rem",
               padding: "0.43rem 0.75rem", borderRadius: 7,
-              background: accessOpen ? "rgba(99,102,241,0.18)" : "rgba(99,102,241,0.08)",
-              border: `1px solid ${accessOpen ? "rgba(99,102,241,0.5)" : "rgba(99,102,241,0.25)"}`,
-              color: accessOpen ? "#a5b4fc" : "#818cf8",
+              background: accessOpen ? "var(--isp-accent-glow)" : "var(--isp-accent-glow)",
+              border: `1px solid ${accessOpen ? "var(--isp-accent-glow)" : "var(--isp-accent-glow)"}`,
+              color: accessOpen ? "var(--isp-accent)" : "var(--isp-accent)",
               fontWeight: 700, fontSize: "0.78rem",
               cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
               transition: "all 0.15s",
             }}
-            onMouseOver={e => { if (!accessOpen) e.currentTarget.style.background = "rgba(99,102,241,0.14)"; }}
-            onMouseOut={e  => { if (!accessOpen) e.currentTarget.style.background = "rgba(99,102,241,0.08)"; }}
+            onMouseOver={e => { if (!accessOpen) e.currentTarget.style.background = "var(--isp-accent-glow)"; }}
+            onMouseOut={e  => { if (!accessOpen) e.currentTarget.style.background = "var(--isp-accent-glow)"; }}
           >
             <LogIn size={12} /> Access
             {accessOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
@@ -814,7 +814,7 @@ export default function ReplaceRouter() {
 
         {/* Legend */}
         <div style={{ background: "rgba(37,99,235,0.04)", border: "1px solid rgba(37,99,235,0.14)", borderRadius: 8, padding: "0.75rem 1rem", fontSize: "0.76rem", color: "var(--isp-text-muted)", lineHeight: 1.7 }}>
-          <strong style={{ color: "#818cf8" }}>Access</strong> — log into the router via WebFig (browser UI) or get Winbox credentials.{" "}
+          <strong style={{ color: "var(--isp-accent)" }}>Access</strong> — log into the router via WebFig (browser UI) or get Winbox credentials.{" "}
           <strong style={{ color: "var(--isp-accent)" }}>API</strong> — set the router IP, API username and password, then click <em>Test Connection</em> to verify the MikroTik API is reachable on port 8728.{" "}
           <strong style={{ color: "#fbbf24" }}>Reconfigure</strong> — re-apply the setup script.{" "}
           <strong style={{ color: "var(--isp-accent)" }}>Ports</strong> — assign bridge ports for the hotspot.

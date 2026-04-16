@@ -198,7 +198,7 @@ export default function HotspotLogin() {
         @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes breathe { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.05); opacity: 0.8; } }
         @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
-        @keyframes glow-pulse { 0%, 100% { box-shadow: 0 0 20px rgba(99,102,241,0.2); } 50% { box-shadow: 0 0 40px rgba(99,102,241,0.4); } }
+        @keyframes glow-pulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
 
         .hp-root {
           min-height: 100vh;
@@ -229,9 +229,9 @@ export default function HotspotLogin() {
         .hp-logo { display: flex; align-items: center; gap: 12px; }
         .hp-logo-icon {
           width: 40px; height: 40px; border-radius: 12px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
           display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 4px 16px rgba(99,102,241,0.35);
+          box-shadow: 0 4px 16px var(--isp-accent-border);
         }
         .hp-logo-text { font-weight: 800; font-size: 15px; color: #fff; }
         .hp-logo-sub { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; }
@@ -263,8 +263,8 @@ export default function HotspotLogin() {
         }
         .hp-wifi-box {
           width: 88px; height: 88px; border-radius: 24px;
-          background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.15));
-          border: 1.5px solid rgba(99,102,241,0.3);
+          background: linear-gradient(135deg, var(--isp-accent-glow), var(--isp-accent-glow));
+          border: 1.5px solid var(--isp-accent-border);
           display: flex; align-items: center; justify-content: center;
           position: relative; z-index: 2;
           animation: float 5s ease-in-out infinite, glow-pulse 3s ease-in-out infinite;
@@ -300,9 +300,9 @@ export default function HotspotLogin() {
           background: transparent; color: rgba(255,255,255,0.35);
         }
         .hp-tab.active {
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
           color: #fff;
-          box-shadow: 0 4px 20px rgba(99,102,241,0.35);
+          box-shadow: 0 4px 20px var(--isp-accent-border);
         }
         .hp-tab:not(.active):hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); }
 
@@ -417,8 +417,8 @@ export default function HotspotLogin() {
           outline: none;
         }
         .hp-input:focus {
-          border-color: rgba(99,102,241,0.5);
-          box-shadow: 0 0 0 4px rgba(99,102,241,0.1);
+          border-color: var(--isp-accent-border);
+          box-shadow: 0 0 0 4px var(--isp-accent-glow);
         }
         .hp-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; }
         .hp-input-left { padding-left: 42px; }
@@ -439,8 +439,8 @@ export default function HotspotLogin() {
           color: #fff; box-shadow: 0 4px 24px rgba(22,163,74,0.35);
         }
         .hp-btn-primary {
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          color: #fff; box-shadow: 0 4px 24px rgba(99,102,241,0.35);
+          background: linear-gradient(135deg, var(--isp-accent), var(--isp-accent));
+          color: #fff; box-shadow: 0 4px 24px var(--isp-accent-border);
         }
         .hp-btn-voucher {
           background: linear-gradient(135deg, #f59e0b, #f97316);
@@ -521,7 +521,7 @@ export default function HotspotLogin() {
 
       <div className="hp-root">
         {/* Ambient background orbs */}
-        <div className="hp-bg-orb" style={{ width: 400, height: 400, top: -100, left: -100, background: "rgba(99,102,241,0.12)" }} />
+        <div className="hp-bg-orb" style={{ width: 400, height: 400, top: -100, left: -100, background: "var(--isp-accent-glow)" }} />
         <div className="hp-bg-orb" style={{ width: 350, height: 350, bottom: -80, right: -80, background: "rgba(139,92,246,0.08)", animationDelay: "4s" }} />
         <div className="hp-bg-orb" style={{ width: 250, height: 250, top: "40%", left: "60%", background: "rgba(236,72,153,0.06)", animationDelay: "2s" }} />
 
@@ -600,7 +600,7 @@ export default function HotspotLogin() {
                       </>
                     ) : (
                       <>
-                        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "rgba(99,102,241,0.1)", border: "2px solid rgba(99,102,241,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+                        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "2px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
                           <Loader2 size={28} color="#818cf8" style={{ animation: "spin 1.5s linear infinite" }} />
                         </div>
                         <h3>Waiting for Payment</h3>
@@ -636,7 +636,7 @@ export default function HotspotLogin() {
                 <>
                   {plansLoading ? (
                     <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
-                      <Loader2 size={28} color="#6366f1" style={{ animation: "spin 1s linear infinite" }} />
+                      <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1s linear infinite" }} />
                     </div>
                   ) : plans.length === 0 ? (
                     <p style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: "48px 0", fontSize: 14 }}>
@@ -785,7 +785,7 @@ export default function HotspotLogin() {
             <div className="hp-section">
               <div className="hp-glass">
                 <div className="hp-glass-header">
-                  <div className="hp-glass-icon" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
+                  <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
                     <User size={16} color="#818cf8" />
                   </div>
                   <div>

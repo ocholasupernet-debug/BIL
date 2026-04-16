@@ -11,8 +11,8 @@ import {
 
 const C = {
   card: "rgba(255,255,255,0.04)",
-  border: "rgba(99,102,241,0.15)",
-  accent: "#6366f1",
+  border: "var(--isp-accent-glow)",
+  accent: "var(--isp-accent)",
   orange: "#f97316",
   danger: "#ef4444",
   text: "#e2e8f0",
@@ -22,7 +22,7 @@ const C = {
 
 const inp: React.CSSProperties = {
   background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(99,102,241,0.2)",
+  border: "1px solid var(--isp-accent-glow)",
   borderRadius: 8,
   padding: "9px 14px",
   color: "#e2e8f0",
@@ -177,7 +177,7 @@ export default function SuperAdminImpersonate() {
                       {/* Admin */}
                       <td style={{ padding: "13px 16px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                             <span style={{ fontSize: "0.72rem", fontWeight: 800, color: "white" }}>
                               {(a.name || a.username || "?")[0].toUpperCase()}
                             </span>
@@ -228,7 +228,7 @@ export default function SuperAdminImpersonate() {
                           <button
                             onClick={() => { setResetting(a); setNewPass(""); setShowPass(false); }}
                             title="Reset this admin's password"
-                            style={{ background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 7, padding: "5px 11px", color: "#818cf8", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: "0.72rem", fontWeight: 600 }}
+                            style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 7, padding: "5px 11px", color: "#818cf8", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: "0.72rem", fontWeight: 600 }}
                           >
                             <KeyRound size={11} /> Reset Password
                           </button>
@@ -260,7 +260,7 @@ export default function SuperAdminImpersonate() {
 
             {/* Admin card */}
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 14, display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <span style={{ fontSize: "1rem", fontWeight: 800, color: "white" }}>{(impersonating.name || impersonating.username || "?")[0].toUpperCase()}</span>
               </div>
               <div>
@@ -290,7 +290,7 @@ export default function SuperAdminImpersonate() {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {/* Admin info */}
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12, display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 9, background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 9, background: "linear-gradient(135deg,var(--isp-accent),#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <span style={{ fontSize: "0.8rem", fontWeight: 800, color: "white" }}>{(resetting.name || resetting.username || "?")[0].toUpperCase()}</span>
               </div>
               <div>

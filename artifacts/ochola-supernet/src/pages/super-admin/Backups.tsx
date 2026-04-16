@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Database, Download, RefreshCw, CheckCircle2, AlertTriangle, Play, Trash2, Clock, HardDrive } from "lucide-react";
 
-const C = { card: "rgba(255,255,255,0.04)", border: "rgba(99,102,241,0.15)", accent: "#6366f1", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 interface Backup { id: number; name: string; size: string; type: "auto" | "manual"; status: "completed" | "failed" | "running"; createdAt: string; duration: string; }
 
@@ -45,7 +45,7 @@ export default function SuperAdminBackups() {
             <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "white", margin: 0 }}>Backups</h1>
             <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.82rem" }}>Database backups — automated daily at 02:00 EAT. Retained for 30 days.</p>
           </div>
-          <button onClick={triggerBackup} disabled={running} style={{ display: "flex", alignItems: "center", gap: 8, background: running ? "rgba(99,102,241,0.3)" : C.accent, border: "none", borderRadius: 10, padding: "10px 18px", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: running ? "not-allowed" : "pointer" }}>
+          <button onClick={triggerBackup} disabled={running} style={{ display: "flex", alignItems: "center", gap: 8, background: running ? "var(--isp-accent-border)" : C.accent, border: "none", borderRadius: 10, padding: "10px 18px", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: running ? "not-allowed" : "pointer" }}>
             {running ? <RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Play size={14} />}
             {running ? "Running Backup…" : "Run Backup Now"}
           </button>
@@ -54,7 +54,7 @@ export default function SuperAdminBackups() {
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
           {[
-            { label: "Total Backups", value: backups.length, color: "#6366f1", icon: Database },
+            { label: "Total Backups", value: backups.length, color: "var(--isp-accent)", icon: Database },
             { label: "Completed", value: backups.filter(b => b.status === "completed").length, color: "#4ade80", icon: CheckCircle2 },
             { label: "Failed", value: backups.filter(b => b.status === "failed").length, color: "#f87171", icon: AlertTriangle },
             { label: "Total Size", value: `${totalSize.toFixed(1)} MB`, color: "#8b5cf6", icon: HardDrive },
@@ -70,7 +70,7 @@ export default function SuperAdminBackups() {
         </div>
 
         {/* Schedule info */}
-        <div style={{ background: "rgba(99,102,241,0.06)", border: `1px solid rgba(99,102,241,0.2)`, borderRadius: 12, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ background: "var(--isp-accent-glow)", border: `1px solid var(--isp-accent-glow)`, borderRadius: 12, padding: "14px 20px", marginBottom: 20, display: "flex", alignItems: "center", gap: 12 }}>
           <Clock size={16} color={C.accent} />
           <div>
             <p style={{ fontWeight: 700, color: "white", margin: 0, fontSize: "0.85rem" }}>Automatic Schedule</p>
@@ -98,7 +98,7 @@ export default function SuperAdminBackups() {
                     </div>
                   </td>
                   <td style={{ padding: "13px 16px" }}>
-                    <span style={{ padding: "2px 8px", borderRadius: 8, fontSize: "0.67rem", fontWeight: 700, background: b.type === "auto" ? "rgba(99,102,241,0.1)" : "rgba(139,92,246,0.1)", color: b.type === "auto" ? "#a5b4fc" : "#c4b5fd" }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 8, fontSize: "0.67rem", fontWeight: 700, background: b.type === "auto" ? "var(--isp-accent-glow)" : "rgba(139,92,246,0.1)", color: b.type === "auto" ? "var(--isp-accent)" : "#c4b5fd" }}>
                       {b.type}
                     </span>
                   </td>
@@ -113,7 +113,7 @@ export default function SuperAdminBackups() {
                   <td style={{ padding: "13px 16px" }}>
                     <div style={{ display: "flex", gap: 6 }}>
                       {b.status === "completed" && (
-                        <button style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 7, padding: "5px 10px", color: C.accent, cursor: "pointer", fontSize: "0.7rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                        <button style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)", borderRadius: 7, padding: "5px 10px", color: C.accent, cursor: "pointer", fontSize: "0.7rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
                           <Download size={11} /> Download
                         </button>
                       )}
