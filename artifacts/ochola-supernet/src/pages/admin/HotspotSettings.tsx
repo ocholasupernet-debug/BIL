@@ -333,7 +333,7 @@ export default function HotspotSettings() {
             </button>
             <button
               onClick={handleSave}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(6,182,212,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(6,182,212,0.35)"}`, color: saved ? "#4ade80" : "#06b6d4", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
@@ -343,7 +343,7 @@ export default function HotspotSettings() {
 
         {/* General Settings */}
         <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#06b6d4" }} /> General Settings</div>
+          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#2563EB" }} /> General Settings</div>
           <div style={SECTION_BODY}>
             <FieldRow label="Hotspot Page Title" icon={<span style={{ fontSize: 12 }}>H</span>}
               hint="Your ISP company name — appears as the main title on the hotspot page.">
@@ -455,10 +455,10 @@ export default function HotspotSettings() {
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {[
                   { name: "Purple Night", colors: { bgColor: "#0d0415", bgColor2: "#1a0735", primaryColor: "#8b5cf6", accentColor: "#d946ef", cardColor: "#1a0f2e", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#000000" } },
-                  { name: "Ocean Blue",   colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#06b6d4", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
+                  { name: "Ocean Blue",   colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#2563EB", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
                   { name: "Forest Green", colors: { bgColor: "#051a0e", bgColor2: "#0d2e1a", primaryColor: "#22c55e", accentColor: "#4ade80", cardColor: "#0d2e1a", buttonColor: "#f59e0b", textColor: "#ffffff", inputBgColor: "#040d07" } },
                   { name: "Sunset Red",   colors: { bgColor: "#1a0508", bgColor2: "#2e0d14", primaryColor: "#f43f5e", accentColor: "#fb923c", cardColor: "#2e0d14", buttonColor: "#8b5cf6", textColor: "#ffffff", inputBgColor: "#0d0205" } },
-                  { name: "Midnight Dark",colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#06b6d4", accentColor: "#0891b2", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
+                  { name: "Midnight Dark",colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#2563EB", accentColor: "#1D4ED8", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
                 ].map(p => (
                   <button
                     key={p.name}
@@ -488,7 +488,7 @@ export default function HotspotSettings() {
           <button onClick={() => setShowPreview(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.35)", color: "#a78bfa", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             <Eye size={14} /> Preview Login Page
           </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(6,182,212,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(6,182,212,0.35)"}`, color: saved ? "#4ade80" : "#06b6d4", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
             {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
           </button>

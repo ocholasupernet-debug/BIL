@@ -12,7 +12,7 @@ interface StatCardProps {
 
 export function StatCard({ label, value, subValue, trend, trendUp, color = "cyan" }: StatCardProps) {
   const colorMap = {
-    cyan: "from-cyan-500 to-cyan-600",
+    cyan: "from-blue-500 to-blue-600",
     green: "from-emerald-500 to-emerald-600",
     amber: "from-amber-500 to-amber-600",
     red: "from-rose-500 to-rose-600",

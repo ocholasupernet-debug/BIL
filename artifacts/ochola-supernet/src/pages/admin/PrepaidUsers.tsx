@@ -36,7 +36,7 @@ function isExpired(d?: string | null) {
 }
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
-  hotspot: { label: "Hotspot", color: "#22d3ee", bg: "rgba(6,182,212,0.12)",  icon: <Wifi    size={10} /> },
+  hotspot: { label: "Hotspot", color: "#3b82f6", bg: "rgba(37,99,235,0.12)",  icon: <Wifi    size={10} /> },
   pppoe:   { label: "PPPoE",   color: "#a78bfa", bg: "rgba(139,92,246,0.12)", icon: <Network size={10} /> },
   static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)", icon: <Globe   size={10} /> },
 };
@@ -45,7 +45,7 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string; bo
   active:    { label: "Active",    color: "#4ade80", bg: "rgba(34,197,94,0.12)",    border: "rgba(34,197,94,0.3)",    icon: <CheckCircle2 size={10} /> },
   expired:   { label: "Expired",   color: "#f87171", bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.3)",   icon: <XCircle      size={10} /> },
   suspended: { label: "Suspended", color: "#fbbf24", bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.3)",    icon: <AlertTriangle size={10} /> },
-  online:    { label: "Online",    color: "#22d3ee", bg: "rgba(6,182,212,0.12)",   border: "rgba(6,182,212,0.3)",     icon: <Wifi size={10} /> },
+  online:    { label: "Online",    color: "#3b82f6", bg: "rgba(37,99,235,0.12)",   border: "rgba(37,99,235,0.3)",     icon: <Wifi size={10} /> },
   offline:   { label: "Offline",   color: "#64748b", bg: "rgba(100,116,139,0.12)", border: "rgba(100,116,139,0.25)",  icon: <Clock size={10} /> },
 };
 
@@ -77,7 +77,7 @@ function TypeBadge({ type }: { type?: string | null }) {
 }
 
 function Avt({ name, id }: { name?: string | null; id: number }) {
-  const COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
+  const COLORS = ["#2563EB","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
   const bg = COLORS[id % COLORS.length];
   const ini = (name ?? "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
   return (
@@ -331,7 +331,7 @@ export default function PrepaidUsers() {
                   ))}
                 </select>
                 <button onClick={handleSync} disabled={!pickedRouter || syncing}
-                  style={{ ...BTN(pickedRouter ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
+                  style={{ ...BTN(pickedRouter ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
                   {syncing ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
                   Sync Users
                 </button>
@@ -352,7 +352,7 @@ export default function PrepaidUsers() {
         {/* ── Stat cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "0.625rem" }}>
           {[
-            { label: "Total Users",  value: stats.total,     color: "#06b6d4", icon: <Users      size={18} /> },
+            { label: "Total Users",  value: stats.total,     color: "#2563EB", icon: <Users      size={18} /> },
             { label: "Active",       value: stats.active,    color: "#4ade80", icon: <CheckCircle2 size={18} /> },
             { label: "Expired",      value: stats.expired,   color: "#f87171", icon: <XCircle     size={18} /> },
             { label: "Suspended",    value: stats.suspended, color: "#fbbf24", icon: <AlertTriangle size={18} /> },
@@ -374,12 +374,12 @@ export default function PrepaidUsers() {
         {/* ── Sync log ── */}
         {syncLogs && (
           <div style={{
-            background: syncOk === false ? "rgba(248,113,113,0.06)" : "rgba(6,182,212,0.05)",
-            border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(6,182,212,0.2)"}`,
+            background: syncOk === false ? "rgba(248,113,113,0.06)" : "rgba(37,99,235,0.05)",
+            border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(37,99,235,0.2)"}`,
             borderRadius: 10, padding: "0.75rem 1rem",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.375rem" }}>
-              <span style={{ fontSize: "0.75rem", fontWeight: 700, color: syncOk === false ? "#f87171" : "#06b6d4" }}>
+              <span style={{ fontSize: "0.75rem", fontWeight: 700, color: syncOk === false ? "#f87171" : "#2563EB" }}>
                 Sync Log
               </span>
               <button onClick={() => setSyncLogs(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
@@ -458,7 +458,7 @@ export default function PrepaidUsers() {
                 <tr>
                   <td colSpan={7} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
-                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#06b6d4" }} /> Loading users…
+                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#2563EB" }} /> Loading users…
                     </div>
                   </td>
                 </tr>
@@ -508,7 +508,7 @@ export default function PrepaidUsers() {
                         {plan ? (
                           <div>
                             <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)" }}>{plan.name}</div>
-                            <div style={{ fontSize: "0.65rem", color: "#06b6d4", fontFamily: "monospace" }}>
+                            <div style={{ fontSize: "0.65rem", color: "#2563EB", fontFamily: "monospace" }}>
                               {plan.speed_down}/{plan.speed_up} Mbps
                             </div>
                           </div>
@@ -523,8 +523,8 @@ export default function PrepaidUsers() {
                           <span style={{
                             display: "inline-flex", alignItems: "center", gap: "0.3rem",
                             fontSize: "0.72rem", fontWeight: 700,
-                            background: "rgba(6,182,212,0.07)", border: "1px solid rgba(6,182,212,0.18)",
-                            color: "#06b6d4", borderRadius: 5, padding: "0.18rem 0.5rem",
+                            background: "rgba(37,99,235,0.07)", border: "1px solid rgba(37,99,235,0.18)",
+                            color: "#2563EB", borderRadius: 5, padding: "0.18rem 0.5rem",
                           }}>
                             <span style={{ width: 5, height: 5, borderRadius: "50%", background: router.status === "online" ? "#22c55e" : "#475569" }} />
                             {router.name}
@@ -580,7 +580,7 @@ export default function PrepaidUsers() {
                 style={{
                   padding: "0.3rem 0.65rem", borderRadius: 5, border: "1px solid",
                   borderColor: p === page ? "transparent" : "var(--isp-border)",
-                  background: p === page ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.04)",
+                  background: p === page ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.04)",
                   color: p === page ? "white" : "var(--isp-text-muted)",
                   fontWeight: 700, fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit",
                 }}>
@@ -640,11 +640,11 @@ export default function PrepaidUsers() {
             </div>
 
             {detailUser.plan_id && planMap[detailUser.plan_id] && (
-              <div style={{ marginTop: "0.75rem", background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 8, padding: "0.625rem 0.75rem" }}>
-                <div style={{ fontSize: "0.65rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Plan</div>
+              <div style={{ marginTop: "0.75rem", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, padding: "0.625rem 0.75rem" }}>
+                <div style={{ fontSize: "0.65rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>Plan</div>
                 <div style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.85rem" }}>
                   {planMap[detailUser.plan_id].name}
-                  <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#06b6d4", marginLeft: "0.5rem" }}>
+                  <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "#2563EB", marginLeft: "0.5rem" }}>
                     {planMap[detailUser.plan_id].speed_down}/{planMap[detailUser.plan_id].speed_up} Mbps
                   </span>
                 </div>

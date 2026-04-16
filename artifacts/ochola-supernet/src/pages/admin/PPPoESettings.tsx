@@ -14,8 +14,8 @@ const STORAGE_KEY = `pppoe_settings_${ADMIN_ID}`;
 const DEFAULT_COLORS = {
   bgColor:      "#020b18",
   bgColor2:     "#051e38",
-  primaryColor: "#0ea5e9",
-  accentColor:  "#06b6d4",
+  primaryColor: "#2563EB",
+  accentColor:  "#2563EB",
   cardColor:    "#0c2340",
   buttonColor:  "#10b981",
   textColor:    "#ffffff",
@@ -364,7 +364,7 @@ export default function PPPoESettings() {
             <button onClick={() => setShowPreview(true)} style={{ ...actBtnBase, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
               <Eye size={14} /> Preview Login Page
             </button>
-            <button onClick={handleSave} style={{ ...actBtnBase, background: saved ? "rgba(74,222,128,0.15)" : "rgba(6,182,212,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(6,182,212,0.35)"}`, color: saved ? "#4ade80" : "#06b6d4" }}>
+            <button onClick={handleSave} style={{ ...actBtnBase, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB" }}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
             </button>
@@ -373,7 +373,7 @@ export default function PPPoESettings() {
 
         {/* General Settings */}
         <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#0ea5e9" }} /> General Settings</div>
+          <div style={SECTION_HEAD}><Info size={16} style={{ color: "#2563EB" }} /> General Settings</div>
           <div style={SECTION_BODY}>
             <FieldRow label="PPPoE Page Title" hint="Your ISP name — displayed as the main heading on the PPPoE login page.">
               <input value={s.ispName} onChange={e => upd("ispName", e.target.value)} style={INPUT} />
@@ -478,11 +478,11 @@ export default function PPPoESettings() {
               <p style={{ fontSize: 12, color: "#64748b", fontWeight: 600, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Presets</p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {[
-                  { name: "Ocean Blue",    colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#06b6d4", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
+                  { name: "Ocean Blue",    colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#2563EB", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
                   { name: "Purple Night",  colors: { bgColor: "#0d0415", bgColor2: "#1a0735", primaryColor: "#8b5cf6", accentColor: "#d946ef", cardColor: "#1a0f2e", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#000000" } },
                   { name: "Forest Green",  colors: { bgColor: "#051a0e", bgColor2: "#0d2e1a", primaryColor: "#22c55e", accentColor: "#4ade80", cardColor: "#0d2e1a", buttonColor: "#f59e0b", textColor: "#ffffff", inputBgColor: "#040d07" } },
                   { name: "Corporate",     colors: { bgColor: "#0f172a", bgColor2: "#1e293b", primaryColor: "#3b82f6", accentColor: "#2563eb", cardColor: "#1e293b", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#0f172a" } },
-                  { name: "Midnight Dark", colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#06b6d4", accentColor: "#0891b2", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
+                  { name: "Midnight Dark", colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#2563EB", accentColor: "#1D4ED8", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
                 ].map(p => (
                   <button key={p.name}
                     onClick={() => setS(prev => ({ ...prev, colors: p.colors as typeof DEFAULT_COLORS }))}
@@ -506,7 +506,7 @@ export default function PPPoESettings() {
           <button onClick={() => setShowPreview(true)} style={{ ...{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" }, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
             <Eye size={14} /> Preview Login Page
           </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(6,182,212,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(6,182,212,0.35)"}`, color: saved ? "#4ade80" : "#06b6d4", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "rgba(37,99,235,0.12)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "rgba(37,99,235,0.35)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
             {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
           </button>

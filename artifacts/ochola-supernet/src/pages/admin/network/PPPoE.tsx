@@ -213,7 +213,7 @@ export default function PPPoE() {
         @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .ppoe-radio:hover{background:rgba(255,255,255,0.05)!important}
-        .ppoe-btn-load:hover{background:rgba(6,182,212,0.18)!important}
+        .ppoe-btn-load:hover{background:rgba(37,99,235,0.18)!important}
         .ppoe-btn-regen:hover{filter:brightness(1.1)}
         .ppoe-btn-help:hover{background:rgba(255,255,255,0.15)!important}
       `}</style>
@@ -228,8 +228,8 @@ export default function PPPoE() {
 
         {/* ── Header banner ── */}
         <div style={{
-          background: "linear-gradient(135deg,rgba(6,182,212,0.18),rgba(2,132,199,0.22))",
-          border: "1px solid rgba(6,182,212,0.35)",
+          background: "linear-gradient(135deg,rgba(37,99,235,0.18),rgba(2,132,199,0.22))",
+          border: "1px solid rgba(37,99,235,0.35)",
           borderRadius: 12, padding: "0.875rem 1.25rem",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem",
         }}>
@@ -342,9 +342,9 @@ export default function PPPoE() {
               style={{
                 display: "inline-flex", alignItems: "center", gap: "0.35rem",
                 padding: "0.4rem 0.875rem", borderRadius: 7,
-                background: "rgba(6,182,212,0.1)",
-                border: "1px solid rgba(6,182,212,0.35)",
-                color: "#22d3ee", fontWeight: 700, fontSize: "0.75rem",
+                background: "rgba(37,99,235,0.1)",
+                border: "1px solid rgba(37,99,235,0.35)",
+                color: "#3b82f6", fontWeight: 700, fontSize: "0.75rem",
                 cursor: router ? "pointer" : "not-allowed",
                 fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap",
                 opacity: !router ? 0.5 : 1,
@@ -393,8 +393,8 @@ export default function PPPoE() {
                     style={{
                       display: "flex", alignItems: "center", gap: "0.5rem",
                       padding: "0.45rem 0.875rem", borderRadius: 8, cursor: "pointer",
-                      background: active ? "rgba(6,182,212,0.1)" : "transparent",
-                      border: `1px solid ${active ? "rgba(6,182,212,0.4)" : "transparent"}`,
+                      background: active ? "rgba(37,99,235,0.1)" : "transparent",
+                      border: `1px solid ${active ? "rgba(37,99,235,0.4)" : "transparent"}`,
                       transition: "all 0.14s",
                     }}
                   >
@@ -404,11 +404,11 @@ export default function PPPoE() {
                       value={opt.id}
                       checked={active}
                       onChange={() => { setMode(opt.id); setIfaceMsg(null); }}
-                      style={{ accentColor: "#06b6d4", width: 14, height: 14, cursor: "pointer" }}
+                      style={{ accentColor: "#2563EB", width: 14, height: 14, cursor: "pointer" }}
                     />
                     <span style={{
                       fontSize: "0.82rem", fontWeight: active ? 700 : 500,
-                      color: active ? "#06b6d4" : "var(--isp-text)",
+                      color: active ? "#2563EB" : "var(--isp-text)",
                     }}>{opt.label}</span>
                   </label>
                 );
@@ -492,9 +492,9 @@ export default function PPPoE() {
                     style={{
                       padding: "0.25rem 0.75rem", borderRadius: 6, fontFamily: "inherit",
                       fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", transition: "all 0.14s",
-                      background: active ? "rgba(6,182,212,0.15)" : "var(--isp-inner-card)",
-                      border: `1px solid ${active ? "rgba(6,182,212,0.5)" : "var(--isp-border)"}`,
-                      color: active ? "#06b6d4" : "var(--isp-text-muted)",
+                      background: active ? "rgba(37,99,235,0.15)" : "var(--isp-inner-card)",
+                      border: `1px solid ${active ? "rgba(37,99,235,0.5)" : "var(--isp-border)"}`,
+                      color: active ? "#2563EB" : "var(--isp-text-muted)",
                     }}
                   >
                     ROS {v}
@@ -592,7 +592,7 @@ export default function PPPoE() {
                   {loadingRouters ? "Loading routers…" : "Select a router above to generate commands"}
                 </p>
                 {!loadingRouters && routers.length === 0 && (
-                  <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600, fontSize: "0.8rem" }}>
+                  <a href="/admin/network/add-router" style={{ color: "#2563EB", fontWeight: 600, fontSize: "0.8rem" }}>
                     Add a router first →
                   </a>
                 )}

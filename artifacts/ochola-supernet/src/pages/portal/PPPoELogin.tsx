@@ -55,7 +55,7 @@ export default function PPPoELogin() {
       <header className="relative z-50 h-20 border-b border-white/10 bg-black/20 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto px-6 h-full flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-cyan-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center shadow-lg shadow-sky-500/30">
               <Sliders className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -77,7 +77,7 @@ export default function PPPoELogin() {
         <div className="text-center mb-12">
           <h2 className="text-4xl md:text-5xl font-black mb-4 tracking-tight">
             Your{" "}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-cyan-400">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-400">
               Broadband Portal
             </span>
           </h2>
@@ -182,7 +182,7 @@ export default function PPPoELogin() {
                   <button
                     type="submit"
                     disabled={logging}
-                    className="w-full py-4 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 text-white font-bold text-lg shadow-lg shadow-sky-500/25 hover:shadow-sky-500/40 transition-all disabled:opacity-70 flex justify-center items-center gap-2 mt-2"
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold text-lg shadow-lg shadow-sky-500/25 hover:shadow-sky-500/40 transition-all disabled:opacity-70 flex justify-center items-center gap-2 mt-2"
                   >
                     {logging ? "Connecting…" : "Login"}
                   </button>
@@ -286,7 +286,7 @@ export default function PPPoELogin() {
                   <button
                     type="submit"
                     disabled={activating}
-                    className="w-full py-4 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 text-white font-bold text-lg shadow-lg shadow-sky-500/25 hover:shadow-sky-500/40 transition-all disabled:opacity-70 flex justify-center items-center gap-2"
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 text-white font-bold text-lg shadow-lg shadow-sky-500/25 hover:shadow-sky-500/40 transition-all disabled:opacity-70 flex justify-center items-center gap-2"
                   >
                     {activating ? "Activating…" : "Activate Voucher"}
                   </button>

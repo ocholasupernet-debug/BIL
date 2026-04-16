@@ -107,7 +107,7 @@ export default function CreateVpn() {
             {created.assigned_ip && (
               <div className="flex justify-between items-center">
                 <span className="text-gray-400">VPN IP</span>
-                <span className="inline-flex items-center gap-1 bg-cyan-50 border border-cyan-200 text-cyan-700 text-xs font-mono font-bold px-2 py-0.5 rounded-full">
+                <span className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 text-xs font-mono font-bold px-2 py-0.5 rounded-full">
                   {created.assigned_ip}
                 </span>
               </div>

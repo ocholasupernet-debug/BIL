@@ -58,7 +58,7 @@ function planSpeed(p: DbPlan) {
 /* ─── Shared styles ─── */
 const ROW: React.CSSProperties     = { display: "flex", alignItems: "flex-start", gap: "1rem" };
 const LBL: React.CSSProperties     = { fontWeight: 700, fontSize: "0.875rem", color: "var(--isp-text)", minWidth: 170, flexShrink: 0, paddingTop: "0.45rem", textAlign: "right" };
-const LBL_CYAN: React.CSSProperties= { ...LBL, color: "#06b6d4" };
+const LBL_CYAN: React.CSSProperties= { ...LBL, color: "#2563EB" };
 const INPUT: React.CSSProperties   = { flex: 1, padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", width: "100%" };
 const SELECT: React.CSSProperties  = { padding: "0.5rem 0.75rem", borderRadius: 6, background: "var(--isp-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.875rem", outline: "none", fontFamily: "inherit", cursor: "pointer" };
 const HINT: React.CSSProperties    = { fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.3rem" };
@@ -66,7 +66,7 @@ const HINT: React.CSSProperties    = { fontSize: "0.75rem", color: "var(--isp-te
 function Radio({ name, value, checked, onChange, label }: { name: string; value: string; checked: boolean; onChange: () => void; label: string }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: "0.375rem", cursor: "pointer", fontSize: "0.875rem", color: "var(--isp-text)" }}>
-      <input type="radio" name={name} value={value} checked={checked} onChange={onChange} style={{ accentColor: "#06b6d4", width: 15, height: 15, cursor: "pointer" }} />
+      <input type="radio" name={name} value={value} checked={checked} onChange={onChange} style={{ accentColor: "#2563EB", width: 15, height: 15, cursor: "pointer" }} />
       {label}
     </label>
   );
@@ -187,12 +187,12 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
 
   return (
     <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden", maxWidth: 780 }}>
-      <div style={{ padding: "0.875rem 1.5rem", background: "rgba(6,182,212,0.06)", borderBottom: "2px solid #06b6d4", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ padding: "0.875rem 1.5rem", background: "rgba(37,99,235,0.06)", borderBottom: "2px solid #2563EB", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontWeight: 700, fontSize: "1rem", color: "var(--isp-text)" }}>
           {isEdit ? "Edit Service Plan" : "Add Service Plan"}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
-          <span style={{ fontSize: "0.7rem", color: "#06b6d4", background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.2)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700 }}>{typeLabel} Plan</span>
+          <span style={{ fontSize: "0.7rem", color: "#2563EB", background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700 }}>{typeLabel} Plan</span>
           {isEdit && <span style={{ fontSize: "0.7rem", color: "#fbbf24", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 4, padding: "0.15rem 0.5rem", fontWeight: 700 }}>ID #{initialData?.id}</span>}
         </div>
       </div>
@@ -335,9 +335,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
           <span style={LBL_CYAN}>Router</span>
           <div style={{ flex: 1 }}>
             {routers.length === 0 ? (
-              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(6,182,212,0.05)", border: "1px solid rgba(6,182,212,0.18)", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
+              <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.18)", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                 No routers configured — router assignment is optional.{" "}
-                <a href="/admin/network/add-router" style={{ color: "#06b6d4", textDecoration: "underline" }}>Add a router</a> anytime later.
+                <a href="/admin/network/add-router" style={{ color: "#2563EB", textDecoration: "underline" }}>Add a router</a> anytime later.
               </div>
             ) : (
               <select style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => setRouterId(e.target.value)}>
@@ -406,13 +406,13 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
                 <>
                   <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. active" />
                   <p style={{ ...HINT, color: "#fbbf24" }}>
-                    No IP pools found. <a href="/admin/network/ip-pools" style={{ color: "#06b6d4" }}>Create one on the IP Pools page →</a>
+                    No IP pools found. <a href="/admin/network/ip-pools" style={{ color: "#2563EB" }}>Create one on the IP Pools page →</a>
                   </p>
                 </>
               )}
               <p style={HINT}>
                 Pool assigned to active subscribers. Defined in{" "}
-                <a href="/admin/network/ip-pools" style={{ color: "#06b6d4" }}>IP Pools</a>.
+                <a href="/admin/network/ip-pools" style={{ color: "#2563EB" }}>IP Pools</a>.
               </p>
             </div>
           </div>
@@ -470,12 +470,12 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
 
         <div style={{ display: "flex", alignItems: "center", gap: "1rem", paddingTop: "0.5rem" }}>
           <button type="submit" disabled={saving}
-            style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(6,182,212,0.6)" : "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(37,99,235,0.6)" : "#2563EB", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "0.4rem" }}>
             {saving && <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />}
             {saving ? "Saving…" : isEdit ? "Update Plan" : "Save Plan"}
           </button>
           <span style={{ fontSize: "0.85rem", color: "var(--isp-text-muted)" }}>Or</span>
-          <button type="button" onClick={onCancel} style={{ background: "none", border: "none", color: "#06b6d4", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0 }}>
+          <button type="button" onClick={onCancel} style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline", padding: 0 }}>
             Cancel
           </button>
         </div>
@@ -578,7 +578,7 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
         <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--isp-text)" }}>
           {isEdit ? `Edit Bandwidth — ${initialData?.name}` : "Add New Bandwidth"}
         </span>
-        <button style={{ padding: "0.3rem 0.875rem", borderRadius: 6, background: "#06b6d4", color: "white", border: "none", fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
+        <button style={{ padding: "0.3rem 0.875rem", borderRadius: 6, background: "#2563EB", color: "white", border: "none", fontSize: "0.78rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
           onClick={() => alert("Bandwidth documentation coming soon!")}>
           Need Help?
         </button>
@@ -607,18 +607,18 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
         <div style={{ display: "flex", alignItems: "flex-start", gap: "1rem" }}>
           <span style={{ ...BW_LBL, paddingTop: "0.1rem" }}>Enable Burst?</span>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            <input type="checkbox" checked={burst} onChange={e => setBurst(e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#06b6d4" }} />
+            <input type="checkbox" checked={burst} onChange={e => setBurst(e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#2563EB" }} />
             {burst && <p style={{ fontSize: "0.78rem", color: "#f87171", lineHeight: 1.65, margin: 0 }}><strong>Disclaimer:</strong> Misconfiguring burst can cause connectivity issues. Consult an admin if unsure.</p>}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem", paddingTop: "0.25rem" }}>
           <button type="submit" disabled={saving}
-            style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(6,182,212,0.6)" : "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+            style={{ padding: "0.55rem 1.75rem", borderRadius: 8, background: saving ? "rgba(37,99,235,0.6)" : "#2563EB", color: "white", border: "none", fontWeight: 700, fontSize: "0.875rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
             {saving && <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />}
             {saving ? "Saving…" : isEdit ? "Update Bandwidth" : "Submit"}
           </button>
           <span style={{ fontSize: "0.85rem", color: "var(--isp-text-muted)" }}>Or</span>
-          <button type="button" onClick={onCancel} style={{ padding: 0, background: "none", border: "none", color: "#06b6d4", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}>Cancel</button>
+          <button type="button" onClick={onCancel} style={{ padding: 0, background: "none", border: "none", color: "#2563EB", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", textDecoration: "underline" }}>Cancel</button>
         </div>
       </form>
     </div>
@@ -631,12 +631,12 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
 function BandwidthCard({ bw, onEdit, onDelete }: { bw: DbBandwidth; onEdit: () => void; onDelete: () => void }) {
   return (
     <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden", transition: "border-color 0.2s" }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(6,182,212,0.4)")}
+      onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(37,99,235,0.4)")}
       onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--isp-border)")}>
-      <div style={{ height: 3, background: "linear-gradient(90deg, #06b6d4, #0891b2)" }} />
+      <div style={{ height: 3, background: "linear-gradient(90deg, #2563EB, #1D4ED8)" }} />
       <div style={{ padding: "0.875rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Gauge style={{ width: 15, height: 15, color: "#06b6d4" }} />
+          <Gauge style={{ width: 15, height: 15, color: "#2563EB" }} />
           <span style={{ fontWeight: 700, fontSize: "0.9rem", color: "var(--isp-text)" }}>{bw.name}</span>
         </div>
         {bw.burst_enabled && <span style={{ fontSize: "0.65rem", color: "#fbbf24", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 4, padding: "0.1rem 0.4rem", fontWeight: 700 }}>⚡ Burst</span>}
@@ -653,7 +653,7 @@ function BandwidthCard({ bw, onEdit, onDelete }: { bw: DbBandwidth; onEdit: () =
           <span style={{ fontWeight: 700, color: "var(--isp-text)", fontFamily: "monospace" }}>{bw.speed_up} {bw.speed_up_unit}</span>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-          <button onClick={onEdit} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.25)", color: "#06b6d4", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+          <button onClick={onEdit} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.25)", color: "#2563EB", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
             <Edit style={{ width: 11, height: 11 }} /> Edit
           </button>
           <button onClick={onDelete} style={{ flex: 1, padding: "0.45rem", borderRadius: 8, background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", fontSize: "0.78rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
@@ -697,7 +697,7 @@ function BandwidthPlansTab() {
 
       {!showForm ? (
         <button onClick={() => { setEditingBw(null); setShowForm(true); }}
-          style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 1.125rem", borderRadius: 10, background: "#06b6d4", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 14px rgba(6,182,212,0.3)" }}>
+          style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 1.125rem", borderRadius: 10, background: "#2563EB", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 14px rgba(37,99,235,0.3)" }}>
           <Plus style={{ width: 15, height: 15 }} /> Add Bandwidth Profile
         </button>
       ) : (
@@ -835,7 +835,7 @@ export default function Plans() {
             description="Push all visible plans as MikroTik hotspot user profiles or PPPoE profiles with rate-limits — no terminal copy-paste needed."
             icon={<UploadCloud size={18} />}
             endpoint="/api/admin/sync/plans"
-            color={activeTab === "pppoe" ? "#8b5cf6" : "#06b6d4"}
+            color={activeTab === "pppoe" ? "#8b5cf6" : "#2563EB"}
             buildPayload={() => ({
               plans: plans.map(p => ({
                 id:            p.id,
@@ -924,9 +924,9 @@ export default function Plans() {
                       <div className="flex gap-3">
                         <button onClick={() => { setEditingPlan(p); setShowAddForm(false); }}
                           className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-1.5"
-                          style={{ background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4" }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(6,182,212,0.16)"; }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(6,182,212,0.08)"; }}>
+                          style={{ background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.3)", color: "#2563EB" }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(37,99,235,0.16)"; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(37,99,235,0.08)"; }}>
                           <Edit size={13} /> Edit
                         </button>
                         <button onClick={() => setDeletingPlan(p)}

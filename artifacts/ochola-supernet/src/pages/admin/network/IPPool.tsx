@@ -273,7 +273,7 @@ export default function IPPool() {
                   ))}
                 </select>
                 <button onClick={handleSyncByRouter} disabled={!pickedRouter || syncingRouter}
-                  style={{ ...btn(pickedRouter ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
+                  style={{ ...btn(pickedRouter ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
                   {syncingRouter ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={13} />}
                   Sync
                 </button>
@@ -303,12 +303,12 @@ export default function IPPool() {
         {/* ── Sync log ── */}
         {syncLogs && (
           <div style={{
-            background: syncOk === false ? "rgba(248,113,113,0.06)" : "rgba(6,182,212,0.05)",
-            border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(6,182,212,0.2)"}`,
+            background: syncOk === false ? "rgba(248,113,113,0.06)" : "rgba(37,99,235,0.05)",
+            border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(37,99,235,0.2)"}`,
             borderRadius: 10, padding: "0.75rem 1rem",
           }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 700, fontSize: "0.8rem", color: syncOk === false ? "#f87171" : "#06b6d4" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 700, fontSize: "0.8rem", color: syncOk === false ? "#f87171" : "#2563EB" }}>
                 {syncOk === false ? <AlertTriangle size={13} /> : syncOk ? <CheckCircle2 size={13} /> : <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
                 Sync Log
               </div>
@@ -333,7 +333,7 @@ export default function IPPool() {
               style={{ ...INPUT, paddingLeft: "2.25rem" }}
             />
           </div>
-          <button onClick={openAdd} style={btn("linear-gradient(135deg,#06b6d4,#0284c7)")}>
+          <button onClick={openAdd} style={btn("linear-gradient(135deg,#2563EB,#0284c7)")}>
             <Plus size={14} /> New Pool
           </button>
         </div>
@@ -355,7 +355,7 @@ export default function IPPool() {
                 <tr>
                   <td colSpan={5} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.625rem", color: "var(--isp-text-muted)" }}>
-                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#06b6d4" }} /> Loading…
+                      <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "#2563EB" }} /> Loading…
                     </div>
                   </td>
                 </tr>
@@ -371,7 +371,7 @@ export default function IPPool() {
                   /* Color-code by pool name */
                   const nameColor =
                     pool.name === "active"  ? "#22c55e" :
-                    pool.name === "pppoe"   ? "#06b6d4" :
+                    pool.name === "pppoe"   ? "#2563EB" :
                     pool.name === "expired" ? "#f59e0b" :
                     "var(--isp-text)";
                   return (
@@ -383,7 +383,7 @@ export default function IPPool() {
                       <td style={{ ...TD, fontWeight: 700, color: nameColor, fontFamily: "monospace", textTransform: "uppercase" }}>
                         {pool.name}
                       </td>
-                      <td style={{ ...TD, fontFamily: "monospace", color: "#06b6d4", fontWeight: 600 }}>
+                      <td style={{ ...TD, fontFamily: "monospace", color: "#2563EB", fontWeight: 600 }}>
                         {pool.range_start}–{pool.range_end}
                       </td>
                       <td style={TD}>
@@ -391,8 +391,8 @@ export default function IPPool() {
                           <span style={{
                             display: "inline-flex", alignItems: "center", gap: "0.3rem",
                             fontSize: "0.75rem", fontWeight: 700,
-                            background: "rgba(6,182,212,0.08)", border: "1px solid rgba(6,182,212,0.2)",
-                            color: "#06b6d4", borderRadius: 5, padding: "0.18rem 0.55rem",
+                            background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)",
+                            color: "#2563EB", borderRadius: 5, padding: "0.18rem 0.55rem",
                           }}>
                             <span style={{ width: 6, height: 6, borderRadius: "50%", background: router.status === "online" ? "#22c55e" : "#475569" }} />
                             {router.name}
@@ -432,7 +432,7 @@ export default function IPPool() {
             {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
               <button key={p} onClick={() => setPage(p)}
                 style={{
-                  ...btn(p === page ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.05)", p === page ? "white" : "var(--isp-text-muted)"),
+                  ...btn(p === page ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.05)", p === page ? "white" : "var(--isp-text-muted)"),
                   border: `1px solid ${p === page ? "transparent" : "var(--isp-border)"}`,
                   padding: "0.32rem 0.7rem", minWidth: 32,
                 }}>
@@ -511,7 +511,7 @@ export default function IPPool() {
               <button onClick={() => setShowForm(false)} style={btn("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>
                 Cancel
               </button>
-              <button onClick={savePool} disabled={saving} style={{ ...btn("linear-gradient(135deg,#06b6d4,#0284c7)"), opacity: saving ? 0.7 : 1 }}>
+              <button onClick={savePool} disabled={saving} style={{ ...btn("linear-gradient(135deg,#2563EB,#0284c7)"), opacity: saving ? 0.7 : 1 }}>
                 {saving ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <CheckCircle2 size={13} />}
                 {editPool ? "Update Pool" : "Save Pool"}
               </button>

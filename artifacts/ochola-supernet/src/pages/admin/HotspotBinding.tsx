@@ -251,7 +251,7 @@ function AddBindingModal({
       <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 480, boxShadow: "0 32px 80px rgba(0,0,0,0.6)", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--isp-border-subtle)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#06b6d4,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Link2 size={17} style={{ color: "white" }} />
             </div>
             <div>
@@ -269,7 +269,7 @@ function AddBindingModal({
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.625rem" }}>
             {(["user-mac", "bypass"] as const).map(t => {
               const active = btype === t;
-              const color = t === "user-mac" ? "#22d3ee" : "#a78bfa";
+              const color = t === "user-mac" ? "#3b82f6" : "#a78bfa";
               return (
                 <button key={t} onClick={() => setBtype(t)}
                   style={{ padding: "0.75rem", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", border: active ? `1.5px solid ${color}` : "1.5px solid var(--isp-border)", background: active ? `${color}18` : "rgba(255,255,255,0.02)", textAlign: "left", transition: "all 0.14s" }}>
@@ -308,7 +308,7 @@ function AddBindingModal({
           </Field>
 
           {/* Info box */}
-          <div style={{ background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.15)", borderRadius: 8, padding: "0.75rem 1rem", fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
+          <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.15)", borderRadius: 8, padding: "0.75rem 1rem", fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
             {btype === "user-mac"
               ? "This device's MAC will be locked to the selected account. The user can only log in from this device."
               : "This device will bypass the hotspot login page and connect automatically, regardless of any user account."}
@@ -320,7 +320,7 @@ function AddBindingModal({
             Cancel
           </button>
           <button onClick={() => { setSaving(true); onSave(btype, btype === "user-mac" ? Number(customerId) : null, mac, ip); }} disabled={saving || !valid}
-            style={{ flex: 2, padding: "0.65rem", borderRadius: 10, background: saving || !valid ? "rgba(6,182,212,0.35)" : "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !valid ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+            style={{ flex: 2, padding: "0.65rem", borderRadius: 10, background: saving || !valid ? "rgba(37,99,235,0.35)" : "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !valid ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
             {saving ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Link2 size={14} />}
             Add Binding
           </button>
@@ -360,7 +360,7 @@ function SessionsTab() {
       {/* Session stat strip */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.875rem" }}>
         {[
-          { label: showActive ? "Active Sessions" : "Past Sessions", value: String(sessions.length), icon: <Activity size={18} />, color: "#22d3ee" },
+          { label: showActive ? "Active Sessions" : "Past Sessions", value: String(sessions.length), icon: <Activity size={18} />, color: "#3b82f6" },
           { label: "Unique Users", value: String(new Set(sessions.map(s => s.username)).size), icon: <Users size={18} />, color: "#a78bfa" },
           { label: "Data Upload", value: fmtBytes(totalIn), icon: <UploadCloud size={18} />, color: "#34d399" },
           { label: "Data Download", value: fmtBytes(totalOut), icon: <DownloadCloud size={18} />, color: "#f59e0b" },
@@ -385,7 +385,7 @@ function SessionsTab() {
         <div style={{ display: "flex", background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, overflow: "hidden" }}>
           {[{ label: "Active", val: true }, { label: "History", val: false }].map(o => (
             <button key={String(o.val)} onClick={() => setShowActive(o.val)}
-              style={{ padding: "0.5rem 1rem", fontFamily: "inherit", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", border: "none", background: showActive === o.val ? "rgba(6,182,212,0.15)" : "transparent", color: showActive === o.val ? "#22d3ee" : "var(--isp-text-muted)", transition: "all 0.14s" }}>
+              style={{ padding: "0.5rem 1rem", fontFamily: "inherit", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", border: "none", background: showActive === o.val ? "rgba(37,99,235,0.15)" : "transparent", color: showActive === o.val ? "#3b82f6" : "var(--isp-text-muted)", transition: "all 0.14s" }}>
               {o.label}
             </button>
           ))}
@@ -416,8 +416,8 @@ function SessionsTab() {
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={8} style={{ textAlign: "center", padding: "4rem" }}>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
-                    <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(6,182,212,0.07)", border: "1.5px dashed rgba(6,182,212,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <Activity size={22} style={{ color: "#06b6d4", opacity: 0.5 }} />
+                    <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(37,99,235,0.07)", border: "1.5px dashed rgba(37,99,235,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Activity size={22} style={{ color: "#2563EB", opacity: 0.5 }} />
                     </div>
                     <div>
                       <p style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.2rem" }}>
@@ -433,7 +433,7 @@ function SessionsTab() {
                 <tr key={s.radacctid} style={{ borderBottom: "1px solid var(--isp-border-subtle)" }} className="crow">
                   <td style={{ padding: "0.7rem 1.1rem", fontWeight: 600, color: "var(--isp-text)" }}>{s.username || "—"}</td>
                   <td style={{ padding: "0.7rem 1.1rem", fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>{formatMac(s.callingstationid) || "—"}</td>
-                  <td style={{ padding: "0.7rem 1.1rem", fontFamily: "monospace", fontSize: "0.75rem", color: "#22d3ee" }}>{s.framedipaddress || "—"}</td>
+                  <td style={{ padding: "0.7rem 1.1rem", fontFamily: "monospace", fontSize: "0.75rem", color: "#3b82f6" }}>{s.framedipaddress || "—"}</td>
                   <td style={{ padding: "0.7rem 1.1rem", fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>{s.nasipaddress || "—"}</td>
                   <td style={{ padding: "0.7rem 1.1rem", fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text)" }}>{fmtDuration(s.acctsessiontime)}</td>
                   <td style={{ padding: "0.7rem 1.1rem", fontFamily: "monospace", fontSize: "0.75rem", color: "#34d399" }}>{fmtBytes(s.acctinputoctets)}</td>
@@ -606,7 +606,7 @@ export default function HotspotBinding() {
               <RefreshCw size={13} style={{ animation: isLoading ? "spin 1s linear infinite" : "none" }} />
             </button>
             <button onClick={() => setShowAdd(true)}
-              style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 1.1rem", borderRadius: 10, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 12px rgba(6,182,212,0.3)" }}>
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.55rem 1.1rem", borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 12px rgba(37,99,235,0.3)" }}>
               <Plus size={15} /> Add Binding
             </button>
           </div>
@@ -616,7 +616,7 @@ export default function HotspotBinding() {
         <div style={{ display: "flex", gap: 0, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 10, padding: 4, alignSelf: "flex-start" }}>
           {([["bindings", <Link2 size={13} />, "Bindings"], ["sessions", <Activity size={13} />, "Sessions"]] as const).map(([t, icon, label]) => (
             <button key={t} onClick={() => setTab(t)}
-              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 1.1rem", borderRadius: 8, fontFamily: "inherit", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", border: "none", background: tab === t ? "rgba(6,182,212,0.15)" : "transparent", color: tab === t ? "#22d3ee" : "var(--isp-text-muted)", transition: "all 0.14s" }}>
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 1.1rem", borderRadius: 8, fontFamily: "inherit", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", border: "none", background: tab === t ? "rgba(37,99,235,0.15)" : "transparent", color: tab === t ? "#3b82f6" : "var(--isp-text-muted)", transition: "all 0.14s" }}>
               {icon} {label}
             </button>
           ))}
@@ -629,7 +629,7 @@ export default function HotspotBinding() {
             {/* Stat cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.875rem" }}>
               {[
-                { label: "Total Bindings", value: String(totalBindings), icon: <Link2 size={18} />,    color: "#22d3ee" },
+                { label: "Total Bindings", value: String(totalBindings), icon: <Link2 size={18} />,    color: "#3b82f6" },
                 { label: "User-MAC Locks", value: String(userMacCount),  icon: <Shield size={18} />,   color: "#a78bfa" },
                 { label: "MAC Bypass",     value: String(bypassCount),   icon: <Monitor size={18} />,  color: "#34d399" },
                 { label: "Active",         value: String(activeCount),   icon: <Activity size={18} />, color: "#f59e0b" },
@@ -680,8 +680,8 @@ export default function HotspotBinding() {
                     ) : filtered.length === 0 ? (
                       <tr><td colSpan={6} style={{ textAlign: "center", padding: "4rem" }}>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
-                          <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(6,182,212,0.07)", border: "1.5px dashed rgba(6,182,212,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <Link2 size={22} style={{ color: "#06b6d4", opacity: 0.5 }} />
+                          <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(37,99,235,0.07)", border: "1.5px dashed rgba(37,99,235,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <Link2 size={22} style={{ color: "#2563EB", opacity: 0.5 }} />
                           </div>
                           <div>
                             <p style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.2rem" }}>
@@ -695,7 +695,7 @@ export default function HotspotBinding() {
                           </div>
                           {bindings.length === 0 && (
                             <button onClick={() => setShowAdd(true)}
-                              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
                               <Plus size={13} /> Add First Binding
                             </button>
                           )}
@@ -724,14 +724,14 @@ export default function HotspotBinding() {
                         {/* Account */}
                         <td style={{ padding: "0.75rem 1.25rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                           {b.username ? (
-                            <span style={{ fontFamily: "monospace", color: "#22d3ee" }}>{b.username}</span>
+                            <span style={{ fontFamily: "monospace", color: "#3b82f6" }}>{b.username}</span>
                           ) : (
                             <span style={{ opacity: 0.5, fontSize: "0.75rem" }}>No account (bypass)</span>
                           )}
                         </td>
                         {/* IP */}
                         <td style={{ padding: "0.75rem 1.25rem" }}>
-                          {b.ip ? <span style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#22d3ee" }}>{b.ip}</span> : <span style={{ color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>Dynamic</span>}
+                          {b.ip ? <span style={{ fontFamily: "monospace", fontSize: "0.78rem", color: "#3b82f6" }}>{b.ip}</span> : <span style={{ color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>Dynamic</span>}
                         </td>
                         {/* Status */}
                         <td style={{ padding: "0.75rem 1.25rem" }}>

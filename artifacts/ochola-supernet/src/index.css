@@ -123,17 +123,17 @@
   --isp-section:       #06121e;
   --isp-card:          #06121e;
   --isp-inner-card:    #030a14;
-  --isp-border:        rgba(0,196,222,0.1);
-  --isp-border-subtle: rgba(0,196,222,0.055);
-  --isp-text:          #ddeeff;
-  --isp-text-muted:    #7ba8c5;
-  --isp-text-sub:      #4a7a9b;
-  --isp-nav-text:      #8bb8d5;
-  --isp-input-bg:      rgba(0,196,222,0.045);
-  --isp-input-border:  rgba(0,196,222,0.1);
-  --isp-hover:         rgba(0,196,222,0.055);
+  --isp-border:        rgba(148,163,184,0.12);
+  --isp-border-subtle: rgba(148,163,184,0.06);
+  --isp-text:          #E2E8F0;
+  --isp-text-muted:    #94A3B8;
+  --isp-text-sub:      #64748B;
+  --isp-nav-text:      #94A3B8;
+  --isp-input-bg:      rgba(255,255,255,0.04);
+  --isp-input-border:  rgba(148,163,184,0.15);
+  --isp-hover:         rgba(255,255,255,0.04);
   --isp-table-bg:      #04101c;
-  --isp-table-border:  rgba(0,196,222,0.065);
+  --isp-table-border:  rgba(148,163,184,0.08);
 
   --isp-accent:        #3b82f6;
   --isp-accent-glow:   rgba(59,130,246,0.15);
@@ -336,14 +336,14 @@
 .isp-badge-green  { background: rgba(34,197,94,0.10);  color: #16A34A; border: 1px solid rgba(34,197,94,0.20); }
 .isp-badge-red    { background: rgba(239,68,68,0.08);  color: #DC2626; border: 1px solid rgba(239,68,68,0.18); }
 .isp-badge-blue   { background: rgba(37,99,235,0.08);  color: #2563EB; border: 1px solid rgba(37,99,235,0.20); }
-.isp-badge-cyan   { background: rgba(6,182,212,0.08);  color: #0891B2; border: 1px solid rgba(6,182,212,0.20); }
+.isp-badge-cyan   { background: rgba(37,99,235,0.08);  color: #2563EB; border: 1px solid rgba(37,99,235,0.20); }
 .isp-badge-amber  { background: rgba(245,158,11,0.10); color: #D97706; border: 1px solid rgba(245,158,11,0.22); }
 .isp-badge-gray   { background: rgba(100,116,139,0.08); color: var(--isp-text-muted); border: 1px solid var(--isp-border); }
 
 [data-theme="dark"] .isp-badge-green  { color: #4ade80; }
 [data-theme="dark"] .isp-badge-red    { color: #f87171; }
 [data-theme="dark"] .isp-badge-blue   { color: #93c5fd; }
-[data-theme="dark"] .isp-badge-cyan   { color: #22d3ee; }
+[data-theme="dark"] .isp-badge-cyan   { color: #93c5fd; }
 [data-theme="dark"] .isp-badge-amber  { color: #fbbf24; }
 
 /* ═══════════════════════════════════════════════════════════════════

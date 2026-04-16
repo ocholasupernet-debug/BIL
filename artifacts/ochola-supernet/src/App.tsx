@@ -94,7 +94,7 @@ function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#080c10]">
       <div className="text-center space-y-4">
-        <h1 className="text-6xl font-black text-cyan-500">404</h1>
+        <h1 className="text-6xl font-black text-blue-500">404</h1>
         <p className="text-xl text-slate-300">Page not found</p>
         <button onClick={() => window.history.back()} className="px-6 py-2 bg-white/10 rounded-lg text-white font-semibold">Go Back</button>
       </div>

@@ -223,7 +223,7 @@ export default function Dashboard() {
 
   /* ─── Real user type breakdown ─── */
   const userInsights = useMemo(() => [
-    { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "#06b6d4" },
+    { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "#3b82f6" },
     { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "#8b5cf6" },
     { label: "Static",  count: customers.filter(c => c.type === "static").length,  color: "#10b981" },
   ], [customers]);
@@ -253,9 +253,7 @@ export default function Dashboard() {
 
   return (
     <AdminLayout>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        @keyframes pulse-glow{0%,100%{opacity:0.6}50%{opacity:1}}
-      `}</style>
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
         {/* Page header */}
@@ -270,11 +268,11 @@ export default function Dashboard() {
               marginBottom: 6,
               padding: "3px 12px 3px 8px",
               borderRadius: 20,
-              background: "rgba(0,196,222,0.07)",
-              border: "1px solid rgba(0,196,222,0.15)",
+              background: "rgba(37,99,235,0.07)",
+              border: "1px solid rgba(37,99,235,0.15)",
             }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#00c4de", display: "inline-block", animation: "pulse-glow 2s infinite", boxShadow: "0 0 6px #00c4de" }} />
-              <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "#00c4de", letterSpacing: "0.08em", textTransform: "uppercase" }}>Live Dashboard</span>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#22C55E", display: "inline-block" }} />
+              <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Live Dashboard</span>
             </div>
             <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", margin: 0, letterSpacing: "-0.03em", lineHeight: 1.2 }}>
               {greeting} 👋
@@ -286,9 +284,9 @@ export default function Dashboard() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             <div style={{
               padding: "6px 14px", borderRadius: 9,
-              background: "rgba(0,196,222,0.06)",
-              border: "1px solid rgba(0,196,222,0.14)",
-              fontSize: "0.72rem", fontWeight: 700, color: "#00c4de",
+              background: "var(--isp-inner-card)",
+              border: "1px solid var(--isp-border)",
+              fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)",
               letterSpacing: "0.03em",
             }}>
               {new Date().toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long" })}
@@ -306,7 +304,7 @@ export default function Dashboard() {
 
         {/* Payment Gateway Status Bar */}
         <div style={{ borderRadius: 16, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0, boxShadow: "0 0 6px #22c55e" }} />
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0 }} />
           <span style={{ fontSize: "1rem" }}>{gatewayInfo.emoji}</span>
           <span style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.875rem" }}>{gatewayInfo.label}</span>
           <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.6rem", borderRadius: 20, background: "rgba(34,197,94,0.15)", color: "#22c55e", fontWeight: 700 }}>Active</span>
@@ -339,7 +337,7 @@ export default function Dashboard() {
               </div>
             ) : routers.length === 0 ? (
               <div style={{ color: "var(--isp-text-muted)", fontSize: "0.8rem", padding: "0.5rem 0" }}>
-                No routers registered yet. <Link href="/admin/network"><span style={{ color: "#06b6d4", cursor: "pointer" }}>Add one →</span></Link>
+                No routers registered yet. <Link href="/admin/network"><span style={{ color: "var(--isp-accent)", cursor: "pointer" }}>Add one →</span></Link>
               </div>
             ) : routers.map(router => {
               const isOnline = routerOnline(router);
@@ -375,7 +373,7 @@ export default function Dashboard() {
               const active = selectedRouter === opt.key;
               return (
                 <button key={String(opt.key)} onClick={() => setSelectedRouter(opt.key)}
-                  style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.35rem 0.875rem", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s", border: active ? "1.5px solid #06b6d4" : "1.5px solid rgba(255,255,255,0.1)", background: active ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.04)", color: active ? "#22d3ee" : "#7c8ea6" }}>
+                  style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.35rem 0.875rem", borderRadius: 20, fontSize: "0.75rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s", border: active ? "1.5px solid var(--isp-accent)" : "1.5px solid var(--isp-border)", background: active ? "var(--isp-accent-glow)" : "rgba(255,255,255,0.04)", color: active ? "var(--isp-accent)" : "var(--isp-text-muted)" }}>
                   {opt.online !== null && <span style={{ width: 7, height: 7, borderRadius: "50%", background: opt.online ? "#22c55e" : "#f87171", display: "inline-block", flexShrink: 0 }} />}
                   {opt.label}
                 </button>
@@ -383,7 +381,7 @@ export default function Dashboard() {
             })}
           </div>
           {selectedRouter !== "all" && selectedRouterObj && (
-            <div style={{ marginLeft: "auto", fontSize: "0.75rem", color: "#22d3ee" }}>
+            <div style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--isp-accent)" }}>
               Showing: <strong>{selectedRouterObj.name}</strong> ({selectedRouterObj.status})
               <button onClick={() => setSelectedRouter("all")} style={{ marginLeft: "0.5rem", background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "0.7rem", fontFamily: "inherit" }}>(clear)</button>
             </div>
@@ -430,7 +428,7 @@ export default function Dashboard() {
                 <svg viewBox={`0 0 ${monthlyData.length * 36} 140`} width="100%" style={{ display: "block", overflow: "visible" }}>
                   <defs>
                     <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#06b6d4" /><stop offset="100%" stopColor="#0284c7" stopOpacity="0.6" />
+                      <stop offset="0%" stopColor="#3b82f6" /><stop offset="100%" stopColor="#2563EB" stopOpacity="0.6" />
                     </linearGradient>
                   </defs>
                   {monthlyData.map((d, i) => {
@@ -492,7 +490,7 @@ export default function Dashboard() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.875rem 1.25rem", borderBottom: "1px solid var(--isp-border-subtle)" }}>
             <span style={{ fontSize: "0.9375rem", fontWeight: 700, color: "var(--isp-text)" }}>Recent Transactions</span>
             <Link href="/admin/transactions">
-              <span style={{ fontSize: "0.75rem", color: "#06b6d4", cursor: "pointer", fontWeight: 600 }}>View All →</span>
+              <span style={{ fontSize: "0.75rem", color: "var(--isp-accent)", cursor: "pointer", fontWeight: 600 }}>View All →</span>
             </Link>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -523,7 +521,7 @@ export default function Dashboard() {
                     <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: "0.72rem" }}>{tx.reference || "—"}</td>
                     <td style={{ padding: "0.625rem 1.25rem", color: "#4ade80", fontWeight: 700 }}>Ksh {tx.amount.toLocaleString()}</td>
                     <td style={{ padding: "0.625rem 1.25rem" }}>
-                      <span style={{ fontSize: "0.6875rem", padding: "0.2rem 0.5rem", borderRadius: 4, background: tx.payment_method === "mpesa" ? "rgba(6,182,212,0.1)" : "rgba(251,191,36,0.1)", color: tx.payment_method === "mpesa" ? "#22d3ee" : "#fbbf24", fontWeight: 700 }}>
+                      <span style={{ fontSize: "0.6875rem", padding: "0.2rem 0.5rem", borderRadius: 4, background: tx.payment_method === "mpesa" ? "rgba(37,99,235,0.1)" : "rgba(251,191,36,0.1)", color: tx.payment_method === "mpesa" ? "#3b82f6" : "#fbbf24", fontWeight: 700 }}>
                         {tx.payment_method.toUpperCase()}
                       </span>
                     </td>

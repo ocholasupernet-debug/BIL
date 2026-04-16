@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 // Mock Data
 export const MOCK_CUSTOMERS = [
-  { id: 1, name: "John Kamau", phone: "0712345678", plan: "Hotspot 10Mbps", ip: "192.168.1.101", expiry: "2026-03-27", paid: 500, status: "Active", initials: "JK", color: "#06b6d4" },
+  { id: 1, name: "John Kamau", phone: "0712345678", plan: "Hotspot 10Mbps", ip: "192.168.1.101", expiry: "2026-03-27", paid: 500, status: "Active", initials: "JK", color: "#2563EB" },
   { id: 2, name: "Mary Wanjiku", phone: "0723456789", plan: "PPPoE 20Mbps", ip: "pppoe-mwanjiku", expiry: "2026-04-01", paid: 1200, status: "Active", initials: "MW", color: "#8b5cf6" },
   { id: 3, name: "Peter Otieno", phone: "0734567890", plan: "Hotspot 5Mbps", ip: "192.168.1.102", expiry: "2026-03-24", paid: 300, status: "Expired", initials: "PO", color: "#f59e0b" },
   { id: 4, name: "Grace Muthoni", phone: "0745678901", plan: "PPPoE 10Mbps", ip: "pppoe-gmuthoni", expiry: "2026-04-05", paid: 800, status: "Active", initials: "GM", color: "#10b981" },

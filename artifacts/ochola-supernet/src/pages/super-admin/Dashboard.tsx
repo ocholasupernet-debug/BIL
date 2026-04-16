@@ -144,7 +144,7 @@ export default function SuperAdminDashboard() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16, marginBottom: 28 }}>
           <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="#6366f1" icon={Users}    loading={loadingAdmins}    />
           <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="#8b5cf6" icon={Router}   loading={loadingRouters}   />
-          <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="#06b6d4" icon={Globe}    loading={loadingCustomers} />
+          <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="#2563EB" icon={Globe}    loading={loadingCustomers} />
           <StatCard C={C} label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
         </div>
 

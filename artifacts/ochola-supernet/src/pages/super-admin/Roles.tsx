@@ -55,7 +55,7 @@ export default function SuperAdminRoles() {
         <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
           {ROLES.map(r => (
             <div key={r} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: r === "Super Admin" ? "#6366f1" : r === "ISP Admin" ? "#8b5cf6" : r === "Sub Admin" ? "#06b6d4" : r === "Reseller" ? "#f59e0b" : "#64748b" }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: r === "Super Admin" ? "#6366f1" : r === "ISP Admin" ? "#8b5cf6" : r === "Sub Admin" ? "#2563EB" : r === "Reseller" ? "#f59e0b" : "#64748b" }} />
               <span style={{ fontSize: "0.72rem", color: C.sub, fontWeight: 600 }}>{r}</span>
             </div>
           ))}

@@ -66,7 +66,7 @@ function fmtDay(key: string) {
   return `${d}/${m}`;
 }
 
-const PIE_COLORS = ["#06b6d4", "#4ade80", "#f59e0b", "#f87171", "#a78bfa", "#fb923c", "#34d399"];
+const PIE_COLORS = ["#2563EB", "#4ade80", "#f59e0b", "#f87171", "#a78bfa", "#fb923c", "#34d399"];
 
 /* ─── Comparison card ─── */
 function CompareCard({ title, current, previous, unit = "Ksh" }: {
@@ -291,8 +291,8 @@ export default function TransactionGraphs() {
             style={{
               display: "flex", alignItems: "center", gap: 8,
               padding: "10px 18px", borderRadius: 10,
-              background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)",
-              color: "#06b6d4", fontSize: 13, fontWeight: 600, cursor: "pointer",
+              background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)",
+              color: "#2563EB", fontSize: 13, fontWeight: 600, cursor: "pointer",
             }}
           >
             <RefreshCw size={14} /> Refresh
@@ -353,8 +353,8 @@ export default function TransactionGraphs() {
                   <AreaChart data={monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="gCyan" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
+                        <stop offset="5%" stopColor="#2563EB" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#2563EB" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -362,7 +362,7 @@ export default function TransactionGraphs() {
                     <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={60} />
                     <Tooltip content={<ChartTooltip />} />
                     <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
-                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="#06b6d4" fill="url(#gCyan)" strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="#2563EB" fill="url(#gCyan)" strokeWidth={2} dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </ChartCard>

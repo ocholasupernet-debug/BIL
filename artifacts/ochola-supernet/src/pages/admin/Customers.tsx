@@ -43,12 +43,12 @@ interface NewCustomerForm {
 
 /* ══════════════════════════ Helpers ══════════════════════════ */
 const TYPE_META: Record<CustomerType, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
-  hotspot: { label: "Hotspot", color: "#22d3ee", bg: "rgba(6,182,212,0.12)",   icon: <Wifi    size={11} /> },
+  hotspot: { label: "Hotspot", color: "#3b82f6", bg: "rgba(37,99,235,0.12)",   icon: <Wifi    size={11} /> },
   pppoe:   { label: "PPPoE",   color: "#a78bfa", bg: "rgba(139,92,246,0.12)",  icon: <Network size={11} /> },
   static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)",  icon: <Globe   size={11} /> },
 };
 
-const AVATAR_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
+const AVATAR_COLORS = ["#2563EB","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
 function avatarColor(id: number) { return AVATAR_COLORS[id % AVATAR_COLORS.length]; }
 function initials(name?: string | null): string {
   if (!name) return "?";
@@ -199,9 +199,9 @@ function CustomFieldsSection({ fields, setFields }: { fields: { name: string; va
 
   return (
     <>
-      <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         Custom Fields
-        <button type="button" onClick={() => setShowAdd(true)} style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", borderRadius: 6, padding: "2px 8px", color: "#06b6d4", fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+        <button type="button" onClick={() => setShowAdd(true)} style={{ display: "flex", alignItems: "center", gap: 4, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.3)", borderRadius: 6, padding: "2px 8px", color: "#2563EB", fontSize: "0.68rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
           <Plus size={10} /> Add Field
         </button>
       </div>
@@ -218,7 +218,7 @@ function CustomFieldsSection({ fields, setFields }: { fields: { name: string; va
               onKeyDown={e => e.key === "Enter" && addField()}
             />
           </div>
-          <button type="button" onClick={addField} style={{ padding: "0.575rem 1rem", borderRadius: 8, background: "#06b6d4", border: "none", color: "white", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          <button type="button" onClick={addField} style={{ padding: "0.575rem 1rem", borderRadius: 8, background: "#2563EB", border: "none", color: "white", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
             Add
           </button>
           <button type="button" onClick={() => setShowAdd(false)} style={{ padding: "0.575rem 0.75rem", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}>
@@ -327,7 +327,7 @@ function CustomerModal({
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--isp-border-subtle)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg,#06b6d4,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg,#2563EB,#0284c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Users size={18} style={{ color: "white" }} />
             </div>
             <div>
@@ -368,7 +368,7 @@ function CustomerModal({
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
 
             {/* ─── IDENTITY ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem" }}>
               Identity
             </div>
 
@@ -390,7 +390,7 @@ function CustomerModal({
             </Field>
 
             {/* ─── CONNECTION ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
               {form.type === "hotspot" ? "Hotspot Credentials" : form.type === "pppoe" ? "PPPoE Credentials" : "Static IP Credentials"}
             </div>
 
@@ -504,7 +504,7 @@ function CustomerModal({
             )}
 
             {/* ─── PLAN & ROUTER ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
               Plan & Router
             </div>
 
@@ -529,14 +529,14 @@ function CustomerModal({
 
             {/* Plan preview */}
             {selectedPlan && (
-              <div style={{ background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+              <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
                 {[
                   ["Plan",     selectedPlan.name],
                   ["Price",    `Ksh ${selectedPlan.price}`],
                   ...(selectedPlan.speed_down ? [["Speed", `${selectedPlan.speed_down}↓ / ${selectedPlan.speed_up}↑ Mbps`]] : []),
                 ].map(([k, v]) => (
                   <div key={k}>
-                    <div style={{ fontSize: "0.62rem", color: "#22d3ee", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
+                    <div style={{ fontSize: "0.62rem", color: "#3b82f6", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
                     <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{v}</div>
                   </div>
                 ))}
@@ -544,7 +544,7 @@ function CustomerModal({
             )}
 
             {/* ─── OPTIONAL ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#06b6d4", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "#2563EB", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
               Optional
             </div>
 
@@ -575,7 +575,7 @@ function CustomerModal({
             Cancel
           </button>
           <button onClick={handleSubmit} disabled={saving || !form.name.trim()}
-            style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: saving || !form.name.trim() ? "rgba(6,182,212,0.35)" : "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !form.name.trim() ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+            style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: saving || !form.name.trim() ? "rgba(37,99,235,0.35)" : "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !form.name.trim() ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
             {saving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={15} />}
             {saving ? "Saving…" : isEdit ? "Save Changes" : `Add ${TYPE_META[form.type].label} Customer`}
           </button>
@@ -751,7 +751,7 @@ export default function Customers() {
             </button>
             <button onClick={() => setShowAdd(true)}
               className="px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2"
-              style={{ background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(6,182,212,0.3)", borderRadius: 12 }}>
+              style={{ background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(37,99,235,0.3)", borderRadius: 12 }}>
               <Plus className="w-4 h-4" /> Add Customer
             </button>
           </div>
@@ -785,7 +785,7 @@ export default function Customers() {
           description="Push all hotspot customers as MikroTik hotspot users, and PPPoE customers as PPPoE secrets — direct via API, no terminal needed."
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
-          color="#06b6d4"
+          color="#2563EB"
           buildPayload={() => ({
             users: customers.map(c => ({
               username:      c.username ?? "",
@@ -847,8 +847,8 @@ export default function Customers() {
                 ) : filtered.length === 0 ? (
                   <tr><td colSpan={8} style={{ textAlign: "center", padding: "4rem" }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
-                      <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(6,182,212,0.07)", border: "1.5px dashed rgba(6,182,212,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <Users size={24} style={{ color: "#06b6d4", opacity: 0.5 }} />
+                      <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(37,99,235,0.07)", border: "1.5px dashed rgba(37,99,235,0.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Users size={24} style={{ color: "#2563EB", opacity: 0.5 }} />
                       </div>
                       <div>
                         <p style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.25rem" }}>
@@ -860,7 +860,7 @@ export default function Customers() {
                       </div>
                       {customers.length === 0 && (
                         <button onClick={() => setShowAdd(true)}
-                          style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#06b6d4,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                          style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1.25rem", borderRadius: 8, background: "linear-gradient(135deg,#2563EB,#0284c7)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
                           <Plus size={14} /> Add Customer
                         </button>
                       )}
@@ -905,7 +905,7 @@ export default function Customers() {
                       </td>
                       {/* IP / MAC */}
                       <td style={{ padding: "0.75rem 1.25rem" }}>
-                        {c.ip_address && <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "#22d3ee" }}>{c.ip_address}</div>}
+                        {c.ip_address && <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "#3b82f6" }}>{c.ip_address}</div>}
                         {c.mac_address && <div style={{ fontFamily: "monospace", fontSize: "0.68rem", color: "var(--isp-text-muted)" }}>{c.mac_address}</div>}
                         {!c.ip_address && !c.mac_address && <span style={{ color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>—</span>}
                       </td>

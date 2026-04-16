@@ -125,7 +125,7 @@ function WirelessCard({
     }
   };
 
-  const bandColor = iface.band?.includes("5") ? "#a78bfa" : "#22d3ee";
+  const bandColor = iface.band?.includes("5") ? "#a78bfa" : "#3b82f6";
 
   return (
     <div style={{
@@ -136,17 +136,17 @@ function WirelessCard({
       {/* Header */}
       <div style={{
         padding: "0.875rem 1.25rem",
-        background: iface.disabled ? "rgba(248,113,113,0.05)" : "rgba(6,182,212,0.04)",
+        background: iface.disabled ? "rgba(248,113,113,0.05)" : "rgba(37,99,235,0.04)",
         borderBottom: "1px solid var(--isp-border-subtle)",
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
           <div style={{
             width: 34, height: 34, borderRadius: 9,
-            background: iface.disabled ? "rgba(248,113,113,0.1)" : "rgba(6,182,212,0.1)",
+            background: iface.disabled ? "rgba(248,113,113,0.1)" : "rgba(37,99,235,0.1)",
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
-            <Radio size={16} style={{ color: iface.disabled ? "#f87171" : "#06b6d4" }} />
+            <Radio size={16} style={{ color: iface.disabled ? "#f87171" : "#2563EB" }} />
           </div>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -216,7 +216,7 @@ function WirelessCard({
             }}>
               <Lock size={11} /> Password
               <span style={{ marginLeft: "auto", fontWeight: 500, fontSize: "0.68rem", textTransform: "none" }}>
-                Profile: <span style={{ color: "#06b6d4" }}>{profile.name}</span>
+                Profile: <span style={{ color: "#2563EB" }}>{profile.name}</span>
               </span>
             </label>
             <PasswordInput value={password} onChange={setPassword} />
@@ -236,11 +236,11 @@ function WirelessCard({
             style={{
               display: "flex", alignItems: "center", gap: "0.45rem",
               padding: "0.55rem 1.375rem", borderRadius: 8, border: "none",
-              background: dirty && !saving ? "linear-gradient(135deg,#06b6d4,#0284c7)" : "rgba(255,255,255,0.06)",
+              background: dirty && !saving ? "linear-gradient(135deg,#2563EB,#0284c7)" : "rgba(255,255,255,0.06)",
               color: dirty && !saving ? "white" : "var(--isp-text-muted)",
               fontWeight: 700, fontSize: "0.84rem", cursor: dirty && !saving ? "pointer" : "not-allowed",
               fontFamily: "inherit", transition: "all 0.15s",
-              boxShadow: dirty && !saving ? "0 4px 14px rgba(6,182,212,0.3)" : "none",
+              boxShadow: dirty && !saving ? "0 4px 14px rgba(37,99,235,0.3)" : "none",
             }}
           >
             {saving
@@ -386,7 +386,7 @@ export default function Wireless() {
             color: "var(--isp-text-muted)", fontSize: "0.875rem",
           }}>
             No routers found.{" "}
-            <a href="/admin/network/add-router" style={{ color: "#06b6d4", fontWeight: 600 }}>
+            <a href="/admin/network/add-router" style={{ color: "#2563EB", fontWeight: 600 }}>
               Add a router first →
             </a>
           </div>
@@ -397,7 +397,7 @@ export default function Wireless() {
             maxWidth: 720, display: "flex", alignItems: "center", gap: "0.75rem",
             padding: "2rem 1.25rem", color: "var(--isp-text-muted)", fontSize: "0.875rem",
           }}>
-            <Loader2 size={18} style={{ animation: "spin 1s linear infinite", color: "#06b6d4" }} />
+            <Loader2 size={18} style={{ animation: "spin 1s linear infinite", color: "#2563EB" }} />
             Reading wireless interfaces from {router?.name}…
           </div>
         )}

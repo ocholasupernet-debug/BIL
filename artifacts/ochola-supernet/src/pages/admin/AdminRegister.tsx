@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Wifi, Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
+import { Wifi, Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, Zap } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 function extractMsg(err: unknown): string {
@@ -21,24 +21,20 @@ export default function AdminRegister() {
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
 
-  /* company availability */
   const [checkingCompany, setCheckingCompany] = useState(false);
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
   const companyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* phone availability */
   const [checkingPhone, setCheckingPhone] = useState(false);
   const [phoneAvailable, setPhoneAvailable] = useState<boolean | null>(null);
   const phoneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* submit */
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [registeredUsername, setRegisteredUsername] = useState("");
   const [serverErr, setServerErr] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  /* ── live company availability check ── */
   useEffect(() => {
     setCompanyAvailable(null);
     if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
@@ -59,7 +55,6 @@ export default function AdminRegister() {
     return () => { if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current); };
   }, [company]);
 
-  /* ── live phone availability check ── */
   useEffect(() => {
     setPhoneAvailable(null);
     if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current);
@@ -79,7 +74,6 @@ export default function AdminRegister() {
     return () => { if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current); };
   }, [phone]);
 
-  /* ── validation ── */
   const validate = () => {
     const e: Record<string, string> = {};
     if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
@@ -89,7 +83,6 @@ export default function AdminRegister() {
     return e;
   };
 
-  /* ── submit ── */
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
     setServerErr("");
@@ -138,42 +131,40 @@ export default function AdminRegister() {
     && !checkingCompany
     && !checkingPhone;
 
-  /* ══════════ Success ══════════ */
   if (success) {
     const subdomainUrl = `https://${registeredUsername}.isplatty.org/admin/login`;
     return (
-      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)" }}>
-        <div className="w-full max-w-sm text-center">
-          <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl p-10 shadow-2xl">
-            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-emerald-500/20 flex items-center justify-center">
-              <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+      <div style={{ minHeight: "100vh", background: "#F8FAFC", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+          <div style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 16, padding: "48px 32px", boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
+            <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: "50%", background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <CheckCircle2 size={32} style={{ color: "#22C55E" }} />
             </div>
-            <h2 className="text-2xl font-black text-white mb-2">Account Created!</h2>
-            <p className="text-slate-300 text-sm mb-3">
-              <span className="text-violet-300 font-semibold">{company}</span> is now registered.
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "#0F172A", marginBottom: 8 }}>Account Created!</h2>
+            <p style={{ fontSize: "0.875rem", color: "#64748B", marginBottom: 20 }}>
+              <span style={{ color: "#2563EB", fontWeight: 600 }}>{company}</span> is now registered.
             </p>
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4 text-left space-y-2">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Your Login Credentials</p>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Username</span>
-                <span className="text-sm font-mono font-bold text-cyan-300">{registeredUsername}</span>
+            <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 12, padding: "16px 20px", marginBottom: 20, textAlign: "left" }}>
+              <p style={{ fontSize: "0.7rem", fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Your Login Credentials</p>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: "0.8rem", color: "#64748B" }}>Username</span>
+                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "#0F172A" }}>{registeredUsername}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Default Password</span>
-                <span className="text-sm font-mono font-bold text-amber-300">admin</span>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+                <span style={{ fontSize: "0.8rem", color: "#64748B" }}>Default Password</span>
+                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "#D97706" }}>admin</span>
               </div>
-              <div className="pt-2 mt-2 border-t border-white/10">
-                <p className="text-xs text-slate-400 mb-1">Your portal URL</p>
-                <p className="text-xs font-mono text-violet-300 break-all">{subdomainUrl}</p>
+              <div style={{ borderTop: "1px solid #E2E8F0", paddingTop: 12 }}>
+                <p style={{ fontSize: "0.72rem", color: "#64748B", marginBottom: 4 }}>Your portal URL</p>
+                <p style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "#2563EB", wordBreak: "break-all" }}>{subdomainUrl}</p>
               </div>
-              <p className="text-xs text-slate-500 pt-2 border-t border-white/10">You'll be asked to create a new password on first sign in.</p>
+              <p style={{ fontSize: "0.72rem", color: "#94A3B8", borderTop: "1px solid #E2E8F0", paddingTop: 10, marginTop: 10 }}>You'll be asked to create a new password on first sign in.</p>
             </div>
             <a
               href={subdomainUrl}
-              className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all"
-              style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)" }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "12px 20px", borderRadius: 10, background: "#2563EB", color: "white", fontWeight: 700, fontSize: "0.9rem", textDecoration: "none", boxShadow: "0 4px 14px rgba(37,99,235,0.3)" }}
             >
-              Go to My Portal <ArrowRight className="w-4 h-4" />
+              Go to My Portal <ArrowRight size={16} />
             </a>
           </div>
         </div>
@@ -181,137 +172,126 @@ export default function AdminRegister() {
     );
   }
 
-  /* ══════════ Form ══════════ */
+  const inputStyle = (hasError: boolean, isAvailable: boolean | null): React.CSSProperties => ({
+    width: "100%", paddingLeft: 38, paddingRight: 38,
+    paddingTop: 11, paddingBottom: 11,
+    background: "#FFFFFF",
+    border: `1.5px solid ${hasError || isAvailable === false ? "#FECACA" : isAvailable === true ? "#BBF7D0" : "#E2E8F0"}`,
+    borderRadius: 10,
+    fontSize: "0.875rem", color: "#0F172A",
+    outline: "none", fontFamily: "inherit",
+    transition: "border-color 0.15s, box-shadow 0.15s",
+  });
+
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
-      style={{ background: "linear-gradient(135deg,#0f0c29,#302b63,#24243e)" }}
-    >
-      <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full opacity-30 blur-3xl pointer-events-none"
-           style={{ background: "radial-gradient(circle,#7c3aed,transparent)" }} />
-      <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full opacity-20 blur-3xl pointer-events-none"
-           style={{ background: "radial-gradient(circle,#06b6d4,transparent)" }} />
+    <div style={{ minHeight: "100vh", background: "#F8FAFC", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div style={{ width: "100%", maxWidth: 420 }}>
 
-      <div className="w-full max-w-sm relative z-10">
-
-        <div className="flex flex-col items-center mb-10">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl mb-4"
-               style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5,#06b6d4)" }}>
-            <Wifi className="w-8 h-8 text-white" />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 9, background: "linear-gradient(135deg,#2563EB,#1D4ED8)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 14px rgba(37,99,235,0.3)" }}>
+            <Zap size={18} style={{ color: "white" }} />
           </div>
-          <h1 className="text-2xl font-black text-white tracking-tight">Get Started</h1>
-          <p className="text-slate-400 text-sm mt-1">Register your ISP on the platform</p>
+          <div>
+            <div style={{ fontSize: "0.95rem", fontWeight: 800, color: "#0F172A", letterSpacing: "-0.02em" }}>ISPlatty</div>
+            <div style={{ fontSize: "0.65rem", color: "#94A3B8", fontWeight: 500 }}>ISP Management Platform</div>
+          </div>
         </div>
 
-        <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
-          <div className="h-1 w-full" style={{ background: "linear-gradient(90deg,#7c3aed,#4f46e5,#06b6d4)" }} />
+        <h1 style={{ fontSize: "1.75rem", fontWeight: 800, color: "#0F172A", letterSpacing: "-0.03em", marginBottom: 6 }}>Get Started</h1>
+        <p style={{ fontSize: "0.875rem", color: "#64748B", marginBottom: 32 }}>Register your ISP on the platform</p>
 
-          <form onSubmit={handleSubmit} className="p-8 space-y-5">
-
-            {/* ── Company Name ── */}
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
-                Company / ISP Name
-              </label>
-              <div className="relative">
-                <Building2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
-                <input
-                  type="text"
-                  value={company}
-                  onChange={e => setCompany(e.target.value.toLowerCase())}
-                  placeholder="e.g. ochola networks"
-                  autoComplete="organization"
-                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
-                    errors.company ? "border-red-500/60 focus:ring-red-500" :
-                    companyAvailable === true ? "border-emerald-500/60 focus:ring-emerald-500" :
-                    companyAvailable === false ? "border-red-500/60 focus:ring-red-500" :
-                    "border-white/10 focus:border-violet-500 focus:ring-violet-500"
-                  }`}
-                />
-                <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
-                  {checkingCompany && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
-                  {!checkingCompany && companyAvailable === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                  {!checkingCompany && companyAvailable === false && <XCircle className="w-4 h-4 text-red-400" />}
-                </div>
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div>
+            <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#374151", marginBottom: 7 }}>Company / ISP Name</label>
+            <div style={{ position: "relative" }}>
+              <Building2 size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94A3B8" }} />
+              <input
+                type="text"
+                value={company}
+                onChange={e => setCompany(e.target.value.toLowerCase())}
+                placeholder="e.g. ochola networks"
+                autoComplete="organization"
+                style={inputStyle(!!errors.company, companyAvailable)}
+                onFocus={e => { if (!errors.company && companyAvailable !== false) { e.target.style.borderColor = "#2563EB"; e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.12)"; } }}
+                onBlur={e => { e.target.style.boxShadow = "none"; if (!errors.company && companyAvailable !== false) e.target.style.borderColor = companyAvailable === true ? "#BBF7D0" : "#E2E8F0"; }}
+              />
+              <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)" }}>
+                {checkingCompany && <Loader2 size={15} style={{ color: "#94A3B8", animation: "spin 1s linear infinite" }} />}
+                {!checkingCompany && companyAvailable === true && <CheckCircle2 size={15} style={{ color: "#22C55E" }} />}
+                {!checkingCompany && companyAvailable === false && <XCircle size={15} style={{ color: "#EF4444" }} />}
               </div>
-              {!errors.company && company.trim().length >= 2 && !checkingCompany && companyAvailable !== null && (
-                <p className={`text-xs mt-1.5 font-medium ${companyAvailable ? "text-emerald-400" : "text-red-400"}`}>
-                  {companyAvailable ? "✓ Available" : "✗ Already taken — try a different name"}
-                </p>
-              )}
-              {errors.company && <p className="text-xs text-red-400 mt-1">{errors.company}</p>}
             </div>
-
-            {/* ── Phone ── */}
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">
-                Mobile Number
-              </label>
-              <div className="relative">
-                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={e => setPhone(e.target.value)}
-                  placeholder="+254 700 000 000"
-                  className={`w-full bg-white/5 border rounded-xl py-3 pl-10 pr-10 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 transition-all text-sm ${
-                    errors.phone ? "border-red-500/60 focus:ring-red-500" :
-                    phoneAvailable === true ? "border-emerald-500/60 focus:ring-emerald-500" :
-                    phoneAvailable === false ? "border-red-500/60 focus:ring-red-500" :
-                    "border-white/10 focus:border-violet-500 focus:ring-violet-500"
-                  }`}
-                />
-                <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
-                  {checkingPhone && <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />}
-                  {!checkingPhone && phoneAvailable === true && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                  {!checkingPhone && phoneAvailable === false && <XCircle className="w-4 h-4 text-red-400" />}
-                </div>
-              </div>
-              {!errors.phone && phone.trim().length >= 7 && !checkingPhone && phoneAvailable !== null && (
-                <p className={`text-xs mt-1.5 font-medium ${phoneAvailable ? "text-emerald-400" : "text-red-400"}`}>
-                  {phoneAvailable ? "✓ Phone available" : "✗ Phone already registered — try signing in instead"}
-                </p>
-              )}
-              {errors.phone && <p className="text-xs text-red-400 mt-1">{errors.phone}</p>}
-            </div>
-
-            {/* ── Server error ── */}
-            {serverErr && (
-              <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/20">
-                <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                <p className="text-sm text-red-300">{serverErr}</p>
-              </div>
+            {!errors.company && company.trim().length >= 2 && !checkingCompany && companyAvailable !== null && (
+              <p style={{ fontSize: "0.75rem", marginTop: 6, fontWeight: 500, color: companyAvailable ? "#16A34A" : "#DC2626" }}>
+                {companyAvailable ? "Available" : "Already taken — try a different name"}
+              </p>
             )}
+            {errors.company && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.company}</p>}
+          </div>
 
-            {/* ── Submit ── */}
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="w-full py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-60 group mt-2"
-              style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)" }}
-            >
-              {loading
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
-                : <>Register <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
-            </button>
+          <div>
+            <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#374151", marginBottom: 7 }}>Mobile Number</label>
+            <div style={{ position: "relative" }}>
+              <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94A3B8" }} />
+              <input
+                type="tel"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                placeholder="+254 700 000 000"
+                style={inputStyle(!!errors.phone, phoneAvailable)}
+                onFocus={e => { if (!errors.phone && phoneAvailable !== false) { e.target.style.borderColor = "#2563EB"; e.target.style.boxShadow = "0 0 0 3px rgba(37,99,235,0.12)"; } }}
+                onBlur={e => { e.target.style.boxShadow = "none"; if (!errors.phone && phoneAvailable !== false) e.target.style.borderColor = phoneAvailable === true ? "#BBF7D0" : "#E2E8F0"; }}
+              />
+              <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)" }}>
+                {checkingPhone && <Loader2 size={15} style={{ color: "#94A3B8", animation: "spin 1s linear infinite" }} />}
+                {!checkingPhone && phoneAvailable === true && <CheckCircle2 size={15} style={{ color: "#22C55E" }} />}
+                {!checkingPhone && phoneAvailable === false && <XCircle size={15} style={{ color: "#EF4444" }} />}
+              </div>
+            </div>
+            {!errors.phone && phone.trim().length >= 7 && !checkingPhone && phoneAvailable !== null && (
+              <p style={{ fontSize: "0.75rem", marginTop: 6, fontWeight: 500, color: phoneAvailable ? "#16A34A" : "#DC2626" }}>
+                {phoneAvailable ? "Phone available" : "Phone already registered — try signing in instead"}
+              </p>
+            )}
+            {errors.phone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.phone}</p>}
+          </div>
 
-            <p className="text-center text-xs text-slate-500">
-              Already registered?{" "}
-              <span
-                onClick={() => setLocation("/admin/login")}
-                className="text-violet-400 font-semibold cursor-pointer hover:text-violet-300 transition-colors"
-              >
-                Sign In
-              </span>
-            </p>
+          {serverErr && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "10px 14px" }}>
+              <AlertTriangle size={15} style={{ color: "#DC2626", flexShrink: 0 }} />
+              <p style={{ fontSize: "0.825rem", color: "#DC2626", margin: 0 }}>{serverErr}</p>
+            </div>
+          )}
 
-          </form>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            style={{
+              width: "100%", padding: "12px 20px", borderRadius: 10,
+              background: canSubmit ? "#2563EB" : "#93C5FD",
+              border: "none", color: "white", fontSize: "0.9rem", fontWeight: 700,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              fontFamily: "inherit",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              transition: "all 0.15s",
+              boxShadow: canSubmit ? "0 4px 14px rgba(37,99,235,0.3)" : "none",
+            }}
+          >
+            {loading ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Registering...</> : <>Register <ArrowRight size={16} /></>}
+          </button>
+
+          <p style={{ textAlign: "center", fontSize: "0.825rem", color: "#94A3B8" }}>
+            Already registered?{" "}
+            <span onClick={() => setLocation("/admin/login")} style={{ color: "#2563EB", fontWeight: 600, cursor: "pointer" }}>Sign In</span>
+          </p>
+        </form>
+
+        <div style={{ marginTop: 20, display: "flex", justifyContent: "center", alignItems: "center", gap: 7 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#22C55E", boxShadow: "0 0 6px rgba(34,197,94,0.5)" }} />
+          <span style={{ fontSize: "0.72rem", color: "#94A3B8", fontWeight: 500 }}>All systems operational</span>
         </div>
-
-        <p className="text-center text-xs text-slate-600 mt-6">
-          © {new Date().getFullYear()} OcholaSupernet · ISP Management Platform
-        </p>
       </div>
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }

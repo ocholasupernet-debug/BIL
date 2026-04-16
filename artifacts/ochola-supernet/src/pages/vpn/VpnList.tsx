@@ -334,7 +334,7 @@ export default function VpnList() {
                       <td className="px-4 py-3.5 hidden sm:table-cell">
                         {v.assigned_ip ? (
                           <div className="flex items-center gap-1.5">
-                            <span className="inline-flex items-center gap-1 bg-cyan-50 border border-cyan-200 text-cyan-700 text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                            <span className="inline-flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full">
                               <Network size={9} />
                               {v.assigned_ip}
                             </span>
