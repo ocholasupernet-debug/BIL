@@ -20,7 +20,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: 22
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -28,21 +28,23 @@ jobs:
 
             # Inject Supabase credentials into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
-            if [ -n "$VITE_SUPABASE_URL" ]; then
-              grep -q "^VITE_SUPABASE_URL=" .env 2>/dev/null \
-                && sed -i "s|^VITE_SUPABASE_URL=.*|VITE_SUPABASE_URL=$VITE_SUPABASE_URL|" .env \
-                || echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
-              echo "  ✓ VITE_SUPABASE_URL written to .env"
-            fi
-            if [ -n "$VITE_SUPABASE_KEY" ]; then
-              grep -q "^VITE_SUPABASE_KEY=" .env 2>/dev/null \
-                && sed -i "s|^VITE_SUPABASE_KEY=.*|VITE_SUPABASE_KEY=$VITE_SUPABASE_KEY|" .env \
-                || echo "VITE_SUPABASE_KEY=$VITE_SUPABASE_KEY" >> .env
-              echo "  ✓ VITE_SUPABASE_KEY written to .env"
-            fi
+            upsert_env() {
+              local key="$1" val="$2"
+              [ -z "$val" ] && return
+              grep -q "^${key}=" .env 2>/dev/null \
+                && sed -i "s|^${key}=.*|${key}=${val}|" .env \
+                || echo "${key}=${val}" >> .env
+              echo "  ✓ ${key} written to .env"
+            }
+
+            touch .env
+            upsert_env "VITE_SUPABASE_URL"        "$VITE_SUPABASE_URL"
+            upsert_env "VITE_SUPABASE_KEY"         "$VITE_SUPABASE_KEY"
+            upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
 
             bash deploy/deploy.sh
             echo "=== Deploy finished at $(date) ==="
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_SUPABASE_URL:        ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_KEY:        ${{ secrets.VITE_SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

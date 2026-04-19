@@ -67,7 +67,11 @@ fi
 #    value from a previous deploy — ecosystem.config.cjs only injects it when non-empty.
 echo "[6/6] Restarting PM2..."
 mkdir -p logs
+# Clear old key name; export the canonical name so PM2 picks it up
 unset SUPABASE_SERVICE_KEY
+if [ -f "$PROJECT_DIR/.env" ]; then
+  set -a; source "$PROJECT_DIR/.env"; set +a
+fi
 if pm2 list | grep -q "ocholanet-api"; then
   pm2 reload ecosystem.config.cjs --env standalone --update-env
 else
