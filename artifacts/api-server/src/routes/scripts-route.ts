@@ -201,8 +201,103 @@ async function ensureVpnUser(adminId: number, username: string, password: string
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   Static mainhotspot.rsc — the entry-point orchestrator script.
+   Downloads VPN, hotspot, PPPoE, sync and heartbeat sub-scripts
+   from safenetworks.isplatty.org, then installs them in order.
+═══════════════════════════════════════════════════════════════ */
+const MAINHOTSPOT_RSC = `# Main ISP Setup Script (mainhotspot.rsc)
+# Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
+
+:global version [/system package update get installed-version]
+:local majorVersion 0
+:local minorVersion 0
+:local dotPos [:find $version "."]
+:if ([:len $dotPos] > 0) do={
+    :set majorVersion [:tonum [:pick $version 0 $dotPos]]
+    :local remaining [:pick $version ($dotPos + 1) [:len $version]]
+    :set dotPos [:find $remaining "."]
+    :if ([:len $dotPos] > 0) do={
+        :set minorVersion [:tonum [:pick $remaining 0 $dotPos]]
+    }
+}
+:if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
+    :put "RouterOS version 6.48 or higher is required."
+    :error "RouterOS version 6.48 or higher is required."
+}
+:if ([/ping 8.8.8.8 count=3] = 0) do={
+    :error "No internet connection. Please check your internet connection and try again."
+}
+:do {
+    :put "Downloading VPN configuration..."
+    :local vpnUrl
+    :if ($majorVersion = 7) do={
+        :set vpnUrl "https://safenetworks.isplatty.org/scripts/vpn7.rsc"
+    } else={
+        :set vpnUrl "https://safenetworks.isplatty.org/scripts/vpn6.rsc"
+    }
+    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https
+    :delay 2s
+    :put "Applying VPN configuration..."
+    /import vpnsetup.rsc
+    /file remove vpnsetup.rsc
+    :put "Downloading hotspot configuration..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
+    :delay 2s
+    :put "Applying hotspot configuration..."
+    /import hotspotsetup.rsc
+    /file remove hotspotsetup.rsc
+    :put "Downloading PPPoE configuration..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
+    :delay 2s
+    :put "Applying PPPoE configuration..."
+    /import pppoesetup.rsc
+    /file remove pppoesetup.rsc
+    :put "Downloading users configuration..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/users.rsc" dst-path=users.rsc mode=https
+    :delay 2s
+    :put "Applying users configuration..."
+    /import users.rsc
+    /file remove users.rsc
+    :put "Downloading sync-users firewalls..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/syncusers.rsc" dst-path=syncusers.rsc mode=https
+    :delay 2s
+    :put "Applying sync-users firewalls..."
+    /import syncusers.rsc
+    /file remove syncusers.rsc
+    :put "Downloading heartbeat firewalls..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
+    :delay 2s
+    :put "Applying heartbeat firewalls..."
+    /import heartbeat.rsc
+    /file remove heartbeat.rsc
+    :put "Downloading sync-full script..."
+    /tool fetch url="https://safenetworks.isplatty.org/scripts/syncfull.rsc" dst-path=syncfull.rsc mode=https
+    :delay 2s
+    :put "Applying sync-full script..."
+    /import syncfull.rsc
+    /file remove syncfull.rsc
+
+    :put "Setting up DNS flush firewalls..."
+    :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
+    /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
+    /ip dns cache flush
+    :put "DNS flush firewalls installed (every 6 hours)"
+
+    :put "All configurations completed successfully."
+} on-error={
+    :put "Error occurred during configuration:"
+    :put $error
+}
+`;
+
+router.get("/scripts/mainhotspot.rsc", (_req, res): void => {
+  res.type("text/plain");
+  res.send(MAINHOTSPOT_RSC);
+});
+
+/* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
-   Dynamically generates a RouterOS .rsc file.
+   Dynamically generates a RouterOS .rsc file per-router.
 
    Admin identification (priority order):
      1. Subdomain from Host header  → looks up isp_admins.subdomain
@@ -210,7 +305,7 @@ async function ensureVpnUser(adminId: number, username: string, password: string
      3. Falls back to admin_id=5
 
    Example:
-     https://fastnet.isplatty.org/api/scripts/mainhotspot.rsc
+     https://fastnet.isplatty.org/api/scripts/fastnet1.rsc
      ↑ subdomain "fastnet" resolves to that ISP's admin row
      ↑ all plans/routers fetched belong to that admin only
      ↑ self-update URL in the script uses "fastnet.isplatty.org"
