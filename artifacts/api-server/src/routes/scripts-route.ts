@@ -456,6 +456,338 @@ router.get("/scripts/vlanpppoe.rsc", (_req, res): void => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   Static sub-scripts downloaded by mainhotspot.rsc.
+   These must be served BEFORE the dynamic /:name handler so the
+   router names "vpn7", "hotspotsetup", etc. are never misrouted
+   into the per-router generator.
+═══════════════════════════════════════════════════════════════ */
+
+/* ── VPN setup – RouterOS 7 ── */
+const VPN7_RSC = `# vpn7.rsc – OpenVPN client setup for RouterOS 7
+# Called by mainhotspot.rsc when majorVersion = 7
+# The per-router .rsc (served from the ISP subdomain) re-imports
+# certificates and recreates the tunnel with router-specific names.
+# This script installs the interface template so the tunnel can
+# be brought up immediately with password-only fallback auth.
+
+:put "  [vpn7] Configuring OpenVPN client (ROS 7)..."
+
+# Remove any existing VPN client with this name
+:do { /interface ovpn-client remove [find name=ocholasupernet] } on-error={}
+
+# Add the tunnel – cert auth will be layered on by the per-router script.
+# cipher=aes256 / auth=sha1 matches the server push directives.
+:do {
+  /interface ovpn-client add \\
+    name=ocholasupernet \\
+    connect-to="safenetworks.isplatty.org" \\
+    port=1194 \\
+    mode=ip \\
+    user=router \\
+    password=ocholasupernet \\
+    cipher=aes256 \\
+    auth=sha1 \\
+    add-default-route=no \\
+    verify-server-certificate=no \\
+    disabled=no
+} on-error={ :put "  WARN: vpn7 tunnel add failed – will retry in per-router script" }
+
+:put "  [vpn7] Done."
+`;
+
+/* ── VPN setup – RouterOS 6 ── */
+const VPN6_RSC = `# vpn6.rsc – OpenVPN client setup for RouterOS 6
+# Called by mainhotspot.rsc when majorVersion = 6
+# Syntax differences from ROS 7: no verify-server-certificate param.
+
+:put "  [vpn6] Configuring OpenVPN client (ROS 6)..."
+
+:do { /interface ovpn-client remove [find name=ocholasupernet] } on-error={}
+
+:do {
+  /interface ovpn-client add \\
+    name=ocholasupernet \\
+    connect-to="safenetworks.isplatty.org" \\
+    port=1194 \\
+    mode=ip \\
+    user=router \\
+    password=ocholasupernet \\
+    cipher=aes256 \\
+    auth=sha1 \\
+    add-default-route=no \\
+    disabled=no
+} on-error={ :put "  WARN: vpn6 tunnel add failed – will retry in per-router script" }
+
+:put "  [vpn6] Done."
+`;
+
+/* ── Hotspot setup ── */
+const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
+# Creates a default bridge, IP pool, hotspot profile and hotspot
+# service so the service is running before the per-router script
+# applies ISP-specific customisation.
+
+:put "  [hotspot] Setting up hotspot service..."
+
+# Detect storage
+:local storage "flash"
+:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }
+
+# Default bridge – the per-router script will reconfigure with the
+# correct bridge name and IP for the specific installation.
+:do { /interface bridge add name="hotspot-bridge" comment="SafeNet Hotspot Bridge" } on-error={}
+:do { /interface bridge set [find name="hotspot-bridge"] fast-forward=no } on-error={}
+
+# IP address on bridge (will be overwritten by per-router script)
+:do { /ip address remove [find interface="hotspot-bridge"] } on-error={}
+:do { /ip address add address=192.168.88.1/24 interface="hotspot-bridge" comment="SafeNet hotspot bridge IP" } on-error={}
+
+# DNS
+:do { /ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes } on-error={}
+
+# IP pool
+:do { /ip pool remove [find name=hspool] } on-error={}
+:do { /ip pool add name=hspool ranges=192.168.88.2-192.168.88.254 } on-error={}
+
+# Hotspot profile
+:do { /ip hotspot profile remove [find name=default-hs] } on-error={}
+:do {
+  /ip hotspot profile add \\
+    name=default-hs \\
+    hotspot-address=192.168.88.1 \\
+    dns-name=wifi.local \\
+    login-by=http-chap,http-pap \\
+    html-directory=($storage . "/hotspot")
+} on-error={ :put "  WARN: hotspot profile add failed" }
+
+# Hotspot service
+:do { /ip hotspot remove [find interface="hotspot-bridge"] } on-error={}
+:do {
+  /ip hotspot add \\
+    name=hotspot1 \\
+    interface="hotspot-bridge" \\
+    profile=default-hs \\
+    address-pool=hspool \\
+    idle-timeout=none
+} on-error={ :put "  WARN: hotspot service add failed" }
+
+:put "  [hotspot] Hotspot service started on hotspot-bridge (192.168.88.1)  OK"
+`;
+
+/* ── PPPoE setup ── */
+const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
+# Sets up a PPPoE server profile and service so ISP clients
+# can authenticate via PPPoE in addition to hotspot.
+
+:put "  [pppoe] Setting up PPPoE server..."
+
+# PPP profile (shared between PPPoE and future L2TP use)
+:do { /ppp profile remove [find name=isp-profile] } on-error={}
+:do {
+  /ppp profile add \\
+    name=isp-profile \\
+    local-address=192.168.99.1 \\
+    remote-address=pppoe-pool \\
+    dns-server=8.8.8.8,8.8.4.4 \\
+    use-compression=no \\
+    use-encryption=yes
+} on-error={ :put "  WARN: PPP profile add failed" }
+
+# PPPoE IP pool
+:do { /ip pool remove [find name=pppoe-pool] } on-error={}
+:do { /ip pool add name=pppoe-pool ranges=192.168.99.2-192.168.99.254 } on-error={}
+
+# PPPoE server on ether1 (WAN interface)
+# The specific interface will be overridden by the per-router script.
+:do { /interface pppoe-server server remove [find service-name=isp-pppoe] } on-error={}
+:do {
+  /interface pppoe-server server add \\
+    service-name=isp-pppoe \\
+    interface=ether1 \\
+    default-profile=isp-profile \\
+    authentication=pap,chap,mschap1,mschap2 \\
+    max-sessions=0 \\
+    disabled=no
+} on-error={ :put "  WARN: PPPoE server add failed" }
+
+:put "  [pppoe] PPPoE server configured  OK"
+`;
+
+/* ── Default users ── */
+const USERS_RSC = `# users.rsc – Default hotspot user and group setup
+# Creates a default admin and a trial guest account.
+# The billing integration manages real user accounts via the API.
+
+:put "  [users] Configuring default hotspot users..."
+
+# Default profile tweaks
+:do {
+  /ip hotspot user profile set [find name=default] \\
+    shared-users=1 \\
+    keepalive-timeout=2m \\
+    idle-timeout=none
+} on-error={}
+
+# Remove stale defaults first
+:do { /ip hotspot user remove [find name=admin] } on-error={}
+:do { /ip hotspot user remove [find name=trial] } on-error={}
+
+# Admin bypass user (MAC or password – per-router script may adjust)
+:do {
+  /ip hotspot user add \\
+    name=admin \\
+    password=admin \\
+    profile=default \\
+    comment="ISP admin bypass"
+} on-error={ :put "  WARN: admin user add failed" }
+
+# 1-hour trial guest
+:do {
+  /ip hotspot user add \\
+    name=trial \\
+    password=trial123 \\
+    profile=default \\
+    limit-uptime=1h \\
+    comment="Trial guest"
+} on-error={ :put "  WARN: trial user add failed" }
+
+:put "  [users] Default users set up  OK"
+`;
+
+/* ── Sync-users firewall rules ── */
+const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user synchronisation
+# Opens the MikroTik API port (8728) to the VPN management subnet
+# (10.8.0.0/24) so the billing server can push user accounts.
+
+:put "  [syncusers] Applying user-sync firewall rules..."
+
+# Allow API from VPN management subnet
+:do {
+  /ip firewall filter remove [find comment="SafeNet - allow API sync"]
+} on-error={}
+
+# place-before=0 puts the rule at the top; fall back to plain add if chain is empty
+:do {
+  /ip firewall filter add \\
+    chain=input \\
+    protocol=tcp \\
+    dst-port=8728 \\
+    src-address=10.8.0.0/24 \\
+    action=accept \\
+    comment="SafeNet - allow API sync" \\
+    place-before=0
+} on-error={
+  :do {
+    /ip firewall filter add \\
+      chain=input \\
+      protocol=tcp \\
+      dst-port=8728 \\
+      src-address=10.8.0.0/24 \\
+      action=accept \\
+      comment="SafeNet - allow API sync"
+  } on-error={ :put "  WARN: API sync firewall rule failed" }
+}
+
+# Enable the RouterOS API service
+:do { /ip service set api disabled=no } on-error={ :put "  WARN: could not enable API service" }
+
+:put "  [syncusers] User-sync firewall rules applied  OK"
+`;
+
+/* ── Heartbeat ── */
+const HEARTBEAT_RSC = `# heartbeat.rsc – Installs the periodic heartbeat script + scheduler
+# The heartbeat pings the billing server every 5 minutes so the
+# admin dashboard shows green / yellow / red router status.
+# The per-router .rsc sets the exact URL (with router secret token);
+# this script installs a placeholder that will be replaced.
+
+:put "  [heartbeat] Installing heartbeat script and scheduler..."
+
+# Remove old entries
+:do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
+:do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
+
+# Placeholder heartbeat – the per-router script overwrites with the
+# real URL containing the secret token.
+:do {
+  /system script add \\
+    name=ochola-heartbeat-script \\
+    policy=read,write,test \\
+    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\"https://safenetworks.isplatty.org/api/isp/router/heartbeat/pending?hs=\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+} on-error={ :put "  WARN: heartbeat script add failed" }
+
+:do {
+  /system scheduler add \\
+    name=ochola-heartbeat \\
+    interval=5m \\
+    start-time=startup \\
+    on-event="/system script run ochola-heartbeat-script" \\
+    comment="SafeNet heartbeat"
+} on-error={ :put "  WARN: heartbeat scheduler add failed" }
+
+# DNS flush scheduler (every 6 hours)
+:do { /system scheduler remove [find name=dns-flush] } on-error={}
+:do {
+  /system scheduler add \\
+    name=dns-flush \\
+    interval=06:00:00 \\
+    on-event="/ip dns cache flush" \\
+    policy=read,write,test,ftp \\
+    start-time=00:00:00
+} on-error={}
+
+:put "  [heartbeat] Heartbeat every 5 min  OK"
+`;
+
+/* ── Full sync script ── */
+const SYNCFULL_RSC = `# syncfull.rsc – Full configuration synchronisation
+# Re-downloads and re-applies the per-router .rsc so the router
+# always has the latest ISP configuration (plans, portal files, etc.).
+# mainhotspot.rsc imports this once; the daily auto-update scheduler
+# (added by the per-router script) handles subsequent runs.
+
+:put "  [syncfull] Scheduling full config sync..."
+
+# Remove old auto-update scheduler (per-router script sets the real URL)
+:do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
+
+# Placeholder auto-update – the per-router script replaces this with
+# the correct router-specific URL (ISP subdomain + router slug).
+:do {
+  /system scheduler add \\
+    name=ochola-autoupdate \\
+    interval=1d \\
+    start-time=00:05:00 \\
+    on-event="/tool fetch url=\"https://safenetworks.isplatty.org/scripts/mainhotspot.rsc\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
+    comment="SafeNet auto-update"
+} on-error={ :put "  WARN: auto-update scheduler add failed" }
+
+:put "  [syncfull] Full-sync scheduler installed  OK"
+`;
+
+/* ── Serve each static sub-script ── */
+const STATIC_SUBSCRIPTS: Record<string, string> = {
+  "vpn7.rsc":         VPN7_RSC,
+  "vpn6.rsc":         VPN6_RSC,
+  "hotspotsetup.rsc": HOTSPOTSETUP_RSC,
+  "pppoesetup.rsc":   PPPOESETUP_RSC,
+  "users.rsc":        USERS_RSC,
+  "syncusers.rsc":    SYNCUSERS_RSC,
+  "heartbeat.rsc":    HEARTBEAT_RSC,
+  "syncfull.rsc":     SYNCFULL_RSC,
+};
+
+for (const [filename, content] of Object.entries(STATIC_SUBSCRIPTS)) {
+  router.get(`/scripts/${filename}`, (_req, res): void => {
+    res
+      .set("Content-Type", "text/plain; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="${filename}"`)
+      .set("Cache-Control", "no-cache")
+      .send(content);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
    Dynamically generates a RouterOS .rsc file per-router.
 
