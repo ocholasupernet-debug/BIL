@@ -60,13 +60,40 @@ async function sbGet<T>(path: string): Promise<T[]> {
   return res.json() as Promise<T[]>;
 }
 
-interface DbRouter {
+export interface DbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null;
   ros_version: string; ports: string | null;
   wan_interface: string | null; bridge_interface: string | null;
   bridge_ip: string | null; hotspot_dns_name: string | null;
   pppoe_mode: string | null; admin_id: number;
+}
+
+/* ── Parse per-router VLAN config out of the pppoe_mode column ──
+   Format: "pppoe_vlan:{vlanId}:{vlanGateway}:{baseBridge}"
+   Backwards-compatible: bare "pppoe_vlan" gets all defaults.       ── */
+const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+const BRIDGE_RE = /^[a-zA-Z0-9._-]{1,64}$/;
+
+export function parsePPPoEVlanConfig(pppoeMode: string | null): {
+  vlanId: number; vlanGateway: string; baseBridge: string;
+} {
+  const defaults = { vlanId: 200, vlanGateway: "192.168.178.1", baseBridge: "hotspot-bridge" };
+  if (!pppoeMode || !pppoeMode.startsWith("pppoe_vlan")) return defaults;
+  const parts = pppoeMode.split(":");
+  if (parts.length < 2) return defaults;
+
+  const rawVlanId = parseInt(parts[1] ?? "200", 10);
+  const vlanId    = Number.isFinite(rawVlanId) && rawVlanId >= 1 && rawVlanId <= 4094
+    ? rawVlanId : defaults.vlanId;
+
+  const rawGw    = (parts[2] ?? "").trim();
+  const vlanGateway = IPV4_RE.test(rawGw) ? rawGw : defaults.vlanGateway;
+
+  const rawBridge  = (parts[3] ?? "").trim();
+  const baseBridge = BRIDGE_RE.test(rawBridge) ? rawBridge : defaults.baseBridge;
+
+  return { vlanId, vlanGateway, baseBridge };
 }
 
 interface DbAdmin { id: number; name: string; subdomain: string | null; }
@@ -376,20 +403,28 @@ function genPPPoEOverHotspot(
    vlanId     = numeric VLAN ID (e.g. 200)
    baseBridge = bridge interface the VLAN lives on (e.g. hotspot-bridge)
 ══════════════════════════════════════════════════════════════ */
-function genPPPoEVlan(
+export function genPPPoEVlan(
   router: DbRouter, companyName: string, ros: number,
-  adminSubdomain: string, vlanId: number, baseBridge: string
+  adminSubdomain: string, vlanId: number, baseBridge: string,
+  vlanGateway?: string,
+  /** Override the auto-update URL embedded in the generated script.
+   *  Use a path-param URL (no `?`) so RouterOS `/tool fetch` can handle it.
+   *  e.g. "https://sub.example.com/api/scripts/vlanpppoe/42.rsc" */
+  scriptBaseOverride?: string
 ): string {
   const co          = rosStr(companyName);
   const secret      = router.router_secret   ?? "ocholasupernet";
   const wanIface    = router.wan_interface   ?? "ether1";
   const apiUser     = rosStr(router.router_username || router.name || "admin");
-  const rawIp       = (router.bridge_ip ?? "10.30.0.1").replace(/\/\d+$/, "");
+  const rawIp       = (vlanGateway ?? router.bridge_ip ?? "10.30.0.1").replace(/\/\d+$/, "");
   const net         = deriveNet(rawIp);
   const vlanIface   = `vlan${vlanId}`;
   const slug        = slugify(router.name);
   const configFile  = `pppoe/vlanpppoe-${slug}.rsc`;
-  const scriptBase  = `https://${adminSubdomain}.${BASE_DOMAIN}/api/pppoe-script/${router.id}/pppoe_vlan/${ros}/${vlanId}/${baseBridge}`;
+  /* Prefer the override (path-based, no query string — required for RouterOS /tool fetch).
+     Fall back to legacy path-param URL for callers that don't supply an override. */
+  const scriptBase  = scriptBaseOverride
+    ?? `https://${adminSubdomain}.${BASE_DOMAIN}/api/pppoe-script/${router.id}/pppoe_vlan/${ros}/${vlanId}/${baseBridge}`;
   const heartbeatUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api/isp/router/heartbeat/${secret}`;
 
   return `# ============================================================

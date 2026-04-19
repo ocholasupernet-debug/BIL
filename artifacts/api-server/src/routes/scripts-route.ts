@@ -1,6 +1,7 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { ensureClientCert } from "./vpn-route.js";
+import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 
 const router: IRouter = Router();
 
@@ -467,11 +468,79 @@ add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action
 `;
 }
 
-router.get("/scripts/vlanpppoe.rsc", (req, res): void => {
+/* ── Per-router dynamic vlanpppoe.rsc handler ──
+   Serves a router-specific vlanpppoe.rsc using config stored in pppoe_mode.
+   Called by two routes:
+     GET /scripts/vlanpppoe/:routerId.rsc  — path-param (RouterOS-safe, preferred)
+     GET /scripts/vlanpppoe.rsc?routerId=X — query-param (legacy, browser-friendly)
+   Falls back to dynamic-origin static script when no routerId is resolvable.  ── */
+async function handleVlanPPPoERsc(req: Request, res: Response): Promise<void> {
   const host = (req.headers.host ?? "") as string;
-  res.type("text/plain");
-  res.send(buildVlanpppoeRsc(resolveOrigin(host)));
-});
+
+  /* Path param takes precedence (RouterOS-safe, no `?` that the terminal eats).
+     Fall through to query param for browser download links. */
+  const rawId = (req.params.routerId ?? req.query.routerId ?? req.query.router_id ?? "") as string;
+  const routerId = parseInt(rawId.replace(/\.rsc$/i, ""), 10);
+
+  if (!routerId || isNaN(routerId)) {
+    /* No routerId — serve origin-resolved static fallback for legacy integrations */
+    res.type("text/plain");
+    res.send(buildVlanpppoeRsc(resolveOrigin(host)));
+    return;
+  }
+
+  try {
+    const rows = await sbGet<PPPoEDbRouter>(
+      `isp_routers?id=eq.${routerId}&select=*&limit=1`
+    );
+    if (rows.length === 0) {
+      res.status(404).type("text/plain").send("# Error: router not found");
+      return;
+    }
+    const dbRouter = rows[0];
+
+    let companyName    = "ISP";
+    let adminSubdomain = `admin${dbRouter.admin_id}`;
+    try {
+      interface DbAdmin { id: number; name: string; subdomain: string | null; }
+      const admins = await sbGet<DbAdmin>(
+        `isp_admins?id=eq.${dbRouter.admin_id}&select=id,name,subdomain&limit=1`
+      );
+      if (admins.length > 0) {
+        companyName    = admins[0].name;
+        adminSubdomain = admins[0].subdomain ?? adminSubdomain;
+      }
+    } catch { /* use defaults */ }
+
+    const { vlanId, vlanGateway, baseBridge } = parsePPPoEVlanConfig(dbRouter.pppoe_mode);
+    const ros = parseInt((dbRouter.ros_version ?? "6").replace(/\D.*/u, ""), 10) || 6;
+
+    /* Build a path-based (no query string) auto-update URL that RouterOS /tool fetch
+       can handle. Uses resolveOrigin to emit the correct ISP-specific subdomain.
+       Re-deriving from pppoe_mode on each fetch ensures the saved VLAN gateway
+       is always reflected — no config drift from daily auto-updates. */
+    const origin = resolveOrigin(host);
+    const scriptBaseOverride = `${origin}/api/scripts/vlanpppoe/${routerId}.rsc`;
+
+    const script = genPPPoEVlan(
+      dbRouter, companyName, ros, adminSubdomain,
+      vlanId, baseBridge, vlanGateway, scriptBaseOverride
+    );
+
+    res.set("Content-Type", "text/plain; charset=utf-8")
+       .set("Content-Disposition", `attachment; filename="vlanpppoe-${routerId}.rsc"`)
+       .set("Cache-Control", "no-cache")
+       .send(script);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).type("text/plain").send(`# Error generating vlanpppoe.rsc: ${msg}`);
+  }
+}
+
+/* Path-param route — preferred for RouterOS /tool fetch (no query string) */
+router.get("/scripts/vlanpppoe/:routerId.rsc", (req, res) => { void handleVlanPPPoERsc(req, res); });
+/* Query-param route — legacy / browser download link */
+router.get("/scripts/vlanpppoe.rsc", (req, res) => { void handleVlanPPPoERsc(req, res); });
 
 /* ═══════════════════════════════════════════════════════════════
    Static normalpppoe.rsc — Normal PPPoE bridge setup script.

@@ -159,6 +159,11 @@ export interface DbRouter {
   uptime_at: string | null;
   created_at: string;
   updated_at: string;
+  /* PPPoE mode + per-router VLAN config.
+     Format when VLAN is configured: "pppoe_vlan:{vlanId}:{vlanGateway}:{baseBridge}"
+     e.g. "pppoe_vlan:200:192.168.178.1:hotspot-bridge"
+     Plain "pppoe_only" or "pppoe_vlan" (no colon params) are also valid.       */
+  pppoe_mode: string | null;
 }
 
 /* ─── isp_transactions row shape ─── */

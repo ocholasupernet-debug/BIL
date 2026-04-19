@@ -105,10 +105,13 @@ export default function PPPoE() {
   const [mode, setMode] = useState<Mode>("pppoe_only");
   const [rosVer, setRosVer] = useState<RosVer>("6");
   const [vlanId, setVlanId] = useState("200");
+  const [vlanSubnet, setVlanSubnet] = useState("192.168.178.1");
   const [baseBridge, setBaseBridge] = useState("hotspot-bridge");
   const [loadingIfaces, setLoadingIfaces] = useState(false);
   const [ifaceMsg, setIfaceMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [regen, setRegen] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const { data: adminInfo } = useQuery({
     queryKey: ["admin_info_pppoe", ADMIN_ID],
@@ -141,6 +144,58 @@ export default function PPPoE() {
     }
   }, [routers, selectedRouterId]);
 
+  /* Pre-populate VLAN fields from stored pppoe_mode when router changes */
+  const selectedRouter = useMemo(
+    () => routers.find(r => r.id === selectedRouterId) ?? null,
+    [routers, selectedRouterId],
+  );
+  useEffect(() => {
+    if (!selectedRouter) return;
+    const pm = selectedRouter.pppoe_mode ?? "";
+    if (pm.startsWith("pppoe_vlan")) {
+      const parts = pm.split(":");
+      setMode("pppoe_vlan");
+      setVlanId(parts[1] && parts[1] !== "" ? parts[1] : "200");
+      setVlanSubnet(parts[2] && parts[2] !== "" ? parts[2] : "192.168.178.1");
+      setBaseBridge(parts[3] && parts[3] !== "" ? parts[3] : "hotspot-bridge");
+    } else if (pm === "pppoe_only") {
+      setMode("pppoe_only");
+      setVlanId("200");
+      setVlanSubnet("192.168.178.1");
+      setBaseBridge("hotspot-bridge");
+    } else {
+      setVlanId("200");
+      setVlanSubnet("192.168.178.1");
+      setBaseBridge("hotspot-bridge");
+    }
+    setSaveMsg(null);
+  }, [selectedRouter?.id]);
+
+  /* Save per-router VLAN config to pppoe_mode column */
+  async function handleSaveVlanConfig() {
+    if (!selectedRouter) return;
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const vid = vlanId.trim() || "200";
+      const sub = vlanSubnet.trim() || "192.168.178.1";
+      const bb  = baseBridge.trim() || "hotspot-bridge";
+      const modeStr = mode === "pppoe_vlan"
+        ? `pppoe_vlan:${vid}:${sub}:${bb}`
+        : mode;
+      const { error } = await supabase
+        .from("isp_routers")
+        .update({ pppoe_mode: modeStr })
+        .eq("id", selectedRouter.id);
+      if (error) throw error;
+      setSaveMsg({ ok: true, text: "VLAN settings saved to router." });
+    } catch (e) {
+      setSaveMsg({ ok: false, text: e instanceof Error ? e.message : "Save failed" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const router = useMemo(
     () => routers.find(r => r.id === selectedRouterId) ?? null,
     [routers, selectedRouterId],
@@ -155,10 +210,12 @@ export default function PPPoE() {
       const file = `pppoe/pppoeonly-${slug}.rsc`;
       return `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/pppoe_only/${rosVer}" mode=https dst-path=${file} check-certificate=no`;
     } else {
-      const vid  = vlanId.trim() || "200";
-      const bb   = baseBridge.trim() || "hotspot-bridge";
+      /* Use the router-scoped path-param URL — RouterOS /tool fetch drops `?` query
+         strings, so we use /api/scripts/vlanpppoe/:routerId.rsc (no query string).
+         The endpoint reads all saved VLAN settings (ID, gateway, bridge) from pppoe_mode
+         automatically, so the generated script always matches exactly what was saved. */
       const file = `pppoe/vlanpppoe-${slug}.rsc`;
-      return `/tool fetch url="${scriptHost}/api/pppoe-script/${router.id}/pppoe_vlan/${rosVer}/${vid}/${bb}" mode=https dst-path=${file} check-certificate=no`;
+      return `/tool fetch url="${scriptHost}/api/scripts/vlanpppoe/${router.id}.rsc" mode=https dst-path=${file} check-certificate=no`;
     }
   }, [router, mode, rosVer, vlanId, baseBridge, scriptHost, slug, regen]);
 
@@ -175,7 +232,7 @@ export default function PPPoE() {
   const downloadUrl = router
     ? mode === "pppoe_only"
       ? `/api/pppoe-script/${router.id}/pppoe_only/${rosVer}`
-      : `/api/pppoe-script/${router.id}/pppoe_vlan/${rosVer}/${vlanId.trim() || "200"}/${baseBridge.trim() || "hotspot-bridge"}`
+      : `/api/scripts/vlanpppoe/${router.id}.rsc`
     : "#";
 
   /* Load Interfaces — pings the router's API to confirm bridge state */
@@ -424,12 +481,37 @@ export default function PPPoE() {
               background: "var(--isp-accent-glow)",
               animation: "fadeIn 0.18s ease",
             }}>
-              <p style={{
-                margin: "0 0 0.625rem", fontSize: "0.7rem", fontWeight: 700,
-                color: "#facc15", textTransform: "uppercase", letterSpacing: "0.06em",
-              }}>VLAN Details</p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.625rem", gap: "0.75rem", flexWrap: "wrap" }}>
+                <p style={{
+                  margin: 0, fontSize: "0.7rem", fontWeight: 700,
+                  color: "#facc15", textTransform: "uppercase", letterSpacing: "0.06em",
+                }}>VLAN Details</p>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  {saveMsg && (
+                    <span style={{ fontSize: "0.72rem", fontWeight: 600, color: saveMsg.ok ? "#4ade80" : "#f87171" }}>
+                      {saveMsg.ok ? "✓" : "✗"} {saveMsg.text}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => void handleSaveVlanConfig()}
+                    disabled={!router || saving}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: "0.3rem",
+                      padding: "0.3rem 0.75rem", borderRadius: 6,
+                      background: saving ? "rgba(37,99,235,0.08)" : "rgba(37,99,235,0.15)",
+                      border: "1px solid rgba(37,99,235,0.4)",
+                      color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.72rem",
+                      cursor: !router || saving ? "not-allowed" : "pointer",
+                      fontFamily: "inherit", opacity: !router ? 0.5 : 1, transition: "all 0.14s",
+                    }}
+                  >
+                    {saving ? <Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> : null}
+                    {saving ? "Saving…" : "Save VLAN Settings"}
+                  </button>
+                </div>
+              </div>
               <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-                <div style={{ flex: "0 0 120px" }}>
+                <div style={{ flex: "0 0 110px" }}>
                   <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
                     VLAN ID
                   </label>
@@ -446,7 +528,24 @@ export default function PPPoE() {
                     }}
                   />
                 </div>
-                <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ flex: "0 0 170px" }}>
+                  <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
+                    VLAN Gateway IP
+                  </label>
+                  <input
+                    type="text"
+                    value={vlanSubnet}
+                    onChange={e => setVlanSubnet(e.target.value)}
+                    placeholder="192.168.178.1"
+                    style={{
+                      width: "100%", background: "var(--isp-inner-card)",
+                      border: "1px solid var(--isp-border)", borderRadius: 7,
+                      padding: "0.4rem 0.625rem", color: "var(--isp-text)",
+                      fontSize: "0.85rem", fontFamily: "monospace", outline: "none", boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+                <div style={{ flex: 1, minWidth: 180 }}>
                   <label style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "block", marginBottom: 4 }}>
                     Hotspot Bridge
                   </label>
@@ -465,10 +564,14 @@ export default function PPPoE() {
                 </div>
               </div>
               <p style={{ margin: "0.5rem 0 0", fontSize: "0.73rem", color: "var(--isp-text-muted)" }}>
-                PPPoE runs on a VLAN on{" "}
+                VLAN <span style={{ color: "#facc15", fontWeight: 600 }}>{vlanId || "200"}</span> on{" "}
                 <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>
                   {baseBridge.trim() || "hotspot-bridge"}
                 </span>
+                {" "}— gateway <span style={{ color: "#fb923c", fontWeight: 600, fontFamily: "monospace" }}>
+                  {vlanSubnet.trim() || "192.168.178.1"}/24
+                </span>.
+                {" "}Save to persist settings; the router-specific script URL will use these values.
               </p>
             </div>
           )}
