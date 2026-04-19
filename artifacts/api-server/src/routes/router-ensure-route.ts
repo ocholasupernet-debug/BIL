@@ -94,7 +94,7 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
     token:            secret,   /* NOT NULL column — same value as router_secret */
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.88.1",
-    status:           "offline",
+    status:           "setup",
   };
 
   let lastStatus = 0;

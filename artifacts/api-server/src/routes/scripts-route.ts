@@ -1181,7 +1181,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
                 token:            autoSecret,  /* NOT NULL column */
                 bridge_interface: "hotspot-bridge",
                 bridge_ip:        "192.168.88.1",
-                status:           "offline",
+                status:           "setup",
               }),
             }
           );

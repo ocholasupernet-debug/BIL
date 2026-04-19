@@ -462,7 +462,20 @@ export default function BridgePorts() {
       const data = await res.json() as { ok: boolean; logs: string[]; error?: string };
       setApplyLogs(data.logs ?? []);
       setApplyOk(data.ok);
-      if (data.ok) fetchPorts(selectedKey!);
+      if (data.ok) {
+        fetchPorts(selectedKey!);
+        /* If this router was in "setup" (freshly created, awaiting bridge config),
+           now mark it as "offline" so heartbeats can promote it to "online". */
+        if (activeRouter.status === "setup") {
+          supabase
+            .from("isp_routers")
+            .update({ status: "offline" })
+            .eq("id", activeRouter.id)
+            .eq("status", "setup")
+            .then(() => console.log(`[bridge-ports] router ${activeRouter.id} promoted from setup → offline`))
+            .catch((e: unknown) => console.warn("[bridge-ports] status update failed", e));
+        }
+      }
     } catch (e) {
       setApplyLogs([`❌ ${e}`]);
       setApplyOk(false);

@@ -1147,17 +1147,20 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
 
   try {
     const enc = encodeURIComponent(token);
+    const hbHeaders = {
+      apikey: HB_KEY,
+      Authorization: `Bearer ${HB_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    };
+
+    /* Step 1 — always update last_seen (and retrieve the row for auto-discovery) */
     const patchRes = await fetch(
       `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
       {
         method: "PATCH",
-        headers: {
-          apikey: HB_KEY,
-          Authorization: `Bearer ${HB_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
-        },
-        body: JSON.stringify({ status: newStatus, last_seen: ts }),
+        headers: hbHeaders,
+        body: JSON.stringify({ last_seen: ts }),
       }
     );
 
@@ -1169,12 +1172,27 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     }
 
     const updated = await patchRes.json() as Array<{
-      id: number; name: string; host?: string;
+      id: number; name: string; host?: string; status?: string;
       router_username?: string; router_secret?: string;
     }>;
     const row = updated[0];
     const routerName = row?.name ?? "unknown";
-    console.log(`[heartbeat] ✓ ${routerName} ${newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
+
+    /* Step 2 — only promote status if the router is NOT in "setup" (awaiting bridge ports) */
+    if (row && row.status !== "setup") {
+      fetch(
+        `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+        {
+          method: "PATCH",
+          headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus }),
+        }
+      ).catch((e: unknown) => console.warn(`[heartbeat] status update failed: ${e instanceof Error ? e.message : e}`));
+    } else if (row?.status === "setup") {
+      console.log(`[heartbeat] ↷ ${routerName} is in "setup" — skipping status promotion`);
+    }
+
+    console.log(`[heartbeat] ✓ ${routerName} ${row?.status === "setup" ? "setup" : newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, status: newStatus });
 
     /* ── Auto-discovery:
