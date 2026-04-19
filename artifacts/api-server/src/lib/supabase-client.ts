@@ -17,7 +17,7 @@ function resolveSupabaseUrl(): string {
 
 const SUPABASE_URL = resolveSupabaseUrl();
 
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? "";
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
 const BEST_KEY    = SERVICE_KEY || ANON_KEY;
 
