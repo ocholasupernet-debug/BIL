@@ -949,7 +949,7 @@ function buildHeartbeatRsc(origin: string): string {
   /system script add \\
     name=ochola-heartbeat-script \\
     policy=read,write,test \\
-    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\"${origin}/api/isp/router/heartbeat/pending?hs=\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${origin}/api/isp/router/heartbeat/pending?hs=\\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
 } on-error={ :put "  WARN: heartbeat script add failed" }
 
 :do {
@@ -996,7 +996,7 @@ function buildSyncfullRsc(origin: string): string {
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\"${origin}/scripts/mainhotspot.rsc\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
+    on-event="/tool fetch url=\\"${origin}/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
     comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
