@@ -200,12 +200,24 @@ async function ensureVpnUser(adminId: number, username: string, password: string
   } catch { /* ignore — non-critical */ }
 }
 
+/* ── Resolve the base origin for the requesting ISP.
+   When a router at come.isplatty.org fetches a script, the Host
+   header is "come.isplatty.org" → origin = "https://come.isplatty.org".
+   Falls back to the literal host when no subdomain is present (dev). ── */
+function resolveOrigin(host: string): string {
+  const subdomain = parseSubdomain(host);
+  if (subdomain) return `https://${subdomain}.isplatty.org`;
+  const proto = host.startsWith("localhost") || host.startsWith("127.") ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
 /* ═══════════════════════════════════════════════════════════════
-   Static mainhotspot.rsc — the entry-point orchestrator script.
-   Downloads VPN, hotspot, PPPoE, sync and heartbeat sub-scripts
-   from safenetworks.isplatty.org, then installs them in order.
+   mainhotspot.rsc — dynamic entry-point orchestrator.
+   Sub-script URLs use the requesting ISP's own subdomain so each
+   ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-const MAINHOTSPOT_RSC = `# Main ISP Setup Script (mainhotspot.rsc)
+function buildMainhotspotRsc(scriptsBase: string): string {
+  return `# Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 
 :global version [/system package update get installed-version]
@@ -231,9 +243,9 @@ const MAINHOTSPOT_RSC = `# Main ISP Setup Script (mainhotspot.rsc)
     :put "Downloading VPN configuration..."
     :local vpnUrl
     :if ($majorVersion = 7) do={
-        :set vpnUrl "https://safenetworks.isplatty.org/scripts/vpn7.rsc"
+        :set vpnUrl "${scriptsBase}/vpn7.rsc"
     } else={
-        :set vpnUrl "https://safenetworks.isplatty.org/scripts/vpn6.rsc"
+        :set vpnUrl "${scriptsBase}/vpn6.rsc"
     }
     /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https
     :delay 2s
@@ -241,37 +253,37 @@ const MAINHOTSPOT_RSC = `# Main ISP Setup Script (mainhotspot.rsc)
     /import vpnsetup.rsc
     /file remove vpnsetup.rsc
     :put "Downloading hotspot configuration..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
+    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
     :delay 2s
     :put "Applying hotspot configuration..."
     /import hotspotsetup.rsc
     /file remove hotspotsetup.rsc
     :put "Downloading PPPoE configuration..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
+    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
     :delay 2s
     :put "Applying PPPoE configuration..."
     /import pppoesetup.rsc
     /file remove pppoesetup.rsc
     :put "Downloading users configuration..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/users.rsc" dst-path=users.rsc mode=https
+    /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https
     :delay 2s
     :put "Applying users configuration..."
     /import users.rsc
     /file remove users.rsc
     :put "Downloading sync-users firewalls..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/syncusers.rsc" dst-path=syncusers.rsc mode=https
+    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https
     :delay 2s
     :put "Applying sync-users firewalls..."
     /import syncusers.rsc
     /file remove syncusers.rsc
     :put "Downloading heartbeat firewalls..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
+    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
     :delay 2s
     :put "Applying heartbeat firewalls..."
     /import heartbeat.rsc
     /file remove heartbeat.rsc
     :put "Downloading sync-full script..."
-    /tool fetch url="https://safenetworks.isplatty.org/scripts/syncfull.rsc" dst-path=syncfull.rsc mode=https
+    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https
     :delay 2s
     :put "Applying sync-full script..."
     /import syncfull.rsc
@@ -289,10 +301,13 @@ const MAINHOTSPOT_RSC = `# Main ISP Setup Script (mainhotspot.rsc)
     :put $error
 }
 `;
+}
 
-router.get("/scripts/mainhotspot.rsc", (_req, res): void => {
+router.get("/scripts/mainhotspot.rsc", (req, res): void => {
+  const host = (req.headers.host ?? "") as string;
+  const scriptsBase = `${resolveOrigin(host)}/scripts`;
   res.type("text/plain");
-  res.send(MAINHOTSPOT_RSC);
+  res.send(buildMainhotspotRsc(scriptsBase));
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -301,11 +316,12 @@ router.get("/scripts/mainhotspot.rsc", (_req, res): void => {
    runs a PPPoE server on it, sets up hotspot captive portal for
    expired/unpaid clients, and configures walled-garden entries.
 ═══════════════════════════════════════════════════════════════ */
-const VLANPPPOE_RSC = `# vlanpppoe.rsc
+function buildVlanpppoeRsc(origin: string): string {
+  return `# vlanpppoe.rsc
 :log info "PPPoE VLAN: init (vlan-id=200, base=hotspot-bridge)";
 
-:log info "PPPoE VLAN: fetching login.html from https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html";
-/tool fetch url="https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
+:log info "PPPoE VLAN: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
+/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
 
 # === PPPoE (VLAN) — hotspot-bridge, VLAN ID 200, interface pppoe-vlan ===
 
@@ -449,10 +465,12 @@ add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action
 
 :log info "PPPoE VLAN: done";
 `;
+}
 
-router.get("/scripts/vlanpppoe.rsc", (_req, res): void => {
+router.get("/scripts/vlanpppoe.rsc", (req, res): void => {
+  const host = (req.headers.host ?? "") as string;
   res.type("text/plain");
-  res.send(VLANPPPOE_RSC);
+  res.send(buildVlanpppoeRsc(resolveOrigin(host)));
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -460,11 +478,12 @@ router.get("/scripts/vlanpppoe.rsc", (_req, res): void => {
    Creates pppoe_bridge, runs PPPoE server + captive hotspot for
    expired clients, walled-garden, firewall rules and NAT ordering.
 ═══════════════════════════════════════════════════════════════ */
-const NORMALPPPOE_RSC = `# normalpppoe.rsc
+function buildNormalpppoeRsc(origin: string): string {
+  return `# normalpppoe.rsc
 :log info "PPPoE NORMAL: init";
 
-:log info "PPPoE NORMAL: fetching login.html from https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html";
-/tool fetch url="https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
+:log info "PPPoE NORMAL: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
+/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
 
 :if ([:len [/interface bridge find where name="pppoe_bridge"]] = 0) do={ /interface bridge add name=pppoe_bridge protocol-mode=rstp comment="PPPoE bridge" }
 :if ([:len [/ip address find where interface="pppoe_bridge" and address="192.168.178.1/24"]] = 0) do={ /ip address add address=192.168.178.1/24 interface=pppoe_bridge comment="PPPoE gateway" }
@@ -588,10 +607,12 @@ add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action
 :log info "PPPoE configuration applied successfully."
 #pppoe configuration finished
 `;
+}
 
-router.get("/scripts/normalpppoe.rsc", (_req, res): void => {
+router.get("/scripts/normalpppoe.rsc", (req, res): void => {
+  const host = (req.headers.host ?? "") as string;
   res.type("text/plain");
-  res.send(NORMALPPPOE_RSC);
+  res.send(buildNormalpppoeRsc(resolveOrigin(host)));
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -602,7 +623,9 @@ router.get("/scripts/normalpppoe.rsc", (_req, res): void => {
 ═══════════════════════════════════════════════════════════════ */
 
 /* ── VPN setup – RouterOS 7 ── */
-const VPN7_RSC = `# vpn7.rsc – OpenVPN client setup for RouterOS 7
+function buildVpn7Rsc(origin: string): string {
+  const vpnHost = origin.replace(/^https?:\/\//, "");
+  return `# vpn7.rsc – OpenVPN client setup for RouterOS 7
 # Called by mainhotspot.rsc when majorVersion = 7
 # The per-router .rsc (served from the ISP subdomain) re-imports
 # certificates and recreates the tunnel with router-specific names.
@@ -619,7 +642,7 @@ const VPN7_RSC = `# vpn7.rsc – OpenVPN client setup for RouterOS 7
 :do {
   /interface ovpn-client add \\
     name=ocholasupernet \\
-    connect-to="safenetworks.isplatty.org" \\
+    connect-to="${vpnHost}" \\
     port=1194 \\
     mode=ip \\
     user=router \\
@@ -633,9 +656,12 @@ const VPN7_RSC = `# vpn7.rsc – OpenVPN client setup for RouterOS 7
 
 :put "  [vpn7] Done."
 `;
+}
 
 /* ── VPN setup – RouterOS 6 ── */
-const VPN6_RSC = `# vpn6.rsc – OpenVPN client setup for RouterOS 6
+function buildVpn6Rsc(origin: string): string {
+  const vpnHost = origin.replace(/^https?:\/\//, "");
+  return `# vpn6.rsc – OpenVPN client setup for RouterOS 6
 # Called by mainhotspot.rsc when majorVersion = 6
 # Syntax differences from ROS 7: no verify-server-certificate param.
 
@@ -646,7 +672,7 @@ const VPN6_RSC = `# vpn6.rsc – OpenVPN client setup for RouterOS 6
 :do {
   /interface ovpn-client add \\
     name=ocholasupernet \\
-    connect-to="safenetworks.isplatty.org" \\
+    connect-to="${vpnHost}" \\
     port=1194 \\
     mode=ip \\
     user=router \\
@@ -659,6 +685,7 @@ const VPN6_RSC = `# vpn6.rsc – OpenVPN client setup for RouterOS 6
 
 :put "  [vpn6] Done."
 `;
+}
 
 /* ── Hotspot setup ── */
 const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
@@ -834,7 +861,8 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 `;
 
 /* ── Heartbeat ── */
-const HEARTBEAT_RSC = `# heartbeat.rsc – Installs the periodic heartbeat script + scheduler
+function buildHeartbeatRsc(origin: string): string {
+  return `# heartbeat.rsc – Installs the periodic heartbeat script + scheduler
 # The heartbeat pings the billing server every 5 minutes so the
 # admin dashboard shows green / yellow / red router status.
 # The per-router .rsc sets the exact URL (with router secret token);
@@ -852,7 +880,7 @@ const HEARTBEAT_RSC = `# heartbeat.rsc – Installs the periodic heartbeat scrip
   /system script add \\
     name=ochola-heartbeat-script \\
     policy=read,write,test \\
-    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\"https://safenetworks.isplatty.org/api/isp/router/heartbeat/pending?hs=\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\"${origin}/api/isp/router/heartbeat/pending?hs=\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
 } on-error={ :put "  WARN: heartbeat script add failed" }
 
 :do {
@@ -861,7 +889,7 @@ const HEARTBEAT_RSC = `# heartbeat.rsc – Installs the periodic heartbeat scrip
     interval=5m \\
     start-time=startup \\
     on-event="/system script run ochola-heartbeat-script" \\
-    comment="SafeNet heartbeat"
+    comment="ISP heartbeat"
 } on-error={ :put "  WARN: heartbeat scheduler add failed" }
 
 # DNS flush scheduler (every 6 hours)
@@ -877,9 +905,11 @@ const HEARTBEAT_RSC = `# heartbeat.rsc – Installs the periodic heartbeat scrip
 
 :put "  [heartbeat] Heartbeat every 5 min  OK"
 `;
+}
 
 /* ── Full sync script ── */
-const SYNCFULL_RSC = `# syncfull.rsc – Full configuration synchronisation
+function buildSyncfullRsc(origin: string): string {
+  return `# syncfull.rsc – Full configuration synchronisation
 # Re-downloads and re-applies the per-router .rsc so the router
 # always has the latest ISP configuration (plans, portal files, etc.).
 # mainhotspot.rsc imports this once; the daily auto-update scheduler
@@ -897,27 +927,37 @@ const SYNCFULL_RSC = `# syncfull.rsc – Full configuration synchronisation
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\"https://safenetworks.isplatty.org/scripts/mainhotspot.rsc\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
-    comment="SafeNet auto-update"
+    on-event="/tool fetch url=\"${origin}/scripts/mainhotspot.rsc\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
+    comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
 :put "  [syncfull] Full-sync scheduler installed  OK"
 `;
+}
 
-/* ── Serve each static sub-script ── */
-const STATIC_SUBSCRIPTS: Record<string, string> = {
-  "vpn7.rsc":         VPN7_RSC,
-  "vpn6.rsc":         VPN6_RSC,
+/* ── Serve each sub-script.
+   Static entries are plain strings; dynamic entries are builder functions
+   that receive the ISP's origin (derived from the Host header) so the
+   generated script uses the requesting ISP's own subdomain, not a
+   hard-coded example company name. ── */
+type SubScriptEntry = string | ((origin: string) => string);
+
+const STATIC_SUBSCRIPTS: Record<string, SubScriptEntry> = {
+  "vpn7.rsc":         buildVpn7Rsc,
+  "vpn6.rsc":         buildVpn6Rsc,
   "hotspotsetup.rsc": HOTSPOTSETUP_RSC,
   "pppoesetup.rsc":   PPPOESETUP_RSC,
   "users.rsc":        USERS_RSC,
   "syncusers.rsc":    SYNCUSERS_RSC,
-  "heartbeat.rsc":    HEARTBEAT_RSC,
-  "syncfull.rsc":     SYNCFULL_RSC,
+  "heartbeat.rsc":    buildHeartbeatRsc,
+  "syncfull.rsc":     buildSyncfullRsc,
 };
 
-for (const [filename, content] of Object.entries(STATIC_SUBSCRIPTS)) {
-  router.get(`/scripts/${filename}`, (_req, res): void => {
+for (const [filename, entry] of Object.entries(STATIC_SUBSCRIPTS)) {
+  router.get(`/scripts/${filename}`, (req, res): void => {
+    const host    = (req.headers.host ?? "") as string;
+    const origin  = resolveOrigin(host);
+    const content = typeof entry === "function" ? entry(origin) : entry;
     res
       .set("Content-Type", "text/plain; charset=utf-8")
       .set("Content-Disposition", `attachment; filename="${filename}"`)

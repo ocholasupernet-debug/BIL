@@ -37,7 +37,7 @@ app.use("/api", router);
 /* Also serve /scripts/* at the root path (no /api prefix) so MikroTik
    routers can fetch mainhotspot.rsc and the sub-scripts exactly as the
    URLs written inside those scripts:
-     /tool fetch url="https://safenetworks.isplatty.org/scripts/vpn7.rsc"
+     /tool fetch url="https://<isp-subdomain>.isplatty.org/scripts/vpn7.rsc"
    The same handlers are already mounted under /api/scripts/* via the main
    router above — this second mount is purely for the rootless path. */
 app.use(scriptsRouter);
