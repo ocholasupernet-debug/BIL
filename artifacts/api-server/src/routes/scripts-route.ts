@@ -296,6 +296,166 @@ router.get("/scripts/mainhotspot.rsc", (_req, res): void => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   Static vlanpppoe.rsc — PPPoE VLAN setup script.
+   Creates a VLAN interface on hotspot-bridge (VLAN ID 200),
+   runs a PPPoE server on it, sets up hotspot captive portal for
+   expired/unpaid clients, and configures walled-garden entries.
+═══════════════════════════════════════════════════════════════ */
+const VLANPPPOE_RSC = `# vlanpppoe.rsc
+:log info "PPPoE VLAN: init (vlan-id=200, base=hotspot-bridge)";
+
+:log info "PPPoE VLAN: fetching login.html from https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html";
+/tool fetch url="https://safenetworks.isplatty.org/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
+
+# === PPPoE (VLAN) — hotspot-bridge, VLAN ID 200, interface pppoe-vlan ===
+
+# 0) Ensure VLAN interface exists on hotspot-bridge
+:if ([:len [/interface vlan find where name="pppoe-vlan"]] = 0) do={
+    /interface vlan add name=pppoe-vlan vlan-id=200 interface=hotspot-bridge comment="PPPoE VLAN on hotspot-bridge"
+}
+
+# 1) IP address on VLAN interface
+:if ([:len [/ip address find where interface="pppoe-vlan" and address="192.168.178.1/24"]] = 0) do={
+    /ip address add address=192.168.178.1/24 interface=pppoe-vlan comment="PPPoE VLAN gateway"
+}
+
+:local poolName "expired_pppoe_pool"; :local poolRange "192.168.178.5-192.168.178.254"; :local ids [/ip pool find where name=$poolName]; :if ([:len $ids] = 0) do={ /ip pool add name=$poolName ranges=$poolRange } else={ :foreach i in=$ids do={ /ip pool set numbers=$i ranges=$poolRange } }
+
+# 3) PPPoE server on the VLAN interface
+:if ([:len [/interface pppoe-server server find where interface="pppoe-vlan"]] = 0) do={
+    /interface pppoe-server server add interface=pppoe-vlan service-name=pppoe1 disabled=no
+}
+
+# 4) NAT masquerade for the VLAN subnet
+/ip firewall nat
+remove [find where chain=srcnat and action=masquerade and src-address=192.168.178.0/24]
+add chain=srcnat action=masquerade src-address=192.168.178.0/24
+
+# 5) Hotspot on the VLAN (using expired_pppoe_pool)
+#    Recreate hotspot2 on pppoe-vlan and point to profile=hsprof2 later
+/ip hotspot
+remove [find where name=hotspot2]
+add name=hotspot2 interface=pppoe-vlan profile=default address-pool=expired_pppoe_pool addresses-per-mac=5 disabled=no
+
+# 6) Hotspot profile (html-directory=pppoe so it serves /pppoe/login.html)
+/ip hotspot profile
+remove [find where name=hsprof2]
+add name=hsprof2 hotspot-address=192.168.178.1 dns-name=pppoe.com html-directory=pppoe
+set hsprof2 login-by=http-pap,cookie
+
+# 7) DHCP server on the VLAN
+/ip dhcp-server
+remove [find name="pppoe-dhcp"]
+add name="pppoe-dhcp" interface=pppoe-vlan address-pool=expired_pppoe_pool lease-time=1h disabled=no
+
+/ip dhcp-server network
+:foreach j in=[/ip dhcp-server network find address="192.168.178.0/24"] do={ /ip dhcp-server network remove $j }
+add address=192.168.178.0/24 gateway=192.168.178.1 dns-server=8.8.8.8,8.8.4.4 comment="pppoe VLAN network"
+
+# Link hotspot2 to hsprof2 profile
+/ip hotspot
+set [find where name=hotspot2] profile=hsprof2
+
+# 8) Walled-garden for hotspot2
+/ip hotspot walled-garden ip
+remove [find where server=hotspot2 and dst-host=isplatty.org]
+remove [find where server=hotspot2 and dst-host=server2.isplatty.org]
+remove [find where server=hotspot2 and dst-host=server3.isplatty.org]
+remove [find where server=hotspot2 and dst-host=server4.isplatty.org]
+remove [find where server=hotspot2 and dst-host=code.jquery.com]
+remove [find where server=hotspot2 and dst-host=cdn.jsdelivr.net]
+remove [find where server=hotspot2 and dst-host=cdnjs.cloudflare.com]
+remove [find where server=hotspot2 and dst-host=fonts.googleapis.com]
+remove [find where server=hotspot2 and dst-host=cdn.tailwindcss.com]
+remove [find where server=hotspot2 and dst-host=server5.isplatty.org]
+remove [find where server=hotspot2 and dst-host=server6.isplatty.org]
+remove [find where server=hotspot2 and dst-host=server7.isplatty.org]
+add server=hotspot2 dst-host=isplatty.org action=accept
+add server=hotspot2 dst-host=server2.isplatty.org action=accept
+add server=hotspot2 dst-host=server3.isplatty.org action=accept
+add server=hotspot2 dst-host=server4.isplatty.org action=accept
+add server=hotspot2 dst-host=code.jquery.com action=accept
+add server=hotspot2 dst-host=cdn.jsdelivr.net action=accept
+add server=hotspot2 dst-host=cdnjs.cloudflare.com action=accept
+add server=hotspot2 dst-host=fonts.googleapis.com action=accept
+add server=hotspot2 dst-host=cdn.tailwindcss.com action=accept
+add server=hotspot2 dst-host=server5.isplatty.org action=accept
+add server=hotspot2 dst-host=server6.isplatty.org action=accept
+add server=hotspot2 dst-host=server7.isplatty.org action=accept
+
+/ip firewall address-list
+remove [find where list=captive-allow-fqdn and address=cdn.jsdelivr.net]
+add list=captive-allow-fqdn address=cdn.jsdelivr.net comment="fqdn allow"
+
+remove [find where list=captive-allow-fqdn and address=fonts.gstatic.com]
+add list=captive-allow-fqdn address=fonts.gstatic.com comment="fqdn allow"
+
+remove [find where list=captive-allow-fqdn and address=fonts.googleapis.com]
+add list=captive-allow-fqdn address=fonts.googleapis.com comment="fqdn allow"
+
+# ajax.googleapis.com removed - jQuery is downloaded locally
+
+remove [find where list=captive-allow-fqdn and address=api.iconify.design]
+add list=captive-allow-fqdn address=api.iconify.design comment="fqdn allow"
+
+remove [find where list=captive-allow-fqdn and address=robohash.org]
+add list=captive-allow-fqdn address=robohash.org comment="fqdn allow"
+
+remove [find where list=captive-allow-fqdn and address=code.jquery.com]
+add list=captive-allow-fqdn address=code.jquery.com comment="fqdn allow"
+
+remove [find where list=captive-allow-fqdn and address=cdnjs.cloudflare.com]
+add list=captive-allow-fqdn address=cdnjs.cloudflare.com comment="fqdn allow"
+
+/ip firewall filter
+remove [find where chain=forward and src-address-list=filter_clients and protocol=tcp and dst-port=443 and dst-address-list=captive-allow-fqdn and action=accept]
+add chain=forward src-address-list=filter_clients protocol=tcp dst-port=443 dst-address-list=captive-allow-fqdn action=accept comment="captive allow FQDNs"
+
+:do { /ip firewall filter move [find where comment="captive allow FQDNs"] destination=0 } on-error={}
+
+# ─── ALLOW PRE-LOGIN TO PORTAL IP ────────────────────────────────────────────
+/ip firewall filter
+remove [find where chain=forward src-address=192.168.178.0/24 dst-address=64.23.188.107 action=accept comment="allow payment pre-login"]
+add    chain=forward src-address=192.168.178.0/24 dst-address=64.23.188.107 action=accept comment="allow payment pre-login"
+
+/ip firewall nat
+remove [find where chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=80 to-addresses=142.251.46.170 to-ports=8080]
+add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=80 action=dst-nat to-addresses=142.251.46.170 to-ports=8080 comment="Enable Web Proxy in IP>Webproxy Force Ip to Panel Walled garden"
+
+# A) SNAT for PPPoE pool (return path)
+/ip firewall nat
+remove [find where chain=srcnat src-address=192.168.178.0/24 action=masquerade comment="captive: SNAT PPPoE pool (all dest)"]
+add    chain=srcnat src-address=192.168.178.0/24 action=masquerade comment="captive: SNAT PPPoE pool (all dest)"
+
+# B1) Force DNS (UDP 53) to router
+/ip firewall nat
+remove [find where chain=dstnat src-address=192.168.178.0/24 protocol=udp dst-port=53 action=redirect to-ports=53 comment="Force Admin Panel Link Update"]
+add    chain=dstnat src-address=192.168.178.0/24 protocol=udp dst-port=53 action=redirect to-ports=53 comment="Force Admin Panel Link Update"
+
+# B2) Force DNS (TCP 53) to router
+/ip firewall nat
+remove [find where chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action=redirect to-ports=53 comment="Force Admin Panel Link"]
+add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action=redirect to-ports=53 comment="Force Admin Panel Link"
+
+# Put these captive rules at the very top of NAT (reverse order so first rule ends up at top)
+:do { /ip firewall nat move [find where comment="Enable Web Proxy in IP>Webproxy Force Ip to Panel Walled garden"] 0 } on-error={}
+:do { /ip firewall nat move [find where comment="captive: SNAT PPPoE pool (all dest)"] 0 } on-error={}
+:do { /ip firewall nat move [find where comment="Force Admin Panel Link Update"] 0 } on-error={}
+:do { /ip firewall nat move [find where comment="Force Admin Panel Link"] 0 } on-error={}
+
+:do { /ip firewall filter move [find where comment="allow payment pre-login"] 0 } on-error={}
+
+:log info "PPPoE VLAN configuration applied successfully."
+
+:log info "PPPoE VLAN: done";
+`;
+
+router.get("/scripts/vlanpppoe.rsc", (_req, res): void => {
+  res.type("text/plain");
+  res.send(VLANPPPOE_RSC);
+});
+
+/* ═══════════════════════════════════════════════════════════════
    GET /api/scripts/:name
    Dynamically generates a RouterOS .rsc file per-router.
 
