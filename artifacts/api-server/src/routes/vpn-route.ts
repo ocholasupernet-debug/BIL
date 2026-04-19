@@ -13,7 +13,7 @@ function sbUrl(): string {
 }
 function sbKey(): string {
   /* Prefer service key (bypasses RLS) → falls back to anon */
-  return process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+  return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
 }
 
 const CA_PATHS = [

@@ -10,7 +10,7 @@ function resolveSupabaseUrl(): string {
   return raw.startsWith("http") ? raw : `https://${raw}`;
 }
 const SUPABASE_URL = resolveSupabaseUrl();
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
 const BASE_DOMAIN  = "isplatty.org";
 
 /* ── Auto-upsert an IP pool record for a router ──

@@ -1119,7 +1119,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
 ═══════════════════════════════════════════════════════════════ */
 /* Per-request env helpers — use || so empty-string falls through */
 function hbUrl(): string { return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""; }
-function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
+function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
 
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const token = (req.params.token ?? "").trim();

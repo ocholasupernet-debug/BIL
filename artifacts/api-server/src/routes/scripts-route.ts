@@ -13,7 +13,7 @@ function resolveUrl(): string {
   return raw.startsWith("http") ? raw : `https://${raw}`;
 }
 const SUPABASE_URL = resolveUrl();
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
 
 /* ── Auto-upsert an IP pool record for a router ──
    Called after script generation so pool ranges are always in the DB.
@@ -1157,7 +1157,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
 
       let createError = "";
       /* Try service-role key first (bypasses RLS), then anon key */
-      const serviceKey = process.env.SUPABASE_SERVICE_KEY ?? "";
+      const serviceKey = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
       const keysToTry  = serviceKey ? [serviceKey, SUPABASE_KEY].filter(Boolean) : [SUPABASE_KEY];
       for (const key of keysToTry) {
         if (router_row) break;
@@ -1204,7 +1204,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     }
 
     if (!router_row) {
-      const serviceSet = !!process.env.SUPABASE_SERVICE_KEY;
+      const serviceSet = !!(process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY);
       res.status(404).send(
         `# Error: no router found for admin "${adminSubdomain}" matching slug "${slug}"\n` +
         `# Available slugs: ${routers.map(r => slugify(r.name)).join(", ") || "(none)"}\n` +
