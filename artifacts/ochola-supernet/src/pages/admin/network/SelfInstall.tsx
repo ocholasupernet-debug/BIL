@@ -153,7 +153,9 @@ export default function SelfInstall() {
   const displaySlug   = activeRouter ? slugify(activeRouter.name) : nextSlug;
   const profileFile   = `${displaySlug}.ovpn`;
   const scriptFile    = `mainhotspot.rsc`;
-  const fetchCmd      = `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc" dst-path=mainhotspot.rsc mode=https`;
+  const fetchCmd      = (activeRouterId && activeRouter?.router_secret)
+    ? `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc?rid=${activeRouterId}&token=${encodeURIComponent(activeRouter.router_secret)}&name=${encodeURIComponent(displayName)}" dst-path=mainhotspot.rsc mode=https`
+    : `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc" dst-path=mainhotspot.rsc mode=https`;
   const importCmd     = `/import mainhotspot.rsc`;
 
   const isReconfigure   = !!reconfigureId;

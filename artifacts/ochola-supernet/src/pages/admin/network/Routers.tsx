@@ -245,6 +245,147 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 /* ══════════════════════════════════════════════════════════════
    Main page
 ══════════════════════════════════════════════════════════════ */
+/* ── Live install progress panel ──
+   Polls /api/admin/router/install-progress every 2s and renders a compact
+   timeline for each router currently running the self-install script. The
+   server auto-collapses successful installs after 60s, so this panel
+   disappears on its own once everything is healthy. */
+type InstallStepDto = {
+  step: number; name: string;
+  phase: "downloading" | "applied" | "failed";
+  error?: string; ts: number;
+};
+type InstallDto = {
+  routerId: number; routerName: string;
+  startedAt: number; updatedAt: number;
+  done: boolean; failures: number;
+  steps: InstallStepDto[];
+};
+
+const INSTALL_STEP_ORDER: Array<{ num: number; name: string; label: string }> = [
+  { num: 1, name: "vpn",       label: "VPN tunnel" },
+  { num: 2, name: "hotspot",   label: "Hotspot config" },
+  { num: 3, name: "pppoe",     label: "PPPoE config" },
+  { num: 4, name: "users",     label: "Users config" },
+  { num: 5, name: "syncusers", label: "Sync-users firewall" },
+  { num: 6, name: "heartbeat", label: "Heartbeat firewall" },
+  { num: 7, name: "syncfull",  label: "Sync-full script" },
+];
+
+function InstallProgressPanel() {
+  const { data } = useQuery({
+    queryKey:        ["isp-install-progress", ADMIN_ID],
+    queryFn:         async (): Promise<InstallDto[]> => {
+      const r = await fetch(`/api/admin/router/install-progress?adminId=${ADMIN_ID}`);
+      if (!r.ok) return [];
+      const j = await r.json() as { ok: boolean; installs?: InstallDto[] };
+      return j.installs ?? [];
+    },
+    refetchInterval: 2_000,
+    staleTime:       0,
+  });
+
+  const installs = data ?? [];
+  if (installs.length === 0) return null;
+
+  return (
+    <div style={{
+      borderRadius: 10, background: "var(--isp-section)",
+      border: "1px solid var(--isp-border)", padding: "1rem 1.25rem",
+      marginBottom: "1rem",
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        marginBottom: "0.85rem", fontSize: "0.82rem",
+        color: "var(--isp-text)", fontWeight: 600,
+      }}>
+        <Loader2 size={14} style={{ animation: "spin 1.2s linear infinite", color: "var(--isp-accent)" }} />
+        Live install progress ({installs.length})
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+        {installs.map(inst => {
+          const stepMap = new Map(inst.steps.map(s => [s.step, s]));
+          const completed = inst.steps.filter(s => s.phase === "applied").length;
+          const pct       = Math.round((completed / 7) * 100);
+          const allOk     = inst.done && inst.failures === 0;
+          const anyFail   = inst.failures > 0;
+
+          return (
+            <div key={inst.routerId} style={{
+              borderRadius: 8, padding: "0.75rem 0.9rem",
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid var(--isp-border-subtle)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, fontSize: "0.78rem" }}>
+                <Radio size={12} style={{
+                  color: anyFail ? "#f87171" : allOk ? "#34d399" : "var(--isp-accent)",
+                }} />
+                <span style={{ fontWeight: 600, color: "var(--isp-text)" }}>{inst.routerName}</span>
+                <span style={{ color: "var(--isp-text-muted)" }}>#{inst.routerId}</span>
+                <span style={{ marginLeft: "auto", color: "var(--isp-text-muted)" }}>
+                  {completed}/7 steps {pct}%{anyFail ? ` · ${inst.failures} failed` : ""}
+                  {allOk ? " · done" : ""}
+                </span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 8 }}>
+                {INSTALL_STEP_ORDER.map(s => {
+                  const cur = stepMap.get(s.num);
+                  const bg =
+                    !cur                         ? "rgba(255,255,255,0.06)" :
+                    cur.phase === "failed"       ? "#dc2626" :
+                    cur.phase === "applied"      ? "#16a34a" :
+                                                   "var(--isp-accent)";
+                  return (
+                    <div key={s.num} title={`[${s.num}/7] ${s.label}${cur ? ` — ${cur.phase}` : " — pending"}`}
+                         style={{ height: 6, borderRadius: 3, background: bg, opacity: cur ? 1 : 0.5 }} />
+                  );
+                })}
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem" }}>
+                {INSTALL_STEP_ORDER.map(s => {
+                  const cur = stepMap.get(s.num);
+                  const phase = cur?.phase ?? "pending";
+                  const color =
+                    phase === "failed"      ? "#f87171" :
+                    phase === "applied"     ? "#34d399" :
+                    phase === "downloading" ? "var(--isp-accent)" :
+                                              "var(--isp-text-muted)";
+                  const icon =
+                    phase === "failed"      ? <AlertCircle size={11} /> :
+                    phase === "applied"     ? <CheckCircle size={11} /> :
+                    phase === "downloading" ? <Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> :
+                                              <Clock size={11} />;
+                  return (
+                    <div key={s.num} style={{ display: "flex", alignItems: "flex-start", gap: 6, color }}>
+                      <span style={{ marginTop: 1 }}>{icon}</span>
+                      <span style={{ minWidth: 28, color: "var(--isp-text-muted)" }}>[{s.num}/7]</span>
+                      <span style={{ minWidth: 130 }}>{s.label}</span>
+                      <span style={{ textTransform: "capitalize" }}>{phase}</span>
+                      {cur?.error && (
+                        <span style={{
+                          marginLeft: 6, color: "#f87171",
+                          fontFamily: "monospace", fontSize: "0.7rem",
+                          overflow: "hidden", textOverflow: "ellipsis",
+                          whiteSpace: "nowrap", maxWidth: 520,
+                        }} title={cur.error}>
+                          {cur.error}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function Routers() {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
@@ -654,6 +795,8 @@ export default function Routers() {
         </div>
 
         <NetworkTabs active="routers" />
+
+        <InstallProgressPanel />
 
         {/* ── table ── */}
         <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>

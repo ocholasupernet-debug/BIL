@@ -217,9 +217,38 @@ function resolveOrigin(host: string): string {
    Sub-script URLs use the requesting ISP's own subdomain so each
    ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-function buildMainhotspotRsc(scriptsBase: string): string {
+function buildMainhotspotRsc(scriptsBase: string, progressUrl: string = "", routerName: string = ""): string {
+  /* When progressUrl is set, every [N/7] step posts a status update to
+     /api/isp/router/install-progress/<rid> so the admin Routers page can
+     render a live timeline. The function pg is a no-op when no URL was
+     provided, so existing routers still get the same script. */
+  /* RouterOS string-literal escape: a router name like My"Bad\Router would
+     otherwise terminate the string early or break the script. We escape
+     backslashes and double-quotes; control characters are stripped so a
+     copy-pasted name with newlines can't inject extra script lines. */
+  const rscEscape = (s: string): string =>
+    s.replace(/[\u0000-\u001F\u007F]/g, "")
+     .replace(/\\/g, "\\\\")
+     .replace(/"/g, '\\"');
+  const safeProgressUrl = rscEscape(progressUrl);
+  const safeRouterName  = rscEscape(routerName);
+  const pgDef = progressUrl
+    ? `:global IPProgUrl "${safeProgressUrl}"
+:global IPRname "${safeRouterName}"
+:global pg do={
+    :global IPProgUrl
+    :global IPRname
+    :local body ("step=" . [:tostr $1] . "&name=" . [:tostr $2] . "&phase=" . [:tostr $3] . "&err=" . [:tostr $4] . "&rname=" . $IPRname)
+    :do {
+        /tool fetch url=$IPProgUrl http-method=post http-content-type="application/x-www-form-urlencoded" http-data=$body keep-result=no mode=https check-certificate=no
+    } on-error={}
+}`
+    : `:global pg do={}`;
+
   return `# Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
+
+${pgDef}
 
 :global version [/system package update get installed-version]
 :local majorVersion 0
@@ -250,6 +279,7 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     :set vpnUrl "${scriptsBase}/vpn6.rsc"
 }
 :do {
+    $pg 1 "vpn" "downloading" ""
     :put "[1/7] Downloading VPN configuration..."
     /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https check-certificate=no
     :delay 2s
@@ -257,14 +287,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import vpnsetup.rsc
     :do { /file remove vpnsetup.rsc } on-error={}
     :put "      VPN configuration applied."
+    $pg 1 "vpn" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [vpnsetup.rsc] FAILED: " . $error)
+    $pg 1 "vpn" "failed" $error
     :do { /file remove vpnsetup.rsc } on-error={}
 }
 
 # --- Hotspot configuration ----------------------------------------------------
 :do {
+    $pg 2 "hotspot" "downloading" ""
     :put "[2/7] Downloading hotspot configuration..."
     /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https check-certificate=no
     :delay 2s
@@ -272,14 +305,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import hotspotsetup.rsc
     :do { /file remove hotspotsetup.rsc } on-error={}
     :put "      Hotspot configuration applied."
+    $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
+    $pg 2 "hotspot" "failed" $error
     :do { /file remove hotspotsetup.rsc } on-error={}
 }
 
 # --- PPPoE configuration ------------------------------------------------------
 :do {
+    $pg 3 "pppoe" "downloading" ""
     :put "[3/7] Downloading PPPoE configuration..."
     /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https check-certificate=no
     :delay 2s
@@ -287,14 +323,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import pppoesetup.rsc
     :do { /file remove pppoesetup.rsc } on-error={}
     :put "      PPPoE configuration applied."
+    $pg 3 "pppoe" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
+    $pg 3 "pppoe" "failed" $error
     :do { /file remove pppoesetup.rsc } on-error={}
 }
 
 # --- Users configuration ------------------------------------------------------
 :do {
+    $pg 4 "users" "downloading" ""
     :put "[4/7] Downloading users configuration..."
     /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https check-certificate=no
     :delay 2s
@@ -302,14 +341,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import users.rsc
     :do { /file remove users.rsc } on-error={}
     :put "      Users configuration applied."
+    $pg 4 "users" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [users.rsc] FAILED: " . $error)
+    $pg 4 "users" "failed" $error
     :do { /file remove users.rsc } on-error={}
 }
 
 # --- Sync-users firewalls -----------------------------------------------------
 :do {
+    $pg 5 "syncusers" "downloading" ""
     :put "[5/7] Downloading sync-users firewalls..."
     /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https check-certificate=no
     :delay 2s
@@ -317,14 +359,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import syncusers.rsc
     :do { /file remove syncusers.rsc } on-error={}
     :put "      Sync-users firewalls applied."
+    $pg 5 "syncusers" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [syncusers.rsc] FAILED: " . $error)
+    $pg 5 "syncusers" "failed" $error
     :do { /file remove syncusers.rsc } on-error={}
 }
 
 # --- Heartbeat firewalls ------------------------------------------------------
 :do {
+    $pg 6 "heartbeat" "downloading" ""
     :put "[6/7] Downloading heartbeat firewalls..."
     /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https check-certificate=no
     :delay 2s
@@ -332,14 +377,17 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import heartbeat.rsc
     :do { /file remove heartbeat.rsc } on-error={}
     :put "      Heartbeat firewalls applied."
+    $pg 6 "heartbeat" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
+    $pg 6 "heartbeat" "failed" $error
     :do { /file remove heartbeat.rsc } on-error={}
 }
 
 # --- Sync-full script ---------------------------------------------------------
 :do {
+    $pg 7 "syncfull" "downloading" ""
     :put "[7/7] Downloading sync-full script..."
     /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https check-certificate=no
     :delay 2s
@@ -347,9 +395,11 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     /import syncfull.rsc
     :do { /file remove syncfull.rsc } on-error={}
     :put "      Sync-full script applied."
+    $pg 7 "syncfull" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [syncfull.rsc] FAILED: " . $error)
+    $pg 7 "syncfull" "failed" $error
     :do { /file remove syncfull.rsc } on-error={}
 }
 
@@ -370,14 +420,37 @@ function buildMainhotspotRsc(scriptsBase: string): string {
 } else={
     :put ("Setup finished with " . $failures . " failed step(s) - see WARN lines above.")
 }
+
+# Final completion ping for the admin progress timeline (no-op when pg was disabled)
+:do {
+    :global IPProgUrl
+    :global IPRname
+    :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
+        /tool fetch url=$IPProgUrl http-method=post http-content-type="application/x-www-form-urlencoded" http-data=("done=1&rname=" . $IPRname) keep-result=no mode=https check-certificate=no
+    }
+} on-error={}
 `;
 }
 
 router.get("/scripts/mainhotspot.rsc", (req, res): void => {
   const host = (req.headers.host ?? "") as string;
-  const scriptsBase = `${resolveOrigin(host)}/scripts`;
+  const origin = resolveOrigin(host);
+  const scriptsBase = `${origin}/scripts`;
+  /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
+     progress callbacks to /api/isp/router/install-progress/<rid>. The token
+     is the router_secret returned by /api/admin/router/ensure and is what
+     the API uses to authenticate the install events. Without rid+token the
+     script runs exactly as before (no callbacks). */
+  const ridRaw   = ((req.query.rid   ?? "") as string).trim();
+  const tokenRaw = ((req.query.token ?? "") as string).trim();
+  const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
+  const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
+  const rname  = ((req.query.name  ?? "") as string).trim().slice(0, 80);
+  const progressUrl = (rid && token)
+    ? `${origin}/api/isp/router/install-progress/${rid}?token=${encodeURIComponent(token)}`
+    : "";
   res.type("text/plain");
-  res.send(buildMainhotspotRsc(scriptsBase));
+  res.send(buildMainhotspotRsc(scriptsBase, progressUrl, rname));
 });
 
 /* ═══════════════════════════════════════════════════════════════

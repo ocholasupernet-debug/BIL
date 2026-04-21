@@ -1121,6 +1121,206 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
 function hbUrl(): string { return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""; }
 function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
 
+  /* ===============================================================
+     Install progress tracking - in-memory store
+     Routers POST a step update each time they download/apply/fail
+     one of the 7 self-install sub-scripts. The admin Routers page
+     polls a listing endpoint and shows a live timeline per router.
+  =============================================================== */
+  type InstallPhase = "downloading" | "applied" | "failed";
+  interface InstallStep {
+    step: number;
+    name: string;
+    phase: InstallPhase;
+    error?: string;
+    ts: number;
+  }
+  interface InstallProgress {
+    routerId: number;
+    adminId?: number;
+    routerName?: string;
+    startedAt: number;
+    updatedAt: number;
+    done: boolean;
+    failures: number;
+    steps: Map<number, InstallStep>;
+  }
+
+  const installProgress = new Map<number, InstallProgress>();
+  const INSTALL_TTL_MS       = 30 * 60 * 1000;
+  const INSTALL_DONE_KEEP_MS = 60 * 1000;
+
+  function gcInstallProgress(): void {
+    const now = Date.now();
+    for (const [rid, p] of installProgress) {
+      if (now - p.updatedAt > INSTALL_TTL_MS) installProgress.delete(rid);
+    }
+  }
+
+  async function enrichInstallProgress(p: InstallProgress): Promise<void> {
+    if (p.adminId && p.routerName) return;
+    const url = hbUrl();
+    const key = hbKey();
+    if (!url || !key) return;
+    try {
+      const r = await fetch(
+        `${url}/rest/v1/isp_routers?id=eq.${p.routerId}&select=id,admin_id,name`,
+        { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
+      );
+      if (!r.ok) return;
+      const rows = await r.json() as Array<{ id: number; admin_id: number; name: string }>;
+      if (rows[0]) {
+        p.adminId    = rows[0].admin_id;
+        p.routerName = p.routerName || rows[0].name;
+      }
+    } catch { /* ignore */ }
+  }
+
+  /* Router callback - accept GET (query) or POST (urlencoded body).
+   Requires ?token=<router_secret> matching the router row, so a malicious
+   caller cannot spoof install events for other routers. Always returns 200
+   so the router-side install never blocks on this. */
+async function handleInstallProgressUpdate(
+  req: import("express").Request,
+  res: import("express").Response,
+): Promise<void> {
+  const rid = parseInt((req.params.rid ?? "0") as string, 10);
+  if (!rid || isNaN(rid)) { res.json({ ok: false, error: "invalid rid" }); return; }
+
+  const src   = { ...(req.query as Record<string, string>), ...(req.body as Record<string, string>) };
+  const token = (src.token ?? "").toString().trim();
+  if (!token) { res.json({ ok: false, error: "missing token" }); return; }
+
+  /* Verify token matches this router. Cache resolved (rid -> {secret, adminId, name}) */
+  const url = hbUrl();
+  const key = hbKey();
+  if (!url || !key) { res.json({ ok: false, error: "auth backend unavailable" }); return; }
+  let routerRow: { id: number; admin_id: number; name: string; router_secret: string } | null = null;
+  try {
+    const r = await fetch(
+      `${url}/rest/v1/isp_routers?id=eq.${rid}&select=id,admin_id,name,router_secret`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
+    );
+    if (r.ok) {
+      const rows = await r.json() as Array<{ id: number; admin_id: number; name: string; router_secret: string }>;
+      routerRow = rows[0] ?? null;
+    }
+  } catch { /* ignore */ }
+
+  if (!routerRow || !routerRow.router_secret || routerRow.router_secret !== token) {
+    res.status(401).json({ ok: false, error: "invalid token" });
+    return;
+  }
+
+  const step  = parseInt(src.step ?? "0", 10);
+  const name  = (src.name  ?? "").toString().slice(0, 40);
+  const phaseRaw = (src.phase ?? "downloading").toString();
+  const allowedPhases = new Set(["downloading", "applied", "failed"]);
+  if (!allowedPhases.has(phaseRaw)) { res.json({ ok: false, error: "invalid phase" }); return; }
+  const phase = phaseRaw as InstallPhase;
+  const err   = (src.err   ?? src.error ?? "").toString().slice(0, 500);
+  const rname = (src.rname ?? "").toString().slice(0, 80);
+  const done  = src.done === "1" || src.done === "true";
+
+  if (!done && (!step || step < 1 || step > 7)) { res.json({ ok: false, error: "step out of range" }); return; }
+
+  let p = installProgress.get(rid);
+  if (!p) {
+    p = {
+      routerId:   rid,
+      adminId:    routerRow.admin_id,
+      routerName: rname || routerRow.name,
+      startedAt:  Date.now(),
+      updatedAt:  Date.now(),
+      done:       false,
+      failures:   0,
+      steps:      new Map(),
+    };
+    installProgress.set(rid, p);
+  } else {
+    p.adminId    = routerRow.admin_id;
+    p.routerName = p.routerName || rname || routerRow.name;
+  }
+  p.updatedAt = Date.now();
+
+  if (step) {
+    const order: Record<InstallPhase, number> = { downloading: 1, applied: 2, failed: 2 };
+    const prev = p.steps.get(step);
+    if (!prev || order[phase] >= order[prev.phase]) {
+      p.steps.set(step, { step, name: name || prev?.name || "", phase, error: err || undefined, ts: Date.now() });
+      if (phase === "failed" && (!prev || prev.phase !== "failed")) p.failures += 1;
+    }
+  }
+
+  if (done) p.done = true;
+
+  console.log(`[install-progress] router=${rid} step=${step}/${name} phase=${phase}${err ? ` err="${err.slice(0, 80)}"` : ""}${done ? " (done)" : ""}`);
+
+  gcInstallProgress();
+  res.json({ ok: true });
+}
+
+router.get ("/isp/router/install-progress/:rid", handleInstallProgressUpdate);
+router.post("/isp/router/install-progress/:rid", handleInstallProgressUpdate);
+
+/* Admin listing - used by the Routers page to render live timelines.
+   Tenant scoping is mandatory: ?adminId= is required and we drop any
+   entry whose owning admin could not be resolved from Supabase, so an
+   unknown-ownership install never leaks across tenants.
+
+   NOTE: like every other /admin/router/* endpoint in this codebase
+   (reboot, fix-api, probe, ports, bridge-assign, ensure...), this
+   endpoint trusts the caller-supplied adminId. The whole admin app
+   currently runs on a localStorage-stored adminId model with no
+   session token, so adding token enforcement here in isolation would
+   not improve security. Migrating all admin endpoints to a real
+   session-bound auth middleware is tracked as a follow-up task. */
+router.get("/admin/router/install-progress", async (req, res): Promise<void> => {
+  gcInstallProgress();
+  const adminId = parseInt(((req.query.adminId ?? "") as string), 10);
+  if (!adminId || isNaN(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "adminId required" });
+    return;
+  }
+
+  const now = Date.now();
+
+  /* Resolve owners for any entry whose owning admin we don't yet know,
+     so the strict-equality filter below is authoritative. */
+  const pending: Array<Promise<void>> = [];
+  for (const p of installProgress.values()) {
+    if (!p.adminId) pending.push(enrichInstallProgress(p));
+  }
+  if (pending.length) await Promise.allSettled(pending);
+
+  const installs: Array<{
+    routerId: number; routerName: string; startedAt: number; updatedAt: number;
+    done: boolean; failures: number; steps: InstallStep[];
+  }> = [];
+
+  for (const p of installProgress.values()) {
+    /* Strict tenant filter: must have a resolved owner that matches.
+       Entries with unknown ownership are NEVER returned. */
+    if (!p.adminId || p.adminId !== adminId) continue;
+    if (p.done && p.failures === 0 && now - p.updatedAt > INSTALL_DONE_KEEP_MS) {
+      installProgress.delete(p.routerId);
+      continue;
+    }
+    installs.push({
+      routerId:   p.routerId,
+      routerName: p.routerName ?? `Router #${p.routerId}`,
+      startedAt:  p.startedAt,
+      updatedAt:  p.updatedAt,
+      done:       p.done,
+      failures:   p.failures,
+      steps:      Array.from(p.steps.values()).sort((a, b) => a.step - b.step),
+    });
+  }
+
+  installs.sort((a, b) => b.updatedAt - a.updatedAt);
+  res.json({ ok: true, installs });
+});
+
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
   const token = (req.params.token ?? "").trim();
 
