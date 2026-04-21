@@ -23,15 +23,17 @@ function useTicker(interval = 10_000) {
 
 /* ── helpers ── */
 async function fetchRouters(): Promise<DbRouter[]> {
-  /* Only show routers that have completed self-install. A router is "fully
-     configured" once it has reported back via heartbeat at least once — at
-     that point its status is promoted out of "setup". Auto-created rows that
-     never came online stay hidden so the list isn't polluted with stubs. */
+  /* A router only counts as "added" once it is fully configured, meaning:
+       1. Bridge ports have been assigned (status promoted out of "setup")
+       2. The router has reported back via heartbeat at least once
+       3. Its current status is one of the two "real" states: online | connected
+     Anything else — auto-created stubs, half-configured devices, unknown
+     statuses — is hidden completely. No pending state, no placeholder row. */
   const { data, error } = await supabase
     .from("isp_routers")
     .select("*")
     .eq("admin_id", ADMIN_ID)
-    .neq("status", "setup")
+    .in("status", ["online", "connected"])
     .not("last_seen", "is", null)
     .order("id", { ascending: false });
   if (error) throw error;
