@@ -181,9 +181,9 @@ export default function Dashboard() {
   const maxCount = Math.max(...monthlyData.map(d => d.count), 1);
 
   const userInsights = useMemo(() => [
-    { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "var(--isp-accent)" },
-    { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "var(--isp-accent)" },
-    { label: "Static",  count: customers.filter(c => c.type === "static").length,  color: "var(--isp-green)" },
+    { label: "Hotspot", count: customers.filter(c => c.type === "hotspot").length, color: "#3B82F6" },
+    { label: "PPPoE",   count: customers.filter(c => c.type === "pppoe").length,   color: "#8B5CF6" },
+    { label: "Static",  count: customers.filter(c => c.type === "static").length,  color: "#22C55E" },
   ], [customers]);
 
   const routerOptions: { key: number | "all"; label: string; online: boolean | null }[] = [
@@ -204,7 +204,6 @@ export default function Dashboard() {
 
   return (
     <AdminLayout>
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
         <div style={{
@@ -224,8 +223,8 @@ export default function Dashboard() {
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--isp-green)", display: "inline-block" }} />
               <span style={{ fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Live Dashboard</span>
             </div>
-            <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", margin: 0, letterSpacing: "-0.03em", lineHeight: 1.2 }}>
-              {greeting} 👋
+            <h1 style={{ fontSize: "1.375rem", fontWeight: 800, color: "var(--isp-text)", margin: 0, letterSpacing: "-0.025em", lineHeight: 1.2 }}>
+              {greeting}
             </h1>
             <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>
               Here's what's happening across your network today.
