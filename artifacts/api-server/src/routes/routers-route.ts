@@ -104,8 +104,47 @@ router.delete("/routers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
   const rows = await sbSelect<{ name: string; admin_id: number }>("isp_routers", `id=eq.${id}&select=name,admin_id&limit=1`);
   const row = rows[0];
-  await sbDelete("isp_routers", `id=eq.${id}`);
-  if (row) void logActivity({ adminId: row.admin_id, type: "router", action: "deleted", subject: row.name });
+  if (!row) { res.status(404).json({ error: "Router not found" }); return; }
+
+  /* ── Best-effort cascade clean-up of child records that may have a
+     foreign-key constraint on isp_routers(id). Each delete is wrapped
+     so a missing table or absent FK never aborts the whole operation. */
+  const childTables = [
+    "isp_ip_pools",
+    "isp_ppp_secrets",
+    "isp_pppoe_users",
+    "isp_hotspot_users",
+    "isp_bridge_ports",
+    "isp_router_history",
+    "isp_router_sessions",
+    "isp_active_sessions",
+    "isp_router_pings",
+    "isp_router_metrics",
+  ];
+  for (const t of childTables) {
+    try { await sbDelete(t, `router_id=eq.${id}`); } catch { /* ignore */ }
+  }
+
+  /* ── Now delete the router itself. If it still fails (e.g. an unknown
+     FK), report the error so the UI can show it instead of silently
+     leaving the row in place. */
+  try {
+    await sbDelete("isp_routers", `id=eq.${id}`);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Delete failed" });
+    return;
+  }
+
+  /* Confirm the row is actually gone — sbDelete swallows non-2xx responses */
+  const verify = await sbSelect<{ id: number }>("isp_routers", `id=eq.${id}&select=id&limit=1`);
+  if (verify.length > 0) {
+    res.status(500).json({
+      error: "Router could not be deleted — it may still be referenced by other records. Remove related VPN users, IP pools, or sessions first.",
+    });
+    return;
+  }
+
+  void logActivity({ adminId: row.admin_id, type: "router", action: "deleted", subject: row.name });
   res.sendStatus(204);
 });
 

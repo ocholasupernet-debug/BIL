@@ -490,14 +490,27 @@ export default function Routers() {
     }
   };
 
-  /* ── delete a router ── */
+  /* ── delete a router ──
+     Uses the server-side endpoint which:
+       • runs with the service-role key (bypasses RLS)
+       • cascades clean-up of child records (VPN users, IP pools, sessions, …)
+       • returns a useful error message when something blocks the delete */
+  const [deleteError, setDeleteError] = useState<Record<number, string>>({});
   const deleteRouter = async (r: DbRouter) => {
     setDeleteState(prev => ({ ...prev, [r.id]: "deleting" }));
+    setDeleteError(prev => ({ ...prev, [r.id]: "" }));
     try {
-      await supabase.from("isp_routers").delete().eq("id", r.id);
+      const res = await fetch(`/api/routers/${r.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        let msg = `Delete failed (HTTP ${res.status})`;
+        try { const body = await res.json(); if (body?.error) msg = body.error; } catch {}
+        throw new Error(msg);
+      }
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
-    } catch {
       setDeleteState(prev => ({ ...prev, [r.id]: "idle" }));
+    } catch (e) {
+      setDeleteState(prev => ({ ...prev, [r.id]: "idle" }));
+      setDeleteError(prev => ({ ...prev, [r.id]: e instanceof Error ? e.message : "Delete failed" }));
     }
   };
 
@@ -870,6 +883,21 @@ export default function Routers() {
                                 color="#f87171" bg="rgba(248,113,113,0.08)" border="rgba(248,113,113,0.25)"
                                 title="Delete router"
                               />
+                            )}
+                            {deleteError[r.id] && (
+                              <span
+                                title={deleteError[r.id]}
+                                onClick={() => setDeleteError(p => ({ ...p, [r.id]: "" }))}
+                                style={{
+                                  fontSize: "0.68rem", color: "#f87171", cursor: "pointer",
+                                  maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap", padding: "0.15rem 0.4rem",
+                                  background: "rgba(248,113,113,0.08)", borderRadius: 4,
+                                  border: "1px solid rgba(248,113,113,0.25)",
+                                }}
+                              >
+                                ✕ {deleteError[r.id]}
+                              </span>
                             )}
                             {pingSt === "pinging" ? (
                               <span style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.68rem", color: "var(--isp-accent)" }}>
