@@ -240,66 +240,135 @@ function buildMainhotspotRsc(scriptsBase: string): string {
 :if ([/ping 8.8.8.8 count=3] = 0) do={
     :error "No internet connection. Please check your internet connection and try again."
 }
+:local failures 0
+
+# --- VPN configuration --------------------------------------------------------
+:local vpnUrl
+:if ($majorVersion = 7) do={
+    :set vpnUrl "${scriptsBase}/vpn7.rsc"
+} else={
+    :set vpnUrl "${scriptsBase}/vpn6.rsc"
+}
 :do {
-    :put "Downloading VPN configuration..."
-    :local vpnUrl
-    :if ($majorVersion = 7) do={
-        :set vpnUrl "${scriptsBase}/vpn7.rsc"
-    } else={
-        :set vpnUrl "${scriptsBase}/vpn6.rsc"
-    }
+    :put "[1/7] Downloading VPN configuration..."
     /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying VPN configuration..."
+    :put "      Applying VPN configuration..."
     /import vpnsetup.rsc
-    /file remove vpnsetup.rsc
-    :put "Downloading hotspot configuration..."
+    :do { /file remove vpnsetup.rsc } on-error={}
+    :put "      VPN configuration applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [vpnsetup.rsc] FAILED: " . $error)
+    :do { /file remove vpnsetup.rsc } on-error={}
+}
+
+# --- Hotspot configuration ----------------------------------------------------
+:do {
+    :put "[2/7] Downloading hotspot configuration..."
     /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying hotspot configuration..."
+    :put "      Applying hotspot configuration..."
     /import hotspotsetup.rsc
-    /file remove hotspotsetup.rsc
-    :put "Downloading PPPoE configuration..."
+    :do { /file remove hotspotsetup.rsc } on-error={}
+    :put "      Hotspot configuration applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
+    :do { /file remove hotspotsetup.rsc } on-error={}
+}
+
+# --- PPPoE configuration ------------------------------------------------------
+:do {
+    :put "[3/7] Downloading PPPoE configuration..."
     /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying PPPoE configuration..."
+    :put "      Applying PPPoE configuration..."
     /import pppoesetup.rsc
-    /file remove pppoesetup.rsc
-    :put "Downloading users configuration..."
+    :do { /file remove pppoesetup.rsc } on-error={}
+    :put "      PPPoE configuration applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
+    :do { /file remove pppoesetup.rsc } on-error={}
+}
+
+# --- Users configuration ------------------------------------------------------
+:do {
+    :put "[4/7] Downloading users configuration..."
     /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying users configuration..."
+    :put "      Applying users configuration..."
     /import users.rsc
-    /file remove users.rsc
-    :put "Downloading sync-users firewalls..."
+    :do { /file remove users.rsc } on-error={}
+    :put "      Users configuration applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [users.rsc] FAILED: " . $error)
+    :do { /file remove users.rsc } on-error={}
+}
+
+# --- Sync-users firewalls -----------------------------------------------------
+:do {
+    :put "[5/7] Downloading sync-users firewalls..."
     /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying sync-users firewalls..."
+    :put "      Applying sync-users firewalls..."
     /import syncusers.rsc
-    /file remove syncusers.rsc
-    :put "Downloading heartbeat firewalls..."
+    :do { /file remove syncusers.rsc } on-error={}
+    :put "      Sync-users firewalls applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [syncusers.rsc] FAILED: " . $error)
+    :do { /file remove syncusers.rsc } on-error={}
+}
+
+# --- Heartbeat firewalls ------------------------------------------------------
+:do {
+    :put "[6/7] Downloading heartbeat firewalls..."
     /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying heartbeat firewalls..."
+    :put "      Applying heartbeat firewalls..."
     /import heartbeat.rsc
-    /file remove heartbeat.rsc
-    :put "Downloading sync-full script..."
+    :do { /file remove heartbeat.rsc } on-error={}
+    :put "      Heartbeat firewalls applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
+    :do { /file remove heartbeat.rsc } on-error={}
+}
+
+# --- Sync-full script ---------------------------------------------------------
+:do {
+    :put "[7/7] Downloading sync-full script..."
     /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https check-certificate=no
     :delay 2s
-    :put "Applying sync-full script..."
+    :put "      Applying sync-full script..."
     /import syncfull.rsc
-    /file remove syncfull.rsc
+    :do { /file remove syncfull.rsc } on-error={}
+    :put "      Sync-full script applied."
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [syncfull.rsc] FAILED: " . $error)
+    :do { /file remove syncfull.rsc } on-error={}
+}
 
-    :put "Setting up DNS flush firewalls..."
+# --- DNS flush scheduler ------------------------------------------------------
+:do {
+    :put "Setting up DNS flush scheduler..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
     /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
     /ip dns cache flush
-    :put "DNS flush firewalls installed (every 6 hours)"
-
-    :put "All configurations completed successfully."
+    :put "DNS flush scheduler installed (every 6 hours)."
 } on-error={
-    :put "Error occurred during configuration:"
-    :put $error
+    :set failures ($failures + 1)
+    :put ("  WARN [dns-flush] FAILED: " . $error)
+}
+
+:if ($failures = 0) do={
+    :put "All configurations completed successfully."
+} else={
+    :put ("Setup finished with " . $failures . " failed step(s) - see WARN lines above.")
 }
 `;
 }
