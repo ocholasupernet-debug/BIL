@@ -248,43 +248,43 @@ function buildMainhotspotRsc(scriptsBase: string): string {
     } else={
         :set vpnUrl "${scriptsBase}/vpn6.rsc"
     }
-    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https
+    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying VPN configuration..."
     /import vpnsetup.rsc
     /file remove vpnsetup.rsc
     :put "Downloading hotspot configuration..."
-    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
+    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying hotspot configuration..."
     /import hotspotsetup.rsc
     /file remove hotspotsetup.rsc
     :put "Downloading PPPoE configuration..."
-    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
+    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying PPPoE configuration..."
     /import pppoesetup.rsc
     /file remove pppoesetup.rsc
     :put "Downloading users configuration..."
-    /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https
+    /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying users configuration..."
     /import users.rsc
     /file remove users.rsc
     :put "Downloading sync-users firewalls..."
-    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https
+    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying sync-users firewalls..."
     /import syncusers.rsc
     /file remove syncusers.rsc
     :put "Downloading heartbeat firewalls..."
-    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
+    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying heartbeat firewalls..."
     /import heartbeat.rsc
     /file remove heartbeat.rsc
     :put "Downloading sync-full script..."
-    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https
+    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https check-certificate=no
     :delay 2s
     :put "Applying sync-full script..."
     /import syncfull.rsc
@@ -322,7 +322,7 @@ function buildVlanpppoeRsc(origin: string): string {
 :log info "PPPoE VLAN: init (vlan-id=200, base=hotspot-bridge)";
 
 :log info "PPPoE VLAN: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
-/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
+/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
 
 # === PPPoE (VLAN) — hotspot-bridge, VLAN ID 200, interface pppoe-vlan ===
 
@@ -552,7 +552,7 @@ function buildNormalpppoeRsc(origin: string): string {
 :log info "PPPoE NORMAL: init";
 
 :log info "PPPoE NORMAL: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
-/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https dst-path="pppoe/login.html"
+/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
 
 :if ([:len [/interface bridge find where name="pppoe_bridge"]] = 0) do={ /interface bridge add name=pppoe_bridge protocol-mode=rstp comment="PPPoE bridge" }
 :if ([:len [/ip address find where interface="pppoe_bridge" and address="192.168.178.1/24"]] = 0) do={ /ip address add address=192.168.178.1/24 interface=pppoe_bridge comment="PPPoE gateway" }
