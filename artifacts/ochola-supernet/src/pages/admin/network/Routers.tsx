@@ -386,6 +386,146 @@ function InstallProgressPanel() {
   );
 }
 
+/* ── Install history modal ──
+   Pulls past install runs from the persistent table so admins can audit
+   failures even after the in-memory live timeline has expired. */
+type InstallHistoryRun = {
+  routerId: number; routerName: string;
+  startedAt: number; updatedAt: number;
+  done: boolean; failures: number;
+  steps: InstallStepDto[];
+};
+
+function InstallHistoryModal({ router, onClose }: { router: DbRouter; onClose: () => void }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["isp-install-history", router.id],
+    queryFn: async (): Promise<InstallHistoryRun[]> => {
+      const r = await fetch(`/api/admin/router/install-history?adminId=${ADMIN_ID}&routerId=${router.id}&limit=500`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json() as { ok: boolean; runs?: InstallHistoryRun[]; error?: string };
+      if (!j.ok) throw new Error(j.error || "Failed to load install history");
+      return j.runs ?? [];
+    },
+    staleTime: 10_000,
+  });
+
+  const runs = data ?? [];
+
+  return (
+    <Modal title={`Install history — ${router.name}`} onClose={onClose}>
+      <div style={{ maxHeight: "70vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+        {isLoading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-text-muted)", fontSize: "0.82rem" }}>
+            <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Loading install history…
+          </div>
+        )}
+        {error && (
+          <div style={{ color: "#f87171", fontSize: "0.82rem", padding: "0.6rem 0.75rem", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", borderRadius: 7 }}>
+            {(error as Error).message}
+          </div>
+        )}
+        {!isLoading && !error && runs.length === 0 && (
+          <div style={{ color: "var(--isp-text-muted)", fontSize: "0.82rem", lineHeight: 1.7 }}>
+            <p style={{ margin: "0 0 0.5rem" }}>
+              No past install runs recorded for <strong style={{ color: "var(--isp-text)" }}>{router.name}</strong>.
+            </p>
+            <p style={{ margin: 0, fontSize: "0.75rem" }}>
+              Future self-install attempts will appear here automatically — including failed steps and error messages.
+            </p>
+          </div>
+        )}
+        {runs.map(run => {
+          const stepMap = new Map(run.steps.map(s => [s.step, s]));
+          const completed = run.steps.filter(s => s.phase === "applied").length;
+          const pct       = Math.round((completed / 7) * 100);
+          const allOk     = run.done && run.failures === 0;
+          const anyFail   = run.failures > 0;
+          const startedDate = new Date(run.startedAt);
+
+          return (
+            <div key={`${run.routerId}-${run.startedAt}`} style={{
+              borderRadius: 8, padding: "0.75rem 0.9rem",
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid var(--isp-border-subtle)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, fontSize: "0.78rem" }}>
+                <Radio size={12} style={{
+                  color: anyFail ? "#f87171" : allOk ? "#34d399" : "var(--isp-text-muted)",
+                }} />
+                <span style={{ fontWeight: 600, color: "var(--isp-text)" }}>
+                  {startedDate.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <span style={{ marginLeft: "auto", color: "var(--isp-text-muted)" }}>
+                  {completed}/7 steps {pct}%{anyFail ? ` · ${run.failures} failed` : ""}
+                  {allOk ? " · done" : ""}
+                </span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 8 }}>
+                {INSTALL_STEP_ORDER.map(s => {
+                  const cur = stepMap.get(s.num);
+                  const bg =
+                    !cur                         ? "rgba(255,255,255,0.06)" :
+                    cur.phase === "failed"       ? "#dc2626" :
+                    cur.phase === "applied"      ? "#16a34a" :
+                                                   "var(--isp-accent)";
+                  return (
+                    <div key={s.num} title={`[${s.num}/7] ${s.label}${cur ? ` — ${cur.phase}` : " — pending"}`}
+                         style={{ height: 6, borderRadius: 3, background: bg, opacity: cur ? 1 : 0.5 }} />
+                  );
+                })}
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.72rem" }}>
+                {INSTALL_STEP_ORDER.map(s => {
+                  const cur = stepMap.get(s.num);
+                  const phase = cur?.phase ?? "pending";
+                  const color =
+                    phase === "failed"      ? "#f87171" :
+                    phase === "applied"     ? "#34d399" :
+                    phase === "downloading" ? "var(--isp-accent)" :
+                                              "var(--isp-text-muted)";
+                  const icon =
+                    phase === "failed"      ? <AlertCircle size={11} /> :
+                    phase === "applied"     ? <CheckCircle size={11} /> :
+                    phase === "downloading" ? <Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> :
+                                              <Clock size={11} />;
+                  return (
+                    <div key={s.num} style={{ display: "flex", alignItems: "flex-start", gap: 6, color }}>
+                      <span style={{ marginTop: 1 }}>{icon}</span>
+                      <span style={{ minWidth: 28, color: "var(--isp-text-muted)" }}>[{s.num}/7]</span>
+                      <span style={{ minWidth: 130 }}>{s.label}</span>
+                      <span style={{ textTransform: "capitalize" }}>{phase}</span>
+                      {cur?.error && (
+                        <span style={{
+                          marginLeft: 6, color: "#f87171",
+                          fontFamily: "monospace", fontSize: "0.7rem",
+                          overflow: "hidden", textOverflow: "ellipsis",
+                          whiteSpace: "nowrap", maxWidth: 420,
+                        }} title={cur.error}>
+                          {cur.error}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1rem" }}>
+        <button
+          onClick={onClose}
+          style={{ padding: "0.4rem 1rem", borderRadius: 6, background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.78rem", cursor: "pointer", fontFamily: "inherit" }}
+        >
+          Close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Routers() {
   const [, navigate] = useLocation();
   const qc = useQueryClient();
@@ -400,6 +540,7 @@ export default function Routers() {
   const [rebootMsg, setRebootMsg]       = useState<Record<number, string>>({});
   const [deleteState, setDeleteState]   = useState<Record<number, "idle" | "confirm" | "deleting">>({});
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
+  const [installHistoryModal, setInstallHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
 
   /* ── Edit router modal ── */
@@ -1078,6 +1219,12 @@ export default function Routers() {
                               onClick={() => setHistoryModal(r)}
                               color="#94a3b8" bg="rgba(255,255,255,0.04)" border="rgba(255,255,255,0.1)"
                             />
+                            <Btn
+                              label="Install History"
+                              icon={<History size={10} />}
+                              onClick={() => setInstallHistoryModal(r)}
+                              color="#a78bfa" bg="rgba(167,139,250,0.08)" border="rgba(167,139,250,0.3)"
+                            />
                           </div>
                         </td>
 
@@ -1349,6 +1496,13 @@ export default function Routers() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {installHistoryModal && (
+        <InstallHistoryModal
+          router={installHistoryModal}
+          onClose={() => setInstallHistoryModal(null)}
+        />
       )}
 
       {historyModal && (

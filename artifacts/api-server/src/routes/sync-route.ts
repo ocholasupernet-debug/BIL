@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
+import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 
 const router: IRouter = Router();
 
@@ -1225,11 +1226,29 @@ async function handleInstallProgressUpdate(
   if (!done && (!step || step < 1 || step > 7)) { res.json({ ok: false, error: "step out of range" }); return; }
 
   let p = installProgress.get(rid);
-  if (!p) {
+
+  /* Detect the start of a new install run so retries are recorded as
+     distinct runs in the persistent history. We start a fresh record
+     when:
+       - the previous run was already marked done (the next update
+         belongs to a new attempt), OR
+       - the previous run is stale (no updates for INSTALL_RUN_GAP_MS),
+         which means the prior attempt was abandoned mid-flight.
+     Step-1 alone is NOT enough because step 1 normally emits both
+     `downloading` and `applied` phase events for the same run.
+     The fresh `startedAt` becomes the run identifier used for both
+     the in-memory timeline and the persisted install_started_at. */
+  const INSTALL_RUN_GAP_MS = 10 * 60 * 1000;
+  const isNewRunStart =
+    !!p && (
+      p.done ||
+      Date.now() - p.updatedAt > INSTALL_RUN_GAP_MS
+    );
+  if (!p || isNewRunStart) {
     p = {
       routerId:   rid,
       adminId:    routerRow.admin_id,
-      routerName: rname || routerRow.name,
+      routerName: rname || routerRow.name || p?.routerName,
       startedAt:  Date.now(),
       updatedAt:  Date.now(),
       done:       false,
@@ -1255,6 +1274,22 @@ async function handleInstallProgressUpdate(
   if (done) p.done = true;
 
   console.log(`[install-progress] router=${rid} step=${step}/${name} phase=${phase}${err ? ` err="${err.slice(0, 80)}"` : ""}${done ? " (done)" : ""}`);
+
+  /* Persist event so admins can audit past installs even after the
+     in-memory store has been GC'd or the API server has restarted. */
+  if (step || done) {
+    void recordInstallEvent({
+      routerId:         rid,
+      adminId:          routerRow.admin_id,
+      routerName:       p.routerName,
+      installStartedAt: p.startedAt,
+      step:             step || 0,
+      stepName:         name,
+      phase,
+      error:            err || undefined,
+      done,
+    });
+  }
 
   gcInstallProgress();
   res.json({ ok: true });
@@ -1319,6 +1354,98 @@ router.get("/admin/router/install-progress", async (req, res): Promise<void> => 
 
   installs.sort((a, b) => b.updatedAt - a.updatedAt);
   res.json({ ok: true, installs });
+});
+
+/* ─── Persisted install history (audit trail) ──────────────────────
+   GET /api/admin/router/install-history?adminId=<id>[&routerId=<rid>][&limit=<n>]
+   Returns past install step events grouped by run so the admin
+   Routers page can render the same timeline UI for completed/failed
+   installs that have already left the in-memory store.
+   Tenant scoping is enforced on the SQL filter (admin_id=eq.<id>). */
+router.get("/admin/router/install-history", async (req, res): Promise<void> => {
+  const adminId  = parseInt(((req.query.adminId  ?? "") as string), 10);
+  const routerId = parseInt(((req.query.routerId ?? "") as string), 10);
+  const limit    = parseInt(((req.query.limit    ?? "500") as string), 10);
+
+  if (!adminId || isNaN(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "adminId required" });
+    return;
+  }
+
+  try {
+    const safeLimit = !isNaN(limit) && limit > 0 ? Math.min(limit, 1000) : 500;
+    const rows = await listInstallHistory(
+      adminId,
+      routerId && !isNaN(routerId) && routerId > 0 ? routerId : undefined,
+      safeLimit,
+    );
+
+    /* Group rows into runs keyed by (router_id, install_started_at). */
+    type Run = {
+      routerId:   number;
+      routerName: string;
+      startedAt:  number;
+      updatedAt:  number;
+      done:       boolean;
+      failures:   number;
+      steps:      Array<{
+        step: number; name: string;
+        phase: "downloading" | "applied" | "failed";
+        error?: string; ts: number;
+      }>;
+    };
+    const runMap = new Map<string, Run>();
+
+    for (const r of rows) {
+      const startedAtMs = new Date(r.install_started_at).getTime();
+      const key = `${r.router_id}|${r.install_started_at}`;
+      let run = runMap.get(key);
+      if (!run) {
+        run = {
+          routerId:   r.router_id,
+          routerName: r.router_name ?? `Router #${r.router_id}`,
+          startedAt:  startedAtMs,
+          updatedAt:  startedAtMs,
+          done:       false,
+          failures:   0,
+          steps:      [],
+        };
+        runMap.set(key, run);
+      }
+      const ts = new Date(r.created_at).getTime();
+      if (ts > run.updatedAt) run.updatedAt = ts;
+      if (r.done) run.done = true;
+
+      if (r.step > 0) {
+        const order = { downloading: 1, applied: 2, failed: 2 } as const;
+        const existing = run.steps.find(s => s.step === r.step);
+        if (!existing) {
+          run.steps.push({
+            step:  r.step,
+            name:  r.step_name ?? "",
+            phase: r.phase,
+            error: r.error ?? undefined,
+            ts,
+          });
+          if (r.phase === "failed") run.failures += 1;
+        } else if (order[r.phase] >= order[existing.phase]) {
+          if (existing.phase !== "failed" && r.phase === "failed") run.failures += 1;
+          existing.phase = r.phase;
+          existing.error = r.error ?? existing.error;
+          existing.ts    = ts;
+          if (r.step_name) existing.name = r.step_name;
+        }
+      }
+    }
+
+    const runs = Array.from(runMap.values())
+      .map(r => ({ ...r, steps: r.steps.sort((a, b) => a.step - b.step) }))
+      .sort((a, b) => b.startedAt - a.startedAt);
+
+    res.json({ ok: true, runs });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
