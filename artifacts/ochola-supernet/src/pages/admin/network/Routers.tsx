@@ -441,16 +441,11 @@ export default function Routers() {
     }
   };
 
-  /* filtered list */
-  /* Routers still being configured (bridge ports not yet applied) */
-  const setupRouters = useMemo(() => routers.filter(r => r.status === "setup"), [routers]);
-
+  /* filtered list (DB query already excludes setup/never-seen routers) */
   const filtered = useMemo(() => {
-    /* Exclude "setup" routers from the main list */
-    const active = routers.filter(r => r.status !== "setup");
-    if (!search.trim()) return active;
+    if (!search.trim()) return routers;
     const q = search.toLowerCase();
-    return active.filter(r =>
+    return routers.filter(r =>
       r.name.toLowerCase().includes(q) ||
       (r.host || "").toLowerCase().includes(q) ||
       (r.model || "").toLowerCase().includes(q) ||
@@ -644,54 +639,6 @@ export default function Routers() {
         </div>
 
         <NetworkTabs active="routers" />
-
-        {/* ── Pending Setup routers ── */}
-        {setupRouters.length > 0 && (
-          <div style={{
-            borderRadius: 10, background: "rgba(251,191,36,0.07)",
-            border: "1px solid rgba(251,191,36,0.3)", padding: "1rem 1.25rem",
-            display: "flex", flexDirection: "column", gap: "0.625rem",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <AlertCircle size={15} style={{ color: "#fbbf24", flexShrink: 0 }} />
-              <span style={{ fontWeight: 700, fontSize: "0.88rem", color: "#fbbf24" }}>
-                Pending Setup — {setupRouters.length} router{setupRouters.length !== 1 ? "s" : ""} awaiting bridge port configuration
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-              {setupRouters.map(r => (
-                <div key={r.id} style={{
-                  display: "flex", alignItems: "center", gap: "0.75rem",
-                  background: "rgba(0,0,0,0.2)", borderRadius: 7, padding: "0.55rem 0.875rem",
-                  flexWrap: "wrap",
-                }}>
-                  <span style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--isp-text)", flex: "1 1 120px" }}>
-                    {r.name}
-                  </span>
-                  <span style={{
-                    fontSize: "0.7rem", fontWeight: 700, padding: "0.15rem 0.55rem",
-                    borderRadius: 4, background: "rgba(251,191,36,0.12)",
-                    border: "1px solid rgba(251,191,36,0.35)", color: "#fbbf24", whiteSpace: "nowrap",
-                  }}>
-                    Setup required
-                  </span>
-                  <button
-                    onClick={() => navigate(`/admin/network/bridge-ports?routerId=${r.id}`)}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: "0.3rem",
-                      padding: "0.35rem 0.875rem", borderRadius: 6, flexShrink: 0,
-                      background: "rgba(37,99,235,0.15)", border: "1px solid rgba(37,99,235,0.4)",
-                      color: "#60a5fa", fontWeight: 700, fontSize: "0.75rem",
-                      cursor: "pointer", fontFamily: "inherit",
-                    }}
-                  >
-                    Configure Bridge Ports →
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* ── table ── */}
         <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
