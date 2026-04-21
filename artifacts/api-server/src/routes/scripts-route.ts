@@ -1430,6 +1430,17 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     ensureClientCert(routerSlug);
     updateVpnCredentials(routerSlug, "ocholasupernet");
 
+    /* Mirror the same credential into isp_vpn_users so the admin UI
+       can see / audit / manage the VPN login that this router uses.
+       Fire-and-forget: the helper internally swallows network errors and
+       Supabase upsert is configured with resolution=ignore-duplicates on
+       (admin_id, username), so re-running the install for the same router
+       is a no-op rather than a duplicate row or a 4xx. The username is the
+       router slug (e.g. "come1") to match what is configured on the
+       MikroTik OVPN client and in the VPS auth file — keeping all three
+       sources of truth in sync. */
+    void ensureVpnUser(adminId, routerSlug, "ocholasupernet", routerName);
+
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [
       `# ===================================================`,
