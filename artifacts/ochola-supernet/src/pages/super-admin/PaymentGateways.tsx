@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { CreditCard, Save, CheckCircle2, Eye, EyeOff, ChevronDown, ChevronUp } from "lucide-react";
+import { CreditCard, Save, CheckCircle2, Eye, EyeOff, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 
 const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
@@ -38,6 +38,29 @@ function SecretField({ value, onChange, label, hint }: { value: string; onChange
 }
 
 interface GwConfig { enabled: boolean; sandbox: boolean; [key: string]: string | boolean; }
+type DestinationType = "bank" | "till" | "paybill";
+interface PaymentDestination {
+  id: string;
+  type: DestinationType;
+  name: string;
+  number: string;
+  accountReference: string;
+  instructions: string;
+  active: boolean;
+}
+
+const emptyDestination = (): Omit<PaymentDestination, "id"> & { id?: string } => ({
+  type: "paybill",
+  name: "",
+  number: "",
+  accountReference: "",
+  instructions: "",
+  active: true,
+});
+
+function destinationTypeLabel(type: DestinationType): string {
+  return type === "till" ? "Till number" : type === "paybill" ? "PayBill" : "Bank account";
+}
 
 const GATEWAYS: { id: string; name: string; logo: string; color: string; fields: { key: string; label: string; hint?: string }[] }[] = [
   { id: "mpesa", name: "M-Pesa (Safaricom Daraja)", logo: "🟢", color: "#00a651",
@@ -80,11 +103,98 @@ export default function SuperAdminPaymentGateways() {
   );
   const [expanded, setExpanded] = useState<string>("mpesa");
   const [saved, setSaved] = useState(false);
+  const [destinations, setDestinations] = useState<PaymentDestination[]>([]);
+  const [registrationDestinationId, setRegistrationDestinationId] = useState("");
+  const [renewalDestinationId, setRenewalDestinationId] = useState("");
+  const [destinationForm, setDestinationForm] = useState(emptyDestination);
+  const [destinationError, setDestinationError] = useState("");
+  const [destinationSaving, setDestinationSaving] = useState(false);
+  const token = useMemo(() => {
+    try { return localStorage.getItem("ochola_superadmin_token") || ""; } catch { return ""; }
+  }, []);
+
+  const applyDestinationData = (data: {
+    destinations?: PaymentDestination[];
+    registrationDestinationId?: string;
+    renewalDestinationId?: string;
+  }) => {
+    setDestinations(data.destinations ?? []);
+    setRegistrationDestinationId(data.registrationDestinationId ?? "");
+    setRenewalDestinationId(data.renewalDestinationId ?? "");
+  };
+
+  useEffect(() => {
+    fetch("/api/super-admin/payment-destinations", { headers: { "x-sa-token": token } })
+      .then(async response => {
+        const data = await response.json() as { ok: boolean; error?: string } & Parameters<typeof applyDestinationData>[0];
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not load payment destinations.");
+        applyDestinationData(data);
+      })
+      .catch(error => setDestinationError(error instanceof Error ? error.message : "Could not load payment destinations."));
+  }, [token]);
 
   const setField = (gw: string, k: string, v: string | boolean) =>
     setConfigs(c => ({ ...c, [gw]: { ...c[gw], [k]: v } }));
 
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+
+  const saveDestination = async () => {
+    setDestinationError("");
+    setDestinationSaving(true);
+    try {
+      const response = await fetch("/api/super-admin/payment-destinations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify({ action: "upsert", destination: destinationForm }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string } & Parameters<typeof applyDestinationData>[0];
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the destination.");
+      applyDestinationData(data);
+      setDestinationForm(emptyDestination());
+    } catch (error) {
+      setDestinationError(error instanceof Error ? error.message : "Could not save the destination.");
+    } finally {
+      setDestinationSaving(false);
+    }
+  };
+
+  const savePurposes = async () => {
+    setDestinationError("");
+    setDestinationSaving(true);
+    try {
+      const response = await fetch("/api/super-admin/payment-destinations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify({ action: "select", registrationDestinationId, renewalDestinationId }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string } & Parameters<typeof applyDestinationData>[0];
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save payment purposes.");
+      applyDestinationData(data);
+    } catch (error) {
+      setDestinationError(error instanceof Error ? error.message : "Could not save payment purposes.");
+    } finally {
+      setDestinationSaving(false);
+    }
+  };
+
+  const removeDestination = async (id: string) => {
+    setDestinationError("");
+    setDestinationSaving(true);
+    try {
+      const response = await fetch(`/api/super-admin/payment-destinations/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { "x-sa-token": token },
+      });
+      const data = await response.json() as { ok: boolean; error?: string } & Parameters<typeof applyDestinationData>[0];
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not remove the destination.");
+      applyDestinationData(data);
+      if (destinationForm.id === id) setDestinationForm(emptyDestination());
+    } catch (error) {
+      setDestinationError(error instanceof Error ? error.message : "Could not remove the destination.");
+    } finally {
+      setDestinationSaving(false);
+    }
+  };
 
   return (
     <SuperAdminLayout>
@@ -98,6 +208,90 @@ export default function SuperAdminPaymentGateways() {
             {saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saved ? "Saved!" : "Save All"}
           </button>
         </div>
+
+        <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <CreditCard size={17} color={C.accent} />
+            <div style={{ color: "white", fontWeight: 750 }}>Collection destinations</div>
+          </div>
+          <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.5, margin: "0 0 18px" }}>
+            Choose where platform registration and renewal payments are collected. New ISP accounts require a KSh 500 payment before activation. Till and PayBill support automatic M-Pesa prompts; bank accounts are saved for manual collection.
+          </p>
+
+          {destinationError && (
+            <div style={{ color: "#fca5a5", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 14 }}>
+              {destinationError}
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px", marginBottom: 6 }}>
+            <Field label="Destination type">
+              <select value={destinationForm.type} onChange={e => setDestinationForm(form => ({ ...form, type: e.target.value as DestinationType }))} style={inp}>
+                <option value="paybill">PayBill</option>
+                <option value="till">Till number</option>
+                <option value="bank">Bank account</option>
+              </select>
+            </Field>
+            <Field label="Display name" hint="e.g. ISPlatty collections">
+              <input style={inp} value={destinationForm.name} onChange={e => setDestinationForm(form => ({ ...form, name: e.target.value }))} />
+            </Field>
+            <Field label={destinationForm.type === "bank" ? "Account number" : destinationForm.type === "till" ? "Till number" : "PayBill number"}>
+              <input style={inp} inputMode="numeric" value={destinationForm.number} onChange={e => setDestinationForm(form => ({ ...form, number: e.target.value }))} />
+            </Field>
+            <Field label="Account / business number" hint={destinationForm.type === "paybill" ? "Required for PayBill" : "Optional reference shown with the payment"}>
+              <input style={inp} value={destinationForm.accountReference} onChange={e => setDestinationForm(form => ({ ...form, accountReference: e.target.value }))} />
+            </Field>
+            <Field label="Payment instructions" hint="Optional instructions for bank/manual payments">
+              <input style={inp} value={destinationForm.instructions} onChange={e => setDestinationForm(form => ({ ...form, instructions: e.target.value }))} />
+            </Field>
+            <Field label="Status">
+              <div style={{ display: "flex", alignItems: "center", gap: 10, height: 36 }}>
+                <Toggle on={destinationForm.active} onChange={active => setDestinationForm(form => ({ ...form, active }))} />
+                <span style={{ fontSize: "0.76rem", color: destinationForm.active ? "#4ade80" : C.sub }}>{destinationForm.active ? "Active" : "Inactive"}</span>
+              </div>
+            </Field>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 18 }}>
+            {destinationForm.id && <button onClick={() => setDestinationForm(emptyDestination())} style={{ border: 0, background: "transparent", color: C.sub, fontSize: "0.76rem", cursor: "pointer" }}>Cancel edit</button>}
+            <button onClick={saveDestination} disabled={destinationSaving} style={{ border: 0, borderRadius: 8, background: C.accent, color: "white", padding: "9px 13px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer", opacity: destinationSaving ? 0.6 : 1 }}>
+              {destinationForm.id ? "Update destination" : "Add destination"}
+            </button>
+          </div>
+
+          {destinations.length > 0 && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, paddingTop: 16, borderTop: `1px solid ${C.border}`, marginBottom: 14 }}>
+                <Field label="New account creation">
+                  <select value={registrationDestinationId} onChange={e => setRegistrationDestinationId(e.target.value)} style={inp}>
+                    <option value="">No destination selected</option>
+                    {destinations.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name} · {destinationTypeLabel(item.type)}</option>)}
+                  </select>
+                </Field>
+                <Field label="Account renewal">
+                  <select value={renewalDestinationId} onChange={e => setRenewalDestinationId(e.target.value)} style={inp}>
+                    <option value="">No destination selected</option>
+                    {destinations.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name} · {destinationTypeLabel(item.type)}</option>)}
+                  </select>
+                </Field>
+                <div style={{ display: "flex", alignItems: "end", paddingBottom: 14 }}>
+                  <button onClick={savePurposes} disabled={destinationSaving} style={{ border: 0, borderRadius: 8, background: "rgba(255,255,255,0.12)", color: "white", padding: "9px 12px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer" }}>Save purposes</button>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {destinations.map(destination => (
+                  <div key={destination.id} style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 11px" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ color: "white", fontWeight: 700, fontSize: "0.78rem" }}>{destination.name} <span style={{ color: C.sub, fontWeight: 500 }}>· {destinationTypeLabel(destination.type)}</span></div>
+                      <div style={{ color: C.sub, fontSize: "0.7rem", marginTop: 3 }}>{destination.number}{destination.accountReference ? ` · ${destination.accountReference}` : ""}{destination.active ? "" : " · inactive"}</div>
+                    </div>
+                    <button onClick={() => setDestinationForm(destination)} style={{ border: 0, background: "transparent", color: C.accent, fontSize: "0.72rem", fontWeight: 700, cursor: "pointer" }}>Edit</button>
+                    <button onClick={() => removeDestination(destination.id)} aria-label={`Delete ${destination.name}`} style={{ border: 0, background: "transparent", color: "#fca5a5", display: "flex", cursor: "pointer" }}><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
 
         {GATEWAYS.map(gw => {
           const cfg = configs[gw.id] ?? {};
