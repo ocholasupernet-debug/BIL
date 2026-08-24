@@ -1,9 +1,17 @@
 import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Link } from "wouter";
 import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
 import { Loader2, Wifi, WifiOff, Users, Ticket, MessageSquare, Router, DollarSign, TrendingUp, BarChart3, CreditCard } from "lucide-react";
+
+/* Fetch live subscriber count from a single router (hotspot + PPPoE) */
+async function fetchLiveCount(routerId: number): Promise<number> {
+  const res = await fetch(`/api/router/${routerId}/live`);
+  if (!res.ok) return 0;
+  const data = await res.json();
+  return (data.hotspotUsers?.length ?? 0) + (data.pppoeUsers?.length ?? 0);
+}
 
 function routerOnline(r: DbRouter): boolean {
   return r.status === "online" || r.status === "connected";
@@ -167,6 +175,23 @@ export default function Dashboard() {
   const onlineRouters  = routers.filter(routerOnline).length;
   const offlineRouters = routers.length - onlineRouters;
 
+  /* ── Live session counts — one query per online router, runs in parallel ── */
+  const onlineRouterIds = useMemo(
+    () => routers.filter(routerOnline).map(r => r.id),
+    [routers],
+  );
+  const liveCountResults = useQueries({
+    queries: onlineRouterIds.map(id => ({
+      queryKey:       ["router-live-count", id],
+      queryFn:        () => fetchLiveCount(id),
+      refetchInterval: 15_000,
+      staleTime:       0,
+      retry:           false,
+    })),
+  });
+  const totalOnlineNow = liveCountResults.reduce((sum, r) => sum + (r.data ?? 0), 0);
+  const liveCountLoading = liveCountResults.some(r => r.isLoading);
+
   const monthlyData = useMemo(() => {
     const year = now.getFullYear();
     return MONTHS.map((month, i) => ({
@@ -251,7 +276,7 @@ export default function Dashboard() {
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-          <StatMiniCard label="Online Now" value="0" href="/admin/customers" dotColor="var(--isp-green)" />
+          <StatMiniCard label="Online Now" value={liveCountLoading && totalOnlineNow === 0 ? "…" : String(totalOnlineNow)} href="/admin/customers" dotColor="var(--isp-green)" />
           <StatMiniCard label="Vouchers Left" value="0" href="/admin/vouchers" dotColor="var(--isp-accent)" />
           <StatMiniCard label="Support Tickets" value="0" href="/admin/support" dotColor="#0d9488" />
           <StatMiniCard label="Routers Online" value={routersLoading ? "0" : String(onlineRouters)} href="/admin/network" dotColor="#d97706" />

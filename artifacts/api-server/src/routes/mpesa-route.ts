@@ -198,11 +198,22 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
 
     if (ResultCode !== 0) {
       logger.info({ ResultCode, CheckoutRequestID }, "[mpesa/callback] Payment failed or cancelled by user");
+      const registrationRows = await sbSelect<{ admin_id: number | null; payment_method: string }>(
+        "isp_transactions",
+        `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}&select=admin_id,payment_method&limit=1`,
+      );
       await sbUpdate(
         "isp_transactions",
         `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`,
         { status: "failed", notes: `ResultCode ${ResultCode}: ${callback.ResultDesc ?? "cancelled"}` },
       ).catch(() => {});
+      const registration = registrationRows[0];
+      if (registration?.payment_method === "mpesa_registration" && registration.admin_id) {
+        await sbUpdate("isp_admins", `id=eq.${registration.admin_id}`, {
+          status: "payment_failed",
+          updated_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -231,6 +242,33 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
         notes: `M-Pesa payment confirmed. Receipt: ${mpesaReceipt}. Phone: ${rawPhone}`,
       },
     ).catch(err => logger.warn({ err }, "[mpesa/callback] Failed to update transaction"));
+
+    const registrationRows = await sbSelect<{ admin_id: number | null; payment_method: string; amount: number }>(
+      "isp_transactions",
+      `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}&select=admin_id,payment_method,amount&limit=1`,
+    );
+    const registration = registrationRows[0];
+    if (registration?.payment_method === "mpesa_registration" && registration.admin_id) {
+      if (Number(registration.amount) !== amount) {
+        await sbUpdate("isp_transactions", `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`, {
+          status: "failed",
+          notes: "Registration payment amount did not match the required fee.",
+        }).catch(() => {});
+        await sbUpdate("isp_admins", `id=eq.${registration.admin_id}`, {
+          status: "payment_failed",
+          updated_at: new Date().toISOString(),
+        }).catch(() => {});
+        logger.warn({ checkoutId: CheckoutRequestID, amount }, "[mpesa/callback] Registration payment amount mismatch");
+        return;
+      }
+      await sbUpdate("isp_admins", `id=eq.${registration.admin_id}`, {
+        is_active: true,
+        status: "active",
+        updated_at: new Date().toISOString(),
+      });
+      logger.info({ adminId: registration.admin_id, checkoutId: CheckoutRequestID }, "[mpesa/callback] ISP registration activated");
+      return;
+    }
 
     if (rawPhone) {
       const digits = rawPhone.replace(/\D/g, "");
@@ -373,9 +411,9 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
     return;
   }
 
-  const rows = await sbSelect<{ id: number; status: string; reference: string }>(
+  const rows = await sbSelect<{ id: number; status: string; reference: string; admin_id: number | null; payment_method: string }>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&select=id,status,reference&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}&select=id,status,reference,admin_id,payment_method&limit=1`,
   );
 
   const tx = rows[0];
@@ -385,6 +423,20 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
   }
 
   const paid = tx.status === "completed" || tx.status === "success" || tx.status === "paid";
+  if (paid && tx.payment_method === "mpesa_registration" && tx.admin_id) {
+    const admins = await sbSelect<{ username: string; name: string; subdomain: string; is_active: boolean }>(
+      "isp_admins",
+      `id=eq.${tx.admin_id}&select=username,name,subdomain,is_active&limit=1`,
+    );
+    const admin = admins[0];
+    res.json({
+      ok: true,
+      paid: !!admin?.is_active,
+      status: admin?.is_active ? "completed" : "processing",
+      registration: admin ? { username: admin.username, name: admin.name, subdomain: admin.subdomain } : undefined,
+    });
+    return;
+  }
   res.json({ ok: true, paid, status: tx.status });
 });
 

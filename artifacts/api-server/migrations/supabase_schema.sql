@@ -1,0 +1,351 @@
+-- OcholaSupernet / ISPlatty — complete Supabase schema
+-- Run once against your Supabase project:
+--   psql "$DATABASE_URL" -f supabase_schema.sql
+-- All statements use CREATE … IF NOT EXISTS so they are safe to re-run.
+
+-- ── Extensions ───────────────────────────────────────────────────────────────
+create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- CORE ISP TABLES
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- ISP admin accounts (one per ISP / tenant)
+create table if not exists isp_admins (
+  id              bigserial primary key,
+  name            text not null,
+  username        text unique,
+  fullname        text,
+  email           text,
+  phone           text,
+  subdomain       text unique,
+  password        text,
+  is_active       boolean not null default true,
+  role            text not null default 'isp_admin',
+  area            text,
+  status          text not null default 'active',
+  plan_name       text,
+  wallet_balance  numeric(12,2) not null default 0,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists isp_admins_subdomain_idx on isp_admins(subdomain);
+create index if not exists isp_admins_username_idx  on isp_admins(username);
+
+-- Internet service plans
+create table if not exists isp_plans (
+  id             bigserial primary key,
+  admin_id       bigint not null references isp_admins(id) on delete cascade,
+  name           text not null,
+  type           text not null default 'hotspot',   -- hotspot | pppoe | static
+  speed_down     numeric(10,2) not null default 10, -- Mbps
+  speed_up       numeric(10,2) not null default 10, -- Mbps
+  price          numeric(12,2) not null default 0,
+  validity       integer not null default 30,
+  validity_unit  text not null default 'days',
+  validity_days  integer not null default 30,
+  shared_users   integer not null default 1,
+  description    text,
+  is_active      boolean not null default true,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+create index if not exists isp_plans_admin_id_idx on isp_plans(admin_id);
+
+-- Subscribers / customers
+create table if not exists isp_customers (
+  id              bigserial primary key,
+  admin_id        bigint not null references isp_admins(id) on delete cascade,
+  name            text not null,
+  phone           text not null,
+  email           text,
+  username        text,
+  password        text,
+  plan_id         bigint references isp_plans(id) on delete set null,
+  type            text not null default 'hotspot',  -- hotspot | pppoe | static
+  ip_address      text,
+  mac_address     text,
+  pppoe_username  text,
+  status          text not null default 'active',   -- active | suspended | expired
+  expires_at      timestamptz,
+  wallet_balance  numeric(12,2) not null default 0,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists isp_customers_admin_id_idx   on isp_customers(admin_id);
+create index if not exists isp_customers_phone_idx      on isp_customers(phone);
+create index if not exists isp_customers_username_idx   on isp_customers(username);
+create index if not exists isp_customers_status_idx     on isp_customers(status);
+
+-- MikroTik routers
+create table if not exists isp_routers (
+  id               bigserial primary key,
+  admin_id         bigint not null references isp_admins(id) on delete cascade,
+  name             text not null,
+  host             text not null,
+  ip_address       text,
+  model            text,
+  ros_version      text,
+  router_username  text not null default 'admin',
+  router_secret    text,
+  token            text,
+  bridge_ip        text,
+  proxy_ip         text,
+  bridge_interface text,
+  status           text not null default 'offline',  -- online | offline | unreachable
+  last_seen        timestamptz,
+  router_uptime    text,
+  uptime_at        timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create index if not exists isp_routers_admin_id_idx on isp_routers(admin_id);
+create index if not exists isp_routers_status_idx   on isp_routers(status);
+
+-- Payment / billing transactions
+create table if not exists isp_transactions (
+  id              bigserial primary key,
+  admin_id        bigint not null references isp_admins(id) on delete cascade,
+  customer_id     bigint references isp_customers(id) on delete set null,
+  plan_id         bigint references isp_plans(id) on delete set null,
+  amount          numeric(12,2) not null,
+  payment_method  text not null default 'mpesa',  -- mpesa | cash | stripe | flutterwave
+  reference       text,
+  status          text not null default 'completed',  -- pending | completed | failed
+  notes           text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists isp_transactions_admin_id_idx    on isp_transactions(admin_id);
+create index if not exists isp_transactions_customer_id_idx on isp_transactions(customer_id);
+create index if not exists isp_transactions_reference_idx   on isp_transactions(reference);
+create index if not exists isp_transactions_created_at_idx  on isp_transactions(created_at desc);
+
+-- Prepaid voucher / PIN codes
+create table if not exists isp_vouchers (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  plan_id     bigint references isp_plans(id) on delete set null,
+  code        text not null,
+  batch_name  text,
+  plan_name   text,
+  duration    integer,   -- days
+  price       numeric(12,2),
+  status      text not null default 'unused',  -- unused | used | expired
+  used_by     text,
+  used_at     timestamptz,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create unique index if not exists isp_vouchers_code_admin_idx on isp_vouchers(admin_id, code);
+create index if not exists isp_vouchers_admin_id_idx          on isp_vouchers(admin_id);
+create index if not exists isp_vouchers_status_idx            on isp_vouchers(status);
+
+-- IP address pools (per router)
+create table if not exists isp_ip_pools (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  router_id   bigint references isp_routers(id) on delete set null,
+  name        text not null,
+  range_start text not null,
+  range_end   text not null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists isp_ip_pools_admin_id_idx  on isp_ip_pools(admin_id);
+create index if not exists isp_ip_pools_router_id_idx on isp_ip_pools(router_id);
+
+-- VPN user accounts (OpenVPN / WireGuard)
+create table if not exists isp_vpn_users (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  username    text not null,
+  password    text,
+  notes       text,
+  is_active   boolean not null default true,
+  expires_at  timestamptz,
+  assigned_ip text,
+  vpn_type    text not null default 'openvpn',  -- openvpn | wireguard
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists isp_vpn_users_admin_id_idx on isp_vpn_users(admin_id);
+
+-- PPPoE username/password secrets (mirrored from MikroTik)
+create table if not exists isp_ppp_secrets (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  router_id   bigint references isp_routers(id) on delete set null,
+  username    text not null,
+  password    text,
+  service     text not null default 'pppoe',  -- pppoe | l2tp | pptp
+  profile     text,
+  ip_address  text,
+  comment     text,
+  is_active   boolean not null default true,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists isp_ppp_secrets_admin_id_idx on isp_ppp_secrets(admin_id);
+create index if not exists isp_ppp_secrets_username_idx on isp_ppp_secrets(username);
+
+-- Active PPPoE sessions (reported by MikroTik)
+create table if not exists isp_pppoe_users (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  router_id   bigint references isp_routers(id) on delete set null,
+  username    text not null,
+  ip_address  text,
+  mac_address text,
+  uptime      text,
+  status      text not null default 'active',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists isp_pppoe_users_admin_id_idx on isp_pppoe_users(admin_id);
+
+-- Active hotspot sessions (reported by MikroTik)
+create table if not exists isp_hotspot_users (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  router_id   bigint references isp_routers(id) on delete set null,
+  username    text not null,
+  ip_address  text,
+  mac_address text,
+  uptime      text,
+  bytes_in    bigint default 0,
+  bytes_out   bigint default 0,
+  status      text not null default 'active',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists isp_hotspot_users_admin_id_idx on isp_hotspot_users(admin_id);
+
+-- Router self-install timeline events
+create table if not exists isp_router_install_events (
+  id                 bigserial primary key,
+  router_id          bigint not null,
+  admin_id           bigint not null,
+  router_name        text,
+  install_started_at timestamptz not null,
+  step               integer not null,
+  step_name          text,
+  phase              text not null,  -- downloading | applied | failed
+  error              text,
+  done               boolean not null default false,
+  created_at         timestamptz not null default now()
+);
+create index if not exists isp_router_install_events_admin_router_idx
+  on isp_router_install_events(admin_id, router_id, install_started_at desc);
+create index if not exists isp_router_install_events_created_at_idx
+  on isp_router_install_events(created_at desc);
+
+-- Admin activity audit log
+create table if not exists isp_activity_logs (
+  id          bigserial primary key,
+  admin_id    bigint not null,
+  type        text not null,    -- router | plan | customer | provision | system
+  action      text not null,    -- added | updated | deleted | …
+  subject     text,
+  details     jsonb,
+  created_at  timestamptz not null default now()
+);
+create index if not exists isp_activity_logs_admin_id_idx  on isp_activity_logs(admin_id);
+create index if not exists isp_activity_logs_created_at_idx on isp_activity_logs(created_at desc);
+
+-- Incoming payment webhook events log
+create table if not exists isp_webhook_events (
+  id          bigserial primary key,
+  gateway     text not null,   -- mpesa | stripe | flutterwave | generic
+  status      text not null,   -- received | processed | ignored | error
+  payload     jsonb,
+  phone       text,
+  amount      numeric(12,2),
+  reference   text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists isp_webhook_events_gateway_idx    on isp_webhook_events(gateway);
+create index if not exists isp_webhook_events_created_at_idx on isp_webhook_events(created_at desc);
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- FREERADIUS TABLES (used by hotspot / PPPoE auth via RADIUS)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+create table if not exists radcheck (
+  id        bigserial primary key,
+  username  text not null,
+  attribute text not null,
+  op        text not null default ':=',
+  value     text not null
+);
+create index if not exists radcheck_username_idx on radcheck(username);
+
+create table if not exists radreply (
+  id        bigserial primary key,
+  username  text not null,
+  attribute text not null,
+  op        text not null default ':=',
+  value     text not null
+);
+create index if not exists radreply_username_idx on radreply(username);
+
+create table if not exists radgroupreply (
+  id         bigserial primary key,
+  groupname  text not null,
+  attribute  text not null,
+  op         text not null default ':=',
+  value      text not null,
+  plan_id    bigint
+);
+create index if not exists radgroupreply_groupname_idx on radgroupreply(groupname);
+create index if not exists radgroupreply_plan_id_idx   on radgroupreply(plan_id);
+
+create table if not exists radusergroup (
+  id         bigserial primary key,
+  username   text not null,
+  groupname  text not null,
+  priority   integer not null default 1
+);
+create index if not exists radusergroup_username_idx on radusergroup(username);
+
+create table if not exists radacct (
+  radacctid        bigserial primary key,
+  username         text not null,
+  nasipaddress     text,
+  framedipaddress  text,
+  acctstoptime     timestamptz,
+  acctsessiontime  bigint default 0,
+  acctinputoctets  bigint default 0,
+  acctoutputoctets bigint default 0,
+  created_at       timestamptz not null default now()
+);
+create index if not exists radacct_username_idx on radacct(username);
+
+create table if not exists nas (
+  id          bigserial primary key,
+  nasname     text not null,
+  shortname   text not null,
+  type        text not null default 'other',
+  ports       text,
+  secret      text not null,
+  description text,
+  server      text,
+  community   text,
+  routers     text
+);
+create index if not exists nas_nasname_idx on nas(nasname);
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ROW LEVEL SECURITY (enable but leave open for service_role)
+-- Uncomment and customise per-table once auth is wired up.
+-- ══════════════════════════════════════════════════════════════════════════════
+-- alter table isp_admins    enable row level security;
+-- alter table isp_customers enable row level security;
+-- alter table isp_plans     enable row level security;
+-- alter table isp_routers   enable row level security;
+-- …etc
+
+-- Seed: default admin account (update credentials before going live)
+insert into isp_admins (name, username, email, subdomain, status, plan_name)
+values ('Default Admin', 'admin', 'admin@example.com', 'default', 'active', 'basic')
+on conflict (username) do nothing;

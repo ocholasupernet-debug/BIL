@@ -19,6 +19,7 @@ import mpesaRouter from "./mpesa-route.js";
 import settingsRouter from "./settings-route.js";
 import superAdminAuthRouter from "./super-admin-auth-route.js";
 import apiAuthRouter from "./api-auth-route.js";
+import registrationRouter from "./registration-route.js";
 
 const router: IRouter = Router();
 
@@ -42,5 +43,6 @@ router.use(mpesaRouter);
 router.use(settingsRouter);
 router.use(superAdminAuthRouter);
 router.use(apiAuthRouter);
+router.use(registrationRouter);
 
 export default router;

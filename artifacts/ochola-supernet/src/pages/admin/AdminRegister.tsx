@@ -34,6 +34,10 @@ export default function AdminRegister() {
   const [registeredUsername, setRegisteredUsername] = useState("");
   const [serverErr, setServerErr] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [checkoutId, setCheckoutId] = useState("");
+  const [awaitingPayment, setAwaitingPayment] = useState(false);
+  const [paymentReady, setPaymentReady] = useState(false);
+  const [registrationFee, setRegistrationFee] = useState({ amount: 500, currency: "KES" });
 
   useEffect(() => {
     setCompanyAvailable(null);
@@ -74,6 +78,48 @@ export default function AdminRegister() {
     return () => { if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current); };
   }, [phone]);
 
+  useEffect(() => {
+    fetch("/api/registration/config")
+      .then(async response => {
+        const data = await response.json() as {
+          registrationFee?: { amount?: number; currency?: string };
+          automaticPaymentAvailable?: boolean;
+        };
+        if (data.registrationFee?.amount && data.registrationFee.currency) {
+          setRegistrationFee({ amount: data.registrationFee.amount, currency: data.registrationFee.currency });
+        }
+        setPaymentReady(data.automaticPaymentAvailable === true);
+      })
+      .catch(() => setPaymentReady(false));
+  }, []);
+
+  useEffect(() => {
+    if (!awaitingPayment || !checkoutId) return;
+    const poll = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`);
+        const data = await response.json() as {
+          paid?: boolean;
+          status?: string;
+          registration?: { username?: string };
+        };
+        if (data.paid && data.registration?.username) {
+          window.clearInterval(poll);
+          setRegisteredUsername(data.registration.username);
+          setAwaitingPayment(false);
+          setSuccess(true);
+        } else if (data.status === "failed") {
+          window.clearInterval(poll);
+          setAwaitingPayment(false);
+          setServerErr("The payment was not completed. You can try registering again.");
+        }
+      } catch {
+        /* Keep polling while the payment provider finishes the callback. */
+      }
+    }, 3000);
+    return () => window.clearInterval(poll);
+  }, [awaitingPayment, checkoutId]);
+
   const validate = () => {
     const e: Record<string, string> = {};
     if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
@@ -90,29 +136,19 @@ export default function AdminRegister() {
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
-    const slug = slugify(company);
     setLoading(true);
     try {
-      const finalSlug = slug || company.trim().toLowerCase();
-      const { error } = await supabase.from("isp_admins").insert({
-        name:      company.trim(),
-        phone:     phone.trim(),
-        username:  finalSlug,
-        password:  "admin",
-        is_active: true,
-        role:      "isp_admin",
-        subdomain: finalSlug,
-      });
-      if (error) throw error;
-
-      fetch("/api/isp/provision", {
+      const response = await fetch("/api/registration/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug: finalSlug }),
-      }).catch(() => {});
-
-      setRegisteredUsername(finalSlug);
-      setSuccess(true);
+        body: JSON.stringify({ company: company.trim(), phone: phone.trim() }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
+      if (!response.ok || !data.ok || !data.CheckoutRequestID) {
+        throw new Error(data.error || "Could not start the registration payment.");
+      }
+      setCheckoutId(data.CheckoutRequestID);
+      setAwaitingPayment(true);
     } catch (err) {
       const msg = extractMsg(err);
       if (msg.includes("duplicate") || msg.includes("unique")) {
@@ -129,7 +165,14 @@ export default function AdminRegister() {
     && companyAvailable !== false
     && phoneAvailable !== false
     && !checkingCompany
-    && !checkingPhone;
+    && !checkingPhone
+    && paymentReady;
+
+  const displayFee = new Intl.NumberFormat("en-KE", {
+    style: "currency",
+    currency: registrationFee.currency,
+    maximumFractionDigits: 0,
+  }).format(registrationFee.amount);
 
   if (success) {
     const subdomainUrl = `https://${registeredUsername}.isplatty.org/admin/login`;
@@ -173,6 +216,26 @@ export default function AdminRegister() {
     );
   }
 
+  if (awaitingPayment) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center", background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: "48px 32px", boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
+          <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: "50%", background: "var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Loader2 size={30} style={{ color: "var(--isp-accent)", animation: "spin 1.2s linear infinite" }} />
+          </div>
+          <h2 style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 10 }}>Confirm your payment</h2>
+          <p style={{ fontSize: "0.9rem", color: "var(--isp-text-muted)", lineHeight: 1.6, margin: "0 0 16px" }}>
+            An M-Pesa prompt for <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> has been sent to <strong style={{ color: "var(--isp-text)" }}>{phone}</strong>.
+          </p>
+          <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55 }}>
+            Enter your M-Pesa PIN on your phone. Your ISP account will be created only after the payment is confirmed.
+          </p>
+        </div>
+        <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+
   const inputStyle = (hasError: boolean, isAvailable: boolean | null): React.CSSProperties => ({
     width: "100%", paddingLeft: 38, paddingRight: 38,
     paddingTop: 11, paddingBottom: 11,
@@ -199,7 +262,14 @@ export default function AdminRegister() {
         </div>
 
         <h1 style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.03em", marginBottom: 6 }}>Get Started</h1>
-        <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: 32 }}>Register your ISP on the platform</p>
+        <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: 18 }}>Register your ISP on the platform</p>
+        <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "13px 15px", marginBottom: 22 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
+            <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)" }}>One-time account creation fee</span>
+            <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--isp-accent)" }}>{displayFee}</span>
+          </div>
+          <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>An M-Pesa prompt is required before the account is activated.</p>
+        </div>
 
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <div>
@@ -275,8 +345,14 @@ export default function AdminRegister() {
               display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
             }}
           >
-            {loading ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Registering...</> : <>Register <ArrowRight size={16} /></>}
+            {loading ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending payment prompt...</> : <>Pay {displayFee} &amp; Create Account <ArrowRight size={16} /></>}
           </button>
+
+          {!paymentReady && (
+            <p style={{ fontSize: "0.75rem", color: "#B45309", textAlign: "center", margin: "-6px 0 0" }}>
+              Registration payments are not configured yet. Please contact support.
+            </p>
+          )}
 
           <p style={{ textAlign: "center", fontSize: "0.825rem", color: "var(--isp-text-sub)" }}>
             Already registered?{" "}

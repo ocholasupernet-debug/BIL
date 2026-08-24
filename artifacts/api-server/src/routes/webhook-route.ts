@@ -46,13 +46,19 @@ async function logRaw(
   meta: Record<string, unknown>,
 ): Promise<void> {
   try {
+    /* Known columns are extracted; everything else goes into the payload
+       JSONB column so PostgREST never rejects the insert for unknown keys. */
+    const { phone, amount, reference, ...rest } = meta;
     await sbInsert("isp_webhook_events", {
       gateway,
       status,
-      ...meta,
+      phone:      phone !== undefined ? String(phone) : null,
+      amount:     amount !== undefined ? Number(amount) : null,
+      reference:  reference !== undefined ? String(reference) : null,
+      payload:    Object.keys(rest).length ? rest : null,
       created_at: new Date().toISOString(),
     });
-  } catch { /* table may not exist yet */ }
+  } catch { /* logging must never break webhook processing */ }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

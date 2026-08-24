@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Users, Wifi, Activity, ArrowDown, ArrowUp, WifiOff } from "lucide-react";
+import { Loader2, Users, Wifi, Activity, ArrowDown, ArrowUp, WifiOff, Copy, Download } from "lucide-react";
 
 /* ─── Types matching backend response ────────────────────────────────────── */
 interface HotspotUser {
@@ -73,6 +73,30 @@ interface RouterLiveStatsProps {
   routerPort?: number;
   routerName?: string;
   refetchIntervalMs?: number;
+}
+
+/* ─── CopyCmd: inline code block with one-click copy ─────────────────────── */
+function CopyCmd({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = () => {
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.25rem" }}>
+      <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.68rem", color: "#67e8f9", background: "rgba(0,0,0,0.35)", padding: "0.2rem 0.5rem", borderRadius: 5, wordBreak: "break-all" }}>
+        {cmd}
+      </code>
+      <button
+        onClick={doCopy}
+        style={{ flexShrink: 0, background: copied ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 4, color: copied ? "#4ade80" : "#64748b", cursor: "pointer", fontSize: "0.6rem", padding: "0.15rem 0.4rem", display: "flex", alignItems: "center", gap: "0.15rem", fontFamily: "inherit" }}
+      >
+        <Copy size={8} />{copied ? "✓" : "copy"}
+      </button>
+    </div>
+  );
 }
 
 /* ─── Component ───────────────────────────────────────────────────────────── */
@@ -154,16 +178,73 @@ export function RouterLiveStats({
 
   if (isError) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    const offline = msg.toLowerCase().includes("offline") || msg.toLowerCase().includes("unreachable");
+    const msgLow = msg.toLowerCase();
+    const offline = msgLow.includes("offline") || msgLow.includes("unreachable") ||
+                    msgLow.includes("timed out") || msgLow.includes("etimedout") ||
+                    msgLow.includes("econnrefused") || msgLow.includes("ehostunreach");
+    const badCreds = msgLow.includes("login failed") || msgLow.includes("authentication") || msgLow.includes("bad password");
+    const apiDisabled = msgLow.includes("econnrefused");
+
+    /* Derive fix label + MikroTik commands */
+    const fix = badCreds
+      ? { label: "Wrong API credentials", cmds: ["/user set admin password=YOUR_PASSWORD"], note: "Update the password in the Routers page to match." }
+      : apiDisabled
+        ? { label: "API service disabled", cmds: ["/ip service enable api"], note: "Run in Winbox → Terminal, then retry." }
+        : offline
+          ? {
+              label: "Port 8728 blocked or router unreachable",
+              /* Restrict to VPN subnet only — never open to 0.0.0.0/0 */
+              cmds: [
+                "/ip service enable api",
+                "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept comment=\"ISP-API\" place-before=0",
+              ],
+              note: "Replace 10.8.0.0/16 with your VPS VPN subnet if different. Download the auto-generated script below for a complete, ready-to-paste ruleset.",
+            }
+          : null;
+
     return (
-      <div style={{ padding: "1rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem", background: "rgba(248,113,113,0.06)", borderTop: "1px solid rgba(248,113,113,0.15)" }}>
-        <WifiOff size={16} color="#f87171" />
-        <div>
-          <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "#f87171" }}>
-            {offline ? "Router Offline" : "MikroTik API Error"}
+      <div style={{ padding: "1rem 1.25rem", background: "rgba(248,113,113,0.06)", borderTop: "1px solid rgba(248,113,113,0.15)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: fix ? "0.75rem" : 0 }}>
+          <WifiOff size={16} color="#f87171" style={{ flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "#f87171" }}>
+              {offline ? "Router Offline or Unreachable" : badCreds ? "Authentication Failed" : "MikroTik API Error"}
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "0.15rem" }}>{msg}</div>
           </div>
-          <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "0.15rem" }}>{msg}</div>
         </div>
+
+        {fix && (
+          <div style={{ background: "rgba(15,23,42,0.6)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 8, padding: "0.65rem 0.875rem" }}>
+            <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.4rem" }}>
+              Fix: {fix.label}
+            </div>
+            {fix.note && (
+              <div style={{ fontSize: "0.7rem", color: "#94a3b8", marginBottom: "0.4rem" }}>{fix.note}</div>
+            )}
+            {fix.cmds.map(cmd => (
+              <CopyCmd key={cmd} cmd={cmd} />
+            ))}
+            {routerId && offline && (
+              <div style={{ marginTop: "0.6rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <div style={{ fontSize: "0.68rem", color: "#94a3b8", marginBottom: "0.35rem" }}>
+                  Or download the auto-generated firewall script (paste into MikroTik terminal):
+                </div>
+                <a
+                  href={`/api/router/${routerId}/firewall-script?vpsIp=YOUR_VPS_IP`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.7rem", fontWeight: 600, color: "var(--isp-accent, #38bdf8)", textDecoration: "none", background: "rgba(56,189,248,0.08)", border: "1px solid rgba(56,189,248,0.2)", borderRadius: 6, padding: "0.3rem 0.65rem" }}
+                >
+                  <Download size={11} /> Download firewall-script.rsc
+                </a>
+                <span style={{ fontSize: "0.65rem", color: "#475569", marginLeft: "0.5rem" }}>
+                  Replace YOUR_VPS_IP with your server's public IP
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
