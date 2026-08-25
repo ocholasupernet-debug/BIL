@@ -20,6 +20,7 @@ import {
 } from "../lib/settings-store.js";
 import { sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { extractToken, validateToken } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -42,18 +43,14 @@ function isValidLiveCallback(value: string): boolean {
   }
 }
 
-function requireProtectedDarajaChange(req: Request, res: Response): boolean {
-  if (!isSuperAdminRequest(req)) {
-    res.status(401).json({ ok: false, error: "Super Admin authentication required." });
+function requireAdminPaymentChange(req: Request, res: Response, adminId: number): boolean {
+  const auth = validateToken(extractToken(req));
+  if (!auth || auth.type !== "a") {
+    res.status(401).json({ ok: false, error: "Sign in again to change payment routing." });
     return false;
   }
-  const passcode = process.env.SUPERADMIN_PASSWORD?.trim();
-  if (!passcode) {
-    res.status(503).json({ ok: false, error: "M-Pesa settings are locked until SUPERADMIN_PASSWORD is configured securely." });
-    return false;
-  }
-  if (req.body?.replacePassword !== passcode) {
-    res.status(401).json({ ok: false, error: "Changing M-Pesa settings requires the replacement passcode." });
+  if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId) {
+    res.status(403).json({ ok: false, error: "You can only change payment routing for your own ISP." });
     return false;
   }
   return true;
@@ -193,13 +190,13 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
 
 /* ── ISP Admin payment gateway preference ── */
 router.post("/admin/payment-gateway", async (req: Request, res: Response): Promise<void> => {
-  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const paymentGateway = getPaymentGateway(req.body?.paymentGateway);
   if (!Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
+  if (!requireAdminPaymentChange(req, res, adminId)) return;
 
   const updated = await sbUpdate(
     "isp_admins",
@@ -225,7 +222,6 @@ router.get("/admin/bank-stk-push", async (req: Request, res: Response): Promise<
 });
 
 router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise<void> => {
-  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const config: BankStkPushConfig = {
     bankName: typeof req.body?.config?.bankName === "string" ? req.body.config.bankName.trim() : "",
@@ -237,6 +233,7 @@ router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
+  if (!requireAdminPaymentChange(req, res, adminId)) return;
   if (!isBankStkPushConfigured(config)) {
     res.status(400).json({ ok: false, error: "Select a bank and enter its PayBill Number plus Account / Business Number." });
     return;
@@ -286,7 +283,6 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
 });
 
 router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): Promise<void> => {
-  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const gatewayId = req.body?.gatewayId;
   const rawConfig = req.body?.config;
@@ -296,6 +292,7 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
+  if (!requireAdminPaymentChange(req, res, adminId)) return;
   if (typeof gatewayId !== "string" || !allowedGatewayIds.has(gatewayId)) {
     res.status(400).json({ ok: false, error: "Unsupported M-Pesa gateway configuration." });
     return;

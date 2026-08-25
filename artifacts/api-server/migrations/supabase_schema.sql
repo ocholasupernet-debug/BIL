@@ -126,6 +126,9 @@ create table if not exists isp_transactions (
   plan_id         bigint references isp_plans(id) on delete set null,
   amount          numeric(12,2) not null,
   payment_method  text not null default 'mpesa',  -- mpesa | cash | stripe | flutterwave
+  payment_phone   text,
+  mpesa_receipt   text,
+  merchant_request_id text,
   reference       text,
   status          text not null default 'completed',  -- pending | completed | failed
   notes           text,
@@ -134,6 +137,9 @@ create table if not exists isp_transactions (
 create index if not exists isp_transactions_admin_id_idx    on isp_transactions(admin_id);
 create index if not exists isp_transactions_customer_id_idx on isp_transactions(customer_id);
 create index if not exists isp_transactions_reference_idx   on isp_transactions(reference);
+create unique index if not exists isp_transactions_pending_mpesa_reference_idx
+  on isp_transactions(reference)
+  where reference is not null and status = 'pending' and payment_method like 'mpesa%';
 create index if not exists isp_transactions_created_at_idx  on isp_transactions(created_at desc);
 
 -- Prepaid voucher / PIN codes

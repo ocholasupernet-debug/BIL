@@ -57,7 +57,17 @@ export default function AdminLogin() {
       if (company && data.username !== username.trim()) { setError("Invalid username or password."); return; }
       if (data.password !== password) { setError("Invalid username or password."); return; }
       if (!data.is_active) { setError("Your account is inactive. Contact the administrator."); return; }
-      setAdminAuth(data.id, data.username, data.name || data.username, data.role ?? undefined);
+      const apiLogin = await fetch("/api/auth/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const apiSession = await apiLogin.json() as { ok?: boolean; token?: string; error?: string };
+      if (!apiLogin.ok || !apiSession.ok || !apiSession.token) {
+        setError(apiSession.error || "Could not create a secure admin session. Please try again.");
+        return;
+      }
+      setAdminAuth(data.id, data.username, data.name || data.username, data.role ?? undefined, apiSession.token);
       /* store country + currency so formatCurrency works immediately */
       try {
         if ((data as Record<string,unknown>).currency) localStorage.setItem("ochola_admin_currency", String((data as Record<string,unknown>).currency));

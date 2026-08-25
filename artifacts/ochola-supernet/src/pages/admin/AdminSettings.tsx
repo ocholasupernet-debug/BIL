@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
   Bell, Wrench, Check, Eye, EyeOff, Copy, Trash2, Plus,
@@ -25,6 +25,14 @@ const C = {
   input:     "var(--isp-input-bg)",
   inputBdr:  "var(--isp-input-border)",
 };
+
+function adminApiHeaders(): Record<string, string> {
+  const token = getAdminApiToken();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -417,7 +425,7 @@ function AdminPaymentGatewayCard() {
     try {
       const response = await fetch("/api/admin/payment-gateway", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: adminApiHeaders(),
         body: JSON.stringify({ adminId: ADMIN_ID, paymentGateway }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
@@ -1525,7 +1533,7 @@ function PaymentGatewaysTab() {
       if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill") {
         const response = await fetch("/api/admin/mpesa-gateway-config", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: adminApiHeaders(),
           body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: fields[gwId] || {} }),
         });
         const data = await response.json() as { ok?: boolean; error?: string };

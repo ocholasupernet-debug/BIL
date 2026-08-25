@@ -22,6 +22,7 @@ const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
 const BEST_KEY    = SERVICE_KEY || ANON_KEY;
 
 export const supabaseConfigured = !!(SUPABASE_URL && BEST_KEY);
+export const supabaseServiceRoleConfigured = !!(SUPABASE_URL && SERVICE_KEY);
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return {
@@ -79,6 +80,28 @@ export async function sbUpsert<T>(
   return res.json() as Promise<T[]>;
 }
 
+/** Invoke a Supabase RPC function using the server-only service role. */
+export async function sbRpc<T>(
+  functionName: string,
+  payload: Record<string, unknown>,
+): Promise<T[]> {
+  if (!supabaseServiceRoleConfigured) {
+    throw new Error("Supabase service-role access is required for this operation.");
+  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${functionName}`, {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY,
+      Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Supabase RPC ${functionName} failed: ${res.status}`);
+  return res.json() as Promise<T[]>;
+}
 /** UPDATE rows matching `filterQuery`. Returns updated rows. */
 export async function sbUpdate<T>(
   table: string,

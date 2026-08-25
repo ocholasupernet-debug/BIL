@@ -23,19 +23,24 @@ function _getStoredAdminId(): number {
 
 export let ADMIN_ID: number = _getStoredAdminId();
 
-export function setAdminAuth(id: number, username: string, name: string, role?: string) {
+export function setAdminAuth(id: number, username: string, name: string, role?: string, apiToken?: string) {
   ADMIN_ID = id;
   try {
     localStorage.setItem("ochola_admin_id", String(id));
     localStorage.setItem("ochola_admin_username", username);
     localStorage.setItem("ochola_admin_name", name);
     if (role) localStorage.setItem("ochola_admin_role", role);
+    if (apiToken) localStorage.setItem("ochola_api_token", apiToken);
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id } }));
   } catch {}
 }
 
 export function getAdminRole(): string {
   try { return localStorage.getItem("ochola_admin_role") || "isp_admin"; } catch { return "isp_admin"; }
+}
+
+export function getAdminApiToken(): string {
+  try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
 }
 
 export function isSuperAdmin(): boolean {
@@ -48,6 +53,7 @@ export function clearAdminAuth() {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_api_token");
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
 }
@@ -79,6 +85,7 @@ export function stopImpersonation() {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_api_token");
   } catch {}
 }
 

@@ -6,6 +6,7 @@ import {
   extractToken,
   lookupAdmin,
   lookupCustomer,
+  apiTokenSigningConfigured,
   type ApiTokenPayload,
 } from "../lib/api-auth.js";
 
@@ -13,7 +14,7 @@ const router: IRouter = Router();
 
 const SA_USERNAME = process.env.SUPERADMIN_USERNAME ?? "Latty";
 const SA_API_KEY  = process.env.SUPERADMIN_API_KEY  ?? "Latex";
-const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? "herina";
+const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? "";
 
 router.post("/auth/admin/login", async (req: Request, res: Response): Promise<void> => {
   const { username, password, api_key } = req.body as {
@@ -22,6 +23,10 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
 
   if (!username || !password) {
     res.status(400).json({ ok: false, error: "username and password are required" });
+    return;
+  }
+  if (!apiTokenSigningConfigured) {
+    res.status(503).json({ ok: false, error: "Secure admin sessions are not configured." });
     return;
   }
 
@@ -37,10 +42,10 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
 
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_admins",
-    `username=eq.${encodeURIComponent(username.trim())}&select=id,username,password,fullname,role&limit=1`,
+    `username=eq.${encodeURIComponent(username.trim())}&select=id,username,password,fullname,role,is_active&limit=1`,
   );
   const admin = rows[0];
-  if (!admin || admin.password !== password) {
+  if (!admin || admin.password !== password || admin.is_active !== true) {
     setTimeout(() => {
       res.status(401).json({ ok: false, error: "Invalid credentials" });
     }, 400);
@@ -59,6 +64,10 @@ router.post("/auth/customer/login", async (req: Request, res: Response): Promise
 
   if (!username || !password) {
     res.status(400).json({ ok: false, error: "username and password are required" });
+    return;
+  }
+  if (!apiTokenSigningConfigured) {
+    res.status(503).json({ ok: false, error: "Secure customer sessions are not configured." });
     return;
   }
 

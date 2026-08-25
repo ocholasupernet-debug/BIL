@@ -2,9 +2,7 @@ import { createHmac } from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { sbSelect } from "./supabase-client.js";
 
-const TOKEN_SIGNING_SECRET = process.env.TOKEN_SIGNING_SECRET
-  ?? process.env.SUPERADMIN_API_KEY
-  ?? "change-me-in-production";
+const TOKEN_SIGNING_SECRET = process.env.TOKEN_SIGNING_SECRET ?? process.env.SESSION_SECRET ?? "";
 const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_CLOCK_SKEW_S = 300;
 
@@ -14,7 +12,10 @@ export interface ApiTokenPayload {
   time: number;
 }
 
+export const apiTokenSigningConfigured = !!TOKEN_SIGNING_SECRET;
+
 export function generateToken(type: "a" | "c", uid: string): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
   const time = Math.floor(Date.now() / 1000);
   const hash = createHmac("sha256", TOKEN_SIGNING_SECRET)
     .update(`${type}.${uid}.${time}`)
@@ -23,7 +24,7 @@ export function generateToken(type: "a" | "c", uid: string): string {
 }
 
 export function validateToken(token: string): ApiTokenPayload | null {
-  if (!token) return null;
+  if (!TOKEN_SIGNING_SECRET || !token) return null;
 
   const parts = token.split(".");
   if (parts.length !== 4) return null;
