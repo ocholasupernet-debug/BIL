@@ -27,12 +27,36 @@ function isSuperAdminRequest(req: Request): boolean {
   return isActiveSuperAdminToken(String(req.headers["x-sa-token"] ?? ""));
 }
 
-function recommendedCallbackUrl(req: Request): string {
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const protocol = typeof forwardedProto === "string"
-    ? forwardedProto.split(",")[0].trim()
-    : req.protocol;
-  return `${protocol}://${req.get("host")}/api/mpesa/callback`;
+function configuredCallbackUrl(): string {
+  return process.env.MPESA_CALLBACK_URL?.trim() ?? "";
+}
+
+function isValidLiveCallback(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" &&
+      !!parsed.hostname &&
+      parsed.pathname === "/api/mpesa/callback";
+  } catch {
+    return false;
+  }
+}
+
+function requireProtectedDarajaChange(req: Request, res: Response): boolean {
+  if (!isSuperAdminRequest(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication required." });
+    return false;
+  }
+  const passcode = process.env.SUPERADMIN_PASSWORD?.trim();
+  if (!passcode) {
+    res.status(503).json({ ok: false, error: "M-Pesa settings are locked until SUPERADMIN_PASSWORD is configured securely." });
+    return false;
+  }
+  if (req.body?.replacePassword !== passcode) {
+    res.status(401).json({ ok: false, error: "Changing M-Pesa settings requires the replacement passcode." });
+    return false;
+  }
+  return true;
 }
 
 const PAYMENT_GATEWAY_IDS = new Set([
@@ -169,6 +193,7 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
 
 /* ── ISP Admin payment gateway preference ── */
 router.post("/admin/payment-gateway", async (req: Request, res: Response): Promise<void> => {
+  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const paymentGateway = getPaymentGateway(req.body?.paymentGateway);
   if (!Number.isInteger(adminId) || adminId <= 0) {
@@ -200,6 +225,7 @@ router.get("/admin/bank-stk-push", async (req: Request, res: Response): Promise<
 });
 
 router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise<void> => {
+  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const config: BankStkPushConfig = {
     bankName: typeof req.body?.config?.bankName === "string" ? req.body.config.bankName.trim() : "",
@@ -260,6 +286,7 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
 });
 
 router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): Promise<void> => {
+  if (!requireProtectedDarajaChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const gatewayId = req.body?.gatewayId;
   const rawConfig = req.body?.config;
@@ -353,7 +380,7 @@ router.get("/super-admin/mpesa", async (req: Request, res: Response): Promise<vo
       consumerSecret: s.consumerSecret ? "**hidden**" : "",
       shortcode:      s.shortcode,
       passkey:        s.passkey        ? "**hidden**" : "",
-      callbackUrl:    s.callbackUrl || recommendedCallbackUrl(req),
+      callbackUrl:    s.callbackUrl || configuredCallbackUrl(),
       env:            s.env,
       tillNumber:     s.tillNumber,
       hasTillNumber:  !!s.tillNumber,
@@ -404,14 +431,12 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
     return;
   }
 
-  if (requestedCallback) {
-    try {
-      const parsed = new URL(requestedCallback);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("Invalid protocol");
-    } catch {
-      res.status(400).json({ ok: false, error: "Callback URL must start with http:// or https://" });
-      return;
-    }
+  if (requestedCallback && !isValidLiveCallback(requestedCallback)) {
+    res.status(400).json({
+      ok: false,
+      error: "Live callback URL must use HTTPS and end with /api/mpesa/callback.",
+    });
+    return;
   }
 
   const next: MpesaSettings = {
@@ -419,10 +444,17 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
     consumerSecret: (consumerSecret && consumerSecret !== "**hidden**") ? consumerSecret : current.consumerSecret,
     shortcode:      shortcode      ?? current.shortcode,
     passkey:        (passkey        && passkey        !== "**hidden**") ? passkey        : current.passkey,
-    callbackUrl:    requestedCallback || current.callbackUrl || recommendedCallbackUrl(req),
+    callbackUrl:    requestedCallback || current.callbackUrl || configuredCallbackUrl(),
     env:            (env === "production" || env === "sandbox") ? env : current.env,
     tillNumber:     typeof tillNumber === "string" ? tillNumber.trim() : current.tillNumber,
   };
+  if (next.env === "production" && !isValidLiveCallback(next.callbackUrl)) {
+    res.status(400).json({
+      ok: false,
+      error: "Live M-Pesa requires a saved HTTPS callback URL ending in /api/mpesa/callback.",
+    });
+    return;
+  }
 
   try {
     await saveMpesaSettings(next);

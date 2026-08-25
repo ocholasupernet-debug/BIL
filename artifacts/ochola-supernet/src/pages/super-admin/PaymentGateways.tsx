@@ -309,7 +309,7 @@ export default function SuperAdminPaymentGateways() {
               <input style={inp} inputMode="numeric" value={mpesa.tillNumber} onChange={e => updateMpesa("tillNumber", e.target.value)} />
             </Field>
             <div style={{ gridColumn: "1 / -1" }}>
-              <Field label="Callback URL" hint="Leave blank to use the deployed production address ending in /api/mpesa/callback.">
+              <Field label="Callback URL" hint="Required for live mode. Enter the deployed HTTPS address ending in /api/mpesa/callback.">
                 <input style={inp} type="url" value={mpesa.callbackUrl} onChange={e => updateMpesa("callbackUrl", e.target.value)} />
               </Field>
             </div>

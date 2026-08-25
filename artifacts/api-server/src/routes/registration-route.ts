@@ -33,6 +33,15 @@ async function getDarajaToken(settings: Awaited<ReturnType<typeof getMpesaSettin
   return (await response.json() as { access_token: string }).access_token;
 }
 
+function hasUsableCallback(settings: Awaited<ReturnType<typeof getMpesaSettings>>): boolean {
+  try {
+    const callback = new URL(settings.callbackUrl);
+    return callback.protocol === "https:" && callback.pathname === "/api/mpesa/callback";
+  } catch {
+    return false;
+  }
+}
+
 router.get("/registration/config", async (_req: Request, res: Response): Promise<void> => {
   const destinations = getPaymentDestinations();
   const mpesaSettings = await getMpesaSettings();
@@ -42,7 +51,8 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
   res.json({
     ok: true,
     registrationFee: { amount: REGISTRATION_FEE, currency: "KES" },
-    automaticPaymentAvailable: !!destination && destination.type !== "bank" && isMpesaConfigured(mpesaSettings),
+    automaticPaymentAvailable: !!destination && destination.type !== "bank" &&
+      isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings),
     destination: destination ? {
       type: destination.type,
       name: destination.name,
@@ -113,13 +123,9 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   try {
     const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, "").slice(0, 14);
     const password = Buffer.from(`${config.shortcode}${config.passkey}${timestamp}`).toString("base64");
-    const forwardedProto = req.headers["x-forwarded-proto"];
-    const protocol = typeof forwardedProto === "string"
-      ? forwardedProto.split(",")[0].trim()
-      : req.protocol;
-    const callbackUrl = config.callbackUrl || `${protocol}://${req.get("host")}/api/mpesa/callback`;
-    if (config.env === "production" && !callbackUrl.startsWith("https://")) {
-      res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+    const callbackUrl = config.callbackUrl;
+    if (!hasUsableCallback(config)) {
+      res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
       return;
     }
     const token = await getDarajaToken(config);

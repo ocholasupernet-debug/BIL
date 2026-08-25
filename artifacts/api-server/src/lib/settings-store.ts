@@ -65,12 +65,23 @@ function encryptionKey(): Buffer | null {
 }
 
 function normaliseMpesaSettings(input: Partial<MpesaSettings>): MpesaSettings {
+  const callbackUrl = typeof input.callbackUrl === "string" ? input.callbackUrl.trim() : "";
+  const hasValidCallback = (() => {
+    try {
+      const parsed = new URL(callbackUrl);
+      return parsed.protocol === "https:" &&
+        !!parsed.hostname &&
+        parsed.pathname === "/api/mpesa/callback";
+    } catch {
+      return false;
+    }
+  })();
   return {
     consumerKey: typeof input.consumerKey === "string" ? input.consumerKey.trim() : "",
     consumerSecret: typeof input.consumerSecret === "string" ? input.consumerSecret.trim() : "",
     shortcode: typeof input.shortcode === "string" ? input.shortcode.trim() : "",
     passkey: typeof input.passkey === "string" ? input.passkey.trim() : "",
-    callbackUrl: typeof input.callbackUrl === "string" ? input.callbackUrl.trim() : "",
+    callbackUrl: hasValidCallback ? callbackUrl : "",
     env: input.env === "production" ? "production" : "sandbox",
     tillNumber: typeof input.tillNumber === "string" ? input.tillNumber.trim() : "",
   };

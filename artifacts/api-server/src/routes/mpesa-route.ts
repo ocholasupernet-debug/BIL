@@ -179,13 +179,19 @@ async function getDarajaToken(settings: MpesaSettings): Promise<string> {
   return data.access_token;
 }
 
-function callbackUrl(req: Request, settings: MpesaSettings): string {
-  if (settings.callbackUrl) return settings.callbackUrl;
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const protocol = typeof forwardedProto === "string"
-    ? forwardedProto.split(",")[0].trim()
-    : req.protocol;
-  return `${protocol}://${req.get("host")}/api/mpesa/callback`;
+function callbackUrl(settings: MpesaSettings): string {
+  return settings.callbackUrl;
+}
+
+function hasValidCallbackUrl(value: string): boolean {
+  try {
+    const callback = new URL(value);
+    return callback.protocol === "https:" &&
+      !!callback.hostname &&
+      callback.pathname === "/api/mpesa/callback";
+  } catch {
+    return false;
+  }
 }
 
 function stkCredentials(shortcode: string, passkey: string): { timestamp: string; password: string } {
@@ -200,27 +206,11 @@ function stkCredentials(shortcode: string, passkey: string): { timestamp: string
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * GET /api/mpesa/token
- * Generates an M-Pesa access token using Consumer Key + Consumer Secret
- * via Safaricom's OAuth endpoint.
+ * Public OAuth token access is intentionally disabled. Tokens are only used
+ * inside the server-side STK flows.
  * ═══════════════════════════════════════════════════════════════════════════ */
-router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> => {
-  const settings = await getMpesaSettings();
-  const { consumerKey, consumerSecret } = settings;
-  if (!consumerKey || !consumerSecret) {
-    res.status(503).json({
-      ok: false,
-      error: "M-Pesa credentials are not configured. Configure them in Super Admin → Payment Gateways.",
-    });
-    return;
-  }
-
-  try {
-    const token = await getDarajaToken(settings);
-    res.json({ ok: true, access_token: token });
-  } catch (e) {
-    logger.error({ err: e }, "[mpesa/token] failed to generate access token");
-    res.status(500).json({ ok: false, error: (e as Error).message });
-  }
+router.get("/mpesa/token", (_req: Request, res: Response): void => {
+  res.status(404).json({ ok: false, error: "This endpoint is not available." });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -274,9 +264,9 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const resolvedCallbackUrl = callbackUrl(req, cfg);
-    if (cfg.env === "production" && !resolvedCallbackUrl.startsWith("https://")) {
-      res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+    const resolvedCallbackUrl = callbackUrl(cfg);
+    if (!hasValidCallbackUrl(resolvedCallbackUrl)) {
+      res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
       return;
     }
     const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
@@ -540,9 +530,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
       return;
     }
-     const resolvedCallbackUrl = callbackUrl(req, cfg);
-     if (cfg.env === "production" && !resolvedCallbackUrl.startsWith("https://")) {
-       res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+     const resolvedCallbackUrl = callbackUrl(cfg);
+     if (!hasValidCallbackUrl(resolvedCallbackUrl)) {
+       res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
        return;
      }
      const token = await getDarajaToken(cfg);
