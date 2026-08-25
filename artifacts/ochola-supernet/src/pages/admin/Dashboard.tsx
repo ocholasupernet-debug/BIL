@@ -4,6 +4,7 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Link } from "wouter";
 import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
 import { Loader2, Wifi, WifiOff, Users, Ticket, MessageSquare, Router, DollarSign, TrendingUp, BarChart3, CreditCard } from "lucide-react";
+import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 
 /* Fetch live subscriber count from a single router (hotspot + PPPoE) */
 async function fetchLiveCount(routerId: number): Promise<number> {
@@ -126,11 +127,7 @@ function DonutChart({ insights }: { insights: { label: string; count: number; co
   );
 }
 
-function fmtKsh(n: number) {
-  if (n >= 1_000_000) return `Ksh. ${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000)     return `Ksh. ${n.toLocaleString()}`;
-  return `Ksh. ${n}`;
-}
+function fmtKsh(n: number) { return fmtMoney(n); }
 
 export default function Dashboard() {
   const [chartCollapsed,  setChartCollapsed]  = useState(false);
@@ -465,7 +462,7 @@ export default function Dashboard() {
                   <tr key={tx.id}>
                     <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: "0.75rem" }}>#{tx.id}</td>
                     <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: "0.72rem" }}>{tx.reference || "—"}</td>
-                    <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-green)", fontWeight: 700 }}>Ksh {tx.amount.toLocaleString()}</td>
+                    <td style={{ padding: "0.625rem 1.25rem", color: "var(--isp-green)", fontWeight: 700 }}>{getCurrencySymbol()} {tx.amount.toLocaleString()}</td>
                     <td style={{ padding: "0.625rem 1.25rem" }}>
                       <span className={`isp-badge ${tx.payment_method === "mpesa" ? "isp-badge-blue" : "isp-badge-amber"}`} style={{ fontSize: "0.6875rem" }}>
                         {tx.payment_method.toUpperCase()}

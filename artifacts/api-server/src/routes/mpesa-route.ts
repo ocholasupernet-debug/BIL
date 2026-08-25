@@ -12,9 +12,153 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbInsert, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
-import { getMpesaSettings, isMpesaConfigured } from "../lib/settings-store.js";
+import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 
 const router: IRouter = Router();
+
+const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
+  mpesa_paybill: "M-Pesa PayBill",
+  mpesa_till_push: "M-Pesa Till Push (Buy Goods & Services)",
+  bank_stk_push: "BankStkPush",
+  airtel: "AirtelMoney",
+  azampay: "AzamPay",
+  custom_paybill: "CustomPaybill",
+  dpo_payments: "DpoPayments",
+  flutterwave: "Flutterwave",
+  intasend: "Intasend",
+  pesapal: "PesaPal",
+  stripe: "Stripe",
+  paypal: "PayPal",
+  tigopesa: "TigoPesa",
+  xendit: "XenditEwallet",
+  manual: "Cash / Manual",
+};
+const PAYMENT_GATEWAY_IDS = new Set(Object.keys(PAYMENT_GATEWAY_LABELS));
+type PaymentGateway = string;
+
+interface BankStkPushConfig {
+  bankName: string;
+  paybillNumber: string;
+  accountNumber: string;
+}
+
+interface MpesaTillPushConfig {
+  tillNumber: string;
+}
+
+interface MpesaPaybillConfig {
+  paybillNumber: string;
+  accountNumber: string;
+}
+
+function getPaymentGateway(value: unknown): PaymentGateway {
+  return typeof value === "string" && PAYMENT_GATEWAY_IDS.has(value) ? value : "mpesa_paybill";
+}
+
+function bankStkPushConfig(value: unknown): BankStkPushConfig {
+  const map = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const config = map.bank_stk_push && typeof map.bank_stk_push === "object" && !Array.isArray(map.bank_stk_push)
+    ? map.bank_stk_push as Record<string, unknown>
+    : {};
+  return {
+    bankName: typeof config.bankName === "string" ? config.bankName.trim() : "",
+    paybillNumber: typeof config.paybillNumber === "string" ? config.paybillNumber.trim() : "",
+    accountNumber: typeof config.accountNumber === "string" ? config.accountNumber.trim() : "",
+  };
+}
+
+function gatewayConfig(value: unknown, gatewayId: string): Record<string, string> {
+  const map = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const config = map[gatewayId] && typeof map[gatewayId] === "object" && !Array.isArray(map[gatewayId])
+    ? map[gatewayId] as Record<string, unknown>
+    : {};
+  return Object.fromEntries(
+    Object.entries(config)
+      .filter(([, field]) => typeof field === "string")
+      .map(([field, value]) => [field, (value as string).trim()]),
+  );
+}
+
+function mpesaTillPushConfig(value: unknown): MpesaTillPushConfig {
+  return { tillNumber: gatewayConfig(value, "mpesa_till_push").tillNumber ?? "" };
+}
+
+function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
+  const config = gatewayConfig(value, "mpesa_paybill");
+  return {
+    paybillNumber: config.paybillNumber ?? "",
+    accountNumber: config.accountNumber ?? "",
+  };
+}
+
+function isBankStkPushConfigured(config: BankStkPushConfig): boolean {
+  return !!(config.bankName && config.paybillNumber && config.accountNumber);
+}
+
+function resolveDarajaPayment(
+  paymentGateway: PaymentGateway,
+  settings: MpesaSettings,
+  bankStkPush: BankStkPushConfig,
+  mpesaTillPush: MpesaTillPushConfig,
+  mpesaPaybill: MpesaPaybillConfig,
+): { businessShortcode: string; destination: string; accountReference?: string } {
+  if (paymentGateway === "bank_stk_push") {
+    return {
+      businessShortcode: settings.shortcode,
+      destination: bankStkPush.paybillNumber,
+      accountReference: bankStkPush.accountNumber,
+    };
+  }
+  if (paymentGateway === "mpesa_till_push") {
+    return { businessShortcode: settings.shortcode, destination: mpesaTillPush.tillNumber };
+  }
+  if (paymentGateway === "mpesa_paybill") {
+    return {
+      businessShortcode: settings.shortcode,
+      destination: mpesaPaybill.paybillNumber || settings.shortcode,
+      accountReference: mpesaPaybill.accountNumber || undefined,
+    };
+  }
+  return { businessShortcode: settings.shortcode, destination: settings.shortcode };
+}
+
+function paymentGatewayLabel(paymentGateway: PaymentGateway): string {
+  return PAYMENT_GATEWAY_LABELS[paymentGateway] ?? paymentGateway;
+}
+
+function isDarajaGateway(paymentGateway: PaymentGateway): boolean {
+  return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push" || paymentGateway === "bank_stk_push";
+}
+
+async function getAdminPaymentSettings(adminId: number | undefined): Promise<{
+  paymentGateway: PaymentGateway;
+  bankStkPush: BankStkPushConfig;
+  mpesaTillPush: MpesaTillPushConfig;
+  mpesaPaybill: MpesaPaybillConfig;
+}> {
+  if (!adminId) {
+    return {
+      paymentGateway: "mpesa_paybill",
+      bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
+      mpesaTillPush: { tillNumber: "" },
+      mpesaPaybill: { paybillNumber: "", accountNumber: "" },
+    };
+  }
+  const rows = await sbSelect<{ payment_gateway?: string; payment_gateway_config?: unknown }>(
+    "isp_admins",
+    `id=eq.${adminId}&select=payment_gateway,payment_gateway_config&limit=1`,
+  );
+  return {
+    paymentGateway: getPaymentGateway(rows[0]?.payment_gateway),
+    bankStkPush: bankStkPushConfig(rows[0]?.payment_gateway_config),
+    mpesaTillPush: mpesaTillPushConfig(rows[0]?.payment_gateway_config),
+    mpesaPaybill: mpesaPaybillConfig(rows[0]?.payment_gateway_config),
+  };
+}
 
 /* ── Daraja helpers — reads credentials fresh per-request so admin saves take effect ── */
 
@@ -35,8 +179,7 @@ async function getDarajaToken(): Promise<string> {
   return data.access_token;
 }
 
-function stkCredentials(): { timestamp: string; password: string } {
-  const { shortcode, passkey } = getMpesaSettings();
+function stkCredentials(shortcode: string, passkey: string): { timestamp: string; password: string } {
   const timestamp = new Date()
     .toISOString()
     .replace(/[-T:.Z]/g, "")
@@ -56,7 +199,7 @@ router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> =
   if (!consumerKey || !consumerSecret) {
     res.status(503).json({
       ok: false,
-      error: "MPESA_CONSUMER_KEY and MPESA_CONSUMER_SECRET are not set. Add them as environment variables or configure in Admin Settings → Billing.",
+      error: "M-Pesa credentials are not configured. Configure them in Super Admin → Payment Gateways.",
     });
     return;
   }
@@ -77,8 +220,8 @@ router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> =
  * Formats phone to 2547XXXXXXXX and sends STK Push via Daraja API.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, account_ref } = req.body as {
-    phone?: string; amount?: number; account_ref?: string;
+  const { phone, amount, account_ref, adminId } = req.body as {
+    phone?: string; amount?: number; account_ref?: string; adminId?: number;
   };
 
   if (!phone || !amount) {
@@ -89,7 +232,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
   if (!isMpesaConfigured()) {
     res.status(503).json({
       ok: false,
-      error: "M-Pesa credentials not configured. Set Consumer Key, Consumer Secret, Shortcode & Passkey in Admin Settings → Billing.",
+      error: "M-Pesa credentials are not configured. Configure them in Super Admin → Payment Gateways.",
     });
     return;
   }
@@ -105,28 +248,37 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
 
   try {
     const cfg = getMpesaSettings();
-    const shortcode = cfg.shortcode || "174379";
-    const passkey   = cfg.passkey;
+      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+      if (!isDarajaGateway(paymentGateway)) {
+       res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
+       return;
+      }
+      if (paymentGateway === "bank_stk_push" && !isBankStkPushConfigured(bankStkPush)) {
+       res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
+       return;
+     }
+      const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
+      const { businessShortcode, destination } = payment;
+     if (paymentGateway === "mpesa_till_push" && !destination) {
+       res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
+      return;
+    }
 
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[-T:.Z]/g, "")
-      .slice(0, 14);
-    const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
+    const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
 
     const token = await getDarajaToken();
 
     const stkBody = {
-      BusinessShortCode: shortcode,
+      BusinessShortCode: businessShortcode,
       Password:          password,
       Timestamp:         timestamp,
-      TransactionType:   "CustomerPayBillOnline",
+       TransactionType:   paymentGateway === "mpesa_till_push" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
       Amount:            Math.ceil(Number(amount)),
       PartyA:            formatted,
-      PartyB:            shortcode,
+      PartyB:            destination,
       PhoneNumber:       formatted,
       CallBackURL:       cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/mpesa/callback`,
-      AccountReference:  account_ref ?? "ISPlatty",
+      AccountReference:  payment.accountReference ?? account_ref ?? "ISPlatty",
       TransactionDesc:   "STK Push Payment",
     };
 
@@ -154,7 +306,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       payment_method: "mpesa",
       reference:      String(data["CheckoutRequestID"] ?? ""),
       status:         "pending",
-      notes:          `STK push to ${formatted}`,
+       notes:          `${paymentGatewayLabel(paymentGateway)} STK push to ${formatted}`,
       created_at:     new Date().toISOString(),
     }).catch(() => {});
 
@@ -179,6 +331,15 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
  *   - Logs the event
  * Always responds 200 to Safaricom immediately.
  * ═══════════════════════════════════════════════════════════════════════════ */
+router.get("/mpesa/callback", (_req: Request, res: Response): void => {
+  res.json({
+    ok: true,
+    service: "M-Pesa Daraja callback",
+    method: "POST",
+    message: "Callback endpoint is online and ready to receive STK Push results.",
+  });
+});
+
 router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void> => {
   res.json({ ResultCode: 0, ResultDesc: "Accepted" });
 
@@ -189,15 +350,16 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const { ResultCode, CheckoutRequestID, MerchantRequestID } = callback;
+    const { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID } = callback;
 
     logger.info(
-      { ResultCode, CheckoutRequestID, MerchantRequestID },
+      { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID },
       "[mpesa/callback] Received callback"
     );
 
     if (ResultCode !== 0) {
-      logger.info({ ResultCode, CheckoutRequestID }, "[mpesa/callback] Payment failed or cancelled by user");
+      const failureReason = String(ResultDesc ?? "M-Pesa rejected the request");
+      logger.info({ ResultCode, ResultDesc: failureReason, CheckoutRequestID }, "[mpesa/callback] Payment failed or cancelled by user");
       const registrationRows = await sbSelect<{ admin_id: number | null; payment_method: string }>(
         "isp_transactions",
         `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}&select=admin_id,payment_method&limit=1`,
@@ -205,7 +367,7 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
       await sbUpdate(
         "isp_transactions",
         `reference=eq.${encodeURIComponent(String(CheckoutRequestID))}`,
-        { status: "failed", notes: `ResultCode ${ResultCode}: ${callback.ResultDesc ?? "cancelled"}` },
+        { status: "failed", notes: `ResultCode ${ResultCode}: ${failureReason}` },
       ).catch(() => {});
       const registration = registrationRows[0];
       if (registration?.payment_method === "mpesa_registration" && registration.admin_id) {
@@ -342,28 +504,43 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     res.status(503).json({
       ok: false,
       demo: true,
-      error: "M-Pesa is not configured. Go to Admin Settings → Billing and enter your Daraja API credentials.",
+      error: "M-Pesa is not configured. Ask the Super Admin to complete Payment Gateways.",
     });
     return;
   }
 
   try {
-    const cfg = getMpesaSettings();
-    const token = await getDarajaToken();
-    const { timestamp, password } = stkCredentials();
-    const callbackUrl = cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/webhooks/mpesa`;
+     const cfg = getMpesaSettings();
+       const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+      if (!isDarajaGateway(paymentGateway)) {
+       res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
+       return;
+      }
+      if (paymentGateway === "bank_stk_push" && !isBankStkPushConfigured(bankStkPush)) {
+       res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
+       return;
+     }
+      const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
+      const { businessShortcode, destination } = payment;
+     if (paymentGateway === "mpesa_till_push" && !destination) {
+       res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
+      return;
+    }
+     const token = await getDarajaToken();
+     const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
+     const callbackUrl = cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/mpesa/callback`;
 
     const body = {
-      BusinessShortCode: cfg.shortcode,
+       BusinessShortCode: businessShortcode,
       Password:          password,
       Timestamp:         timestamp,
-      TransactionType:   "CustomerPayBillOnline",
+       TransactionType:   paymentGateway === "mpesa_till_push" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
       Amount:            Math.ceil(Number(amount)),
       PartyA:            normalised,
-      PartyB:            cfg.shortcode,
+      PartyB:            destination,
       PhoneNumber:       normalised,
       CallBackURL:       callbackUrl,
-      AccountReference:  account_ref ?? "ISPlatty",
+       AccountReference:  payment.accountReference ?? account_ref ?? "ISPlatty",
       TransactionDesc:   `Plan ${plan_id ?? "purchase"}`,
     };
 
@@ -389,7 +566,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       payment_method: "mpesa",
       reference:      String(data["CheckoutRequestID"] ?? ""),
       status:         "pending",
-      notes:          `STK push to ${normalised}`,
+       notes:          `${paymentGatewayLabel(paymentGateway)} STK push to ${normalised}`,
       created_at:     new Date().toISOString(),
     }).catch(() => { /* non-fatal */ });
 
@@ -411,9 +588,9 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
     return;
   }
 
-  const rows = await sbSelect<{ id: number; status: string; reference: string; admin_id: number | null; payment_method: string }>(
+  const rows = await sbSelect<{ id: number; status: string; reference: string; notes: string | null; admin_id: number | null; payment_method: string }>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&select=id,status,reference,admin_id,payment_method&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}&select=id,status,reference,notes,admin_id,payment_method&limit=1`,
   );
 
   const tx = rows[0];
@@ -437,7 +614,12 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
     });
     return;
   }
-  res.json({ ok: true, paid, status: tx.status });
+  res.json({
+    ok: true,
+    paid,
+    status: tx.status,
+    failureReason: tx.status === "failed" ? tx.notes ?? undefined : undefined,
+  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════

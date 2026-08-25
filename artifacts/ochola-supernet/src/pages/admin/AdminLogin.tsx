@@ -46,7 +46,7 @@ export default function AdminLogin() {
     try {
       let query = supabase
         .from("isp_admins")
-        .select("id, name, username, password, is_active, role, subdomain");
+        .select("id, name, username, password, is_active, role, subdomain, area, currency");
       if (company) {
         query = query.eq("id", company.id);
       } else {
@@ -58,6 +58,11 @@ export default function AdminLogin() {
       if (data.password !== password) { setError("Invalid username or password."); return; }
       if (!data.is_active) { setError("Your account is inactive. Contact the administrator."); return; }
       setAdminAuth(data.id, data.username, data.name || data.username, data.role ?? undefined);
+      /* store country + currency so formatCurrency works immediately */
+      try {
+        if ((data as Record<string,unknown>).currency) localStorage.setItem("ochola_admin_currency", String((data as Record<string,unknown>).currency));
+        if ((data as Record<string,unknown>).area) localStorage.setItem("ochola_admin_country", String((data as Record<string,unknown>).area));
+      } catch {}
       setLocation(data.password === "admin" ? "/admin/set-password" : "/admin/dashboard");
     } catch {
       setError("Login failed. Please try again.");

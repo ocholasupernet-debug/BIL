@@ -10,6 +10,7 @@ import {
   CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw, UploadCloud,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
+import { getCurrencySymbol } from "@/lib/utils";
 
 /* ══════════════════════════ Types ══════════════════════════ */
 interface PlanLite { id: number; name: string; type: string; price: number; speed_down: number; speed_up: number; }
@@ -513,7 +514,7 @@ function CustomerModal({
                 <select style={sel} value={form.plan_id} onChange={e => set("plan_id", Number(e.target.value))}>
                   <option value="">— Select plan —</option>
                   {allPlans.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} · Ksh {p.price}{p.speed_down ? ` · ${p.speed_down}/${p.speed_up}Mbps` : ""}</option>
+                    <option key={p.id} value={p.id}>{p.name} · {getCurrencySymbol()} {p.price}{p.speed_down ? ` · ${p.speed_down}/${p.speed_up}Mbps` : ""}</option>
                   ))}
                 </select>
               </Field>
@@ -532,7 +533,7 @@ function CustomerModal({
               <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
                 {[
                   ["Plan",     selectedPlan.name],
-                  ["Price",    `Ksh ${selectedPlan.price}`],
+                  ["Price",    `${getCurrencySymbol()} ${selectedPlan.price}`],
                   ...(selectedPlan.speed_down ? [["Speed", `${selectedPlan.speed_down}↓ / ${selectedPlan.speed_up}↑ Mbps`]] : []),
                 ].map(([k, v]) => (
                   <div key={k}>

@@ -19,6 +19,7 @@ export interface MpesaSettings {
   passkey:        string;
   callbackUrl:    string;
   env:            "sandbox" | "production";
+  tillNumber:     string;
 }
 
 interface SettingsFile {
@@ -49,13 +50,15 @@ function writeFile(data: SettingsFile): void {
 /** Returns effective M-Pesa config: env vars take precedence over stored values. */
 export function getMpesaSettings(): MpesaSettings {
   const stored = (readFile().mpesa ?? {}) as Partial<MpesaSettings>;
+  const configuredEnv = process.env.MPESA_ENV || stored.env;
   return {
-    consumerKey:    process.env.MPESA_CONSUMER_KEY    || stored.consumerKey    || "",
-    consumerSecret: process.env.MPESA_CONSUMER_SECRET || stored.consumerSecret || "",
-    shortcode:      process.env.MPESA_SHORTCODE       || stored.shortcode      || "",
-    passkey:        process.env.MPESA_PASSKEY         || stored.passkey        || "",
-    callbackUrl:    process.env.MPESA_CALLBACK_URL    || stored.callbackUrl    || "",
-    env:            (process.env.MPESA_ENV as MpesaSettings["env"]) || stored.env || "sandbox",
+    consumerKey:    (process.env.MPESA_CONSUMER_KEY    || stored.consumerKey    || "").trim(),
+    consumerSecret: (process.env.MPESA_CONSUMER_SECRET || stored.consumerSecret || "").trim(),
+    shortcode:      (process.env.MPESA_SHORTCODE       || stored.shortcode      || "").trim(),
+    passkey:        (process.env.MPESA_PASSKEY         || stored.passkey        || "").trim(),
+    callbackUrl:    (process.env.MPESA_CALLBACK_URL    || stored.callbackUrl    || "").trim(),
+    env:            configuredEnv === "production" ? "production" : "sandbox",
+    tillNumber:     (process.env.MPESA_TILL_NUMBER     || stored.tillNumber     || "").trim(),
   };
 }
 

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { getCurrencySymbol } from "@/lib/utils";
 import {
   Webhook, Copy, Check, RefreshCw, Loader2, CheckCircle2,
   XCircle, AlertTriangle, Clock, Globe, CreditCard, Zap,
@@ -520,7 +521,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
                             {ev.phone || "—"}
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 12, fontWeight: 700, color: "var(--isp-text)" }}>
-                            {ev.amount ? `KES ${ev.amount.toLocaleString()}` : "—"}
+                            {ev.amount ? `${getCurrencySymbol()} ${ev.amount.toLocaleString()}` : "—"}
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 11, color: ev.status === "error" ? "#f87171" : "var(--isp-text-muted)", maxWidth: 200 }}>
                             {ev.error || (ev.status === "processed" ? "✅ Account provisioned" : "")}
@@ -551,7 +552,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
                 <input value={testPhone} onChange={e => setTestPhone(e.target.value)} style={inp} placeholder="e.g. 0712345678 or 254712345678" />
               </div>
               <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 6, display: "block" }}>Amount (KES)</label>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 6, display: "block" }}>Amount ({getCurrencySymbol()})</label>
                 <input type="number" value={testAmount} onChange={e => setTestAmount(e.target.value)} style={inp} min="1" />
               </div>
               <div>

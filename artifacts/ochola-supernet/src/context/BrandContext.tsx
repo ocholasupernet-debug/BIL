@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { setAdminCurrency, setAdminCountryLocal } from "@/lib/utils";
 
 export interface Brand {
   ispName:      string;   // e.g. "OcholaSupernet"
@@ -8,6 +9,7 @@ export interface Brand {
   adminName:    string;   // full name of the admin
   phone:        string;
   country:      string;
+  currency:     string;   // ISO 4217 e.g. "KES"
   loading:      boolean;
 }
 
@@ -18,6 +20,7 @@ const DEFAULT: Brand = {
   adminName:    "Administrator",
   phone:        "",
   country:      "Kenya",
+  currency:     "KES",
   loading:      true,
 };
 
@@ -44,7 +47,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       try {
         const { data, error } = await supabase
           .from("isp_admins")
-          .select("name, email, phone, area, username, subdomain")
+          .select("name, email, phone, area, username, subdomain, currency")
           .eq("id", adminId)
           .maybeSingle();
 
@@ -58,13 +61,21 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
         }
         if (!domain) domain = DEFAULT.domain;
 
+        const country  = row.area     || DEFAULT.country;
+        const currency = row.currency || DEFAULT.currency;
+
+        /* persist to localStorage so formatCurrency works instantly anywhere */
+        setAdminCurrency(currency);
+        setAdminCountryLocal(country);
+
         setBrand({
           ispName:      DEFAULT.ispName,              /* platform name stays hardcoded */
           domain,
           supportEmail: row.email    || `support@${domain}`,
           adminName:    row.name     || row.username  || DEFAULT.adminName,
           phone:        row.phone    || "",
-          country:      row.area     || DEFAULT.country,
+          country,
+          currency,
           loading:      false,
         });
       } catch {

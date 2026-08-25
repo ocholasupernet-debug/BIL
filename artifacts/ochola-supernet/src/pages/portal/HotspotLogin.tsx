@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { ADMIN_ID } from "@/lib/supabase";
+import { getCurrencySymbol } from "@/lib/utils";
 
 interface Plan {
   id: number; name: string; price: number;
@@ -46,6 +47,28 @@ const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #0acffe 0%, #495aff 100%)", light: "#0acffe" },
 ];
 
+const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
+  mpesa_paybill: "M-Pesa PayBill",
+  mpesa_till_push: "M-Pesa Till Push",
+  bank_stk_push: "BankStkPush",
+  airtel: "AirtelMoney",
+  azampay: "AzamPay",
+  custom_paybill: "CustomPaybill",
+  dpo_payments: "DpoPayments",
+  flutterwave: "Flutterwave",
+  intasend: "Intasend",
+  pesapal: "PesaPal",
+  stripe: "Stripe",
+  paypal: "PayPal",
+  tigopesa: "TigoPesa",
+  xendit: "XenditEwallet",
+  manual: "Cash / Manual",
+};
+
+function isDarajaGateway(paymentGateway: string): boolean {
+  return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push";
+}
+
 export default function HotspotLogin() {
   const brand = useBrand();
   const [activeTab, setActiveTab] = useState<Tab>("plans");
@@ -67,14 +90,21 @@ export default function HotspotLogin() {
   const [stkSent, setStkSent] = useState(false);
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
-  const [mpesaStatus, setMpesaStatus] = useState<{ configured: boolean; env: string; shortcode: string } | null>(null);
+  const [paymentFailed, setPaymentFailed] = useState(false);
+  const [mpesaStatus, setMpesaStatus] = useState<{
+    configured: boolean;
+    env: string;
+    shortcode: string;
+    hasTillNumber: boolean;
+    paymentGateway: string;
+  } | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
           fetch(`/api/plans?adminId=${adminId}`),
-          fetch("/api/settings/mpesa").catch(() => null),
+          fetch(`/api/settings/mpesa?adminId=${adminId}`).catch(() => null),
         ]);
         const plansData: Plan[] = await plansRes.json();
         const hs = plansData.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
@@ -86,6 +116,8 @@ export default function HotspotLogin() {
             configured: mpesaData.configured,
             env: mpesaData.settings?.env ?? "sandbox",
             shortcode: mpesaData.settings?.shortcode ?? "",
+            hasTillNumber: mpesaData.settings?.hasTillNumber === true,
+            paymentGateway: typeof mpesaData.settings?.paymentGateway === "string" ? mpesaData.settings.paymentGateway : "mpesa_paybill",
           });
         }
       } catch { setPlans([]); }
@@ -96,7 +128,7 @@ export default function HotspotLogin() {
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
   useEffect(() => {
-    if (!checkoutId || paymentConfirmed) return;
+    if (!checkoutId || paymentConfirmed || paymentFailed) return;
     setPollTimedOut(false);
     const start = Date.now();
     const maxPollMs = 3 * 60 * 1000;
@@ -112,6 +144,10 @@ export default function HotspotLogin() {
         if (data.paid) {
           setPaymentConfirmed(true);
           clearInterval(interval);
+        } else if (data.status === "failed") {
+          setPayError(data.failureReason || "M-Pesa cancelled or declined the payment prompt.");
+          setPaymentFailed(true);
+          clearInterval(interval);
         }
       } catch {}
     }, 3000);
@@ -121,7 +157,7 @@ export default function HotspotLogin() {
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan || !phone.trim()) return;
-    setPayLoading(true); setPayError(null);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setPollTimedOut(false);
     try {
       const res = await fetch("/api/mpesa/stk", {
         method: "POST",
@@ -573,7 +609,7 @@ export default function HotspotLogin() {
                           <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                         </div>
                         <h3>Payment Confirmed!</h3>
-                        <p>Your payment of <strong style={{ color: "#fff" }}>Ksh {selectedPlan?.price}</strong> has been received.</p>
+                        <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
                         <p style={{ fontSize: 12, marginBottom: 8 }}>You are now connected to the network.</p>
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
@@ -589,6 +625,20 @@ export default function HotspotLogin() {
                           Done
                         </button>
                       </>
+                    ) : paymentFailed ? (
+                      <>
+                        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "rgba(245,158,11,0.08)", border: "2px solid rgba(245,158,11,0.22)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+                          <AlertCircle size={30} color="#fbbf24" strokeWidth={2} />
+                        </div>
+                        <h3>Payment Not Completed</h3>
+                        <p>The M-Pesa prompt was cancelled or declined. No payment was confirmed and your plan has not been activated.</p>
+                        {payError && <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 8 }}>{payError}</p>}
+                        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>Check M-Pesa before retrying if you believe the amount was deducted.</p>
+                        <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
+                          Try Again
+                        </button>
+                      </>
                     ) : (
                       <>
                         <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "2px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
@@ -597,7 +647,7 @@ export default function HotspotLogin() {
                         <h3>Waiting for Payment</h3>
                         <p>An STK push has been sent to <strong style={{ color: "#fff" }}>{phone}</strong></p>
                         <p style={{ fontSize: 13, marginBottom: 4 }}>
-                          Enter your M-Pesa PIN on your phone to pay <strong style={{ color: "#34d399" }}>Ksh {selectedPlan?.price}</strong>
+                          Enter your PIN on your phone to pay <strong style={{ color: "#34d399" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong>
                         </p>
                         <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginBottom: 20 }}>
                           {mpesaStatus?.shortcode && <>Paybill: {mpesaStatus.shortcode} &middot; </>}
@@ -616,7 +666,7 @@ export default function HotspotLogin() {
                           </div>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPollTimedOut(false); }}>
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
                           {pollTimedOut ? "Try Again" : "Cancel & Start Over"}
                         </button>
                       </>
@@ -652,7 +702,7 @@ export default function HotspotLogin() {
                                   <div>
                                     <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
                                     <div className="hp-plan-price" style={{ marginBottom: 6 }}>
-                                      <span>Ksh </span>{plan.price}
+                                      <span>{getCurrencySymbol()} </span>{plan.price}
                                     </div>
                                   </div>
                                   <div className="hp-plan-check" style={{ background: grad.bg }}>
@@ -676,30 +726,30 @@ export default function HotspotLogin() {
                                       <Phone size={14} color="#22c55e" />
                                       <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Pay with M-Pesa</span>
                                     </div>
-                                    {mpesaStatus && (
+                                     {mpesaStatus && (
                                       <span style={{
                                         fontSize: 10, fontWeight: 700,
                                         padding: "3px 8px", borderRadius: 6,
-                                        background: mpesaStatus.configured ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
-                                        color: mpesaStatus.configured ? "#34d399" : "#fca5a5",
-                                        border: `1px solid ${mpesaStatus.configured ? "rgba(52,211,153,0.2)" : "rgba(239,68,68,0.2)"}`,
+                                         background: mpesaStatus.configured ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
+                                         color: mpesaStatus.configured ? "#34d399" : "#fca5a5",
+                                         border: `1px solid ${mpesaStatus.configured ? "rgba(52,211,153,0.2)" : "rgba(239,68,68,0.2)"}`,
                                       }}>
-                                        {mpesaStatus.configured
-                                          ? mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"
+                                         {mpesaStatus.configured
+                                           ? mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"
                                           : "NOT CONFIGURED"}
                                       </span>
                                     )}
                                   </div>
 
-                                  {mpesaStatus && !mpesaStatus.configured ? (
+                                   {mpesaStatus && (!mpesaStatus.configured || !isDarajaGateway(mpesaStatus.paymentGateway) || (mpesaStatus.paymentGateway === "mpesa_till_push" && !mpesaStatus.hasTillNumber)) ? (
                                     <div style={{
                                       padding: 14, borderRadius: 10, textAlign: "center",
                                       background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
                                       fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
                                     }}>
                                       <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
-                                      <p style={{ margin: 0 }}>M-Pesa Daraja API not configured yet.</p>
-                                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Admin needs to set Consumer Key, Secret, Shortcode &amp; Passkey in Settings.</p>
+                                       <p style={{ margin: 0 }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? `${PAYMENT_GATEWAY_LABELS[mpesaStatus.paymentGateway] || "Selected payment gateway"} is not connected for automated payments yet.` : mpesaStatus.paymentGateway === "mpesa_till_push" && !mpesaStatus.hasTillNumber ? "M-Pesa Till Push is not configured yet." : "M-Pesa Daraja API is not configured yet."}</p>
+                                        <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? "Choose a connected payment gateway to continue." : "Complete the required M-Pesa connection settings to continue."}</p>
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
@@ -723,17 +773,21 @@ export default function HotspotLogin() {
                                         {payLoading ? (
                                           <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                         ) : (
-                                          <><Phone size={16} /> Pay Ksh {plan.price}</>
+                                          <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}</>
                                         )}
                                       </button>
                                     </form>
                                   )}
 
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                                     <div className="hp-secured" style={{ margin: 0 }}>
                                       <Shield size={11} />
-                                      {mpesaStatus?.shortcode
-                                        ? <>Paybill {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
+                                        {!isDarajaGateway(mpesaStatus?.paymentGateway || "")
+                                          ? <>{PAYMENT_GATEWAY_LABELS[mpesaStatus?.paymentGateway || ""] || "Payment gateway"} selected</>
+                                          : mpesaStatus?.paymentGateway === "mpesa_till_push" && mpesaStatus.hasTillNumber
+                                         ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
+                                         : mpesaStatus?.shortcode
+                                         ? <>PayBill {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
                                         : <>Secured by Safaricom M-Pesa</>
                                       }
                                     </div>
@@ -747,7 +801,7 @@ export default function HotspotLogin() {
                               <div className="hp-plan-body" onClick={() => { setSelectedPlan(plan); setPhone(""); setPayError(null); }} style={{ cursor: "pointer" }}>
                                 <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
                                 <div className="hp-plan-price">
-                                  <span>Ksh </span>{plan.price}
+                                  <span>{getCurrencySymbol()} </span>{plan.price}
                                 </div>
                                 <div className="hp-plan-meta">
                                   <div className="hp-plan-meta-row">

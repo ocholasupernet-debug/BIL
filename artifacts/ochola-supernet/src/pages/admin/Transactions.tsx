@@ -5,6 +5,7 @@ import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
 import { supabase, type DbTransaction } from "@/lib/supabase";
 import { Search, Download, Loader2 } from "lucide-react";
+import { fmtMoney } from "@/lib/utils";
 
 async function fetchTransactions(): Promise<DbTransaction[]> {
   const { data, error } = await supabase
@@ -18,9 +19,7 @@ async function fetchTransactions(): Promise<DbTransaction[]> {
 function fmtDate(d: string) {
   return new Date(d).toLocaleString("en-KE", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
-function fmtKsh(n: number) {
-  return `Ksh ${n.toLocaleString()}`;
-}
+function fmtKsh(n: number) { return fmtMoney(n); }
 
 export default function Transactions() {
   const { data: transactions = [], isLoading } = useQuery({

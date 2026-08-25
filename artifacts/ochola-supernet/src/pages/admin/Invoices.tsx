@@ -5,6 +5,7 @@ import {
   CheckCircle2, Clock, AlertTriangle, X, Printer,
   DollarSign, TrendingUp,
 } from "lucide-react";
+import { fmtMoney } from "@/lib/utils";
 
 interface Invoice {
   id: string;
@@ -65,10 +66,6 @@ function fmtDate(d?: string | null) {
   if (!d) return "\u2014";
   return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" });
 }
-function fmtMoney(n: number) {
-  return `KES ${n.toLocaleString()}`;
-}
-
 function InvoicePreview({ invoice, onClose }: { invoice: Invoice; onClose: () => void }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>

@@ -23,7 +23,10 @@ create table if not exists isp_admins (
   password        text,
   is_active       boolean not null default true,
   role            text not null default 'isp_admin',
-  area            text,
+  area            text,                               -- country name (e.g. "Kenya")
+  currency        text not null default 'KES',        -- ISO 4217 currency code
+  payment_gateway text not null default 'mpesa_paybill',
+  payment_gateway_config jsonb not null default '{}'::jsonb,
   status          text not null default 'active',
   plan_name       text,
   wallet_balance  numeric(12,2) not null default 0,

@@ -92,7 +92,8 @@ export function getImpersonatedName(): string {
 
 /* ─── Payment gateway preference ─── */
 export const GATEWAY_OPTIONS: { id: string; label: string; emoji: string; color: string }[] = [
-  { id: "mpesa",       label: "M-Pesa STK Push",   emoji: "🟢", color: "#00a651" },
+  { id: "mpesa",       label: "M-Pesa PayBill (STK Push)", emoji: "🟢", color: "#00a651" },
+  { id: "mpesa_till_push", label: "M-Pesa Till Push", emoji: "🟢", color: "#00a651" },
   { id: "airtel",      label: "Airtel Money",       emoji: "🔴", color: "#ef4444" },
   { id: "stripe",      label: "Stripe",             emoji: "💳", color: "#635bff" },
   { id: "flutterwave", label: "Flutterwave",        emoji: "🦋", color: "#f5a623" },

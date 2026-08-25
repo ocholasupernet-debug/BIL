@@ -5,6 +5,7 @@ import {
   Users, DollarSign, TrendingUp, ArrowRightLeft, X, Plus, Minus,
   Loader2, CheckCircle2,
 } from "lucide-react";
+import { getCurrencySymbol } from "@/lib/utils";
 
 interface CustomerWallet {
   id: number;
@@ -51,8 +52,8 @@ function fmtDate(d?: string | null) {
   if (!d) return "\u2014";
   return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-function fmtMoney(n: number) {
-  return `KES ${Math.abs(n).toLocaleString()}`;
+function fmtMoneyLocal(n: number) {
+  return `${getCurrencySymbol()} ${Math.abs(n).toLocaleString()}`;
 }
 
 const TYPE_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -86,7 +87,7 @@ function BalanceActionModal({ customer, onClose }: { customer: CustomerWallet; o
         <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--isp-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <h3 style={{ fontSize: "1rem", fontWeight: 800, color: "var(--isp-text)", margin: 0 }}>Balance Action</h3>
-            <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "2px 0 0" }}>{customer.name} — Current: KES {customer.balance.toLocaleString()}</p>
+            <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "2px 0 0" }}>{customer.name} — Current: {getCurrencySymbol()} {customer.balance.toLocaleString()}</p>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={18} /></button>
         </div>
@@ -105,7 +106,7 @@ function BalanceActionModal({ customer, onClose }: { customer: CustomerWallet; o
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 4, textTransform: "uppercase" }}>Amount (KES)</label>
+            <label style={{ display: "block", fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: 4, textTransform: "uppercase" }}>Amount ({getCurrencySymbol()})</label>
             <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 500"
               style={{ width: "100%", boxSizing: "border-box", padding: "0.55rem 0.75rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.85rem", fontFamily: "inherit" }} />
           </div>
@@ -168,9 +169,9 @@ export default function CustomerBalance() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
           {[
-            { label: "Total Wallet Balance", value: `KES ${totalBalance.toLocaleString()}`, icon: <Wallet size={18} />, color: "var(--isp-accent)" },
+            { label: "Total Wallet Balance", value: `${getCurrencySymbol()} ${totalBalance.toLocaleString()}`, icon: <Wallet size={18} />, color: "var(--isp-accent)" },
             { label: "Active Wallets", value: customers.filter(c => c.balance > 0).length, icon: <Users size={18} />, color: "#34d399" },
-            { label: "Total Spent (All Time)", value: `KES ${totalSpent.toLocaleString()}`, icon: <TrendingUp size={18} />, color: "var(--isp-accent)" },
+            { label: "Total Spent (All Time)", value: `${getCurrencySymbol()} ${totalSpent.toLocaleString()}`, icon: <TrendingUp size={18} />, color: "var(--isp-accent)" },
           ].map((s, i) => (
             <div key={i} style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "1rem 1.25rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -209,7 +210,7 @@ export default function CustomerBalance() {
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <p style={{ fontSize: "0.85rem", fontWeight: 800, color: c.balance > 0 ? "#34d399" : "var(--isp-text-muted)", margin: 0 }}>KES {c.balance.toLocaleString()}</p>
+                    <p style={{ fontSize: "0.85rem", fontWeight: 800, color: c.balance > 0 ? "#34d399" : "var(--isp-text-muted)", margin: 0 }}>{getCurrencySymbol()} {c.balance.toLocaleString()}</p>
                     <p style={{ fontSize: "0.65rem", color: "var(--isp-text-muted)", margin: "1px 0 0" }}>{c.last_topup ? `Last: ${new Date(c.last_topup).toLocaleDateString("en-KE", { day: "2-digit", month: "short" })}` : "No top-ups"}</p>
                   </div>
                 </div>
@@ -235,7 +236,7 @@ export default function CustomerBalance() {
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <p style={{ fontSize: "0.8rem", fontWeight: 700, color: t.amount >= 0 ? "#34d399" : "#f87171", margin: 0 }}>
-                        {t.amount >= 0 ? "+" : ""}{fmtMoney(t.amount)}
+                        {t.amount >= 0 ? "+" : ""}{fmtMoneyLocal(t.amount)}
                       </p>
                       <p style={{ fontSize: "0.6rem", color: "var(--isp-text-muted)", margin: "1px 0 0" }}>{fmtDate(t.created_at)}</p>
                     </div>

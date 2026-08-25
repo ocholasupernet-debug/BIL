@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;0,14..32,900;1,14..32,400&display=swap');
+
+/* ── ISPlatty design tokens (light theme, from main app index.css) ── */
+:root {
+  --isp-bg:            #F8FAFC;
+  --isp-header:        #FFFFFF;
+  --isp-sidebar:       #0F172A;
+  --isp-section:       #FFFFFF;
+  --isp-card:          #FFFFFF;
+  --isp-inner-card:    #F8FAFC;
+  --isp-border:        #E2E8F0;
+  --isp-border-subtle: #F1F5F9;
+  --isp-text:          #0F172A;
+  --isp-text-muted:    #64748B;
+  --isp-text-sub:      #94A3B8;
+  --isp-nav-text:      #CBD5E1;
+  --isp-hover:         #F1F5F9;
+  --isp-table-bg:      #FFFFFF;
+  --isp-table-border:  #F1F5F9;
+  --isp-accent:        #2563EB;
+  --isp-accent-glow:   rgba(37,99,235,0.10);
+  --isp-accent-border: rgba(37,99,235,0.30);
+  --isp-green:         #22C55E;
+  --isp-green-glow:    rgba(34,197,94,0.12);
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+.isp-mock { font-family: 'Inter', system-ui, sans-serif; }
+
+.isp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 0.69rem;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.isp-badge-green  { background: rgba(34,197,94,0.10);  color: #16A34A; border: 1px solid rgba(34,197,94,0.20); }
+.isp-badge-red    { background: rgba(239,68,68,0.08);  color: #DC2626; border: 1px solid rgba(239,68,68,0.18); }
+.isp-badge-blue   { background: rgba(37,99,235,0.08);  color: #2563EB; border: 1px solid rgba(37,99,235,0.20); }
+.isp-badge-amber  { background: rgba(245,158,11,0.10); color: #D97706; border: 1px solid rgba(245,158,11,0.22); }
+
+.isp-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.isp-table thead th {
+  background: #F8FAFC;
+  color: var(--isp-text-muted);
+  font-size: 0.695rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--isp-border);
+  white-space: nowrap;
+}
+.isp-table tbody tr { border-bottom: 1px solid var(--isp-border-subtle); }
+.isp-table tbody tr:hover { background: var(--isp-hover); }
+.isp-table tbody td { padding: 11px 14px; color: var(--isp-text); vertical-align: middle; }

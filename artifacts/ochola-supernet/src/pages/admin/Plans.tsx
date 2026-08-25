@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
 import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
+import { getCurrencySymbol } from "@/lib/utils";
 
 interface DbPool { id: number; name: string; range_start: string; range_end: string; router_id: number | null; }
 
@@ -285,7 +286,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
         <div style={ROW}>
           <span style={LBL}>Plan Price</span>
           <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
-            <span style={{ padding: "0.5rem 0.625rem", background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", borderRight: "none", borderRadius: "6px 0 0 6px", fontSize: "0.825rem", color: "var(--isp-text-muted)", fontWeight: 600, whiteSpace: "nowrap" }}>Ksh.</span>
+            <span style={{ padding: "0.5rem 0.625rem", background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", borderRight: "none", borderRadius: "6px 0 0 6px", fontSize: "0.825rem", color: "var(--isp-text-muted)", fontWeight: 600, whiteSpace: "nowrap" }}>{getCurrencySymbol()}</span>
             <input type="number" min="0" style={{ ...INPUT, borderRadius: "0 6px 6px 0", borderLeft: "none" }} value={price} onChange={e => setPrice(e.target.value)} placeholder="e.g. 500" required />
           </div>
         </div>
@@ -887,7 +888,7 @@ export default function Plans() {
                     </div>
                     <div className="p-6">
                       <div className="flex items-end gap-2 mb-6">
-                        <span className="text-3xl font-black text-foreground">Ksh {p.price}</span>
+                        <span className="text-3xl font-black text-foreground">{getCurrencySymbol()} {p.price}</span>
                         <span className="text-sm font-medium text-muted-foreground mb-1">/ {planValidity(p)}</span>
                       </div>
                       <div className="space-y-3 mb-8">

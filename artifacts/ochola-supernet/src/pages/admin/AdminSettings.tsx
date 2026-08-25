@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { ADMIN_ID } from "@/lib/supabase";
 import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
   Bell, Wrench, Check, Eye, EyeOff, Copy, Trash2, Plus,
@@ -196,159 +197,311 @@ function IspProfileTab() {
   );
 }
 
+const ADMIN_PAYMENT_GATEWAY_OPTIONS = [
+  { id: "mpesa_paybill", label: "M-Pesa PayBill (STK Push)" },
+  { id: "mpesa_till_push", label: "M-Pesa Till Push (Buy Goods & Services)" },
+  { id: "bank_stk_push", label: "BankStkPush" },
+  { id: "airtel", label: "AirtelMoney" },
+  { id: "azampay", label: "AzamPay" },
+  { id: "custom_paybill", label: "CustomPaybill" },
+  { id: "dpo_payments", label: "DpoPayments" },
+  { id: "flutterwave", label: "Flutterwave" },
+  { id: "intasend", label: "Intasend" },
+  { id: "pesapal", label: "PesaPal" },
+  { id: "stripe", label: "Stripe" },
+  { id: "paypal", label: "PayPal" },
+  { id: "tigopesa", label: "TigoPesa" },
+  { id: "xendit", label: "XenditEwallet" },
+  { id: "manual", label: "Cash / Manual" },
+];
+
+type PaymentTestStatus = "idle" | "sending" | "pending" | "paid" | "failed" | "expired";
+
+function AdminPaymentTestCard({ currency }: { currency: string }) {
+  const [phone, setPhone] = useState("");
+  const [amount, setAmount] = useState("");
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [environment, setEnvironment] = useState<"sandbox" | "production">("sandbox");
+  const [shortcode, setShortcode] = useState("");
+  const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
+  const [bankStkPushConfigured, setBankStkPushConfigured] = useState(false);
+  const [adminTillPushConfigured, setAdminTillPushConfigured] = useState(false);
+  const [status, setStatus] = useState<PaymentTestStatus>("idle");
+  const [checkoutId, setCheckoutId] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const loadMpesaSettings = () => {
+      fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`)
+        .then(response => response.json())
+        .then((data: { configured?: boolean; settings?: { env?: "sandbox" | "production"; shortcode?: string; hasTillNumber?: boolean; bankStkPushConfigured?: boolean; adminTillPushConfigured?: boolean; paymentGateway?: string } }) => {
+          setConfigured(data.configured === true);
+          setEnvironment(data.settings?.env === "production" ? "production" : "sandbox");
+          setShortcode(data.settings?.shortcode?.trim() || "");
+          setPaymentGateway(ADMIN_PAYMENT_GATEWAY_OPTIONS.some(option => option.id === data.settings?.paymentGateway) ? data.settings?.paymentGateway || "mpesa_paybill" : "mpesa_paybill");
+          setBankStkPushConfigured(data.settings?.bankStkPushConfigured === true);
+          setAdminTillPushConfigured(data.settings?.adminTillPushConfigured === true);
+        })
+        .catch(() => setConfigured(false));
+    };
+    loadMpesaSettings();
+    window.addEventListener("ochola-payment-gateway-change", loadMpesaSettings);
+    return () => window.removeEventListener("ochola-payment-gateway-change", loadMpesaSettings);
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutId || status !== "pending") return;
+    const startedAt = Date.now();
+    let active = true;
+
+    const poll = async () => {
+      if (Date.now() - startedAt >= 3 * 60 * 1000) {
+        if (active) setStatus("expired");
+        return;
+      }
+      try {
+        const response = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`);
+        const data = await response.json() as { paid?: boolean; status?: string; failureReason?: string };
+        if (!active) return;
+        if (data.paid) setStatus("paid");
+        else if (data.status === "failed") {
+          setError(data.failureReason || "M-Pesa cancelled or declined the payment prompt.");
+          setStatus("failed");
+        }
+      } catch {}
+    };
+
+    poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [checkoutId, status]);
+
+  const sendPrompt = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const numericAmount = Number(amount);
+    if (!phone.trim() || !Number.isFinite(numericAmount) || numericAmount <= 0) {
+      setError("Enter a valid subscriber phone number and amount.");
+      return;
+    }
+    if (paymentGateway !== "mpesa_paybill" && paymentGateway !== "mpesa_till_push" && paymentGateway !== "bank_stk_push") {
+      setError("Automated payment tests are available when a Daraja payment gateway is selected.");
+      return;
+    }
+    if (paymentGateway === "bank_stk_push" && !bankStkPushConfigured) {
+      setError("Save the selected bank, PayBill Number, and Account / Business Number before sending a BankStkPush test.");
+      return;
+    }
+    if (paymentGateway === "mpesa_till_push" && !adminTillPushConfigured) {
+      setError("Save this ISP’s Buy Goods Till Number before sending a Till Push test.");
+      return;
+    }
+
+    setError("");
+    setStatus("sending");
+    setCheckoutId("");
+    try {
+      const { ADMIN_ID: adminId } = await import("@/lib/supabase");
+      const response = await fetch("/api/mpesa/stk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: phone.trim(),
+          amount: numericAmount,
+          adminId,
+          account_ref: "Admin payment test",
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; CheckoutRequestID?: string };
+      if (!response.ok || !data.ok) {
+        setStatus("idle");
+        setError(data.error || "M-Pesa could not send the payment prompt.");
+        return;
+      }
+      setCheckoutId(data.CheckoutRequestID || "");
+      setStatus(data.CheckoutRequestID ? "pending" : "expired");
+    } catch {
+      setStatus("idle");
+      setError("Could not reach the payment server.");
+    }
+  };
+
+  const statusMessage = {
+    idle: "",
+    sending: "Contacting M-Pesa…",
+    pending: "Prompt sent. Ask the subscriber to approve it on their phone.",
+    paid: "Payment accepted. The callback confirmed the transaction.",
+    failed: "The payment prompt was cancelled or declined. No payment was confirmed.",
+    expired: "No confirmation arrived within three minutes. Check M-Pesa and Transactions before retrying.",
+  }[status];
+  const usingTillPush = paymentGateway === "mpesa_till_push";
+  const usingBankStkPush = paymentGateway === "bank_stk_push";
+  const usingDarajaGateway = paymentGateway === "mpesa_paybill" || usingTillPush || usingBankStkPush;
+  const gatewayLabel = ADMIN_PAYMENT_GATEWAY_OPTIONS.find(option => option.id === paymentGateway)?.label || paymentGateway;
+
+  return (
+    <Card title="Test Subscriber Payment Prompt" desc="Send a one-time STK prompt to verify the configured M-Pesa account">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: environment === "production" ? "rgba(245,158,11,0.08)" : "rgba(37,99,235,0.06)", border: `1px solid ${environment === "production" ? "rgba(245,158,11,0.25)" : "var(--isp-border)"}`, color: environment === "production" ? "#fbbf24" : C.muted, fontSize: "0.72rem", lineHeight: 1.45 }}>
+        {environment === "production"
+          ? `Live mode: approving this prompt charges the phone and sends ${currency} through the configured ${gatewayLabel} gateway using shortcode ${shortcode || "the configured account"}.`
+          : `Sandbox mode: this prompt uses the configured ${gatewayLabel} gateway${shortcode ? ` with shortcode ${shortcode}` : ""}.`}
+      </div>
+
+      <form onSubmit={sendPrompt}>
+        <Grid2>
+          <Field label="Subscriber phone number" hint="Use 07…, 01…, or +254…">
+            <Input value={phone} onChange={event => setPhone(event.target.value)} placeholder="0712 345 678" inputMode="tel" />
+          </Field>
+          <Field label={`Amount (${currency})`}>
+            <Input value={amount} onChange={event => setAmount(event.target.value)} placeholder="e.g. 50" type="number" min="1" step="1" inputMode="decimal" />
+          </Field>
+        </Grid2>
+
+        {configured === false && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            M-Pesa is not configured yet.
+          </p>
+        )}
+        {!usingDarajaGateway && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            {gatewayLabel} is active. Select an M-Pesa or BankStkPush gateway to send an automated payment test.
+          </p>
+        )}
+        {usingBankStkPush && !bankStkPushConfigured && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            Complete and save the BankStkPush configuration before sending a test.
+          </p>
+        )}
+        {usingTillPush && !adminTillPushConfigured && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            Complete and save this ISP’s Buy Goods Till Number before sending a test.
+          </p>
+        )}
+        {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}>⚠ {error}</p>}
+        {statusMessage && (
+          <p style={{ color: status === "paid" ? "#34d399" : status === "failed" || status === "expired" ? "#fbbf24" : C.muted, fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
+            {status === "paid" ? "✓ " : ""}{statusMessage}
+          </p>
+        )}
+        <Row>
+           <button type="submit" disabled={configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending"} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending" ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending" ? 0.55 : 1 }}>
+             {status === "sending" ? "Sending…" : status === "pending" ? "Waiting for approval…" : "Send STK Prompt"}
+          </button>
+        </Row>
+      </form>
+    </Card>
+  );
+}
+
+function AdminPaymentGatewayCard() {
+  const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`)
+      .then(response => response.json())
+      .then((data: { settings?: { paymentGateway?: string } }) => {
+        setPaymentGateway(ADMIN_PAYMENT_GATEWAY_OPTIONS.some(option => option.id === data.settings?.paymentGateway) ? data.settings?.paymentGateway || "mpesa_paybill" : "mpesa_paybill");
+      })
+      .catch(() => setError("Could not load your payment gateway settings."));
+  }, []);
+
+  const savePaymentGateway = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/payment-gateway", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId: ADMIN_ID, paymentGateway }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the payment gateway.");
+      setSaved(true);
+      window.dispatchEvent(new Event("ochola-payment-gateway-change"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the payment gateway.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title="Active Payment Gateway" desc="Select one payment gateway to use for this ISP at a time">
+      <Field label="Payment Gateway">
+        <Select value={paymentGateway} onChange={event => { setPaymentGateway(event.target.value); setSaved(false); setError(""); }}>
+          {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </Select>
+      </Field>
+      <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
+        Your selection is the active payment gateway for this ISP. Select a different option at any time to switch the active account.
+      </p>
+      {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "10px 0 0" }}>⚠ {error}</p>}
+      {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>✓ Payment gateway saved.</p>}
+      <Row>
+        <button
+          type="button"
+          onClick={savePaymentGateway}
+          disabled={saving}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+        >
+          <Save size={13} /> {saving ? "Saving…" : "Save Payment Gateway"}
+        </button>
+      </Row>
+    </Card>
+  );
+}
+
 function BillingTab() {
-  const [currency, setCurrency] = useState("KES");
+  const [currency, setCurrency] = useState(() => {
+    try { return localStorage.getItem("ochola_admin_currency") || "KES"; } catch { return "KES"; }
+  });
+  const [currencySaving, setCurrencySaving] = useState(false);
   const [vatEnabled, setVatEnabled] = useState(true);
   const [gracePeriod, setGracePeriod] = useState(true);
   const [autoRenew, setAutoRenew] = useState(false);
   const [installments, setInstallments] = useState(false);
 
-  /* ── M-Pesa state ── */
-  const [mp, setMp] = useState({
-    shortcode:      "",
-    consumerKey:    "",
-    consumerSecret: "",
-    passkey:        "",
-    callbackUrl:    "",
-    env:            "sandbox" as "sandbox" | "production",
-  });
-  const [mpConfigured, setMpConfigured] = useState(false);
-  const [mpLoading,    setMpLoading]    = useState(true);
-  const [mpSaving,     setMpSaving]     = useState(false);
-  const [mpSaved,      setMpSaved]      = useState(false);
-  const [mpError,      setMpError]      = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/settings/mpesa")
-      .then(r => r.json())
-      .then((d: { ok: boolean; configured: boolean; settings: Record<string, string> }) => {
-        if (d.ok) {
-          setMpConfigured(d.configured);
-          setMp(prev => ({
-            ...prev,
-            shortcode:   d.settings.shortcode   || "",
-            callbackUrl: d.settings.callbackUrl  || "",
-            env:         (d.settings.env as "sandbox" | "production") || "sandbox",
-          }));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setMpLoading(false));
-  }, []);
-
-  const saveMpesa = async () => {
-    setMpSaving(true);
-    setMpError(null);
-    try {
-      const res = await fetch("/api/settings/mpesa", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mp),
-      });
-      const d = await res.json() as { ok: boolean; configured: boolean; error?: string };
-      if (d.ok) {
-        setMpConfigured(d.configured);
-        setMpSaved(true);
-        setTimeout(() => setMpSaved(false), 2500);
-      } else {
-        setMpError(d.error ?? "Failed to save");
-      }
-    } catch {
-      setMpError("Could not reach server");
-    } finally {
-      setMpSaving(false);
-    }
-  };
-
   return (
     <>
-      <Card
-        title="M-Pesa Integration"
-        desc="Safaricom Daraja API credentials for STK push and C2B payments"
-      >
-        {/* Status badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          {mpLoading ? (
-            <span style={{ fontSize: "0.72rem", color: C.muted }}>Loading…</span>
-          ) : mpConfigured ? (
-            <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "0.72rem", color: "#10b981", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 99, padding: "3px 10px" }}>
-              <Check size={11} /> Active — STK push ready
-            </span>
-          ) : (
-            <span style={{ fontSize: "0.72rem", color: "#f59e0b", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 99, padding: "3px 10px" }}>
-              ⚠ Not configured — portal payments are disabled
-            </span>
-          )}
-        </div>
-
-        <Grid2>
-          <Field label="Paybill / Business Short Code">
-            <Input
-              value={mp.shortcode}
-              onChange={e => setMp(p => ({ ...p, shortcode: e.target.value }))}
-              placeholder="174379"
-            />
-          </Field>
-          <Field label="Environment">
-            <Select value={mp.env} onChange={e => setMp(p => ({ ...p, env: e.target.value as "sandbox" | "production" }))}>
-              <option value="sandbox">Sandbox (Testing)</option>
-              <option value="production">Production (Live)</option>
-            </Select>
-          </Field>
-          <Field label="Consumer Key" hint="From your Daraja app">
-            <Input
-              value={mp.consumerKey}
-              onChange={e => setMp(p => ({ ...p, consumerKey: e.target.value }))}
-              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Consumer Key"}
-            />
-          </Field>
-          <Field label="Consumer Secret">
-            <Input
-              type="password"
-              value={mp.consumerSecret}
-              onChange={e => setMp(p => ({ ...p, consumerSecret: e.target.value }))}
-              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Consumer Secret"}
-            />
-          </Field>
-          <Field label="Passkey" hint="Lipa Na M-Pesa Online passkey">
-            <Input
-              type="password"
-              value={mp.passkey}
-              onChange={e => setMp(p => ({ ...p, passkey: e.target.value }))}
-              placeholder={mpConfigured ? "••• already set — paste to update •••" : "Paste Passkey"}
-            />
-          </Field>
-          <Field label="Callback URL" hint="Receives payment confirmations from Safaricom">
-            <Input
-              value={mp.callbackUrl}
-              onChange={e => setMp(p => ({ ...p, callbackUrl: e.target.value }))}
-              placeholder="https://yourdomain.com/api/webhooks/mpesa"
-            />
-          </Field>
-        </Grid2>
-
-        {mpError && (
-          <p style={{ fontSize: "0.75rem", color: "#f87171", margin: "0 0 10px" }}>⚠ {mpError}</p>
-        )}
-
-        <Row>
-          <button
-            onClick={saveMpesa}
-            disabled={mpSaving}
-            style={{ display: "flex", alignItems: "center", gap: 6, background: mpSaved ? "#10b981" : C.cyan, border: "none", cursor: mpSaving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s", opacity: mpSaving ? 0.7 : 1 }}>
-            {mpSaved ? <><Check size={13} /> Saved!</> : mpSaving ? "Saving…" : <><Save size={13} /> Save M-Pesa Settings</>}
-          </button>
-        </Row>
+      <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments">
+        <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
+          M-Pesa connection details and callback settings are managed centrally for this platform.
+        </p>
       </Card>
+      <AdminPaymentTestCard currency={currency} />
 
       <Card title="Billing Preferences" desc="Currency, VAT, grace periods, and invoice configuration">
         <Grid2>
-          <Field label="Currency">
+          <Field label="Currency" hint="Applies across the entire platform">
             <Select value={currency} onChange={e => setCurrency(e.target.value)}>
-              <option value="KES">KES — Kenyan Shilling</option>
-              <option value="UGX">UGX — Ugandan Shilling</option>
-              <option value="TZS">TZS — Tanzanian Shilling</option>
-              <option value="USD">USD — US Dollar</option>
+              <option value="KES">KES — Kenyan Shilling (Ksh)</option>
+              <option value="UGX">UGX — Ugandan Shilling (USh)</option>
+              <option value="TZS">TZS — Tanzanian Shilling (TSh)</option>
+              <option value="RWF">RWF — Rwandan Franc (RF)</option>
+              <option value="ETB">ETB — Ethiopian Birr</option>
+              <option value="NGN">NGN — Nigerian Naira (₦)</option>
+              <option value="GHS">GHS — Ghanaian Cedi (GH₵)</option>
+              <option value="ZAR">ZAR — South African Rand (R)</option>
+              <option value="ZMW">ZMW — Zambian Kwacha (ZK)</option>
+              <option value="MWK">MWK — Malawian Kwacha (MK)</option>
+              <option value="XAF">XAF — Central African Franc (FCFA)</option>
+              <option value="XOF">XOF — West African Franc (CFA)</option>
+              <option value="EGP">EGP — Egyptian Pound (E£)</option>
+              <option value="MAD">MAD — Moroccan Dirham (DH)</option>
+              <option value="USD">USD — US Dollar ($)</option>
+              <option value="GBP">GBP — British Pound (£)</option>
+              <option value="EUR">EUR — Euro (€)</option>
+              <option value="INR">INR — Indian Rupee (₹)</option>
+              <option value="CAD">CAD — Canadian Dollar (CA$)</option>
+              <option value="AUD">AUD — Australian Dollar (A$)</option>
             </Select>
           </Field>
           <Field label="Invoice Prefix" hint="e.g. INV → INV-0001"><Input defaultValue="INV" /></Field>
@@ -372,7 +525,23 @@ function BillingTab() {
             </div>
           ))}
         </div>
-        <Row><SaveBtn label="Save Billing Settings" /></Row>
+        <Row>
+          <button
+            onClick={async () => {
+              setCurrencySaving(true);
+              try {
+                const { supabase: sb, ADMIN_ID: aid } = await import("@/lib/supabase");
+                await sb.from("isp_admins").update({ currency }).eq("id", aid);
+                localStorage.setItem("ochola_admin_currency", currency);
+                window.dispatchEvent(new Event("ochola-currency-change"));
+              } catch {}
+              setCurrencySaving(false);
+            }}
+            disabled={currencySaving}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: currencySaving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: currencySaving ? 0.7 : 1 }}>
+            <Save size={13} /> {currencySaving ? "Saving…" : "Save Billing Settings"}
+          </button>
+        </Row>
       </Card>
     </>
   );
@@ -1174,38 +1343,38 @@ interface GatewayDef {
 }
 
 const KENYAN_BANKS = [
-  "KCB", "Equity", "Co-operative", "NCBA", "Absa", "Stanbic",
-  "I&M", "DTB", "Standard Chartered", "Family Bank", "KWFT",
-  "National Bank", "Prime Bank", "Bank of Africa", "Sidian Bank",
+  "Absa Bank Kenya", "Access Bank Kenya", "ABC Bank", "Bank of Africa",
+  "Bank of Baroda", "Bank of India", "Citibank Kenya", "Co-operative Bank",
+  "Consolidated Bank", "Credit Bank", "Development Bank of Kenya",
+  "Diamond Trust Bank", "Dubai Islamic Bank", "Ecobank Kenya", "Equity Bank",
+  "Family Bank", "Guaranty Trust Bank", "Gulf African Bank", "Habib Bank AG Zurich",
+  "I&M Bank", "KCB Bank", "Kenya Post Office Savings Bank", "Kingdom Bank",
+  "Mayfair Bank", "M-Oriental Bank", "National Bank of Kenya", "NCBA Bank",
+  "Paramount Universal Bank", "Prime Bank", "SBM Bank Kenya", "Sidian Bank",
+  "Spire Bank", "Stanbic Bank", "Standard Chartered Bank", "UBA Kenya",
+  "Victoria Commercial Bank",
 ];
 
 const GATEWAYS: GatewayDef[] = [
   {
-    id: "mpesa_stk", name: "MpesaStkPush", category: "Mobile Money", color: "#00a651", icon: Phone,
+    id: "mpesa_paybill", name: "M-Pesa PayBill", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "consumerKey", label: "Consumer Key", secret: true },
-      { key: "consumerSecret", label: "Consumer Secret", secret: true },
-      { key: "shortcode", label: "Business Short Code", hint: "Paybill number e.g. 174379 (sandbox) or your live paybill" },
-      { key: "passkey", label: "Lipa Na M-Pesa Passkey", secret: true },
-      { key: "callbackUrl", label: "Callback URL", hint: "e.g. https://yourdomain.com/api/mpesa/callback" },
+      { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number used by this ISP" },
+      { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business number required by this PayBill" },
     ],
   },
   {
-    id: "mpesa_till", name: "MpesatillStk", category: "Mobile Money", color: "#00a651", icon: Phone,
+    id: "mpesa_till_push", name: "M-Pesa Till Push", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "tillNumber", label: "Till Number", hint: "Your Safaricom Buy Goods till number" },
-      { key: "storeNumber", label: "Store Number", hint: "Head Office number (usually same as till)" },
-      { key: "consumerKey", label: "Consumer Key", secret: true },
-      { key: "consumerSecret", label: "Consumer Secret", secret: true },
-      { key: "passkey", label: "Passkey", secret: true },
-      { key: "callbackUrl", label: "Callback URL" },
+      { key: "tillNumber", label: "Buy Goods Till Number", hint: "Enter the Till Number used by this ISP" },
     ],
   },
   {
     id: "bank_stk_push", name: "BankStkPush", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
     fields: [
-      { key: "bankAccountNumber", label: "Bank Account Number" },
       { key: "bankName", label: "Bank Name", type: "select", options: KENYAN_BANKS },
+      { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number provided by your bank" },
+      { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business number required by the bank" },
     ],
   },
   {
@@ -1311,10 +1480,6 @@ const GATEWAYS: GatewayDef[] = [
 
 function PaymentGatewaysTab() {
   const brand = useBrand();
-  const [defaultGw, setDefaultGw] = useState<string>(() => {
-    try { return localStorage.getItem("ochola_gw_default") || "mpesa_stk"; } catch { return "mpesa_stk"; }
-  });
-  const [defaultSaved, setDefaultSaved] = useState(false);
   const [selectedGw, setSelectedGw] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
     try {
@@ -1323,7 +1488,27 @@ function PaymentGatewaysTab() {
     } catch { return {}; }
   });
   const [saved, setSaved] = useState<string | null>(null);
+  const [savingGateway, setSavingGateway] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState("");
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`)
+      .then(response => response.ok ? response.json() : null)
+      .then((data: { configs?: Record<string, Record<string, string>> } | null) => {
+        if (!data?.configs) return;
+        setFields(prev => ({
+          ...prev,
+          ...Object.fromEntries(
+            Object.entries(data.configs).map(([gatewayId, config]) => [
+              gatewayId,
+              { ...(prev[gatewayId] || {}), ...config },
+            ]),
+          ),
+        }));
+      })
+      .catch(() => {});
+  }, []);
 
   const updateField = (gwId: string, fieldKey: string, value: string) => {
     setFields(prev => ({
@@ -1332,55 +1517,39 @@ function PaymentGatewaysTab() {
     }));
   };
 
-  const saveDefault = () => {
-    try { localStorage.setItem("ochola_gw_default", defaultGw); } catch {}
-    setDefaultSaved(true);
-    setTimeout(() => setDefaultSaved(false), 2000);
-  };
-
-  const saveGateway = (gwId: string) => {
+  const saveGateway = async (gwId: string) => {
+    setSaveError("");
+    setSavingGateway(gwId);
     try { localStorage.setItem("ochola_gw_fields", JSON.stringify(fields)); } catch {}
-    setSaved(gwId);
-    setTimeout(() => setSaved(null), 2000);
+    try {
+      if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill") {
+        const response = await fetch("/api/admin/mpesa-gateway-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: fields[gwId] || {} }),
+        });
+        const data = await response.json() as { ok?: boolean; error?: string };
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save M-Pesa gateway settings.");
+        window.dispatchEvent(new Event("ochola-payment-gateway-change"));
+      }
+      setSaved(gwId);
+      setTimeout(() => setSaved(null), 2000);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not save payment gateway settings.");
+    } finally {
+      setSavingGateway(null);
+    }
   };
 
   const activeGw = GATEWAYS.find(g => g.id === selectedGw);
-  const defaultGwName = GATEWAYS.find(g => g.id === defaultGw)?.name ?? defaultGw;
-
   return (
     <>
-      <Card title="Step 1: Choose Default Payment Gateway" desc="Select your primary payment method">
-        <Field label="Select your primary payment method">
-          <Select value={defaultGw} onChange={e => setDefaultGw(e.target.value)}>
-            {GATEWAYS.map(g => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </Select>
-        </Field>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: 8,
-          padding: "8px 16px", borderRadius: 8,
-          background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.25)",
-          marginBottom: 16,
-        }}>
-          <Check size={14} style={{ color: "#10b981" }} />
-          <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#10b981" }}>
-            Current Gateway: {defaultGwName}
-          </span>
-        </div>
-        <Row>
-          <button onClick={saveDefault} style={{
-            display: "flex", alignItems: "center", gap: 6,
-            background: defaultSaved ? "#10b981" : C.cyan, border: "none", cursor: "pointer",
-            color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem",
-            borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s",
-          }}>
-            {defaultSaved ? <><Check size={13} /> Saved!</> : <><Save size={13} /> Save Default Gateway</>}
-          </button>
-        </Row>
-      </Card>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
+        Select one active payment gateway for this ISP. You can switch to another gateway whenever needed.
+      </div>
+      <AdminPaymentGatewayCard />
 
-      <Card title="Step 2: Configure Payment Gateways" desc="Click on a payment gateway below to configure its settings.">
+      <Card title="Payment Gateway Configurations" desc="Add or update the account details for the payment gateways available to this ISP.">
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
           marginBottom: selectedGw ? 20 : 0,
@@ -1444,56 +1613,65 @@ function PaymentGatewaysTab() {
                 </div>
               )}
 
-              {activeGw.fields.map(f => (
-                <div key={f.key} style={{
-                  display: "flex", alignItems: "center", gap: 16,
-                  padding: "12px 0",
-                  borderBottom: `1px solid ${C.border}`,
-                }}>
-                  <label style={{
-                    width: 180, flexShrink: 0,
-                    fontSize: "0.8rem", fontWeight: 600, color: C.muted,
-                    textAlign: "right",
+              {activeGw.fields.map(f => {
+                const selectedBank = fields[activeGw.id]?.bankName || "";
+                if (activeGw.id === "bank_stk_push" && (f.key === "paybillNumber" || f.key === "accountNumber") && !selectedBank) return null;
+                const fieldLabel = f.key === "paybillNumber" && selectedBank
+                  ? `${selectedBank} PayBill Number`
+                  : f.key === "accountNumber" && selectedBank
+                  ? `${selectedBank} Account / Business Number`
+                  : f.label;
+                return (
+                  <div key={f.key} style={{
+                    display: "flex", alignItems: "center", gap: 16,
+                    padding: "12px 0",
+                    borderBottom: `1px solid ${C.border}`,
                   }}>
-                    {f.label}
-                  </label>
-                  <div style={{ flex: 1 }}>
-                    {f.type === "select" && f.options ? (
-                      <Select
-                        value={fields[activeGw.id]?.[f.key] || ""}
-                        onChange={e => updateField(activeGw.id, f.key, e.target.value)}
-                      >
-                        <option value="">-- Select --</option>
-                        {f.options.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </Select>
-                    ) : f.secret ? (
-                      <div style={{ position: "relative" }}>
-                        <Input
-                          type={showSecrets[`${activeGw.id}_${f.key}`] ? "text" : "password"}
+                    <label style={{
+                      width: 180, flexShrink: 0,
+                      fontSize: "0.8rem", fontWeight: 600, color: C.muted,
+                      textAlign: "right",
+                    }}>
+                      {fieldLabel}
+                    </label>
+                    <div style={{ flex: 1 }}>
+                      {f.type === "select" && f.options ? (
+                        <Select
                           value={fields[activeGw.id]?.[f.key] || ""}
                           onChange={e => updateField(activeGw.id, f.key, e.target.value)}
-                          placeholder="••••••••••••••••"
-                          style={{ paddingRight: 36 }}
-                        />
-                        <button
-                          onClick={() => setShowSecrets(prev => ({ ...prev, [`${activeGw.id}_${f.key}`]: !prev[`${activeGw.id}_${f.key}`] }))}
-                          style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 2 }}
                         >
-                          {showSecrets[`${activeGw.id}_${f.key}`] ? <EyeOff size={13} /> : <Eye size={13} />}
-                        </button>
-                      </div>
-                    ) : (
-                      <Input
-                        value={fields[activeGw.id]?.[f.key] || ""}
-                        onChange={e => updateField(activeGw.id, f.key, e.target.value)}
-                        placeholder={f.hint || `Enter ${f.label.toLowerCase()}`}
-                      />
-                    )}
+                          <option value="">-- Select --</option>
+                          {f.options.map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </Select>
+                      ) : f.secret ? (
+                        <div style={{ position: "relative" }}>
+                          <Input
+                            type={showSecrets[`${activeGw.id}_${f.key}`] ? "text" : "password"}
+                            value={fields[activeGw.id]?.[f.key] || ""}
+                            onChange={e => updateField(activeGw.id, f.key, e.target.value)}
+                            placeholder="••••••••••••••••"
+                            style={{ paddingRight: 36 }}
+                          />
+                          <button
+                            onClick={() => setShowSecrets(prev => ({ ...prev, [`${activeGw.id}_${f.key}`]: !prev[`${activeGw.id}_${f.key}`] }))}
+                            style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 2 }}
+                          >
+                            {showSecrets[`${activeGw.id}_${f.key}`] ? <EyeOff size={13} /> : <Eye size={13} />}
+                          </button>
+                        </div>
+                      ) : (
+                        <Input
+                          value={fields[activeGw.id]?.[f.key] || ""}
+                          onChange={e => updateField(activeGw.id, f.key, e.target.value)}
+                          placeholder={f.hint || `Enter ${f.label.toLowerCase()}`}
+                        />
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {activeGw.id === "bank_stk_push" && (
                 <div style={{
@@ -1502,24 +1680,27 @@ function PaymentGatewaysTab() {
                 }}>
                   <p style={{ fontSize: "0.78rem", color: "#f59e0b", margin: 0, lineHeight: 1.6 }}>
                     <AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
-                    After saving, funds will be sent to the chosen bank account.
-                    Make sure account number and bank match exactly.
+                    BankStkPush sends a Daraja PayBill prompt using the chosen bank’s PayBill Number.
+                    The Account / Business Number is included as the payment reference.
                   </p>
                 </div>
               )}
 
+              {saveError && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "14px 0 0" }}>⚠ {saveError}</p>}
               <Row>
                 <button
                   onClick={() => saveGateway(activeGw.id)}
+                  disabled={savingGateway === activeGw.id}
                   style={{
                     display: "flex", alignItems: "center", gap: 6,
                     background: saved === activeGw.id ? "#10b981" : C.cyan,
                     border: "none", cursor: "pointer", color: "white",
                     fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem",
                     borderRadius: 8, fontFamily: "inherit", transition: "background 0.2s",
+                    opacity: savingGateway === activeGw.id ? 0.65 : 1,
                   }}
                 >
-                  {saved === activeGw.id ? <><Check size={13} /> Saved!</> : <><Save size={13} /> Save Changes</>}
+                  {saved === activeGw.id ? <><Check size={13} /> Saved!</> : savingGateway === activeGw.id ? "Saving…" : <><Save size={13} /> Save Changes</>}
                 </button>
               </Row>
             </div>

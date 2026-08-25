@@ -8,6 +8,7 @@ import {
   AlertTriangle, ChevronDown, UploadCloud,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
+import { getCurrencySymbol } from "@/lib/utils";
 
 /* ─────────────────────────── Types ─────────────────────────── */
 interface VoucherRow {
@@ -158,7 +159,7 @@ function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
       </div>
       <div style={{ borderTop: "1px dashed #94a3b8", paddingTop: "0.35rem", fontSize: "0.625rem", display: "flex", justifyContent: "space-between" }}>
         <span><strong>Plan:</strong> {v.plan_name}</span>
-        <span><strong>Ksh {v.price}</strong></span>
+        <span><strong>{getCurrencySymbol()} {v.price}</strong></span>
       </div>
       {v.expiry && (
         <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
@@ -240,7 +241,7 @@ function GenerateModal({
               onChange={e => setSelectedPlanId(Number(e.target.value))}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}>
               {plans.map(p => (
-                <option key={p.id} value={p.id}>{p.name} — Ksh {p.price} · {p.validity}d · {p.speed_down}/{p.speed_up} Mbps</option>
+                <option key={p.id} value={p.id}>{p.name} — {getCurrencySymbol()} {p.price} · {p.validity}d · {p.speed_down}/{p.speed_up} Mbps</option>
               ))}
             </select>
           </label>
@@ -249,7 +250,7 @@ function GenerateModal({
           {plan && (
             <div style={{ background: "rgba(37,99,235,0.07)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem" }}>
               {[
-                ["Price",    `Ksh ${plan.price}`],
+                ["Price",    `${getCurrencySymbol()} ${plan.price}`],
                 ["Validity", `${plan.validity} day${plan.validity !== 1 ? "s" : ""}`],
                 ["Speed",    `${plan.speed_down}/${plan.speed_up} Mbps`],
               ].map(([k, v]) => (
@@ -694,7 +695,7 @@ export default function Vouchers() {
                           </div>
                         ) : <span style={{ color: "var(--isp-text-sub)", fontSize: "0.75rem" }}>Universal</span>}
                       </td>
-                      <td style={{ padding: "0.7rem 1rem", color: "#4ade80", fontWeight: 700 }}>Ksh {v.price}</td>
+                      <td style={{ padding: "0.7rem 1rem", color: "#4ade80", fontWeight: 700 }}>{getCurrencySymbol()} {v.price}</td>
                       <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                         {planInfo ? `${planInfo.speed_down}/${planInfo.speed_up} Mbps` : "—"}
                       </td>

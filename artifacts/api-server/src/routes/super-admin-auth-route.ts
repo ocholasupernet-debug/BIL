@@ -29,6 +29,7 @@ function tokenExpired(): boolean {
   return Date.now() - activeIssuedAt > SESSION_TTL_MS;
 }
 
+/** Used by protected Super Admin-only settings routes. */
 export function isActiveSuperAdminToken(token: string): boolean {
   if (!token || !activeToken || token !== activeToken) return false;
   if (tokenExpired()) {
@@ -89,8 +90,20 @@ router.post("/super-admin/login", (req: Request, res: Response): void => {
 router.get("/super-admin/verify", (req: Request, res: Response): void => {
   const token = (req.headers["x-sa-token"] as string | undefined) ?? "";
 
-  if (!isActiveSuperAdminToken(token)) {
-    res.status(401).json({ ok: false, reason: token ? "expired_or_superseded" : "no_session" });
+  if (!token || !activeToken) {
+    res.status(401).json({ ok: false, reason: "no_session" });
+    return;
+  }
+
+  if (token !== activeToken) {
+    res.status(401).json({ ok: false, reason: "superseded" });
+    return;
+  }
+
+  if (tokenExpired()) {
+    activeToken    = null;
+    activeIssuedAt = 0;
+    res.status(401).json({ ok: false, reason: "expired" });
     return;
   }
 
