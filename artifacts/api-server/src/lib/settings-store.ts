@@ -1,13 +1,13 @@
 /**
- * Simple JSON file–backed settings store.
- * All values can be overridden at runtime by environment variables.
- * File is written to <cwd>/data/settings.json
+ * Local JSON storage for non-secret settings.
+ * Daraja credentials and configuration are encrypted and stored in Supabase.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "crypto";
 import { logger } from "./logger.js";
+import { sbSelect, sbUpsert, supabaseConfigured } from "./supabase-client.js";
 
 const DATA_DIR  = path.resolve(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "settings.json");
@@ -47,32 +47,127 @@ function writeFile(data: SettingsFile): void {
 
 /* ── M-Pesa ── */
 
-/** Returns effective M-Pesa config: env vars take precedence over stored values. */
-export function getMpesaSettings(): MpesaSettings {
-  const stored = (readFile().mpesa ?? {}) as Partial<MpesaSettings>;
-  const configuredEnv = process.env.MPESA_ENV || stored.env;
+const DARAJA_SETTINGS_ID = "global_daraja";
+
+interface EncryptedDarajaSettings {
+  id: string;
+  ciphertext: string;
+  iv: string;
+  auth_tag: string;
+}
+
+function encryptionKey(): Buffer | null {
+  const sessionSecret = process.env.SESSION_SECRET?.trim();
+  if (!sessionSecret) return null;
+  return createHash("sha256")
+    .update(`ochola-supernet:daraja-settings:v1:${sessionSecret}`)
+    .digest();
+}
+
+function normaliseMpesaSettings(input: Partial<MpesaSettings>): MpesaSettings {
   return {
-    consumerKey:    (process.env.MPESA_CONSUMER_KEY    || stored.consumerKey    || "").trim(),
-    consumerSecret: (process.env.MPESA_CONSUMER_SECRET || stored.consumerSecret || "").trim(),
-    shortcode:      (process.env.MPESA_SHORTCODE       || stored.shortcode      || "").trim(),
-    passkey:        (process.env.MPESA_PASSKEY         || stored.passkey        || "").trim(),
-    callbackUrl:    (process.env.MPESA_CALLBACK_URL    || stored.callbackUrl    || "").trim(),
-    env:            configuredEnv === "production" ? "production" : "sandbox",
-    tillNumber:     (process.env.MPESA_TILL_NUMBER     || stored.tillNumber     || "").trim(),
+    consumerKey: typeof input.consumerKey === "string" ? input.consumerKey.trim() : "",
+    consumerSecret: typeof input.consumerSecret === "string" ? input.consumerSecret.trim() : "",
+    shortcode: typeof input.shortcode === "string" ? input.shortcode.trim() : "",
+    passkey: typeof input.passkey === "string" ? input.passkey.trim() : "",
+    callbackUrl: typeof input.callbackUrl === "string" ? input.callbackUrl.trim() : "",
+    env: input.env === "production" ? "production" : "sandbox",
+    tillNumber: typeof input.tillNumber === "string" ? input.tillNumber.trim() : "",
   };
 }
 
-/** Saves M-Pesa credentials to the store file. */
-export function saveMpesaSettings(settings: MpesaSettings): void {
-  const data = readFile();
-  data.mpesa = settings;
-  writeFile(data);
-  logger.info("[settings-store] M-Pesa settings saved");
+function bootstrapMpesaSettings(): MpesaSettings {
+  const stored = (readFile().mpesa ?? {}) as Partial<MpesaSettings>;
+  return normaliseMpesaSettings({
+    consumerKey: process.env.MPESA_CONSUMER_KEY,
+    consumerSecret: process.env.MPESA_CONSUMER_SECRET,
+    shortcode: process.env.MPESA_SHORTCODE || stored.shortcode,
+    passkey: process.env.MPESA_PASSKEY,
+    callbackUrl: process.env.MPESA_CALLBACK_URL || stored.callbackUrl,
+    env: process.env.MPESA_ENV === "production" ? "production" : stored.env,
+    tillNumber: process.env.MPESA_TILL_NUMBER || stored.tillNumber,
+  });
 }
 
-export function isMpesaConfigured(): boolean {
-  const s = getMpesaSettings();
-  return !!(s.consumerKey && s.consumerSecret && s.shortcode && s.passkey);
+function encryptMpesaSettings(settings: MpesaSettings): Omit<EncryptedDarajaSettings, "id"> {
+  const key = encryptionKey();
+  if (!key) throw new Error("SESSION_SECRET is required to encrypt Daraja settings.");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(settings), "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    ciphertext: ciphertext.toString("base64"),
+    iv: iv.toString("base64"),
+    auth_tag: cipher.getAuthTag().toString("base64"),
+  };
+}
+
+function decryptMpesaSettings(record: EncryptedDarajaSettings): MpesaSettings {
+  const key = encryptionKey();
+  if (!key) throw new Error("SESSION_SECRET is required to decrypt Daraja settings.");
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(record.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(record.auth_tag, "base64"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(record.ciphertext, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+  return normaliseMpesaSettings(JSON.parse(decrypted) as Partial<MpesaSettings>);
+}
+
+function hasDarajaCredentials(settings: MpesaSettings): boolean {
+  return !!(settings.consumerKey && settings.consumerSecret && settings.passkey);
+}
+
+/** Loads Daraja configuration from encrypted Supabase storage. */
+export async function getMpesaSettings(): Promise<MpesaSettings> {
+  const bootstrap = bootstrapMpesaSettings();
+  if (!supabaseConfigured || !encryptionKey()) return bootstrap;
+
+  const rows = await sbSelect<EncryptedDarajaSettings>(
+    "platform_secure_settings",
+    `id=eq.${DARAJA_SETTINGS_ID}&select=id,ciphertext,iv,auth_tag&limit=1`,
+  );
+  const record = rows[0];
+  if (record) {
+    try {
+      return decryptMpesaSettings(record);
+    } catch (err) {
+      logger.error({ err }, "[settings-store] could not decrypt Daraja settings");
+      return bootstrap;
+    }
+  }
+
+  if (hasDarajaCredentials(bootstrap)) {
+    try {
+      await saveMpesaSettings(bootstrap);
+      logger.info("[settings-store] Daraja settings securely bootstrapped to Supabase");
+    } catch (err) {
+      logger.warn({ err }, "[settings-store] Daraja settings bootstrap pending Supabase migration");
+    }
+  }
+  return bootstrap;
+}
+
+/** Encrypts and saves Daraja configuration to Supabase. */
+export async function saveMpesaSettings(settings: MpesaSettings): Promise<void> {
+  if (!supabaseConfigured) throw new Error("Supabase must be configured to save Daraja settings.");
+  const encrypted = encryptMpesaSettings(normaliseMpesaSettings(settings));
+  const saved = await sbUpsert<EncryptedDarajaSettings>(
+    "platform_secure_settings",
+    "id",
+    { id: DARAJA_SETTINGS_ID, ...encrypted, updated_at: new Date().toISOString() },
+  );
+  if (!saved[0]) {
+    throw new Error("Could not save encrypted Daraja settings to Supabase. Apply the secure settings migration first.");
+  }
+  logger.info("[settings-store] encrypted Daraja settings saved to Supabase");
+}
+
+export function isMpesaConfigured(settings: MpesaSettings): boolean {
+  return !!(settings.consumerKey && settings.consumerSecret && settings.shortcode && settings.passkey);
 }
 
 export type PaymentDestinationType = "bank" | "till" | "paybill";

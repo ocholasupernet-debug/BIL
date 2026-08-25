@@ -63,6 +63,22 @@ export async function sbInsert<T>(
   return res.json() as Promise<T[]>;
 }
 
+/** INSERT or UPDATE rows using a unique conflict column. */
+export async function sbUpsert<T>(
+  table: string,
+  conflictColumn: string,
+  payload: Record<string, unknown>,
+): Promise<T[]> {
+  if (!supabaseConfigured) return [];
+  const res = await fetch(url(table, `on_conflict=${encodeURIComponent(conflictColumn)}`), {
+    method: "POST",
+    headers: headers({ Prefer: "resolution=merge-duplicates,return=representation" }),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) return [];
+  return res.json() as Promise<T[]>;
+}
+
 /** UPDATE rows matching `filterQuery`. Returns updated rows. */
 export async function sbUpdate<T>(
   table: string,

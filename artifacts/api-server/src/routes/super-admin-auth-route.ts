@@ -17,7 +17,7 @@ const router: IRouter = Router();
 
 const SA_USERNAME = process.env.SUPERADMIN_USERNAME ?? "Latty";
 const SA_API_KEY  = process.env.SUPERADMIN_API_KEY  ?? "Latex";
-const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? "herina";
+const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD?.trim() ?? "";
 
 const SESSION_TTL_MS = 3 * 60 * 60 * 1000; /* 3 hours */
 

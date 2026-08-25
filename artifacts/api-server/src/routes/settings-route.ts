@@ -150,11 +150,11 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
 
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
-  const s = getMpesaSettings();
+  const s = await getMpesaSettings();
   const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminIdFromRequest(req));
   res.json({
     ok: true,
-    configured: isMpesaConfigured(),
+    configured: isMpesaConfigured(s),
     settings: {
       shortcode:      s.shortcode,
       env:            s.env,
@@ -324,8 +324,9 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
 });
 
 /* ── GET /api/settings/mpesa/status ── */
-router.get("/settings/mpesa/status", (_req: Request, res: Response): void => {
-  res.json({ ok: true, configured: isMpesaConfigured() });
+router.get("/settings/mpesa/status", async (_req: Request, res: Response): Promise<void> => {
+  const settings = await getMpesaSettings();
+  res.json({ ok: true, configured: isMpesaConfigured(settings), env: settings.env });
 });
 
 /* ── POST /api/settings/mpesa ── */
@@ -337,18 +338,18 @@ router.post("/settings/mpesa", (req: Request, res: Response): void => {
 });
 
 /* ── Super Admin-only M-Pesa management ── */
-router.get("/super-admin/mpesa", (req: Request, res: Response): void => {
+router.get("/super-admin/mpesa", async (req: Request, res: Response): Promise<void> => {
   if (!isSuperAdminRequest(req)) {
     res.status(401).json({ ok: false, error: "Super Admin authentication required." });
     return;
   }
 
-  const s = getMpesaSettings();
+  const s = await getMpesaSettings();
   res.json({
     ok: true,
-    configured: isMpesaConfigured(),
+    configured: isMpesaConfigured(s),
     settings: {
-      consumerKey:    s.consumerKey    ? `${s.consumerKey.slice(0, 4)}${"*".repeat(Math.max(0, s.consumerKey.length - 4))}` : "",
+      consumerKey:    s.consumerKey    ? "**hidden**" : "",
       consumerSecret: s.consumerSecret ? "**hidden**" : "",
       shortcode:      s.shortcode,
       passkey:        s.passkey        ? "**hidden**" : "",
@@ -363,7 +364,7 @@ router.get("/super-admin/mpesa", (req: Request, res: Response): void => {
   });
 });
 
-router.post("/super-admin/mpesa", (req: Request, res: Response): void => {
+router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<void> => {
   if (!isSuperAdminRequest(req)) {
     res.status(401).json({ ok: false, error: "Super Admin authentication required." });
     return;
@@ -373,22 +374,32 @@ router.post("/super-admin/mpesa", (req: Request, res: Response): void => {
     req.body as Partial<MpesaSettings> & { replacePassword?: string };
 
   /* Merge with existing — don't overwrite a secret if the UI sends "**hidden**" placeholder */
-  const current = getMpesaSettings();
+  const current = await getMpesaSettings();
   const requestedCallback = typeof callbackUrl === "string" ? callbackUrl.trim() : "";
   const hasNewCredential = [consumerKey, consumerSecret, passkey].some(value =>
     typeof value === "string" && value.trim().length > 0 && value !== "**hidden**"
   );
-  const hasExistingCredential = !!(
-    current.consumerKey || current.consumerSecret || current.shortcode || current.passkey
-  );
+  const changingDarajaSettings =
+    hasNewCredential ||
+    shortcode !== undefined ||
+    callbackUrl !== undefined ||
+    env !== undefined ||
+    tillNumber !== undefined;
+  const replacementPasscode = process.env.SUPERADMIN_PASSWORD?.trim();
 
-  /* Replacing live Daraja credentials is deliberately protected server-side.
-     The password is never sent back to the browser or included in logs. */
-  if (hasExistingCredential && (hasNewCredential || shortcode !== undefined) &&
-      replacePassword !== (process.env.SUPERADMIN_PASSWORD ?? "herina")) {
+  if (!replacementPasscode) {
+    res.status(503).json({
+      ok: false,
+      error: "M-Pesa settings are locked until SUPERADMIN_PASSWORD is configured securely.",
+    });
+    return;
+  }
+  /* All Daraja edits are protected server-side. The passcode is never returned
+     to the browser or included in logs. */
+  if (changingDarajaSettings && replacePassword !== replacementPasscode) {
     res.status(401).json({
       ok: false,
-      error: "Credential replacement requires the replacement password.",
+      error: "Changing M-Pesa settings requires the replacement passcode.",
     });
     return;
   }
@@ -413,8 +424,15 @@ router.post("/super-admin/mpesa", (req: Request, res: Response): void => {
     tillNumber:     typeof tillNumber === "string" ? tillNumber.trim() : current.tillNumber,
   };
 
-  saveMpesaSettings(next);
-  res.json({ ok: true, configured: !!(next.consumerKey && next.consumerSecret && next.shortcode && next.passkey) });
+  try {
+    await saveMpesaSettings(next);
+    res.json({ ok: true, configured: isMpesaConfigured(next) });
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      error: "Secure M-Pesa storage is unavailable. Apply the Supabase secure settings migration, then try again.",
+    });
+  }
 });
 
 /* ── Super Admin collection destinations ── */

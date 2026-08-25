@@ -160,23 +160,32 @@ async function getAdminPaymentSettings(adminId: number | undefined): Promise<{
   };
 }
 
-/* ── Daraja helpers — reads credentials fresh per-request so admin saves take effect ── */
+/* ── Daraja helpers ───────────────────────────────────────────────────────── */
 
-function darajaBase(): string {
-  return getMpesaSettings().env === "production"
+function darajaBase(settings: MpesaSettings): string {
+  return settings.env === "production"
     ? "https://api.safaricom.co.ke"
     : "https://sandbox.safaricom.co.ke";
 }
 
-async function getDarajaToken(): Promise<string> {
-  const { consumerKey, consumerSecret } = getMpesaSettings();
+async function getDarajaToken(settings: MpesaSettings): Promise<string> {
+  const { consumerKey, consumerSecret } = settings;
   const creds = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-  const res = await fetch(`${darajaBase()}/oauth/v1/generate?grant_type=client_credentials`, {
+  const res = await fetch(`${darajaBase(settings)}/oauth/v1/generate?grant_type=client_credentials`, {
     headers: { Authorization: `Basic ${creds}` },
   });
   if (!res.ok) throw new Error(`Daraja OAuth failed: ${res.status}`);
   const data = await res.json() as { access_token: string };
   return data.access_token;
+}
+
+function callbackUrl(req: Request, settings: MpesaSettings): string {
+  if (settings.callbackUrl) return settings.callbackUrl;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = typeof forwardedProto === "string"
+    ? forwardedProto.split(",")[0].trim()
+    : req.protocol;
+  return `${protocol}://${req.get("host")}/api/mpesa/callback`;
 }
 
 function stkCredentials(shortcode: string, passkey: string): { timestamp: string; password: string } {
@@ -195,7 +204,8 @@ function stkCredentials(shortcode: string, passkey: string): { timestamp: string
  * via Safaricom's OAuth endpoint.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> => {
-  const { consumerKey, consumerSecret } = getMpesaSettings();
+  const settings = await getMpesaSettings();
+  const { consumerKey, consumerSecret } = settings;
   if (!consumerKey || !consumerSecret) {
     res.status(503).json({
       ok: false,
@@ -205,7 +215,7 @@ router.get("/mpesa/token", async (_req: Request, res: Response): Promise<void> =
   }
 
   try {
-    const token = await getDarajaToken();
+    const token = await getDarajaToken(settings);
     res.json({ ok: true, access_token: token });
   } catch (e) {
     logger.error({ err: e }, "[mpesa/token] failed to generate access token");
@@ -229,7 +239,8 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     return;
   }
 
-  if (!isMpesaConfigured()) {
+  const cfg = await getMpesaSettings();
+  if (!isMpesaConfigured(cfg)) {
     res.status(503).json({
       ok: false,
       error: "M-Pesa credentials are not configured. Configure them in Super Admin → Payment Gateways.",
@@ -247,8 +258,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     : `254${raw}`;
 
   try {
-    const cfg = getMpesaSettings();
-      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+    const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -264,9 +274,13 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       return;
     }
 
+    const resolvedCallbackUrl = callbackUrl(req, cfg);
+    if (cfg.env === "production" && !resolvedCallbackUrl.startsWith("https://")) {
+      res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+      return;
+    }
     const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
-
-    const token = await getDarajaToken();
+    const token = await getDarajaToken(cfg);
 
     const stkBody = {
       BusinessShortCode: businessShortcode,
@@ -277,12 +291,12 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       PartyA:            formatted,
       PartyB:            destination,
       PhoneNumber:       formatted,
-      CallBackURL:       cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/mpesa/callback`,
+      CallBackURL:       resolvedCallbackUrl,
       AccountReference:  payment.accountReference ?? account_ref ?? "ISPlatty",
       TransactionDesc:   "STK Push Payment",
     };
 
-    const stkRes = await fetch(`${darajaBase()}/mpesa/stkpush/v1/processrequest`, {
+    const stkRes = await fetch(`${darajaBase(cfg)}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(stkBody),
@@ -499,7 +513,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     ? raw
     : `254${raw}`;
 
-  if (!isMpesaConfigured()) {
+  const cfg = await getMpesaSettings();
+  if (!isMpesaConfigured(cfg)) {
     logger.warn("[mpesa/stk] M-Pesa credentials not configured — returning 503");
     res.status(503).json({
       ok: false,
@@ -510,8 +525,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   }
 
   try {
-     const cfg = getMpesaSettings();
-       const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -526,9 +540,13 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
       return;
     }
-     const token = await getDarajaToken();
+     const resolvedCallbackUrl = callbackUrl(req, cfg);
+     if (cfg.env === "production" && !resolvedCallbackUrl.startsWith("https://")) {
+       res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+       return;
+     }
+     const token = await getDarajaToken(cfg);
      const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
-     const callbackUrl = cfg.callbackUrl || `${req.protocol}://${req.get("host")}/api/mpesa/callback`;
 
     const body = {
        BusinessShortCode: businessShortcode,
@@ -539,12 +557,12 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       PartyA:            normalised,
       PartyB:            destination,
       PhoneNumber:       normalised,
-      CallBackURL:       callbackUrl,
+       CallBackURL:       resolvedCallbackUrl,
        AccountReference:  payment.accountReference ?? account_ref ?? "ISPlatty",
       TransactionDesc:   `Plan ${plan_id ?? "purchase"}`,
     };
 
-    const stkRes = await fetch(`${darajaBase()}/mpesa/stkpush/v1/processrequest`, {
+    const stkRes = await fetch(`${darajaBase(cfg)}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),

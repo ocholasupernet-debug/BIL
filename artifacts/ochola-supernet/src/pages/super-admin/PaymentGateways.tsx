@@ -39,6 +39,16 @@ function SecretField({ value, onChange, label, hint }: { value: string; onChange
 
 interface GwConfig { enabled: boolean; sandbox: boolean; [key: string]: string | boolean; }
 type DestinationType = "bank" | "till" | "paybill";
+interface MpesaSettings {
+  consumerKey: string;
+  consumerSecret: string;
+  shortcode: string;
+  passkey: string;
+  callbackUrl: string;
+  env: "sandbox" | "production";
+  tillNumber: string;
+  replacePassword: string;
+}
 interface PaymentDestination {
   id: string;
   type: DestinationType;
@@ -56,6 +66,17 @@ const emptyDestination = (): Omit<PaymentDestination, "id"> & { id?: string } =>
   accountReference: "",
   instructions: "",
   active: true,
+});
+
+const emptyMpesaSettings = (): MpesaSettings => ({
+  consumerKey: "",
+  consumerSecret: "",
+  shortcode: "",
+  passkey: "",
+  callbackUrl: "",
+  env: "production",
+  tillNumber: "",
+  replacePassword: "",
 });
 
 function destinationTypeLabel(type: DestinationType): string {
@@ -99,10 +120,14 @@ const GATEWAYS: { id: string; name: string; logo: string; color: string; fields:
 
 export default function SuperAdminPaymentGateways() {
   const [configs, setConfigs] = useState<Record<string, GwConfig>>(
-    Object.fromEntries(GATEWAYS.map(gw => [gw.id, { enabled: gw.id === "mpesa", sandbox: true, ...Object.fromEntries(gw.fields.map(f => [f.key, ""])) }]))
+    Object.fromEntries(GATEWAYS.filter(gw => gw.id !== "mpesa").map(gw => [gw.id, { enabled: false, sandbox: true, ...Object.fromEntries(gw.fields.map(f => [f.key, ""])) }]))
   );
-  const [expanded, setExpanded] = useState<string>("mpesa");
+  const [expanded, setExpanded] = useState<string>("");
   const [saved, setSaved] = useState(false);
+  const [mpesa, setMpesa] = useState<MpesaSettings>(emptyMpesaSettings);
+  const [mpesaConfigured, setMpesaConfigured] = useState(false);
+  const [mpesaError, setMpesaError] = useState("");
+  const [mpesaSaving, setMpesaSaving] = useState(false);
   const [destinations, setDestinations] = useState<PaymentDestination[]>([]);
   const [registrationDestinationId, setRegistrationDestinationId] = useState("");
   const [renewalDestinationId, setRenewalDestinationId] = useState("");
@@ -133,10 +158,55 @@ export default function SuperAdminPaymentGateways() {
       .catch(error => setDestinationError(error instanceof Error ? error.message : "Could not load payment destinations."));
   }, [token]);
 
+  useEffect(() => {
+    fetch("/api/super-admin/mpesa", { headers: { "x-sa-token": token } })
+      .then(async response => {
+        const data = await response.json() as {
+          ok: boolean;
+          configured?: boolean;
+          error?: string;
+          settings?: Omit<MpesaSettings, "replacePassword">;
+        };
+        if (!response.ok || !data.ok || !data.settings) throw new Error(data.error || "Could not load M-Pesa settings.");
+        setMpesa({ ...emptyMpesaSettings(), ...data.settings });
+        setMpesaConfigured(!!data.configured);
+      })
+      .catch(error => setMpesaError(error instanceof Error ? error.message : "Could not load M-Pesa settings."));
+  }, [token]);
+
   const setField = (gw: string, k: string, v: string | boolean) =>
     setConfigs(c => ({ ...c, [gw]: { ...c[gw], [k]: v } }));
 
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+
+  const updateMpesa = (key: keyof MpesaSettings, value: string) =>
+    setMpesa(current => ({ ...current, [key]: value }));
+
+  const saveMpesa = async () => {
+    setMpesaError("");
+    setMpesaSaving(true);
+    try {
+      const response = await fetch("/api/super-admin/mpesa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify(mpesa),
+      });
+      const data = await response.json() as { ok: boolean; configured?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save M-Pesa settings.");
+      setMpesaConfigured(!!data.configured);
+      setMpesa(current => ({
+        ...current,
+        consumerKey: current.consumerKey ? "**hidden**" : "",
+        consumerSecret: current.consumerSecret ? "**hidden**" : "",
+        passkey: current.passkey ? "**hidden**" : "",
+        replacePassword: "",
+      }));
+    } catch (error) {
+      setMpesaError(error instanceof Error ? error.message : "Could not save M-Pesa settings.");
+    } finally {
+      setMpesaSaving(false);
+    }
+  };
 
   const saveDestination = async () => {
     setDestinationError("");
@@ -208,6 +278,51 @@ export default function SuperAdminPaymentGateways() {
             {saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saved ? "Saved!" : "Save All"}
           </button>
         </div>
+
+        <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: "1.1rem" }}>🟢</span>
+            <div style={{ color: "white", fontWeight: 750 }}>M-Pesa Daraja</div>
+            <span style={{ marginLeft: 4, fontSize: "0.65rem", background: mpesa.env === "production" ? "rgba(74,222,128,0.12)" : "rgba(251,191,36,0.12)", color: mpesa.env === "production" ? "#4ade80" : "#fbbf24", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>
+              {mpesa.env === "production" ? "Live" : "Sandbox"}
+            </span>
+            {mpesaConfigured && <span style={{ fontSize: "0.65rem", background: "rgba(74,222,128,0.12)", color: "#4ade80", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>Configured</span>}
+          </div>
+          <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.5, margin: "0 0 16px" }}>
+            Credentials are encrypted in Supabase and only their status is shown here. Enter the replacement passcode to change any live M-Pesa setting.
+          </p>
+          {mpesaError && <div style={{ color: "#fca5a5", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 14 }}>{mpesaError}</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+            <SecretField label="Consumer Key" value={mpesa.consumerKey} onChange={value => updateMpesa("consumerKey", value)} />
+            <SecretField label="Consumer Secret" value={mpesa.consumerSecret} onChange={value => updateMpesa("consumerSecret", value)} />
+            <Field label="Business shortcode">
+              <input style={inp} inputMode="numeric" value={mpesa.shortcode} onChange={e => updateMpesa("shortcode", e.target.value)} />
+            </Field>
+            <SecretField label="Lipa na M-Pesa passkey" value={mpesa.passkey} onChange={value => updateMpesa("passkey", value)} />
+            <Field label="Mode">
+              <select style={inp} value={mpesa.env} onChange={e => updateMpesa("env", e.target.value)}>
+                <option value="production">Live / Production</option>
+                <option value="sandbox">Sandbox / Test</option>
+              </select>
+            </Field>
+            <Field label="Till number (optional)">
+              <input style={inp} inputMode="numeric" value={mpesa.tillNumber} onChange={e => updateMpesa("tillNumber", e.target.value)} />
+            </Field>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <Field label="Callback URL" hint="Leave blank to use the deployed production address ending in /api/mpesa/callback.">
+                <input style={inp} type="url" value={mpesa.callbackUrl} onChange={e => updateMpesa("callbackUrl", e.target.value)} />
+              </Field>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <SecretField label="Replacement passcode" hint="Required to change credentials, shortcode, mode, callback, or till number." value={mpesa.replacePassword} onChange={value => updateMpesa("replacePassword", value)} />
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={saveMpesa} disabled={mpesaSaving} style={{ border: 0, borderRadius: 8, background: C.accent, color: "white", padding: "9px 13px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer", opacity: mpesaSaving ? 0.6 : 1 }}>
+              {mpesaSaving ? "Saving…" : "Save protected M-Pesa settings"}
+            </button>
+          </div>
+        </section>
 
         <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -293,7 +408,7 @@ export default function SuperAdminPaymentGateways() {
           )}
         </section>
 
-        {GATEWAYS.map(gw => {
+        {GATEWAYS.filter(gw => gw.id !== "mpesa").map(gw => {
           const cfg = configs[gw.id] ?? {};
           const open = expanded === gw.id;
           return (

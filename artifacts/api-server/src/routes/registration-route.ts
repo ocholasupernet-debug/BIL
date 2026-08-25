@@ -17,31 +17,32 @@ function normalizeKenyanPhone(value: string): string {
   return `254${digits}`;
 }
 
-function darajaBase(): string {
-  return getMpesaSettings().env === "production"
+function darajaBase(settings: Awaited<ReturnType<typeof getMpesaSettings>>): string {
+  return settings.env === "production"
     ? "https://api.safaricom.co.ke"
     : "https://sandbox.safaricom.co.ke";
 }
 
-async function getDarajaToken(): Promise<string> {
-  const { consumerKey, consumerSecret } = getMpesaSettings();
+async function getDarajaToken(settings: Awaited<ReturnType<typeof getMpesaSettings>>): Promise<string> {
+  const { consumerKey, consumerSecret } = settings;
   const credentials = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-  const response = await fetch(`${darajaBase()}/oauth/v1/generate?grant_type=client_credentials`, {
+  const response = await fetch(`${darajaBase(settings)}/oauth/v1/generate?grant_type=client_credentials`, {
     headers: { Authorization: `Basic ${credentials}` },
   });
   if (!response.ok) throw new Error(`Daraja OAuth failed: ${response.status}`);
   return (await response.json() as { access_token: string }).access_token;
 }
 
-router.get("/registration/config", (_req: Request, res: Response): void => {
+router.get("/registration/config", async (_req: Request, res: Response): Promise<void> => {
   const destinations = getPaymentDestinations();
+  const mpesaSettings = await getMpesaSettings();
   const destination = destinations.destinations.find(row =>
     row.id === destinations.registrationDestinationId && row.active,
   );
   res.json({
     ok: true,
     registrationFee: { amount: REGISTRATION_FEE, currency: "KES" },
-    automaticPaymentAvailable: !!destination && destination.type !== "bank" && isMpesaConfigured(),
+    automaticPaymentAvailable: !!destination && destination.type !== "bank" && isMpesaConfigured(mpesaSettings),
     destination: destination ? {
       type: destination.type,
       name: destination.name,
@@ -60,7 +61,8 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(400).json({ ok: false, error: "Enter a company name and a valid Kenyan mobile number." });
     return;
   }
-  if (!isMpesaConfigured()) {
+  const config = await getMpesaSettings();
+  if (!isMpesaConfigured(config)) {
     res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
     return;
   }
@@ -109,11 +111,19 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
 
   try {
-    const config = getMpesaSettings();
     const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, "").slice(0, 14);
     const password = Buffer.from(`${config.shortcode}${config.passkey}${timestamp}`).toString("base64");
-    const token = await getDarajaToken();
-    const response = await fetch(`${darajaBase()}/mpesa/stkpush/v1/processrequest`, {
+    const forwardedProto = req.headers["x-forwarded-proto"];
+    const protocol = typeof forwardedProto === "string"
+      ? forwardedProto.split(",")[0].trim()
+      : req.protocol;
+    const callbackUrl = config.callbackUrl || `${protocol}://${req.get("host")}/api/mpesa/callback`;
+    if (config.env === "production" && !callbackUrl.startsWith("https://")) {
+      res.status(503).json({ ok: false, error: "Live M-Pesa requires a public HTTPS callback URL." });
+      return;
+    }
+    const token = await getDarajaToken(config);
+    const response = await fetch(`${darajaBase(config)}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -125,7 +135,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
         PartyA: formattedPhone,
         PartyB: destination.number,
         PhoneNumber: formattedPhone,
-        CallBackURL: `${req.protocol}://${req.get("host")}/api/mpesa/callback`,
+        CallBackURL: callbackUrl,
         AccountReference: destination.accountReference || slug,
         TransactionDesc: "ISPlatty account registration",
       }),

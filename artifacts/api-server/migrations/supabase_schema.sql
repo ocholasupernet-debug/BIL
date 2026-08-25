@@ -7,6 +7,18 @@
 create extension if not exists "uuid-ossp";
 create extension if not exists "pgcrypto";
 
+-- Global Daraja settings are encrypted by the API before storage.
+create table if not exists platform_secure_settings (
+  id         text primary key,
+  ciphertext text not null,
+  iv         text not null,
+  auth_tag   text not null,
+  updated_at timestamptz not null default now(),
+  constraint platform_secure_settings_single_global
+    check (id = 'global_daraja')
+);
+alter table platform_secure_settings enable row level security;
+
 -- ══════════════════════════════════════════════════════════════════════════════
 -- CORE ISP TABLES
 -- ══════════════════════════════════════════════════════════════════════════════

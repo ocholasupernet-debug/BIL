@@ -5,7 +5,7 @@
     "shortcode": "4346291",
     "passkey": "",
     "callbackUrl": "",
-    "env": "sandbox"
+    "env": "production"
   },
   "paymentDestinations": {
     "registrationDestinationId": "destination_6f123d0f-940b-4f99-985a-4be053394d7c",
