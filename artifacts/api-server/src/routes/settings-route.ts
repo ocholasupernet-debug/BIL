@@ -46,7 +46,7 @@ function isValidLiveCallback(value: string): boolean {
 function requireAdminPaymentChange(req: Request, res: Response, adminId: number): boolean {
   const auth = validateToken(extractToken(req));
   if (!auth || auth.type !== "a") {
-    res.status(401).json({ ok: false, error: "Sign in again to change payment routing." });
+    res.status(401).json({ ok: false, error: "Your ISP Admin session is missing or expired. Sign in again; Super Admin approval is not required." });
     return false;
   }
   if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId) {

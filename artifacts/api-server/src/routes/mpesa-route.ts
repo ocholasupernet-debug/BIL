@@ -11,9 +11,10 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
-import { sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
+import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -36,6 +37,11 @@ const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
 };
 const PAYMENT_GATEWAY_IDS = new Set(Object.keys(PAYMENT_GATEWAY_LABELS));
 type PaymentGateway = string;
+const stkRateLimits = new Map<string, { count: number; startedAt: number }>();
+const callbackIntakeLimits = new Map<string, { count: number; startedAt: number }>();
+const CALLBACK_RECONCILIATION_WINDOW_MS = 10 * 60 * 1000;
+const CALLBACK_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
+let lastCallbackPurgeAt = 0;
 
 interface BankStkPushConfig {
   bankName: string;
@@ -167,6 +173,38 @@ async function isActiveIspAdmin(adminId: number): Promise<boolean> {
     `id=eq.${adminId}&is_active=is.true&select=id&limit=1`,
   );
   return !!rows[0];
+}
+
+function normaliseKenyanPhone(value: string): string {
+  const raw = value.replace(/\D/g, "");
+  if (raw.startsWith("0")) return `254${raw.slice(1)}`;
+  return raw.startsWith("254") ? raw : `254${raw}`;
+}
+
+function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
+  const key = `${req.ip}:${adminId}:${phone}`;
+  const now = Date.now();
+  const existing = stkRateLimits.get(key);
+  if (!existing || now - existing.startedAt > 15 * 60 * 1000) {
+    stkRateLimits.set(key, { count: 1, startedAt: now });
+    return true;
+  }
+  if (existing.count >= 5) return false;
+  existing.count += 1;
+  return true;
+}
+
+function allowCallbackIntake(req: Request): boolean {
+  const key = req.ip ?? "unknown";
+  const now = Date.now();
+  const existing = callbackIntakeLimits.get(key);
+  if (!existing || now - existing.startedAt > 60 * 1000) {
+    callbackIntakeLimits.set(key, { count: 1, startedAt: now });
+    return true;
+  }
+  if (existing.count >= 60) return false;
+  existing.count += 1;
+  return true;
 }
 
 /* ── Daraja helpers ───────────────────────────────────────────────────────── */
@@ -329,15 +367,27 @@ async function processMpesaCallback(body: unknown): Promise<boolean> {
 }
 
 export async function processDeferredMpesaCallbacks(checkoutId?: string): Promise<void> {
-  const referenceFilter = checkoutId ? `&reference=eq.${encodeURIComponent(checkoutId)}` : "";
-  const events = await sbSelect<{ id: number; payload: unknown }>(
+  const now = Date.now();
+  const activeCutoff = new Date(now - CALLBACK_RECONCILIATION_WINDOW_MS).toISOString();
+  const referenceFilter = checkoutId ? `&reference=eq.${encodeURIComponent(checkoutId)}` : `&created_at=gte.${encodeURIComponent(activeCutoff)}`;
+  const events = await sbSelect<{ id: number; payload: unknown; created_at: string }>(
     "isp_webhook_events",
-    `gateway=eq.mpesa&status=eq.received${referenceFilter}&select=id,payload`,
+    `gateway=eq.mpesa&status=eq.received${referenceFilter}&select=id,payload,created_at&order=created_at.asc&limit=100`,
   );
   for (const event of events) {
     if (await processMpesaCallback(event.payload)) {
       await sbUpdate("isp_webhook_events", `id=eq.${event.id}`, { status: "processed" });
+    } else if (now - Date.parse(event.created_at) >= CALLBACK_RECONCILIATION_WINDOW_MS) {
+      await sbUpdate("isp_webhook_events", `id=eq.${event.id}&status=eq.received`, { status: "ignored" });
     }
+  }
+  if (!checkoutId && now - lastCallbackPurgeAt >= 60 * 60 * 1000) {
+    lastCallbackPurgeAt = now;
+    const retentionCutoff = new Date(now - CALLBACK_EVENT_RETENTION_MS).toISOString();
+    await sbDelete(
+      "isp_webhook_events",
+      `gateway=eq.mpesa&status=in.(processed,ignored)&created_at=lt.${encodeURIComponent(retentionCutoff)}`,
+    );
   }
 }
 
@@ -364,6 +414,40 @@ router.get("/mpesa/token", (_req: Request, res: Response): void => {
   res.status(404).json({ ok: false, error: "This endpoint is not available." });
 });
 
+/* Public hotspot checkout gets a short-lived, plan-bound token before STK. */
+router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> => {
+  const adminId = Number(req.body?.adminId);
+  const planId = Number(req.body?.plan_id);
+  const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
+  if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
+    res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
+    return;
+  }
+  if (!await isActiveIspAdmin(adminId)) {
+    res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
+    return;
+  }
+  const plans = await sbSelect<{ id: number; price: number | string }>(
+    "isp_plans",
+    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price&limit=1`,
+  );
+  const plan = plans[0];
+  const amount = Math.ceil(Number(plan?.price));
+  if (!plan || !Number.isFinite(amount) || amount <= 0) {
+    res.status(404).json({ ok: false, error: "The selected plan is not available for payment." });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      paymentIntent: generatePaymentIntent({ adminId, planId, amount, phone }),
+      amount,
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Secure payment checkout is temporarily unavailable." });
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * POST /api/mpesa/stkpush
  * Body: { phone, amount, account_ref? }
@@ -386,6 +470,11 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
   }
   if (!await isActiveIspAdmin(scopedAdminId)) {
     res.status(404).json({ ok: false, error: "The selected ISP account is not active." });
+    return;
+  }
+  const adminAuth = validateToken(extractToken(req));
+  if (!adminAuth || adminAuth.type !== "a" || (adminAuth.uid !== "superadmin" && Number(adminAuth.uid) !== scopedAdminId)) {
+    res.status(401).json({ ok: false, error: "An ISP Admin session is required to send this payment prompt." });
     return;
   }
 
@@ -533,8 +622,12 @@ router.get("/mpesa/callback", (_req: Request, res: Response): void => {
 router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void> => {
   try {
     const checkoutId = String(req.body?.Body?.stkCallback?.CheckoutRequestID ?? "").trim();
-    if (!checkoutId) {
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId)) {
       res.status(400).json({ ResultCode: 1, ResultDesc: "CheckoutRequestID is required" });
+      return;
+    }
+    if (!allowCallbackIntake(req)) {
+      res.status(429).json({ ResultCode: 1, ResultDesc: "Callback rate limit exceeded" });
       return;
     }
     const events = await sbInsert<{ id: number }>("isp_webhook_events", {
@@ -563,8 +656,8 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string;
   };
 
   if (!phone || !amount) {
@@ -581,13 +674,26 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  /* Normalise phone to 254XXXXXXXXX format */
-  const raw = String(phone).replace(/\D/g, "");
-  const normalised = raw.startsWith("0")
-    ? `254${raw.slice(1)}`
-    : raw.startsWith("254")
-    ? raw
-    : `254${raw}`;
+  const normalised = normaliseKenyanPhone(String(phone));
+  const requestedAmount = Math.ceil(Number(amount));
+  const requestedPlanId = Number(plan_id);
+  const intent = typeof paymentIntent === "string" ? validatePaymentIntent(paymentIntent) : null;
+  const adminAuth = validateToken(extractToken(req));
+  const hasAdminSession = !!adminAuth && adminAuth.type === "a" &&
+    (adminAuth.uid === "superadmin" || Number(adminAuth.uid) === scopedAdminId);
+  const hasMatchingIntent = !!intent &&
+    intent.adminId === scopedAdminId &&
+    intent.planId === requestedPlanId &&
+    intent.amount === requestedAmount &&
+    intent.phone === normalised;
+  if (!hasAdminSession && !hasMatchingIntent) {
+    res.status(401).json({ ok: false, error: "Create a payment checkout from an active plan or sign in as this ISP Admin." });
+    return;
+  }
+  if (!allowStkRequest(req, scopedAdminId, normalised)) {
+    res.status(429).json({ ok: false, error: "Too many payment prompts. Please wait before trying again." });
+    return;
+  }
 
   const cfg = await getMpesaSettings();
   if (!isMpesaConfigured(cfg)) {

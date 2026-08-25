@@ -314,7 +314,7 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
       const { ADMIN_ID: adminId } = await import("@/lib/supabase");
       const response = await fetch("/api/mpesa/stk", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: adminApiHeaders(),
         body: JSON.stringify({
           phone: phone.trim(),
           amount: numericAmount,
@@ -440,7 +440,7 @@ function AdminPaymentGatewayCard() {
   };
 
   return (
-    <Card title="Active Payment Gateway" desc="Select one payment gateway to use for this ISP at a time">
+    <Card title="Active Payment Gateway" desc="Switch this ISP’s payment gateway anytime — no Super Admin approval or passcode required">
       <Field label="Payment Gateway">
         <Select value={paymentGateway} onChange={event => { setPaymentGateway(event.target.value); setSaved(false); setError(""); }}>
           {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
@@ -449,7 +449,7 @@ function AdminPaymentGatewayCard() {
         </Select>
       </Field>
       <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
-        Your selection is the active payment gateway for this ISP. Select a different option at any time to switch the active account.
+        This setting belongs to your ISP account. Select a different option at any time to switch the active gateway; only your normal ISP Admin sign-in is required.
       </p>
       {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "10px 0 0" }}>⚠ {error}</p>}
       {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>✓ Payment gateway saved.</p>}
@@ -1553,7 +1553,7 @@ function PaymentGatewaysTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        Select one active payment gateway for this ISP. You can switch to another gateway whenever needed.
+        Select one active payment gateway for this ISP. You can switch to another gateway whenever needed without Super Admin approval.
       </div>
       <AdminPaymentGatewayCard />
 

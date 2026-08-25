@@ -45,6 +45,23 @@ function writeFile(data: SettingsFile): void {
   }
 }
 
+function scrubLegacyDarajaSecrets(): void {
+  const data = readFile();
+  if (!data.mpesa) return;
+  const existing = normaliseMpesaSettings(data.mpesa);
+  data.mpesa = {
+    consumerKey: "",
+    consumerSecret: "",
+    passkey: "",
+    shortcode: existing.shortcode,
+    callbackUrl: existing.callbackUrl,
+    env: existing.env,
+    tillNumber: existing.tillNumber,
+  };
+  writeFile(data);
+  logger.info("[settings-store] scrubbed legacy Daraja secrets from local settings");
+}
+
 /* ── M-Pesa ── */
 
 const DARAJA_SETTINGS_ID = "global_daraja";
@@ -144,10 +161,17 @@ export async function getMpesaSettings(): Promise<MpesaSettings> {
   const record = rows[0];
   if (record) {
     try {
-      return decryptMpesaSettings(record);
+      const settings = decryptMpesaSettings(record);
+      scrubLegacyDarajaSecrets();
+      return settings;
     } catch (err) {
       logger.error({ err }, "[settings-store] could not decrypt Daraja settings");
-      return bootstrap;
+      return normaliseMpesaSettings({
+        shortcode: bootstrap.shortcode,
+        callbackUrl: bootstrap.callbackUrl,
+        env: bootstrap.env,
+        tillNumber: bootstrap.tillNumber,
+      });
     }
   }
 
@@ -165,7 +189,8 @@ export async function getMpesaSettings(): Promise<MpesaSettings> {
 /** Encrypts and saves Daraja configuration to Supabase. */
 export async function saveMpesaSettings(settings: MpesaSettings): Promise<void> {
   if (!supabaseConfigured) throw new Error("Supabase must be configured to save Daraja settings.");
-  const encrypted = encryptMpesaSettings(normaliseMpesaSettings(settings));
+  const normalised = normaliseMpesaSettings(settings);
+  const encrypted = encryptMpesaSettings(normalised);
   const saved = await sbUpsert<EncryptedDarajaSettings>(
     "platform_secure_settings",
     "id",
@@ -174,6 +199,7 @@ export async function saveMpesaSettings(settings: MpesaSettings): Promise<void> 
   if (!saved[0]) {
     throw new Error("Could not save encrypted Daraja settings to Supabase. Apply the secure settings migration first.");
   }
+  scrubLegacyDarajaSecrets();
   logger.info("[settings-store] encrypted Daraja settings saved to Supabase");
 }
 

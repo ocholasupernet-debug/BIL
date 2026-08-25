@@ -353,6 +353,8 @@ create table if not exists isp_webhook_events (
 );
 create index if not exists isp_webhook_events_gateway_idx    on isp_webhook_events(gateway);
 create index if not exists isp_webhook_events_created_at_idx on isp_webhook_events(created_at desc);
+create index if not exists isp_webhook_events_mpesa_received_idx
+  on isp_webhook_events(gateway, status, created_at asc);
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- FREERADIUS TABLES (used by hotspot / PPPoE auth via RADIUS)

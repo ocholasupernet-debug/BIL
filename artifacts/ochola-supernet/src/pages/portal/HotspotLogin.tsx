@@ -159,10 +159,20 @@ export default function HotspotLogin() {
     if (!selectedPlan || !phone.trim()) return;
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setPollTimedOut(false);
     try {
+      const intentResponse = await fetch("/api/mpesa/intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone.trim(), plan_id: selectedPlan.id, adminId }),
+      });
+      const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number };
+      if (!intentResponse.ok || !intentData.ok || !intentData.paymentIntent || !intentData.amount) {
+        setPayError(intentData.error ?? "Could not start a secure payment checkout. Please try again.");
+        return;
+      }
       const res = await fetch("/api/mpesa/stk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), amount: selectedPlan.price, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName }),
+        body: JSON.stringify({ phone: phone.trim(), amount: intentData.amount, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName, paymentIntent: intentData.paymentIntent }),
       });
       const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
       if (!res.ok || !data.ok) setPayError(data.error ?? "Failed to send STK push. Please try again.");

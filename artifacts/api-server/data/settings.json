@@ -2,10 +2,11 @@
   "mpesa": {
     "consumerKey": "",
     "consumerSecret": "",
-    "shortcode": "4346291",
     "passkey": "",
+    "shortcode": "4346291",
     "callbackUrl": "",
-    "env": "production"
+    "env": "production",
+    "tillNumber": ""
   },
   "paymentDestinations": {
     "registrationDestinationId": "destination_6f123d0f-940b-4f99-985a-4be053394d7c",
