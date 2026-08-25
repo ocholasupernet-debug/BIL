@@ -1,10 +1,27 @@
 {
   "mpesa": {
-    "consumerKey": "P0IVV6yGy5Ci3KDc4UbcfL1RVKOGeyCxOFiNQapsdjNCeOak",
-    "consumerSecret": "rB80ieyQSU0xn89osFyOoS7tIP6TX0et3NCIAKU94vGnMisgZbMrCvFEbxh3GS6R",
+    "consumerKey": "",
+    "consumerSecret": "",
     "shortcode": "41764011",
     "passkey": "",
     "callbackUrl": "",
     "env": "sandbox"
+  },
+  "paymentDestinations": {
+    "registrationDestinationId": "destination_6f123d0f-940b-4f99-985a-4be053394d7c",
+    "renewalDestinationId": "destination_6f123d0f-940b-4f99-985a-4be053394d7c",
+    "destinations": [
+      {
+        "id": "destination_6f123d0f-940b-4f99-985a-4be053394d7c",
+        "type": "till",
+        "name": "ocholasupernet",
+        "number": "4770766",
+        "accountReference": "",
+        "instructions": "",
+        "active": true,
+        "createdAt": "2026-08-25T07:14:17.142Z",
+        "updatedAt": "2026-08-25T07:14:17.142Z"
+      }
+    ]
   }
 }
