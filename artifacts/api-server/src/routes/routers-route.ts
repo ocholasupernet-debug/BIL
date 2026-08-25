@@ -36,6 +36,13 @@ async function tcpProbe(host: string): Promise<number | null> {
 
 const router: IRouter = Router();
 
+function isPendingSetup(status: string | null | undefined): boolean {
+  return status === "setup"
+    || status === "awaiting_ports"
+    || status === "awaiting_sync"
+    || status === "awaiting_connection";
+}
+
 /*
  * /api/routers — thin proxy to Supabase isp_routers.
  * The frontend Routers.tsx page writes to Supabase directly; this route is
@@ -157,8 +164,8 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
 
   const rows = await sbSelect<{
     id: number; host: string; bridge_ip: string | null;
-    router_username: string; router_secret: string | null;
-  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,router_username,router_secret&limit=1`);
+    router_username: string; router_secret: string | null; status: string;
+  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,router_username,router_secret,status&limit=1`);
 
   const row = rows[0];
   if (!row) { res.status(404).json({ ok: false, error: "Router not found" }); return; }
@@ -178,7 +185,7 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
     const result = await pingRouter(creds);
     const now = result.connectedAt;
     await sbUpdate("isp_routers", `id=eq.${id}`, {
-      status: "online", last_seen: now,
+      ...(!isPendingSetup(row.status) ? { status: "online", last_seen: now } : {}),
       model: result.board || undefined, ros_version: result.version || undefined,
       updated_at: now,
       ...(result.uptime ? { router_uptime: result.uptime, uptime_at: now } : {}),
@@ -192,14 +199,16 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
     if (openPort !== null) {
       const now = new Date().toISOString();
       await sbUpdate("isp_routers", `id=eq.${id}`, {
-        status: "online", last_seen: now, updated_at: now,
+        ...(!isPendingSetup(row.status) ? { status: "online", last_seen: now } : {}),
+        updated_at: now,
       });
       logger.info({ routerId: id, host, port: openPort }, "[router/ping] online via TCP fallback");
       res.json({ ok: true, online: true, via: `tcp:${openPort}`, note: `Router is reachable (port ${openPort} open) but RouterOS API is unavailable. Check API credentials or enable /ip service api.` });
     } else {
       const error = (apiErr as Error).message;
       await sbUpdate("isp_routers", `id=eq.${id}`, {
-        status: "offline", updated_at: new Date().toISOString(),
+        ...(!isPendingSetup(row.status) ? { status: "offline" } : {}),
+        updated_at: new Date().toISOString(),
       });
       logger.warn({ routerId: id, error }, "[router/ping] offline");
       res.json({ ok: false, online: false, error });
@@ -215,8 +224,8 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
 
   const routers = await sbSelect<{
     id: number; name: string; host: string; bridge_ip: string | null;
-    router_username: string; router_secret: string | null;
-  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret`);
+    router_username: string; router_secret: string | null; status: string;
+  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret,status`);
 
   if (!routers.length) { res.json({ ok: true, results: [], total: 0 }); return; }
 
@@ -235,7 +244,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
       try {
         const r = await pingRouter(creds);
         await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-          status: "online", last_seen: r.connectedAt,
+          ...(!isPendingSetup(row.status) ? { status: "online", last_seen: r.connectedAt } : {}),
           model: r.board || undefined, ros_version: r.version || undefined,
           updated_at: r.connectedAt,
           ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),
@@ -243,7 +252,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
         return { id: row.id, name: row.name, online: true, identity: r.identity, uptime: r.uptime };
       } catch (err) {
         /* Only write "offline" in production — in dev the VPS is the source of truth */
-        if (process.env.NODE_ENV === "production") {
+        if (process.env.NODE_ENV === "production" && !isPendingSetup(row.status)) {
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
             status: "offline", updated_at: new Date().toISOString(),
           });
@@ -317,7 +326,7 @@ export async function sweepAllRouters(): Promise<void> {
     const routers = await sbSelect<{
       id: number; name: string; host: string; bridge_ip: string | null;
       router_username: string; router_secret: string | null;
-    }>("isp_routers", "select=id,name,host,bridge_ip,router_username,router_secret");
+    }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,bridge_ip,router_username,router_secret");
 
     if (!routers.length) return;
 

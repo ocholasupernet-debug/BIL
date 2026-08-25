@@ -217,7 +217,15 @@ function resolveOrigin(host: string): string {
    Sub-script URLs use the requesting ISP's own subdomain so each
    ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-function buildMainhotspotRsc(scriptsBase: string, progressUrl: string = "", routerName: string = ""): string {
+function buildMainhotspotRsc(
+  scriptsBase: string,
+  progressUrl: string = "",
+  routerName: string = "",
+  companyName: string = "ISPlatty",
+  registrationUrl: string = "",
+  heartbeatUrl: string = "",
+  installerUrl: string = "",
+): string {
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
      render a live timeline. The function pg is a no-op when no URL was
@@ -232,6 +240,10 @@ function buildMainhotspotRsc(scriptsBase: string, progressUrl: string = "", rout
      .replace(/"/g, '\\"');
   const safeProgressUrl = rscEscape(progressUrl);
   const safeRouterName  = rscEscape(routerName);
+  const safeCompanyName = rscEscape(companyName) || "ISPlatty";
+  const safeRegistrationUrl = rscEscape(registrationUrl);
+  const safeHeartbeatUrl = rscEscape(heartbeatUrl);
+  const safeInstallerUrl = rscEscape(installerUrl);
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
@@ -245,8 +257,9 @@ function buildMainhotspotRsc(scriptsBase: string, progressUrl: string = "", rout
 }`
     : `:global pg do={}`;
 
-  return `# Main ISP Setup Script (mainhotspot.rsc)
+  return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
+# Router: ${safeRouterName || "new router"}
 
 ${pgDef}
 
@@ -270,6 +283,9 @@ ${pgDef}
     :error "No internet connection. Please check your internet connection and try again."
 }
 :local failures 0
+:put "======================================================"
+:put " ${safeCompanyName} router setup"
+:put "======================================================"
 
 # --- VPN configuration --------------------------------------------------------
 :local vpnUrl
@@ -385,6 +401,20 @@ ${pgDef}
     :do { /file remove heartbeat.rsc } on-error={}
 }
 
+# --- Router-specific heartbeat endpoint ---------------------------------------
+# The generic heartbeat bootstrap intentionally has no router secret. Replace it
+# here with this router's authenticated URL and run it once immediately so the
+# saved-router gate receives a genuine connection proof.
+${safeHeartbeatUrl ? `:do {
+    /system script remove [find name=ochola-heartbeat-script]
+    /system scheduler remove [find name=ochola-heartbeat]
+    /system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${safeHeartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+    /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${safeCompanyName} heartbeat"
+    /system script run ochola-heartbeat-script
+    :put "      Authenticated heartbeat installed and sent."
+} on-error={ :put "  WARN [heartbeat] authenticated heartbeat install failed" }
+` : `# This generic script has no saved-router token, so its heartbeat remains disabled.`}
+
 # --- Sync-full script ---------------------------------------------------------
 :do {
     $pg 7 "syncfull" "downloading" ""
@@ -403,6 +433,35 @@ ${pgDef}
     :do { /file remove syncfull.rsc } on-error={}
 }
 
+# --- Preserve the personalized installer on daily updates ---------------------
+# syncfull.rsc installs a generic fallback scheduler. Replace it here only when
+# this installer was bound to a validated router record, otherwise generic
+# downloads must remain tokenless and unable to report as a saved router.
+${safeInstallerUrl ? `:do {
+    /system scheduler remove [find name=ochola-autoupdate]
+    /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${safeInstallerUrl}\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" comment="${safeCompanyName} personalized auto-update"
+    :put "      Personalized auto-update scheduler installed."
+} on-error={ :put "  WARN [auto-update] personalized scheduler install failed" }
+` : `# Generic installers intentionally retain the tokenless update scheduler.`}
+
+# --- Optional diagnostic logging ----------------------------------------------
+:do {
+    :put "Downloading diagnostic log-push script..."
+    /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc mode=https check-certificate=no
+    :delay 2s
+    /import logpush.rsc
+    :do { /file remove logpush.rsc } on-error={}
+} on-error={ :put "Diagnostic log-push install skipped (non-fatal)" }
+
+# --- Optional API hardening ----------------------------------------------------
+:do {
+    :put "Downloading API security script..."
+    /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc mode=https check-certificate=no
+    :delay 2s
+    /import seclogpush.rsc
+    :do { /file remove seclogpush.rsc } on-error={}
+} on-error={ :put "API security install skipped (non-fatal)" }
+
 # --- DNS flush scheduler ------------------------------------------------------
 :do {
     :put "Setting up DNS flush scheduler..."
@@ -415,10 +474,42 @@ ${pgDef}
     :put ("  WARN [dns-flush] FAILED: " . $error)
 }
 
-:if ($failures = 0) do={
-    :put "All configurations completed successfully."
+# --- Report the installed router to this ISP's current app --------------------
+${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
+:local reportedIp ""
+:foreach a in=[/ip address find where interface="ocholasupernet"] do={
+    :set reportedIp [/ip address get $a address]
+}
+:if ($reportedIp != "") do={
+    :local slashPos [:find $reportedIp "/"]
+    :if ([:len $slashPos] > 0) do={ :set reportedIp [:pick $reportedIp 0 $slashPos] }
+    :local rm ""
+    :local ri ""
+    :local rv ""
+    :do { :set rm [/system routerboard get model] } on-error={}
+    :do { :set ri [/system identity get name] } on-error={}
+    :do { :set rv [/system package get [find name=routeros] version] } on-error={}
+    :do {
+        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) mode=https check-certificate=no dst-path=router-register.tmp
+        :do { /file remove router-register.tmp } on-error={}
+        :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
+    } on-error={ :put "Router registration report failed (ignored)" }
 } else={
-    :put ("Setup finished with " . $failures . " failed step(s) - see WARN lines above.")
+    :put "Management VPN has no IP yet; skipping router registration report"
+}
+` : `# Router registration is enabled when this script is generated for a saved router.`}
+
+# --- Keep install noise out of the normal system log --------------------------
+:do {
+    /system logging set [find topics="warning"] topics=warning,!script
+    /system logging set [find topics="script"] topics=script,!warning
+    :put "Log script-warning suppression applied"
+} on-error={ :put "Log suppression skipped (non-fatal)" }
+
+:if ($failures = 0) do={
+    :put "${safeCompanyName}: all configurations completed successfully."
+} else={
+    :put ("${safeCompanyName}: setup finished with " . $failures . " failed step(s) - see WARN lines above.")
 }
 
 # Final completion ping for the admin progress timeline (no-op when pg was disabled)
@@ -432,7 +523,7 @@ ${pgDef}
 `;
 }
 
-router.get("/scripts/mainhotspot.rsc", (req, res): void => {
+router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const host = (req.headers.host ?? "") as string;
   const origin = resolveOrigin(host);
   const scriptsBase = `${origin}/scripts`;
@@ -446,11 +537,62 @@ router.get("/scripts/mainhotspot.rsc", (req, res): void => {
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
   const rname  = ((req.query.name  ?? "") as string).trim().slice(0, 80);
+  let companyName = "ISPlatty";
+  let resolvedRouterName = rname;
+  let registrationUrl = "";
+  let heartbeatUrl = "";
+  let installerUrl = "";
+
+  interface InstallRouter { admin_id: number; name: string; }
+  interface InstallAdmin { id: number; name: string; }
+
+  try {
+    if (rid && token) {
+      /* A valid router secret binds the install script to a specific ISP and
+         unlocks the post-install registration call. */
+      const routers = await sbGet<InstallRouter>(
+        `isp_routers?id=eq.${rid}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=admin_id,name&limit=1`,
+      );
+      const currentRouter = routers[0];
+      if (currentRouter) {
+        resolvedRouterName = currentRouter.name;
+        registrationUrl = `${origin}/api/isp/router/register/${token}`;
+        heartbeatUrl = `${origin}/api/isp/router/heartbeat/${token}`;
+        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
+        const admins = await sbGet<InstallAdmin>(
+          `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
+        );
+        companyName = admins[0]?.name || companyName;
+      }
+    } else {
+      const subdomain = parseSubdomain(host);
+      if (subdomain) {
+        const admins = await sbGet<InstallAdmin>(
+          `isp_admins?subdomain=eq.${encodeURIComponent(subdomain)}&select=id,name&limit=1`,
+        );
+        companyName = admins[0]?.name || companyName;
+      }
+    }
+  } catch {
+    /* The script remains usable when the identity lookup is temporarily down. */
+  }
+
   const progressUrl = (rid && token)
     ? `${origin}/api/isp/router/install-progress/${rid}?token=${encodeURIComponent(token)}`
     : "";
-  res.type("text/plain");
-  res.send(buildMainhotspotRsc(scriptsBase, progressUrl, rname));
+  res
+    .set("Content-Type", "text/plain; charset=utf-8")
+    .set("Content-Disposition", "attachment; filename=\"mainhotspot.rsc\"")
+    .set("Cache-Control", "no-cache")
+    .send(buildMainhotspotRsc(
+      scriptsBase,
+      progressUrl,
+      resolvedRouterName,
+      companyName,
+      registrationUrl,
+      heartbeatUrl,
+      installerUrl,
+    ));
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1071,6 +1213,22 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 :put "  [syncusers] User-sync firewall rules applied  OK"
 `;
 
+/* ── Optional diagnostic logging bootstrap ──
+   This preserves the Main ISP Ledger install stage without introducing a
+   third-party log collector. The active app remains the source of router
+   health and install events. */
+const LOGPUSH_RSC = `# logpush.rsc – ISPlatty diagnostic logging bootstrap
+:put "  [logpush] Diagnostics remain available through the ISP dashboard."
+`;
+
+/* ── Optional API security bootstrap ──
+   Router-specific firewall allow rules are created by the main configuration.
+   This stage intentionally avoids broad DROP rules that could lock an admin
+   out of a freshly installed router. */
+const SECLOGPUSH_RSC = `# seclogpush.rsc – ISPlatty API security bootstrap
+:put "  [api-security] Router-specific API access policy is being retained."
+`;
+
 /* ── Heartbeat ── */
 function buildHeartbeatRsc(origin: string): string {
   return `# heartbeat.rsc – Installs the periodic heartbeat script + scheduler
@@ -1160,6 +1318,8 @@ const STATIC_SUBSCRIPTS: Record<string, SubScriptEntry> = {
   "pppoesetup.rsc":   PPPOESETUP_RSC,
   "users.rsc":        USERS_RSC,
   "syncusers.rsc":    SYNCUSERS_RSC,
+  "logpush.rsc":      LOGPUSH_RSC,
+  "seclogpush.rsc":   SECLOGPUSH_RSC,
   "heartbeat.rsc":    buildHeartbeatRsc,
   "syncfull.rsc":     buildSyncfullRsc,
 };

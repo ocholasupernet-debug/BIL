@@ -5,7 +5,7 @@ import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Check, Copy, Loader2, Settings, ArrowRight, Terminal,
-  ChevronRight, Info, HelpCircle, AlertTriangle,
+  ChevronRight, Info, HelpCircle, AlertTriangle, Download,
 } from "lucide-react";
 
 /* ─── Types ─────────────────────────────────────────────────────── */
@@ -108,6 +108,7 @@ export default function SelfInstall() {
 
   const [phase, setPhase]               = useState<"idle" | "generated">(reconfigureId ? "generated" : "idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
+  const [generatedRouter, setGeneratedRouter] = useState<FullRouter | null>(null);
   const [generating, setGenerating]     = useState(false);
   const [showHelp, setShowHelp]         = useState(false);
 
@@ -148,7 +149,12 @@ export default function SelfInstall() {
   const nextName   = `${nameBase}${nextNumber}`;
   const nextSlug   = slugify(nextName);
 
-  const activeRouter  = activeRouterId ? (routers.find(r => r.id === activeRouterId) ?? null) : null;
+  const activeRouter  = activeRouterId
+    ? (routers.find(r => r.id === activeRouterId) ?? generatedRouter)
+    : null;
+  const savedRouters  = routers.filter((router) =>
+    ["online", "connected", "active"].includes((router.status ?? "").toLowerCase()) && !!router.last_seen
+  );
   const displayName   = activeRouter?.name ?? nextName;
   const displaySlug   = activeRouter ? slugify(activeRouter.name) : nextSlug;
   const profileFile   = `${displaySlug}.ovpn`;
@@ -156,6 +162,9 @@ export default function SelfInstall() {
   const fetchCmd      = (activeRouterId && activeRouter?.router_secret)
     ? `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc?rid=${activeRouterId}&token=${encodeURIComponent(activeRouter.router_secret)}&name=${encodeURIComponent(displayName)}" dst-path=mainhotspot.rsc mode=https`
     : `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc" dst-path=mainhotspot.rsc mode=https`;
+  const scriptUrl = (activeRouterId && activeRouter?.router_secret)
+    ? `${scriptHost}/api/scripts/mainhotspot.rsc?rid=${activeRouterId}&token=${encodeURIComponent(activeRouter.router_secret)}&name=${encodeURIComponent(displayName)}`
+    : `${scriptHost}/api/scripts/mainhotspot.rsc`;
   const importCmd     = `/import mainhotspot.rsc`;
 
   const isReconfigure   = !!reconfigureId;
@@ -182,8 +191,11 @@ export default function SelfInstall() {
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ adminId: ADMIN_ID, routerName: nextName }),
       });
-      const json = await res.json() as { ok: boolean; router?: { id: number } };
-      if (json.ok && json.router?.id) setActiveRouterId(json.router.id);
+      const json = await res.json() as { ok: boolean; router?: FullRouter };
+      if (json.ok && json.router?.id) {
+        setGeneratedRouter(json.router);
+        setActiveRouterId(json.router.id);
+      }
     } catch { /* auto-create on script fetch */ }
     finally {
       setGenerating(false);
@@ -310,19 +322,19 @@ export default function SelfInstall() {
             </div>
 
             {/* Existing routers list */}
-            {routers.length > 0 && (
+             {savedRouters.length > 0 && (
               <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflow: "hidden" }}>
                 <div style={{ padding: "0.625rem 1rem", background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--isp-border)", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Existing routers ({routers.length})
+                   Saved routers ({savedRouters.length})
                 </div>
-                {routers.map((r, i) => {
+                 {savedRouters.map((r, i) => {
                   const colour = routerStatusColor(r);
                   const label  = routerStatusLabel(r);
                   return (
                     <div key={r.id} style={{
                       display: "flex", alignItems: "center", gap: "0.625rem",
                       padding: "0.6rem 1rem",
-                      borderBottom: i < routers.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
+                       borderBottom: i < savedRouters.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
                     }}>
                       <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: colour }} />
                       <span style={{ fontSize: "0.8rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
@@ -363,13 +375,40 @@ export default function SelfInstall() {
                   <code style={{ fontFamily: "monospace", fontSize: "0.73rem", color: "#64748b", marginLeft: "0.5rem" }}>({scriptFile})</code>
                 </div>
                 <button
-                  onClick={() => { setPhase("idle"); setActiveRouterId(null); }}
+                  onClick={() => { setPhase("idle"); setActiveRouterId(null); setGeneratedRouter(null); }}
                   style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "0.25rem 0.625rem", cursor: "pointer", fontFamily: "inherit" }}
                 >
                   ← Back
                 </button>
               </div>
             )}
+
+            {/* Personalized script actions */}
+            <div style={{
+              background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)",
+              borderRadius: 10, padding: "0.875rem 1.125rem", display: "flex",
+              alignItems: "center", justifyContent: "space-between", gap: "0.875rem", flexWrap: "wrap",
+            }}>
+              <div style={{ minWidth: 180, flex: 1 }}>
+                <div style={{ color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 700, marginBottom: "0.2rem" }}>
+                  Personalized installer for {adminData?.name ?? "your ISP"}
+                </div>
+                <div style={{ color: "var(--isp-text-muted)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                  Includes this router’s progress reporting, current ISP identity, and ISPlatty service URLs.
+                </div>
+              </div>
+              <a
+                href={scriptUrl}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: "0.45rem",
+                  padding: "0.55rem 0.9rem", borderRadius: 7, background: "#2563eb",
+                  color: "white", fontSize: "0.78rem", fontWeight: 700, textDecoration: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Download size={14} /> Download .rsc
+              </a>
+            </div>
 
             {/* Commands card */}
             <div style={{ background: "var(--isp-card)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 12, overflow: "hidden" }}>

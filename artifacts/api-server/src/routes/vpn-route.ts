@@ -307,13 +307,13 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
     /* 2. Load all routers */
     let routers: {
       id: number; name: string; host: string; bridge_ip: string | null;
-      router_username: string; router_secret: string | null;
+      router_username: string; router_secret: string | null; status: string;
     }[] = [];
     try {
       routers = await sbSelect<{
         id: number; name: string; host: string; bridge_ip: string | null;
-        router_username: string; router_secret: string | null;
-      }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret`);
+        router_username: string; router_secret: string | null; status: string;
+      }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret,status`);
     } catch (dbErr) {
       res.json({
         ok:    false,
@@ -365,8 +365,9 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
         try {
           const ping = await pingRouter(creds);
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-            status:      "online",
-            last_seen:   ping.connectedAt,
+            ...(!["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(row.status)
+              ? { status: "online", last_seen: ping.connectedAt }
+              : {}),
             model:       ping.board    || undefined,
             ros_version: ping.version  || undefined,
             updated_at:  ping.connectedAt,
@@ -378,7 +379,10 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
           });
         } catch (err) {
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-            status: "offline", updated_at: new Date().toISOString(),
+            ...(!["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(row.status)
+              ? { status: "offline" }
+              : {}),
+            updated_at: new Date().toISOString(),
           });
           results.push({
             routerId: row.id, routerName: row.name, matched: true,

@@ -165,13 +165,14 @@ async function bgAutoProbe(
     const model   = boardName || sysRes["board-name"] || "";
     const version = sysRes.version || "";
     console.log(`[auto-probe] ✓ ${host} — model=${model} ver=${version}`);
-    /* Persist host + hardware info */
+    /* Persist only metadata. A probe must never activate a temporary
+       self-install record before the sync and bridge gates have passed. */
     await fetch(
       `${url}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ host, model, ros_version: version, status: "online" }),
+        body: JSON.stringify({ host, model, ros_version: version }),
       }
     );
   } catch (e) {
@@ -1013,13 +1014,14 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 /* ═══════════════════════════════════════════════════════════════
    POST /api/admin/router/bridge-assign
    Adds/removes ports from a bridge.
-   Body: { host, username, password, bridge, addPorts[], removePorts[] }
+   Body: { host, username, password, bridge, addPorts[], removePorts[], desiredPorts[] }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
-  const { host, username, password, bridge, addPorts = [], removePorts = [], bridgeIp } = req.body as {
+  const { host, username, password, bridge, addPorts = [], removePorts = [], desiredPorts, bridgeIp, routerId } = req.body as {
     host: string; username: string; password: string;
     bridge: string; addPorts: string[]; removePorts: string[];
-    bridgeIp?: string;
+    desiredPorts?: string[];
+    bridgeIp?: string; routerId?: number;
   };
 
   /* Accept bridgeIp as a fallback when host is absent */
@@ -1032,17 +1034,18 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
   const logs: string[] = [];
   const log = (m: string) => logs.push(m);
 
-  /* No-op short-circuit — report clearly instead of silently succeeding */
+  /* A no-change submission is valid when the selected membership is already
+     correct. Keep going so the router can prove that membership; never trust
+     the browser's stale snapshot as completion evidence. */
   if (addPorts.length === 0 && removePorts.length === 0) {
-    log("ℹ️  No port changes needed — the selected ports already match the bridge membership.");
+    log("ℹ️  No port changes requested — verifying the selected bridge membership on the router.");
     log(`   Bridge: ${bridge}`);
-    log("   To add a port: tick it and click Finish. To remove: untick and click Finish.");
-    res.json({ ok: true, logs });
-    return;
   }
 
   let conn = makeConn(primaryHost, username, password);
   let connectedVia = primaryHost;
+  let connectedHost = primaryHost;
+  let portOperationFailed = false;
 
   try {
     try {
@@ -1055,6 +1058,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
         conn = makeConn(altHost, username, password);
         await withTimeout(conn.connect(), 12000);
         connectedVia = `${altHost} (VPN)`;
+        connectedHost = altHost;
         log(`✓ Connected via VPN tunnel (${altHost})`);
       } else {
         throw directErr;
@@ -1077,7 +1081,10 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
             log(`✓ Removed ${iface} from ${bridge}`);
           }
         }
-      } catch (e) { log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, username)}`); }
+      } catch (e) {
+        portOperationFailed = true;
+        log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, username)}`);
+      }
     }
 
     /* Add ports */
@@ -1099,12 +1106,56 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
           `=interface=${iface}`,
         ]);
         log(`✓ Added ${iface} → ${bridge}`);
-      } catch (e) { log(`❌ Add ${iface}: ${enrichPermErr(e, username)}`); }
+      } catch (e) {
+        portOperationFailed = true;
+        log(`❌ Add ${iface}: ${enrichPermErr(e, username)}`);
+      }
+    }
+
+    /* Do not treat a successful API connection as proof that bridge work
+       completed. Re-read the full bridge membership and compare it with the
+       selected snapshot, including a legitimate no-change submission. */
+    const currentMembers = await conn.write(["/interface/bridge/port/print", `?bridge=${bridge}`]);
+    const actualPorts = new Set(
+      Array.isArray(currentMembers)
+        ? currentMembers.map(row => String((row as Record<string, unknown>).interface ?? "")).filter(Boolean)
+        : [],
+    );
+    const expectedPorts = new Set(Array.isArray(desiredPorts) ? desiredPorts.filter(Boolean) : []);
+    let portMembershipVerified = !portOperationFailed && Array.isArray(desiredPorts);
+    if (!Array.isArray(desiredPorts)) {
+      log("❌ Verification failed: the selected port snapshot was not supplied.");
+    }
+    for (const iface of expectedPorts) {
+      if (!actualPorts.has(iface)) {
+        portMembershipVerified = false;
+        log(`❌ Verification failed: ${iface} is not a member of ${bridge}`);
+      }
+    }
+    for (const iface of actualPorts) {
+      if (!expectedPorts.has(iface)) {
+        portMembershipVerified = false;
+        log(`❌ Verification failed: ${iface} is unexpectedly a member of ${bridge}`);
+      }
     }
 
     conn.close();
-    log(`\n✅ Bridge port assignment complete`);
-    res.json({ ok: true, logs });
+    log(portMembershipVerified
+      ? `\n✅ Bridge port assignment complete`
+      : `\n⚠️ Bridge port assignment was not fully verified`);
+    if (routerId && portMembershipVerified && await bridgeAssignmentMatchesSetupRouter(
+      routerId,
+      connectedHost,
+      username,
+    )) {
+      const setupMessage = await markBridgePortsAssigned(routerId);
+      if (setupMessage) log(`ℹ️  ${setupMessage}`);
+    } else if (routerId && !portMembershipVerified) {
+      log("ℹ️  Router setup remains pending until every requested bridge change is verified.");
+    } else if (routerId) {
+      log("ℹ️  Router setup remains pending because this router target could not be verified.");
+    }
+    res.json({ ok: portMembershipVerified, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${enrichPermErr(err, username)}`);
@@ -1121,6 +1172,117 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
 /* Per-request env helpers — use || so empty-string falls through */
 function hbUrl(): string { return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""; }
 function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
+
+type RouterSetupStatus = "setup" | "awaiting_ports" | "awaiting_sync" | "awaiting_connection";
+
+function isSetupStatus(status: string | undefined): status is RouterSetupStatus {
+  return status === "setup"
+    || status === "awaiting_ports"
+    || status === "awaiting_sync"
+    || status === "awaiting_connection";
+}
+
+type SetupRouterRow = { id: number; status: string; last_seen: string | null };
+
+async function getSetupRouter(routerId: number): Promise<SetupRouterRow | null> {
+  const url = hbUrl();
+  const key = hbKey();
+  if (!url || !key || !routerId) return null;
+  const response = await fetch(
+    `${url}/rest/v1/isp_routers?id=eq.${routerId}&select=id,status,last_seen&limit=1`,
+    { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
+  );
+  if (!response.ok) return null;
+  return ((await response.json()) as SetupRouterRow[])[0] ?? null;
+}
+
+/* The bridge route receives credentials from the admin UI, but routerId is
+   only allowed to advance a setup record after the server confirms it belongs
+   to the same trusted router endpoint and username that were just contacted. */
+async function bridgeAssignmentMatchesSetupRouter(
+  routerId: number,
+  connectedHost: string,
+  username: string,
+): Promise<boolean> {
+  const url = hbUrl();
+  const key = hbKey();
+  if (!url || !key || !routerId) return false;
+  const response = await fetch(
+    `${url}/rest/v1/isp_routers?id=eq.${routerId}&select=host,bridge_ip,router_username,status&limit=1`,
+    { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
+  );
+  if (!response.ok) return false;
+  const row = ((await response.json()) as Array<{
+    host: string | null; bridge_ip: string | null; router_username: string | null; status: string;
+  }>)[0];
+  if (!row || !isSetupStatus(row.status)) return false;
+  const trustedHosts = [row.host, row.bridge_ip].filter((value): value is string => Boolean(value?.trim()))
+    .map(value => value.trim());
+  return trustedHosts.includes(connectedHost.trim())
+    && (row.router_username || "admin") === (username || "admin");
+}
+
+async function setSetupStatus(routerId: number, expectedStatus: string, status: string): Promise<boolean> {
+  const url = hbUrl();
+  const key = hbKey();
+  if (!url || !key || !routerId) return false;
+  const response = await fetch(`${url}/rest/v1/isp_routers?id=eq.${routerId}&status=eq.${encodeURIComponent(expectedStatus)}`, {
+    method: "PATCH",
+    headers: {
+      apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) return false;
+  return ((await response.json()) as unknown[]).length > 0;
+}
+
+/* A self-install record is intentionally invisible to the normal Routers
+   list until all three prerequisites have succeeded: the installer finished
+   its complete sync, bridge ports were applied, and a heartbeat proved the
+   router is connected. */
+async function markInstallSyncComplete(routerId: number): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await getSetupRouter(routerId);
+    if (!row || !isSetupStatus(row.status)) return;
+    if (row.status === "setup") {
+      if (await setSetupStatus(routerId, row.status, "awaiting_ports")) return;
+      continue;
+    }
+    if (row.status === "awaiting_sync") {
+      if (await setSetupStatus(routerId, row.status, row.last_seen ? "online" : "awaiting_connection")) return;
+      continue;
+    }
+    return;
+  }
+}
+
+async function markBridgePortsAssigned(routerId: number): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await getSetupRouter(routerId);
+    if (!row || !isSetupStatus(row.status)) return null;
+    if (row.status === "setup") {
+      if (await setSetupStatus(routerId, row.status, "awaiting_sync")) {
+        return "Ports assigned. Waiting for the router configuration sync to finish before saving it.";
+      }
+      continue;
+    }
+    if (row.status === "awaiting_ports") {
+      if (await setSetupStatus(routerId, row.status, row.last_seen ? "online" : "awaiting_connection")) {
+        return row.last_seen
+          ? "Router setup is complete and it has been saved."
+          : "Ports assigned. Waiting for the router to connect before saving it.";
+      }
+      continue;
+    }
+    if (row.status === "awaiting_connection") {
+      return "Ports are already assigned. Waiting for the router to connect before saving it.";
+    }
+    return null;
+  }
+  return null;
+}
 
   /* ===============================================================
      Install progress tracking - in-memory store
@@ -1278,7 +1440,7 @@ async function handleInstallProgressUpdate(
   /* Persist event so admins can audit past installs even after the
      in-memory store has been GC'd or the API server has restarted. */
   if (step || done) {
-    void recordInstallEvent({
+    await recordInstallEvent({
       routerId:         rid,
       adminId:          routerRow.admin_id,
       routerName:       p.routerName,
@@ -1288,6 +1450,14 @@ async function handleInstallProgressUpdate(
       phase,
       error:            err || undefined,
       done,
+    });
+  }
+
+  const allCoreStepsApplied = [1, 2, 3, 4, 5, 6, 7]
+    .every((coreStep) => p.steps.get(coreStep)?.phase === "applied");
+  if (done && p.failures === 0 && allCoreStepsApplied) {
+    void markInstallSyncComplete(rid).catch((e: unknown) => {
+      console.warn(`[install-progress] could not record completed sync for router ${rid}:`, e);
     });
   }
 
@@ -1505,8 +1675,18 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     const row = updated[0];
     const routerName = row?.name ?? "unknown";
 
-    /* Step 2 — only promote status if the router is NOT in "setup" (awaiting bridge ports) */
-    if (row && row.status !== "setup") {
+    /* Setup records only become visible after both the install sync and bridge
+       assignment have completed. A heartbeat is the final connection proof. */
+    if (row?.status === "awaiting_connection") {
+      fetch(
+        `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+        {
+          method: "PATCH",
+          headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus }),
+        }
+      ).catch((e: unknown) => console.warn(`[heartbeat] setup promotion failed: ${e instanceof Error ? e.message : e}`));
+    } else if (row && !isSetupStatus(row.status)) {
       fetch(
         `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
         {
@@ -1515,8 +1695,8 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
           body: JSON.stringify({ status: newStatus }),
         }
       ).catch((e: unknown) => console.warn(`[heartbeat] status update failed: ${e instanceof Error ? e.message : e}`));
-    } else if (row?.status === "setup") {
-      console.log(`[heartbeat] ↷ ${routerName} is in "setup" — skipping status promotion`);
+    } else if (row && isSetupStatus(row.status)) {
+      console.log(`[heartbeat] ↷ ${routerName} is awaiting setup prerequisites (${row.status})`);
     }
 
     console.log(`[heartbeat] ✓ ${routerName} ${row?.status === "setup" ? "setup" : newStatus} (hs=${hsParam ?? "n/a"}) @ ${ts}`);
@@ -1594,7 +1774,8 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
    GET /api/isp/router/register/:token
    Called once during /import of the .rsc script on the MikroTik.
    Detects router model, RouterOS version and identity then stores
-   them in isp_routers, also marking the router online.
+   them in isp_routers. This registers hardware metadata only; the router is
+   promoted to the saved router list later by the gated setup lifecycle.
 
    Query params (URL-encoded, sent by RouterOS):
      ?model=RB750Gr3   — routerboard model
@@ -1625,8 +1806,9 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
   const enc = encodeURIComponent(token);
 
   try {
-    /* Build the patch — only include fields that were provided */
-    const patch: Record<string, string> = { last_seen: ts, status: "online" };
+    /* Build the patch — only include safe metadata. Registration itself must
+       not set last_seen/status because it happens before bridge assignment. */
+    const patch: Record<string, string> = {};
     if (model)    patch.model       = model;
     if (ver)      patch.ros_version = ver;
     if (bridgeIp) patch.bridge_ip   = bridgeIp;

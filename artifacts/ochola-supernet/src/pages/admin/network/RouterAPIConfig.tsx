@@ -10,6 +10,13 @@ import {
   ChevronDown, ChevronUp,
 } from "lucide-react";
 
+function isPendingSetup(status: string | null | undefined): boolean {
+  return status === "setup"
+    || status === "awaiting_ports"
+    || status === "awaiting_sync"
+    || status === "awaiting_connection";
+}
+
 /* ══════════════════════ Types ══════════════════════════════════ */
 interface DbRouter {
   id: number;
@@ -270,13 +277,12 @@ function RouterForm({
         }));
       }
 
-      /* If test succeeded and editing an existing router, update status in DB */
+      /* A raw credential test is not an installation-complete signal. It may
+         update RouterOS metadata but must not promote a temporary setup record. */
       if (j.ok && routerId) {
         await supabase
           .from("isp_routers")
           .update({
-            status:      "online",
-            last_seen:   new Date().toISOString(),
             ros_version: j.rosVersion || undefined,
           })
           .eq("id", routerId);
@@ -737,10 +743,13 @@ export default function RouterAPIConfig() {
       const j = await r.json() as TestResult & { warnings?: string[] };
       setTestResults(prev => ({ ...prev, [id]: j }));
 
-      /* Update status in Supabase based on test result */
+      const target = routers.find(router => router.id === id);
+      /* A temporary self-install record is promoted only by its server-side
+         sync + ports + heartbeat lifecycle, never by an admin test action. */
       await supabase.from("isp_routers").update({
-        status:    j.ok ? "online" : "offline",
-        last_seen: new Date().toISOString(),
+        ...(!isPendingSetup(target?.status)
+          ? { status: j.ok ? "online" : "offline", last_seen: new Date().toISOString() }
+          : {}),
         ...(j.rosVersion ? { ros_version: j.rosVersion } : {}),
       }).eq("id", id);
 
