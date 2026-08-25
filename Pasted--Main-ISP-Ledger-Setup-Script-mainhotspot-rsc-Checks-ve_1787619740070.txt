@@ -1,0 +1,141 @@
+# Main ISP Ledger Setup Script (mainhotspot.rsc)
+# Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
+
+:global version [/system package update get installed-version]
+:local majorVersion 0
+:local minorVersion 0
+:local dotPos [:find $version "."]
+:if ([:len $dotPos] > 0) do={
+    :set majorVersion [:tonum [:pick $version 0 $dotPos]]
+    :local remaining [:pick $version ($dotPos + 1) [:len $version]]
+    :set dotPos [:find $remaining "."]
+    :if ([:len $dotPos] > 0) do={
+        :set minorVersion [:tonum [:pick $remaining 0 $dotPos]]
+    }
+}
+:if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
+    :put "RouterOS version 6.48 or higher is required."
+    :error "RouterOS version 6.48 or higher is required."
+}
+:if ([/ping 8.8.8.8 count=3] = 0) do={
+    :error "No internet connection. Please check your internet connection and try again."
+}
+:do {
+    :put "Downloading VPN configuration..."
+    :local vpnUrl
+    :if ($majorVersion = 7) do={
+        :set vpnUrl "https://netkali.ispledger.com/scripts/vpn7.rsc"
+    } else={
+        :set vpnUrl "https://netkali.ispledger.com/scripts/vpn6.rsc"
+    }
+    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https
+    :delay 2s
+    :put "Applying VPN configuration..."
+    /import vpnsetup.rsc
+    /file remove vpnsetup.rsc
+    :put "Downloading hotspot configuration..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
+    :delay 2s
+    :put "Applying hotspot configuration..."
+    /import hotspotsetup.rsc
+    /file remove hotspotsetup.rsc
+    :put "Downloading PPPoE configuration..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
+    :delay 2s
+    :put "Applying PPPoE configuration..."
+    /import pppoesetup.rsc
+    /file remove pppoesetup.rsc
+    :put "Downloading users configuration..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/users.rsc" dst-path=users.rsc mode=https
+    :delay 2s
+    :put "Applying users configuration..."
+    /import users.rsc
+    /file remove users.rsc
+    :put "Downloading sync-users firewalls..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/syncusers.rsc" dst-path=syncusers.rsc mode=https
+    :delay 2s
+    :put "Applying sync-users firewalls..."
+    /import syncusers.rsc
+    /file remove syncusers.rsc
+    :put "Downloading heartbeat firewalls..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
+    :delay 2s
+    :put "Applying heartbeat firewalls..."
+    /import heartbeat.rsc
+    /file remove heartbeat.rsc
+    :put "Downloading sync-full script..."
+    /tool fetch url="https://netkali.ispledger.com/scripts/syncfull.rsc" dst-path=syncfull.rsc mode=https
+    :delay 2s
+    :put "Applying sync-full script..."
+    /import syncfull.rsc
+    /file remove syncfull.rsc
+    :put "Downloading log-push script..."
+    :do {
+      /tool fetch url="https://netkali.ispledger.com/scripts/logpush.rsc" dst-path=logpush.rsc mode=https
+      :delay 2s
+      :put "Applying log-push script..."
+      /import logpush.rsc
+      /file remove logpush.rsc
+    } on-error={ :put "log-push install skipped (non-fatal)" }
+
+    # API lockdown (2026-07-08) - a real firewall block on 8728,8729,21 with ACCEPT-gateways-first
+    # then DROP everyone else. Applied on-router via /import (accept lands before the drop atomically),
+    # so it cannot sever the install session. Leaves /ip/service www UNTOUCHED (WebFig/local login
+    # stays open). The seclogpush.rsc block also HEALS any leftover old rules + retired scripts
+    # (including the seclogpush login monitor, retired 2026-07-29 - removed here, never installed).
+    # Runs inside :do{}on-error so a hiccup never aborts the install.
+    :put "Downloading API block script..."
+    :do {
+      /tool fetch url="https://netkali.ispledger.com/scripts/seclogpush.rsc" dst-path=seclogpush.rsc mode=https
+      :delay 2s
+      :put "Applying API block script..."
+      /import seclogpush.rsc
+      /file remove seclogpush.rsc
+    } on-error={ :put "API block install skipped (non-fatal)" }
+
+    :put "Setting up DNS flush firewalls..."
+    :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
+    /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
+    /ip dns cache flush
+    :put "DNS flush firewalls installed (every 6 hours)"
+
+    # â”€â”€â”€ REPORT VPN IP TO PROXY (once) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # The freeispradius ovpn-client was added at the top of this run, so it
+    # already has an IP. Read it and POST (sub, name, ip) to the proxy.
+    :put "Reporting VPN IP to proxy..."
+    :local reportedIp ""
+    :foreach a in=[/ip address find where interface="freeispradius"] do={
+        :set reportedIp [/ip address get $a address]
+    }
+    :if ($reportedIp != "") do={
+        # Strip CIDR suffix (e.g. 10.8.0.6/24 -> 10.8.0.6)
+        :local slashPos [:find $reportedIp "/"]
+        :if ([:len $slashPos] > 0) do={ :set reportedIp [:pick $reportedIp 0 $slashPos] }
+        :do {
+            /tool fetch mode=https http-method=post \
+              http-data=("action=register&sub=netkali&name=netkali4&ip=" . $reportedIp) \
+              url="https://proxyserver.ispledger.com/ipp.php" \
+              output=user
+            :put ("Reported VPN IP " . $reportedIp . " to proxy")
+        } on-error={ :put "Proxy report failed (ignored)" }
+    } else={
+        :put "freeispradius interface has no IP; skipping proxy report"
+    }
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    :put "Suppressing script warnings in system log..."
+    :do {
+        # A script-warning entry (e.g. "SyncFull: fetch failed") carries BOTH
+        # the 'script' and 'warning' topics, so muting it means excluding the
+        # combination from BOTH rules. Exact-match the default topic strings so
+        # the two sets never collide and stay idempotent on re-run.
+        /system logging set [find topics="warning"] topics=warning,!script
+        /system logging set [find topics="script"] topics=script,!warning
+        :put "Log script-warning suppression applied"
+    } on-error={ :put "Log suppress skipped (non-fatal)" }
+
+    :put "All configurations completed successfully."
+} on-error={
+    :put "Error occurred during configuration:"
+    :put $error
+}
