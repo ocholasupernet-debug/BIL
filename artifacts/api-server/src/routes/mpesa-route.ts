@@ -161,6 +161,14 @@ async function getAdminPaymentSettings(adminId: number | undefined): Promise<{
   };
 }
 
+async function isActiveIspAdmin(adminId: number): Promise<boolean> {
+  const rows = await sbSelect<{ id: number }>(
+    "isp_admins",
+    `id=eq.${adminId}&is_active=is.true&select=id&limit=1`,
+  );
+  return !!rows[0];
+}
+
 /* ── Daraja helpers ───────────────────────────────────────────────────────── */
 
 function darajaBase(settings: MpesaSettings): string {
@@ -266,6 +274,77 @@ async function reconcileInitiatedStkRequest(
   return false;
 }
 
+async function processMpesaCallback(body: unknown): Promise<boolean> {
+  const callback = (body as { Body?: { stkCallback?: Record<string, unknown> } })?.Body?.stkCallback;
+  if (!callback) {
+    logger.warn("[mpesa/callback] No stkCallback in body — ignoring");
+    return false;
+  }
+
+  const { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID } = callback;
+  const checkoutId = String(CheckoutRequestID ?? "").trim();
+  if (!checkoutId) {
+    logger.warn("[mpesa/callback] Missing CheckoutRequestID — ignoring");
+    return false;
+  }
+
+  const pendingRows = await sbSelect<PendingMpesaTransaction>(
+    "isp_transactions",
+    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,amount,payment_method,payment_phone&limit=1`,
+  );
+  const transaction = pendingRows[0];
+  if (!transaction) {
+    logger.warn({ checkoutId, MerchantRequestID }, "[mpesa/callback] Callback awaits local checkout reconciliation");
+    return false;
+  }
+
+  const settings = await getMpesaSettings();
+  const verification = await queryDarajaStkResult(settings, checkoutId);
+  const callbackResultCode = Number(ResultCode);
+  if (!verification.verified || verification.resultCode !== callbackResultCode) {
+    logger.warn({ checkoutId, callbackResultCode, verification }, "[mpesa/callback] Callback could not be verified with Daraja");
+    return false;
+  }
+
+  const isSuccessful = verification.resultCode === 0;
+  const settlements = await sbRpc<SettlementResult>("settle_verified_mpesa_transaction", {
+    p_transaction_id: transaction.id,
+    p_status: isSuccessful ? "completed" : "failed",
+    p_note: isSuccessful
+      ? "M-Pesa payment verified by Daraja."
+      : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
+  });
+  const settlement = settlements[0];
+  if (!settlement?.settled) {
+    logger.info({ checkoutId }, "[mpesa/callback] Callback replay ignored after state transition");
+    return false;
+  }
+
+  if (isSuccessful && settlement.payment_method === "mpesa_registration") {
+    logger.info({ adminId: settlement.admin_id, checkoutId }, "[mpesa/callback] ISP registration activated");
+  } else if (isSuccessful) {
+    logger.info({ customerId: settlement.credited_customer_id, checkoutId, amount: settlement.amount }, "[mpesa/callback] Payment settled atomically");
+  }
+  return true;
+}
+
+export async function processDeferredMpesaCallbacks(checkoutId?: string): Promise<void> {
+  const referenceFilter = checkoutId ? `&reference=eq.${encodeURIComponent(checkoutId)}` : "";
+  const events = await sbSelect<{ id: number; payload: unknown }>(
+    "isp_webhook_events",
+    `gateway=eq.mpesa&status=eq.received${referenceFilter}&select=id,payload`,
+  );
+  for (const event of events) {
+    if (await processMpesaCallback(event.payload)) {
+      await sbUpdate("isp_webhook_events", `id=eq.${event.id}`, { status: "processed" });
+    }
+  }
+}
+
+setInterval(() => {
+  void processDeferredMpesaCallbacks().catch(err => logger.error({ err }, "[mpesa/callback] Deferred callback retry failed"));
+}, 60_000).unref();
+
 function stkCredentials(shortcode: string, passkey: string): { timestamp: string; password: string } {
   const timestamp = new Date()
     .toISOString()
@@ -300,6 +379,15 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     res.status(400).json({ ok: false, error: "phone and amount are required" });
     return;
   }
+  const scopedAdminId = Number(adminId);
+  if (!Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
+    res.status(400).json({ ok: false, error: "A valid ISP admin context is required for M-Pesa payments." });
+    return;
+  }
+  if (!await isActiveIspAdmin(scopedAdminId)) {
+    res.status(404).json({ ok: false, error: "The selected ISP account is not active." });
+    return;
+  }
 
   const cfg = await getMpesaSettings();
   if (!isMpesaConfigured(cfg)) {
@@ -324,7 +412,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     : `254${raw}`;
 
   try {
-    const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+    const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -346,7 +434,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       return;
     }
     const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
-      admin_id: null,
+      admin_id: scopedAdminId,
       plan_id: null,
       amount: Math.ceil(Number(amount)),
       payment_method: "mpesa",
@@ -411,6 +499,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       res.status(502).json({ ok: false, error: "The payment prompt was sent but could not be recorded safely. Do not retry; contact support." });
       return;
     }
+    await processDeferredMpesaCallbacks(checkoutId);
 
     res.json({
       ok: true,
@@ -442,77 +531,28 @@ router.get("/mpesa/callback", (_req: Request, res: Response): void => {
 });
 
 router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void> => {
-  res.json({ ResultCode: 0, ResultDesc: "Accepted" });
-
   try {
-    const callback = req.body?.Body?.stkCallback;
-    if (!callback) {
-      logger.warn({ body: req.body }, "[mpesa/callback] No stkCallback in body — ignoring");
-      return;
-    }
-
-    const { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID } = callback;
-
-    logger.info(
-      { ResultCode, ResultDesc, CheckoutRequestID, MerchantRequestID },
-      "[mpesa/callback] Received callback"
-    );
-
-    const checkoutId = String(CheckoutRequestID ?? "").trim();
+    const checkoutId = String(req.body?.Body?.stkCallback?.CheckoutRequestID ?? "").trim();
     if (!checkoutId) {
-      logger.warn("[mpesa/callback] Missing CheckoutRequestID — ignoring");
+      res.status(400).json({ ResultCode: 1, ResultDesc: "CheckoutRequestID is required" });
       return;
     }
-    const pendingRows = await sbSelect<PendingMpesaTransaction>(
-      "isp_transactions",
-      `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,amount,payment_method,payment_phone&limit=1`,
-    );
-    const transaction = pendingRows[0];
-    if (!transaction) {
-      await sbInsert("isp_webhook_events", {
-        gateway: "mpesa",
-        status: "received",
-        payload: req.body,
-        reference: checkoutId,
-        created_at: new Date().toISOString(),
-      });
-      logger.warn({ checkoutId }, "[mpesa/callback] Callback arrived before local checkout reconciliation; queued for review");
-      return;
-    }
-
-    const settings = await getMpesaSettings();
-    const verification = await queryDarajaStkResult(settings, checkoutId);
-    const callbackResultCode = Number(ResultCode);
-    if (!verification.verified || verification.resultCode !== callbackResultCode) {
-      logger.warn({ checkoutId, callbackResultCode, verification }, "[mpesa/callback] Callback could not be verified with Daraja");
-      return;
-    }
-
-    const isSuccessful = verification.resultCode === 0;
-    const status = isSuccessful ? "completed" : "failed";
-    const settlements = await sbRpc<SettlementResult>("settle_verified_mpesa_transaction", {
-      p_transaction_id: transaction.id,
-      p_status: status,
-      p_note: isSuccessful
-        ? "M-Pesa payment verified by Daraja."
-        : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
+    const events = await sbInsert<{ id: number }>("isp_webhook_events", {
+      gateway: "mpesa",
+      status: "received",
+      payload: req.body,
+      reference: checkoutId,
+      created_at: new Date().toISOString(),
     });
-    const settlement = settlements[0];
-    if (!settlement?.settled) {
-      logger.info({ checkoutId }, "[mpesa/callback] Callback replay ignored after state transition");
+    const event = events[0];
+    if (!event) {
+      res.status(503).json({ ResultCode: 1, ResultDesc: "Callback intake is temporarily unavailable" });
       return;
     }
-
-    if (!isSuccessful) {
-      return;
+    res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    if (await processMpesaCallback(req.body)) {
+      await sbUpdate("isp_webhook_events", `id=eq.${event.id}`, { status: "processed" });
     }
-
-    if (settlement.payment_method === "mpesa_registration") {
-      logger.info({ adminId: settlement.admin_id, checkoutId }, "[mpesa/callback] ISP registration activated");
-      return;
-    }
-
-    logger.info({ customerId: settlement.credited_customer_id, checkoutId, amount: settlement.amount }, "[mpesa/callback] Payment settled atomically");
   } catch (err) {
     logger.error({ err }, "[mpesa/callback] Unexpected error processing callback");
   }
@@ -529,6 +569,15 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
+    return;
+  }
+  const scopedAdminId = Number(adminId);
+  if (!Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
+    res.status(400).json({ ok: false, error: "A valid ISP admin context is required for M-Pesa payments." });
+    return;
+  }
+  if (!await isActiveIspAdmin(scopedAdminId)) {
+    res.status(404).json({ ok: false, error: "The selected ISP account is not active." });
     return;
   }
 
@@ -556,7 +605,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   }
 
   try {
-      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -577,7 +626,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        return;
      }
      const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
-       admin_id: adminId ?? null,
+       admin_id: scopedAdminId,
        plan_id: plan_id ?? null,
        amount: Math.ceil(Number(amount)),
        payment_method: "mpesa",
@@ -639,6 +688,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       res.status(502).json({ ok: false, error: "The payment prompt was sent but could not be recorded safely. Do not retry; contact support." });
       return;
     }
+    await processDeferredMpesaCallbacks(checkoutId);
 
     res.json({ ok: true, CheckoutRequestID: data["CheckoutRequestID"], MerchantRequestID: data["MerchantRequestID"] });
   } catch (e) {

@@ -23,4 +23,7 @@ begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
     revoke all on table platform_secure_settings from authenticated;
   end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant select, insert, update on table platform_secure_settings to service_role;
+  end if;
 end $$;

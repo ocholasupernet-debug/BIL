@@ -98,7 +98,11 @@ export default function SuperAdminLogin() {
         setError(data.error ?? "Invalid credentials. Access denied.");
         return;
       }
-      setSuperAdminSession(data.name ?? username, data.token ?? "sa", data.issuedAt ?? Date.now());
+      if (!data.token || !data.issuedAt) {
+        setError("The server did not create a secure session. Please try again.");
+        return;
+      }
+      setSuperAdminSession(data.name ?? username, data.token, data.issuedAt);
       setLocation("/super-admin/dashboard");
     } catch {
       setError("Could not reach the server. Please try again.");

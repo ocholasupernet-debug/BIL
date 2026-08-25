@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
+import { processDeferredMpesaCallbacks } from "./mpesa-route.js";
 import { sbInsert, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
 import { logger } from "../lib/logger.js";
@@ -227,6 +228,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       res.status(500).json({ ok: false, error: "Could not record the registration payment. Please contact support." });
       return;
     }
+    await processDeferredMpesaCallbacks(checkoutId);
 
     res.json({
       ok: true,

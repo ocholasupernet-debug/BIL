@@ -10,6 +10,7 @@
  * Tokens expire after SESSION_TTL_MS (3 hours).
  */
 
+import { randomBytes, timingSafeEqual } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { logger } from "../lib/logger.js";
 
@@ -24,14 +25,47 @@ const SESSION_TTL_MS = 3 * 60 * 60 * 1000; /* 3 hours */
 /* ── In-memory single-session store ─────────────────────────────── */
 let activeToken: string | null     = null;
 let activeIssuedAt: number         = 0;
+const failedLoginAttempts = new Map<string, { count: number; startedAt: number }>();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 function tokenExpired(): boolean {
   return Date.now() - activeIssuedAt > SESSION_TTL_MS;
 }
 
+function secretsEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function loginRateLimitKey(req: Request, username: string): string {
+  return `${req.ip}:${username.trim().toLowerCase()}`;
+}
+
+function loginIsRateLimited(key: string): boolean {
+  const attempt = failedLoginAttempts.get(key);
+  if (!attempt) return false;
+  if (Date.now() - attempt.startedAt >= LOGIN_WINDOW_MS) {
+    failedLoginAttempts.delete(key);
+    return false;
+  }
+  return attempt.count >= MAX_LOGIN_ATTEMPTS;
+}
+
+function recordFailedLogin(key: string): void {
+  const now = Date.now();
+  const existing = failedLoginAttempts.get(key);
+  if (!existing || now - existing.startedAt >= LOGIN_WINDOW_MS) {
+    failedLoginAttempts.set(key, { count: 1, startedAt: now });
+    return;
+  }
+  existing.count += 1;
+}
+
 /** Used by protected Super Admin-only settings routes. */
 export function isActiveSuperAdminToken(token: string): boolean {
-  if (!token || !activeToken || token !== activeToken) return false;
+  if (!token || !activeToken || !secretsEqual(token, activeToken)) return false;
   if (tokenExpired()) {
     activeToken = null;
     activeIssuedAt = 0;
@@ -50,13 +84,19 @@ router.post("/super-admin/login", (req: Request, res: Response): void => {
     res.status(400).json({ ok: false, error: "All fields are required." });
     return;
   }
+  const attemptKey = loginRateLimitKey(req, username);
+  if (loginIsRateLimited(attemptKey)) {
+    res.status(429).json({ ok: false, error: "Too many failed attempts. Try again later." });
+    return;
+  }
 
   const match =
-    username.trim() === SA_USERNAME &&
-    api_key.trim()  === SA_API_KEY  &&
-    password        === SA_PASSWORD;
+    secretsEqual(username.trim(), SA_USERNAME) &&
+    secretsEqual(api_key.trim(), SA_API_KEY) &&
+    secretsEqual(password, SA_PASSWORD);
 
   if (!match) {
+    recordFailedLogin(attemptKey);
     logger.warn({ username }, "[super-admin/login] failed login attempt");
     setTimeout(() => {
       res.status(401).json({ ok: false, error: "Invalid credentials. Access denied." });
@@ -65,7 +105,7 @@ router.post("/super-admin/login", (req: Request, res: Response): void => {
   }
 
   /* Invalidate any previous session and issue a new token */
-  const token    = Buffer.from(`${SA_USERNAME}:${Date.now()}`).toString("base64");
+  const token    = randomBytes(32).toString("base64url");
   const issuedAt = Date.now();
 
   if (activeToken) {
@@ -74,6 +114,7 @@ router.post("/super-admin/login", (req: Request, res: Response): void => {
 
   activeToken    = token;
   activeIssuedAt = issuedAt;
+  failedLoginAttempts.delete(attemptKey);
 
   logger.info({ username }, "[super-admin/login] successful login — single session enforced");
 
@@ -95,7 +136,7 @@ router.get("/super-admin/verify", (req: Request, res: Response): void => {
     return;
   }
 
-  if (token !== activeToken) {
+  if (!secretsEqual(token, activeToken)) {
     res.status(401).json({ ok: false, reason: "superseded" });
     return;
   }
@@ -115,7 +156,7 @@ router.get("/super-admin/verify", (req: Request, res: Response): void => {
 router.post("/super-admin/logout", (req: Request, res: Response): void => {
   const token = (req.headers["x-sa-token"] as string | undefined) ?? "";
 
-  if (token && token === activeToken) {
+  if (token && activeToken && secretsEqual(token, activeToken)) {
     activeToken    = null;
     activeIssuedAt = 0;
     logger.info("[super-admin/logout] session cleared");
