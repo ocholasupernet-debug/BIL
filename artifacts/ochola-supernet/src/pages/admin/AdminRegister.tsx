@@ -20,6 +20,7 @@ export default function AdminRegister() {
 
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
+  const [paymentPhone, setPaymentPhone] = useState("");
 
   const [checkingCompany, setCheckingCompany] = useState(false);
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
@@ -124,8 +125,12 @@ export default function AdminRegister() {
     const e: Record<string, string> = {};
     if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
     if (companyAvailable === false) e.company = "This company name is already taken";
-    if (!phone.trim()) e.phone = "Mobile number is required";
+    if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
+    if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
+    else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
+      e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
+    }
     return e;
   };
 
@@ -141,7 +146,7 @@ export default function AdminRegister() {
       const response = await fetch("/api/registration/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: company.trim(), phone: phone.trim() }),
+        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim() }),
       });
       const data = await response.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
       if (!response.ok || !data.ok || !data.CheckoutRequestID) {
@@ -225,7 +230,7 @@ export default function AdminRegister() {
           </div>
           <h2 style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 10 }}>Confirm your payment</h2>
           <p style={{ fontSize: "0.9rem", color: "var(--isp-text-muted)", lineHeight: 1.6, margin: "0 0 16px" }}>
-            An M-Pesa prompt for <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> has been sent to <strong style={{ color: "var(--isp-text)" }}>{phone}</strong>.
+             An M-Pesa prompt for <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> has been sent to <strong style={{ color: "var(--isp-text)" }}>{paymentPhone}</strong>.
           </p>
           <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55 }}>
             Enter your M-Pesa PIN on your phone. Your ISP account will be created only after the payment is confirmed.
@@ -301,14 +306,14 @@ export default function AdminRegister() {
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>Mobile Number</label>
+             <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>ISP Contact Number</label>
             <div style={{ position: "relative" }}>
               <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
               <input
                 type="tel"
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
-                placeholder="+254 700 000 000"
+               placeholder="+254 700 000 000"
                 style={inputStyle(!!errors.phone, phoneAvailable)}
                 onFocus={e => { if (!errors.phone && phoneAvailable !== false) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
                 onBlur={e => { e.target.style.boxShadow = "none"; }}
@@ -326,6 +331,27 @@ export default function AdminRegister() {
             )}
             {errors.phone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.phone}</p>}
           </div>
+
+           <div>
+             <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>M-Pesa Payment Number</label>
+             <div style={{ position: "relative" }}>
+               <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
+               <input
+                 type="tel"
+                 value={paymentPhone}
+                 onChange={e => setPaymentPhone(e.target.value)}
+                 placeholder="+254 700 000 000"
+                 autoComplete="tel"
+                 style={inputStyle(!!errors.paymentPhone, null)}
+                 onFocus={e => { if (!errors.paymentPhone) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
+                 onBlur={e => { e.target.style.boxShadow = "none"; }}
+               />
+             </div>
+             <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+               The STK Push will be sent here. This number may be reused for multiple ISP registrations.
+             </p>
+             {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
+           </div>
 
           {serverErr && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, padding: "10px 14px" }}>

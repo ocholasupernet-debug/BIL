@@ -34,6 +34,7 @@ create table if not exists isp_admins (
   fullname        text,
   email           text,
   phone           text,
+  payment_phone   text,
   subdomain       text unique,
   password        text,
   is_active       boolean not null default true,

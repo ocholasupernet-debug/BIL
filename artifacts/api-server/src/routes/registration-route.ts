@@ -89,11 +89,14 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
 router.post("/registration/payment", async (req: Request, res: Response): Promise<void> => {
   const company = typeof req.body?.company === "string" ? req.body.company.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
+  const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
 
-  if (company.length < 2 || !slug || !phone || !/^2547\d{8}$/.test(formattedPhone)) {
-    res.status(400).json({ ok: false, error: "Enter a company name and a valid Kenyan mobile number." });
+  if (company.length < 2 || !slug || !phone || !/^2547\d{8}$/.test(formattedPhone) ||
+      !paymentPhone || !/^2547\d{8}$/.test(formattedPaymentPhone)) {
+    res.status(400).json({ ok: false, error: "Enter a company name, a valid contact number, and a valid M-Pesa payment number." });
     return;
   }
   const config = await getMpesaSettings();
@@ -134,6 +137,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const pendingAdmins = await sbInsert<{ id: number; username: string }>("isp_admins", {
     name: company,
     phone,
+    payment_phone: formattedPaymentPhone,
     username: slug,
     password: "admin",
     is_active: false,
@@ -163,7 +167,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       plan_id: null,
       amount: REGISTRATION_FEE,
       payment_method: "mpesa_registration",
-      payment_phone: formattedPhone,
+       payment_phone: formattedPaymentPhone,
       reference: `initiating:${randomUUID()}`,
       status: "initiating",
       notes: `Registration STK request is being created for ${slug}`,
@@ -190,7 +194,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
         Amount: REGISTRATION_FEE,
         PartyA: formattedPhone,
         PartyB: destination.number,
-        PhoneNumber: formattedPhone,
+         PhoneNumber: formattedPaymentPhone,
         CallBackURL: callbackUrl,
         AccountReference: destination.accountReference || slug,
         TransactionDesc: "ISPlatty account registration",
