@@ -222,16 +222,29 @@ export interface PaymentDestination {
 }
 
 export interface PaymentDestinationSettings {
+  registrationFee: number;
   registrationDestinationId: string;
   renewalDestinationId: string;
   destinations: PaymentDestination[];
 }
 
 const EMPTY_DESTINATIONS: PaymentDestinationSettings = {
+  registrationFee: 500,
   registrationDestinationId: "",
   renewalDestinationId: "",
   destinations: [],
 };
+
+const MAX_REGISTRATION_FEE = 1_000_000;
+
+export function normaliseRegistrationFee(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_REGISTRATION_FEE
+    ? value
+    : EMPTY_DESTINATIONS.registrationFee;
+}
 
 function isDestinationType(value: unknown): value is PaymentDestinationType {
   return value === "bank" || value === "till" || value === "paybill";
@@ -263,6 +276,7 @@ export function getPaymentDestinations(): PaymentDestinationSettings {
     : [];
   const validIds = new Set(destinations.map(row => row.id));
   return {
+    registrationFee: normaliseRegistrationFee(stored.registrationFee),
     registrationDestinationId: validIds.has(stored.registrationDestinationId) ? stored.registrationDestinationId : "",
     renewalDestinationId: validIds.has(stored.renewalDestinationId) ? stored.renewalDestinationId : "",
     destinations,
@@ -271,7 +285,10 @@ export function getPaymentDestinations(): PaymentDestinationSettings {
 
 export function savePaymentDestinations(settings: PaymentDestinationSettings): void {
   const data = readFile();
-  data.paymentDestinations = settings;
+  data.paymentDestinations = {
+    ...settings,
+    registrationFee: normaliseRegistrationFee(settings.registrationFee),
+  };
   writeFile(data);
   logger.info("[settings-store] payment destinations saved");
 }
@@ -302,7 +319,16 @@ export function upsertPaymentDestination(input: {
   const destinations = existing
     ? current.destinations.map(row => row.id === destination.id ? destination : row)
     : [...current.destinations, destination];
-  const next = { ...current, destinations };
+  const next = {
+    ...current,
+    registrationDestinationId: !destination.active && current.registrationDestinationId === destination.id
+      ? ""
+      : current.registrationDestinationId,
+    renewalDestinationId: !destination.active && current.renewalDestinationId === destination.id
+      ? ""
+      : current.renewalDestinationId,
+    destinations,
+  };
   savePaymentDestinations(next);
   return next;
 }
@@ -310,6 +336,7 @@ export function upsertPaymentDestination(input: {
 export function deletePaymentDestination(id: string): PaymentDestinationSettings {
   const current = getPaymentDestinations();
   const next = {
+    registrationFee: current.registrationFee,
     registrationDestinationId: current.registrationDestinationId === id ? "" : current.registrationDestinationId,
     renewalDestinationId: current.renewalDestinationId === id ? "" : current.renewalDestinationId,
     destinations: current.destinations.filter(row => row.id !== id),

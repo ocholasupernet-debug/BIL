@@ -9,6 +9,7 @@ import {
   apiTokenSigningConfigured,
   type ApiTokenPayload,
 } from "../lib/api-auth.js";
+import { verifyIspAdminPassword } from "../lib/passwords.js";
 
 const router: IRouter = Router();
 
@@ -42,10 +43,10 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
 
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_admins",
-    `username=eq.${encodeURIComponent(username.trim())}&select=id,username,password,fullname,role,is_active&limit=1`,
+    `username=eq.${encodeURIComponent(username.trim())}&select=id,name,username,password,fullname,role,is_active,subdomain,area,currency&limit=1`,
   );
   const admin = rows[0];
-  if (!admin || admin.password !== password || admin.is_active !== true) {
+  if (!admin || !await verifyIspAdminPassword(admin.password, password) || admin.is_active !== true) {
     setTimeout(() => {
       res.status(401).json({ ok: false, error: "Invalid credentials" });
     }, 400);

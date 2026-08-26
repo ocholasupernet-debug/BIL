@@ -1,12 +1,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { processDeferredMpesaCallbacks } from "./mpesa-route.js";
-import { sbInsert, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
 import { logger } from "../lib/logger.js";
+import { hashIspAdminPassword } from "../lib/passwords.js";
 
 const router: IRouter = Router();
-const REGISTRATION_FEE = 500;
 
 function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -20,14 +20,11 @@ function normalizeKenyanPhone(value: string): string {
 }
 
 function darajaBase(settings: Awaited<ReturnType<typeof getMpesaSettings>>): string {
-  return settings.env === "production"
-    ? "https://api.safaricom.co.ke"
-    : "https://sandbox.safaricom.co.ke";
+  return settings.env === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
 }
 
 async function getDarajaToken(settings: Awaited<ReturnType<typeof getMpesaSettings>>): Promise<string> {
-  const { consumerKey, consumerSecret } = settings;
-  const credentials = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
+  const credentials = Buffer.from(`${settings.consumerKey}:${settings.consumerSecret}`).toString("base64");
   const response = await fetch(`${darajaBase(settings)}/oauth/v1/generate?grant_type=client_credentials`, {
     headers: { Authorization: `Basic ${credentials}` },
   });
@@ -35,23 +32,11 @@ async function getDarajaToken(settings: Awaited<ReturnType<typeof getMpesaSettin
   return (await response.json() as { access_token: string }).access_token;
 }
 
-async function reconcileInitiatedRegistration(
-  transactionId: number,
-  checkoutId: string,
-  merchantRequestId: string,
-  notes: string,
-): Promise<boolean> {
+async function reconcileInitiatedRegistration(transactionId: number, checkoutId: string, merchantRequestId: string, notes: string): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const updated = await sbUpdate(
-      "isp_transactions",
-      `id=eq.${transactionId}&status=eq.initiating`,
-      {
-        reference: checkoutId,
-        merchant_request_id: merchantRequestId,
-        status: "pending",
-        notes,
-      },
-    );
+    const updated = await sbUpdate("isp_transactions", `id=eq.${transactionId}&status=eq.initiating`, {
+      reference: checkoutId, merchant_request_id: merchantRequestId, status: "pending", notes,
+    });
     if (updated[0]) return true;
     await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
   }
@@ -67,21 +52,48 @@ function hasUsableCallback(settings: Awaited<ReturnType<typeof getMpesaSettings>
   }
 }
 
+function automaticDestinationMatchesMpesa(
+  destination: { type: "bank" | "till" | "paybill"; number: string },
+  settings: Awaited<ReturnType<typeof getMpesaSettings>>,
+): boolean {
+  if (destination.type === "bank") return false;
+  return destination.type === "paybill"
+    ? destination.number === settings.shortcode
+    : destination.number === (settings.tillNumber || settings.shortcode);
+}
+
+async function registrationSchemaReady(): Promise<boolean> {
+  if (!supabaseServiceRoleConfigured) return false;
+  try {
+    const versions = await sbRpc<{ schema_version: number; payment_phone_available: boolean }>(
+      "registration_payment_schema_version",
+      {},
+    );
+    return versions[0]?.schema_version === 1 && versions[0]?.payment_phone_available === true;
+  } catch (error) {
+    logger.warn({ err: error }, "[registration] settlement schema readiness check failed");
+    return false;
+  }
+}
+
 router.get("/registration/config", async (_req: Request, res: Response): Promise<void> => {
   const destinations = getPaymentDestinations();
   const mpesaSettings = await getMpesaSettings();
-  const destination = destinations.destinations.find(row =>
-    row.id === destinations.registrationDestinationId && row.active,
-  );
+  const schemaReady = await registrationSchemaReady();
+  const destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
+  const automaticPaymentAvailable = !!destination && destination.type !== "bank" &&
+    schemaReady && isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings) &&
+    automaticDestinationMatchesMpesa(destination, mpesaSettings);
+
   res.json({
     ok: true,
-    registrationFee: { amount: REGISTRATION_FEE, currency: "KES" },
-    automaticPaymentAvailable: !!destination && destination.type !== "bank" &&
-      isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings),
+    registrationFee: { amount: destinations.registrationFee, currency: "KES" },
+    registrationAvailable: (destination?.type === "bank" && schemaReady) || automaticPaymentAvailable,
+    manualPaymentRequired: destination?.type === "bank" && schemaReady,
+    automaticPaymentAvailable,
     destination: destination ? {
-      type: destination.type,
-      name: destination.name,
-      number: destination.number,
+      type: destination.type, name: destination.name, number: destination.number,
+      accountReference: destination.accountReference, instructions: destination.instructions,
     } : null,
   });
 });
@@ -90,38 +102,41 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const company = typeof req.body?.company === "string" ? req.body.company.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
+  const userPassword = typeof req.body?.password === "string" ? req.body.password : "";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
 
-  if (company.length < 2 || !slug || !phone || !/^2547\d{8}$/.test(formattedPhone) ||
-      !paymentPhone || !/^2547\d{8}$/.test(formattedPaymentPhone)) {
-    res.status(400).json({ ok: false, error: "Enter a company name, a valid contact number, and a valid M-Pesa payment number." });
-    return;
-  }
-  const config = await getMpesaSettings();
-  if (!isMpesaConfigured(config)) {
-    res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
-    return;
-  }
-  if (!supabaseServiceRoleConfigured) {
-    res.status(503).json({ ok: false, error: "Live M-Pesa settlement is temporarily unavailable." });
+  if (company.length < 2 || !slug || !/^2547\d{8}$/.test(formattedPhone) ||
+      !/^2547\d{8}$/.test(formattedPaymentPhone) || userPassword.length < 10) {
+    res.status(400).json({ ok: false, error: "Enter a company name, valid contact and M-Pesa payment numbers, and a password of at least 10 characters." });
     return;
   }
 
   const settings = getPaymentDestinations();
-  const destination = settings.destinations.find(row =>
-    row.id === settings.registrationDestinationId && row.active,
-  );
+  const registrationFee = settings.registrationFee;
+  const destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
   if (!destination) {
     res.status(503).json({ ok: false, error: "No active payment destination has been selected for registration." });
     return;
   }
-  if (destination.type === "bank") {
-    res.status(409).json({
-      ok: false,
-      error: "The selected bank destination requires manual verification. Select a Till or PayBill for automatic registration.",
-    });
+  const config = destination.type === "bank" ? null : await getMpesaSettings();
+  if (!await registrationSchemaReady()) {
+    res.status(503).json({ ok: false, error: "Registration payments are temporarily unavailable while the payment database migration is completed." });
+    return;
+  }
+  if (destination.type !== "bank" && (!config || !isMpesaConfigured(config))) {
+    res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
+    return;
+  }
+  if (destination.type !== "bank" && config && !automaticDestinationMatchesMpesa(destination, config)) {
+    res.status(503).json({ ok: false, error: "The selected registration destination does not match the configured M-Pesa Daraja collection number." });
+    return;
+  }
+  if (!supabaseServiceRoleConfigured) {
+    res.status(503).json({ ok: false, error: destination.type === "bank"
+      ? "Registration is temporarily unavailable. Please try again later."
+      : "Live M-Pesa settlement is temporarily unavailable." });
     return;
   }
 
@@ -135,17 +150,9 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
 
   const pendingAdmins = await sbInsert<{ id: number; username: string }>("isp_admins", {
-    name: company,
-    phone,
-    payment_phone: formattedPaymentPhone,
-    username: slug,
-    password: "admin",
-    is_active: false,
-    role: "isp_admin",
-    subdomain: slug,
-    status: "pending_payment",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    name: company, phone, payment_phone: formattedPaymentPhone, username: slug,
+    password: await hashIspAdminPassword(userPassword), is_active: false, role: "isp_admin",
+    subdomain: slug, status: "pending_payment", created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   });
   const pendingAdmin = pendingAdmins[0];
   if (!pendingAdmin) {
@@ -154,31 +161,48 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
 
   try {
-    const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, "").slice(0, 14);
-    const password = Buffer.from(`${config.shortcode}${config.passkey}${timestamp}`).toString("base64");
-    const callbackUrl = config.callbackUrl;
+    if (destination.type === "bank") {
+      const manualTransactions = await sbInsert<{ id: number }>("isp_transactions", {
+        admin_id: pendingAdmin.id, customer_id: null, plan_id: null, amount: registrationFee,
+        payment_method: "manual_registration", payment_phone: formattedPaymentPhone,
+        reference: `manual:${randomUUID()}`, status: "pending",
+        notes: `Pending manual registration payment for ${slug}`, created_at: new Date().toISOString(),
+      });
+      if (!manualTransactions[0]) {
+        await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
+        res.status(503).json({ ok: false, error: "Could not safely create the registration request. Please try again." });
+        return;
+      }
+      res.json({
+        ok: true, manualPayment: true, registrationFee: { amount: registrationFee, currency: "KES" },
+        destination: {
+          type: destination.type, name: destination.name, number: destination.number,
+          accountReference: destination.accountReference, instructions: destination.instructions,
+        },
+        username: pendingAdmin.username,
+      });
+      return;
+    }
+
+    if (!config) {
+      res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
+      return;
+    }
     if (!hasUsableCallback(config)) {
       res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
       return;
     }
+    const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, "").slice(0, 14);
+    const darajaPassword = Buffer.from(`${config.shortcode}${config.passkey}${timestamp}`).toString("base64");
     const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
-      admin_id: pendingAdmin.id,
-      customer_id: null,
-      plan_id: null,
-      amount: REGISTRATION_FEE,
-      payment_method: "mpesa_registration",
-       payment_phone: formattedPaymentPhone,
-      reference: `initiating:${randomUUID()}`,
-      status: "initiating",
-      notes: `Registration STK request is being created for ${slug}`,
-      created_at: new Date().toISOString(),
+      admin_id: pendingAdmin.id, customer_id: null, plan_id: null, amount: registrationFee,
+      payment_method: "mpesa_registration", payment_phone: formattedPaymentPhone,
+      reference: `initiating:${randomUUID()}`, status: "initiating",
+      notes: `Registration STK request is being created for ${slug}`, created_at: new Date().toISOString(),
     });
     const initiatedTransaction = initiatedTransactions[0];
     if (!initiatedTransaction) {
-      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, {
-        status: "payment_failed",
-        updated_at: new Date().toISOString(),
-      });
+      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
       res.status(503).json({ ok: false, error: "Could not safely create the registration payment request. Please try again." });
       return;
     }
@@ -187,64 +211,36 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        BusinessShortCode: config.shortcode,
-        Password: password,
-        Timestamp: timestamp,
+        BusinessShortCode: config.shortcode, Password: darajaPassword, Timestamp: timestamp,
         TransactionType: destination.type === "till" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
-        Amount: REGISTRATION_FEE,
-        PartyA: formattedPhone,
-        PartyB: destination.number,
-         PhoneNumber: formattedPaymentPhone,
-        CallBackURL: callbackUrl,
-        AccountReference: destination.accountReference || slug,
-        TransactionDesc: "ISPlatty account registration",
+        Amount: registrationFee, PartyA: formattedPaymentPhone, PartyB: destination.number,
+        PhoneNumber: formattedPaymentPhone, CallBackURL: config.callbackUrl,
+        AccountReference: destination.accountReference || slug, TransactionDesc: "ISPlatty account registration",
       }),
     });
     const data = await response.json() as Record<string, unknown>;
     if (!response.ok || data.ResponseCode !== "0") {
       await sbUpdate("isp_transactions", `id=eq.${initiatedTransaction.id}&status=eq.initiating`, {
-        status: "failed",
-        notes: `Registration STK prompt request failed: ${String(data.errorMessage ?? data.ResponseDescription ?? "Unknown error")}`,
+        status: "failed", notes: `Registration STK prompt request failed: ${String(data.errorMessage ?? data.ResponseDescription ?? "Unknown error")}`,
       });
-      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, {
-        status: "payment_failed",
-        updated_at: new Date().toISOString(),
-      });
-      res.status(400).json({
-        ok: false,
-        error: String(data.errorMessage ?? data.ResponseDescription ?? "Could not send the registration payment prompt."),
-      });
+      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
+      res.status(400).json({ ok: false, error: String(data.errorMessage ?? data.ResponseDescription ?? "Could not send the registration payment prompt.") });
       return;
     }
 
     const checkoutId = String(data.CheckoutRequestID ?? "");
     const reconciled = checkoutId && await reconcileInitiatedRegistration(
-      initiatedTransaction.id,
-      checkoutId,
-      String(data.MerchantRequestID ?? ""),
-      `Pending ISP registration for ${slug}`,
+      initiatedTransaction.id, checkoutId, String(data.MerchantRequestID ?? ""), `Pending ISP registration for ${slug}`,
     );
     if (!reconciled) {
-      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, {
-        status: "payment_failed",
-        updated_at: new Date().toISOString(),
-      });
+      await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
       res.status(500).json({ ok: false, error: "Could not record the registration payment. Please contact support." });
       return;
     }
     await processDeferredMpesaCallbacks(checkoutId);
-
-    res.json({
-      ok: true,
-      CheckoutRequestID: checkoutId,
-      registrationFee: { amount: REGISTRATION_FEE, currency: "KES" },
-      username: pendingAdmin.username,
-    });
+    res.json({ ok: true, CheckoutRequestID: checkoutId, registrationFee: { amount: registrationFee, currency: "KES" }, username: pendingAdmin.username });
   } catch (error) {
-    await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, {
-      status: "payment_failed",
-      updated_at: new Date().toISOString(),
-    });
+    await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
     logger.error({ err: error, adminId: pendingAdmin.id }, "[registration/payment] failed");
     res.status(500).json({ ok: false, error: "Could not send the registration payment prompt. Please try again." });
   }

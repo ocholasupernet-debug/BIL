@@ -44,36 +44,33 @@ export default function AdminLogin() {
     }
     setIsLoading(true);
     try {
-      let query = supabase
-        .from("isp_admins")
-        .select("id, name, username, password, is_active, role, subdomain, area, currency");
-      if (company) {
-        query = query.eq("id", company.id);
-      } else {
-        query = query.eq("username", username.trim());
-      }
-      const { data, error: dbErr } = await query.single();
-      if (dbErr || !data) { setError("Invalid username or password."); return; }
-      if (company && data.username !== username.trim()) { setError("Invalid username or password."); return; }
-      if (data.password !== password) { setError("Invalid username or password."); return; }
-      if (!data.is_active) { setError("Your account is inactive. Contact the administrator."); return; }
       const apiLogin = await fetch("/api/auth/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: username.trim(), password }),
       });
-      const apiSession = await apiLogin.json() as { ok?: boolean; token?: string; error?: string };
-      if (!apiLogin.ok || !apiSession.ok || !apiSession.token) {
+      const apiSession = await apiLogin.json() as {
+        ok?: boolean;
+        token?: string;
+        error?: string;
+        admin?: { id: number; name?: string; username: string; role?: string; subdomain?: string; area?: string; currency?: string };
+      };
+      if (!apiLogin.ok || !apiSession.ok || !apiSession.token || !apiSession.admin) {
         setError(apiSession.error || "Could not create a secure admin session. Please try again.");
         return;
       }
-      setAdminAuth(data.id, data.username, data.name || data.username, data.role ?? undefined, apiSession.token);
+      const admin = apiSession.admin;
+      if (company && (admin.id !== company.id || admin.username !== username.trim())) {
+        setError("Invalid username or password.");
+        return;
+      }
+      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, apiSession.token);
       /* store country + currency so formatCurrency works immediately */
       try {
-        if ((data as Record<string,unknown>).currency) localStorage.setItem("ochola_admin_currency", String((data as Record<string,unknown>).currency));
-        if ((data as Record<string,unknown>).area) localStorage.setItem("ochola_admin_country", String((data as Record<string,unknown>).area));
+        if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);
+        if (admin.area) localStorage.setItem("ochola_admin_country", admin.area);
       } catch {}
-      setLocation(data.password === "admin" ? "/admin/set-password" : "/admin/dashboard");
+      setLocation("/admin/dashboard");
     } catch {
       setError("Login failed. Please try again.");
     } finally {

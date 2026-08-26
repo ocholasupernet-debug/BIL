@@ -15,12 +15,22 @@ function slugify(str: string) {
   return str.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+interface RegistrationDestination {
+  type: "bank" | "till" | "paybill";
+  name: string;
+  number: string;
+  accountReference?: string;
+  instructions?: string;
+}
+
 export default function AdminRegister() {
   const [, setLocation] = useLocation();
 
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentPhone, setPaymentPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [checkingCompany, setCheckingCompany] = useState(false);
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
@@ -39,6 +49,8 @@ export default function AdminRegister() {
   const [awaitingPayment, setAwaitingPayment] = useState(false);
   const [paymentReady, setPaymentReady] = useState(false);
   const [registrationFee, setRegistrationFee] = useState({ amount: 500, currency: "KES" });
+  const [registrationDestination, setRegistrationDestination] = useState<RegistrationDestination | null>(null);
+  const [manualPayment, setManualPayment] = useState<RegistrationDestination | null>(null);
 
   useEffect(() => {
     setCompanyAvailable(null);
@@ -85,11 +97,14 @@ export default function AdminRegister() {
         const data = await response.json() as {
           registrationFee?: { amount?: number; currency?: string };
           automaticPaymentAvailable?: boolean;
+          manualPaymentRequired?: boolean;
+          destination?: RegistrationDestination | null;
         };
         if (data.registrationFee?.amount && data.registrationFee.currency) {
           setRegistrationFee({ amount: data.registrationFee.amount, currency: data.registrationFee.currency });
         }
-        setPaymentReady(data.automaticPaymentAvailable === true);
+        setRegistrationDestination(data.destination ?? null);
+        setPaymentReady(data.manualPaymentRequired === true || data.automaticPaymentAvailable === true);
       })
       .catch(() => setPaymentReady(false));
   }, []);
@@ -131,6 +146,8 @@ export default function AdminRegister() {
     else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
     }
+    if (password.length < 10) e.password = "Choose a password with at least 10 characters";
+    if (password !== confirmPassword) e.confirmPassword = "Passwords do not match";
     return e;
   };
 
@@ -146,12 +163,21 @@ export default function AdminRegister() {
       const response = await fetch("/api/registration/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim() }),
+        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim(), password }),
       });
-      const data = await response.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
-      if (!response.ok || !data.ok || !data.CheckoutRequestID) {
+      const data = await response.json() as {
+        ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean;
+        username?: string; destination?: RegistrationDestination;
+      };
+      if (!response.ok || !data.ok) {
         throw new Error(data.error || "Could not start the registration payment.");
       }
+      if (data.manualPayment) {
+        setRegisteredUsername(data.username || "");
+        setManualPayment(data.destination || registrationDestination);
+        return;
+      }
+      if (!data.CheckoutRequestID) throw new Error("The registration payment prompt could not be created.");
       setCheckoutId(data.CheckoutRequestID);
       setAwaitingPayment(true);
     } catch (err) {
@@ -199,14 +225,13 @@ export default function AdminRegister() {
                 <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>{registeredUsername}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>Default Password</span>
-                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "#D97706" }}>admin</span>
+                <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>Password</span>
+                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)" }}>Use the password you chose</span>
               </div>
               <div style={{ borderTop: "1px solid var(--isp-border)", paddingTop: 12 }}>
                 <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginBottom: 4 }}>Your portal URL</p>
                 <p style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", wordBreak: "break-all" }}>{subdomainUrl}</p>
               </div>
-              <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", borderTop: "1px solid var(--isp-border)", paddingTop: 10, marginTop: 10 }}>You'll be asked to create a new password on first sign in.</p>
             </div>
             <a
               href={subdomainUrl}
@@ -237,6 +262,27 @@ export default function AdminRegister() {
           </p>
         </div>
         <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+
+  if (manualPayment) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
+        <div style={{ width: "100%", maxWidth: 460, background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: "40px 32px", boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
+          <h2 style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 10px" }}>Complete your bank payment</h2>
+          <p style={{ fontSize: "0.9rem", color: "var(--isp-text-muted)", lineHeight: 1.6, margin: "0 0 18px" }}>
+            Pay <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> to <strong style={{ color: "var(--isp-text)" }}>{manualPayment.name}</strong> before your ISP is activated.
+          </p>
+          <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: 16, color: "var(--isp-text)", fontSize: "0.875rem", lineHeight: 1.65 }}>
+            <div><strong>Account:</strong> {manualPayment.number}</div>
+            {manualPayment.accountReference && <div><strong>Reference:</strong> {manualPayment.accountReference}</div>}
+            {manualPayment.instructions && <div style={{ marginTop: 8 }}>{manualPayment.instructions}</div>}
+          </div>
+          <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55, margin: "18px 0 0" }}>
+            Your registration is pending. A Super Admin will verify the bank payment and activate your account.
+          </p>
+        </div>
       </div>
     );
   }
@@ -273,7 +319,13 @@ export default function AdminRegister() {
             <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)" }}>One-time account creation fee</span>
             <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--isp-accent)" }}>{displayFee}</span>
           </div>
-          <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>An M-Pesa prompt is required before the account is activated.</p>
+          <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+            {registrationDestination?.type === "bank"
+              ? <>Pay manually to <strong>{registrationDestination.name}</strong> ({registrationDestination.number}) before activation.</>
+              : registrationDestination
+              ? <>An M-Pesa prompt will use <strong>{registrationDestination.name}</strong> ({registrationDestination.number}){registrationDestination.accountReference ? ` · Reference: ${registrationDestination.accountReference}` : ""}{registrationDestination.instructions ? ` — ${registrationDestination.instructions}` : ""}</>
+              : "A payment destination must be configured before registration."}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -353,6 +405,18 @@ export default function AdminRegister() {
              {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
            </div>
 
+          <div>
+            <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>Create Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" placeholder="At least 10 characters" style={{ ...inputStyle(!!errors.password, null), paddingLeft: 14 }} />
+            {errors.password && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.password}</p>}
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>Confirm Password</label>
+            <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" placeholder="Re-enter your password" style={{ ...inputStyle(!!errors.confirmPassword, null), paddingLeft: 14 }} />
+            {errors.confirmPassword && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.confirmPassword}</p>}
+          </div>
+
           {serverErr && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, padding: "10px 14px" }}>
               <AlertTriangle size={15} style={{ color: "#DC2626", flexShrink: 0 }} />
@@ -371,7 +435,11 @@ export default function AdminRegister() {
               display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
             }}
           >
-            {loading ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending payment prompt...</> : <>Pay {displayFee} &amp; Create Account <ArrowRight size={16} /></>}
+            {loading
+              ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {registrationDestination?.type === "bank" ? "Saving registration..." : "Sending payment prompt..."}</>
+              : registrationDestination?.type === "bank"
+              ? <>Continue to bank payment instructions <ArrowRight size={16} /></>
+              : <>Pay {displayFee} &amp; Create Account <ArrowRight size={16} /></>}
           </button>
 
           {!paymentReady && (

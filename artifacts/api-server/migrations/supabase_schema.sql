@@ -184,7 +184,7 @@ begin
     return query select true, tx.payment_method, tx.admin_id, tx.amount, null::bigint;
     return;
   end if;
-  if tx.payment_method = 'mpesa_registration' and tx.admin_id is not null then
+  if tx.payment_method in ('mpesa_registration', 'manual_registration') and tx.admin_id is not null then
     update isp_admins set is_active = true, status = 'active', updated_at = now() where id = tx.admin_id;
     return query select true, tx.payment_method, tx.admin_id, tx.amount, null::bigint;
     return;
@@ -207,6 +207,29 @@ $$;
 
 revoke all on function public.settle_verified_mpesa_transaction(bigint, text, text) from public;
 grant execute on function public.settle_verified_mpesa_transaction(bigint, text, text) to service_role;
+
+create function public.registration_payment_schema_version()
+returns table (schema_version integer, payment_phone_available boolean)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    1,
+    exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'isp_admins'
+        and column_name = 'payment_phone'
+    );
+$$;
+
+revoke all on function public.registration_payment_schema_version() from public;
+grant execute on function public.registration_payment_schema_version() to service_role;
+
+notify pgrst, 'reload schema';
 create index if not exists isp_transactions_created_at_idx  on isp_transactions(created_at desc);
 
 -- Prepaid voucher / PIN codes

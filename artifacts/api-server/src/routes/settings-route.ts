@@ -14,11 +14,12 @@ import {
   saveMpesaSettings,
   savePaymentDestinations,
   isMpesaConfigured,
+  normaliseRegistrationFee,
   upsertPaymentDestination,
   type PaymentDestinationType,
   type MpesaSettings,
 } from "../lib/settings-store.js";
-import { sbSelect, sbUpdate } from "../lib/supabase-client.js";
+import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { extractToken, validateToken } from "../lib/api-auth.js";
 
@@ -54,6 +55,39 @@ function requireAdminPaymentChange(req: Request, res: Response, adminId: number)
     return false;
   }
   return true;
+}
+
+function requireSuperAdminReplacementPasscode(req: Request, res: Response): boolean {
+  const replacementPasscode = process.env.SUPERADMIN_PASSWORD?.trim();
+  if (!replacementPasscode) {
+    res.status(503).json({
+      ok: false,
+      error: "Payment settings are locked until SUPERADMIN_PASSWORD is configured securely.",
+    });
+    return false;
+  }
+  if (req.body?.replacePassword !== replacementPasscode) {
+    res.status(401).json({
+      ok: false,
+      error: "Changing registration payment settings requires the replacement passcode.",
+    });
+    return false;
+  }
+  return true;
+}
+
+function isValidCollectionNumber(type: PaymentDestinationType, value: string): boolean {
+  if (type === "bank") return /^[A-Za-z0-9][A-Za-z0-9 -]{2,33}$/.test(value);
+  return /^\d{5,10}$/.test(value);
+}
+
+function automaticDestinationMatchesMpesa(
+  destination: { type: PaymentDestinationType; number: string },
+  settings: MpesaSettings,
+): boolean {
+  if (destination.type === "bank") return true;
+  if (destination.type === "paybill") return destination.number === settings.shortcode;
+  return destination.number === (settings.tillNumber || settings.shortcode);
 }
 
 const PAYMENT_GATEWAY_IDS = new Set([
@@ -470,14 +504,16 @@ router.get("/super-admin/payment-destinations", (req: Request, res: Response): v
     res.status(401).json({ ok: false, error: "Super Admin authentication required." });
     return;
   }
-  res.json({ ok: true, ...getPaymentDestinations(), registrationFee: { amount: 500, currency: "KES" } });
+  const settings = getPaymentDestinations();
+  res.json({ ok: true, ...settings, registrationFee: { amount: settings.registrationFee, currency: "KES" } });
 });
 
-router.post("/super-admin/payment-destinations", (req: Request, res: Response): void => {
+router.post("/super-admin/payment-destinations", async (req: Request, res: Response): Promise<void> => {
   if (!isSuperAdminRequest(req)) {
     res.status(401).json({ ok: false, error: "Super Admin authentication required." });
     return;
   }
+  if (!requireSuperAdminReplacementPasscode(req, res)) return;
 
   if (req.body?.action === "select") {
     const current = getPaymentDestinations();
@@ -487,15 +523,41 @@ router.post("/super-admin/payment-destinations", (req: Request, res: Response): 
     const renewalDestinationId = typeof req.body?.renewalDestinationId === "string"
       ? req.body.renewalDestinationId.trim()
       : "";
+    const registrationFee = normaliseRegistrationFee(req.body?.registrationFee);
+    if (req.body?.registrationFee !== undefined &&
+        registrationFee !== req.body.registrationFee) {
+      res.status(400).json({ ok: false, error: "Registration fee must be a whole KSh amount between 1 and 1,000,000." });
+      return;
+    }
     const activeIds = new Set(current.destinations.filter(row => row.active).map(row => row.id));
     if ((registrationDestinationId && !activeIds.has(registrationDestinationId)) ||
         (renewalDestinationId && !activeIds.has(renewalDestinationId))) {
       res.status(400).json({ ok: false, error: "Choose an active destination for each payment purpose." });
       return;
     }
-    const next = { ...current, registrationDestinationId, renewalDestinationId };
+    if (registrationDestinationId) {
+      const destination = current.destinations.find(row => row.id === registrationDestinationId);
+      if (destination && destination.type !== "bank") {
+        const mpesa = await getMpesaSettings();
+        if (!isMpesaConfigured(mpesa)) {
+          res.status(400).json({ ok: false, error: "Save matching M-Pesa Daraja settings before selecting an automatic registration destination." });
+          return;
+        }
+        if (!automaticDestinationMatchesMpesa(destination, mpesa)) {
+          const expectedNumber = destination.type === "paybill"
+            ? mpesa.shortcode
+            : (mpesa.tillNumber || mpesa.shortcode);
+          res.status(400).json({
+            ok: false,
+            error: `The selected ${destination.type === "paybill" ? "PayBill" : "Till"} must match the configured Daraja collection number (${expectedNumber}).`,
+          });
+          return;
+        }
+      }
+    }
+    const next = { ...current, registrationFee, registrationDestinationId, renewalDestinationId };
     savePaymentDestinations(next);
-    res.json({ ok: true, ...next, registrationFee: { amount: 500, currency: "KES" } });
+    res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
     return;
   }
 
@@ -507,7 +569,7 @@ router.post("/super-admin/payment-destinations", (req: Request, res: Response): 
   const source = req.body?.destination ?? {};
   const type = source.type;
   const name = typeof source.name === "string" ? source.name.trim() : "";
-  const number = typeof source.number === "string" ? source.number.trim() : "";
+  const number = typeof source.number === "string" ? source.number.trim().replace(/\s+/g, "") : "";
   const accountReference = typeof source.accountReference === "string" ? source.accountReference.trim() : "";
   const instructions = typeof source.instructions === "string" ? source.instructions.trim() : "";
   const id = typeof source.id === "string" ? source.id.trim() : "";
@@ -515,8 +577,24 @@ router.post("/super-admin/payment-destinations", (req: Request, res: Response): 
     res.status(400).json({ ok: false, error: "Choose a type and enter a destination name plus receiving number." });
     return;
   }
+  if (!isValidCollectionNumber(type, number)) {
+    res.status(400).json({
+      ok: false,
+      error: type === "bank"
+        ? "Enter a valid bank account number."
+        : "Enter a numeric PayBill or Till number between 5 and 10 digits.",
+    });
+    return;
+  }
   if (type === "paybill" && !accountReference) {
     res.status(400).json({ ok: false, error: "PayBill destinations require an Account / Business Number." });
+    return;
+  }
+  if (type === "bank" && (!accountReference || !instructions)) {
+    res.status(400).json({
+      ok: false,
+      error: "Bank destinations require an account reference and payment instructions for manual registration.",
+    });
     return;
   }
 
@@ -529,7 +607,7 @@ router.post("/super-admin/payment-destinations", (req: Request, res: Response): 
     instructions,
     active: source.active !== false,
   });
-  res.json({ ok: true, ...next, registrationFee: { amount: 500, currency: "KES" } });
+  res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
 });
 
 router.delete("/super-admin/payment-destinations/:id", (req: Request, res: Response): void => {
@@ -537,12 +615,92 @@ router.delete("/super-admin/payment-destinations/:id", (req: Request, res: Respo
     res.status(401).json({ ok: false, error: "Super Admin authentication required." });
     return;
   }
+  if (!requireSuperAdminReplacementPasscode(req, res)) return;
   const id = String(req.params.id ?? "").trim();
   if (!id) {
     res.status(400).json({ ok: false, error: "A destination is required." });
     return;
   }
-  res.json({ ok: true, ...deletePaymentDestination(id), registrationFee: { amount: 500, currency: "KES" } });
+  const next = deletePaymentDestination(id);
+  res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
+});
+
+/* ── Super Admin manual bank-registration settlement ── */
+interface ManualRegistrationTransaction {
+  id: number;
+  admin_id: number;
+  amount: number | string;
+  payment_phone: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+interface RegistrationSettlement {
+  settled: boolean;
+  payment_method: string | null;
+  admin_id: number | null;
+}
+
+router.get("/super-admin/manual-registration-payments", async (req: Request, res: Response): Promise<void> => {
+  if (!isSuperAdminRequest(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication required." });
+    return;
+  }
+  const payments = await sbSelect<ManualRegistrationTransaction>(
+    "isp_transactions",
+    "payment_method=eq.manual_registration&status=eq.pending&select=id,admin_id,amount,payment_phone,notes,created_at&order=created_at.asc&limit=100",
+  );
+  res.json({ ok: true, payments });
+});
+
+router.post("/super-admin/manual-registration-payments/:id/verify", async (req: Request, res: Response): Promise<void> => {
+  if (!isSuperAdminRequest(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication required." });
+    return;
+  }
+  if (!requireSuperAdminReplacementPasscode(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) {
+    res.status(400).json({ ok: false, error: "A valid manual registration payment is required." });
+    return;
+  }
+  const payments = await sbSelect<{ id: number }>(
+    "isp_transactions",
+    `id=eq.${id}&payment_method=eq.manual_registration&status=eq.pending&select=id&limit=1`,
+  );
+  if (!payments[0]) {
+    res.status(404).json({ ok: false, error: "This manual registration payment is no longer awaiting verification." });
+    return;
+  }
+  try {
+    const settlements = await sbRpc<RegistrationSettlement>("settle_verified_mpesa_transaction", {
+      p_transaction_id: id,
+      p_status: "completed",
+      p_note: "Manual bank registration payment verified by Super Admin.",
+    });
+    if (!settlements[0]?.settled || settlements[0].payment_method !== "manual_registration") {
+      res.status(409).json({ ok: false, error: "This payment was already settled or could not be verified." });
+      return;
+    }
+    if (!settlements[0].admin_id) {
+      res.status(500).json({ ok: false, error: "The verified payment is not linked to an ISP registration." });
+      return;
+    }
+    const admins = await sbSelect<{ is_active: boolean; status: string }>(
+      "isp_admins",
+      `id=eq.${settlements[0].admin_id}&select=is_active,status&limit=1`,
+    );
+    if (admins[0]?.is_active !== true || admins[0].status !== "active") {
+      res.status(503).json({
+        ok: false,
+        error: "Payment was recorded but the ISP was not activated. Confirm the registration payments migration is applied before retrying.",
+      });
+      return;
+    }
+    res.json({ ok: true, adminId: settlements[0].admin_id });
+  } catch {
+    res.status(503).json({ ok: false, error: "Manual payment verification is unavailable. Apply the registration payments migration, then try again." });
+  }
 });
 
 export default router;
