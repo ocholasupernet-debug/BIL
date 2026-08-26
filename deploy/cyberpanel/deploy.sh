@@ -92,6 +92,7 @@ echo "[5/5] Restarting PM2..."
 mkdir -p logs
 
 if command -v pm2 >/dev/null 2>&1; then
+  API_RUNNER="PM2"
   if pm2 list 2>/dev/null | grep -q "ocholanet-api"; then
     pm2 reload ecosystem.config.cjs --env production --update-env
   else
@@ -100,6 +101,7 @@ if command -v pm2 >/dev/null 2>&1; then
   fi
   echo "  ✓ API managed by PM2"
 else
+  API_RUNNER="background Node process"
   # Git Manager can still launch the API when neither PM2 nor the Node.js Apps
   # panel is available. The PID file lets later Git pulls replace the old
   # process with the newly built bundle.
@@ -130,7 +132,7 @@ echo ""
 echo "══════════════════════════════════════════════"
 echo "  ✓  Deploy complete!"
 echo "  Site  → https://isplatty.org"
-echo "  API   → PM2 (ocholanet-api) port 8080"
+echo "  API   → $API_RUNNER on port ${API_PORT:-8080}"
 echo "  Files → $PUBLIC_HTML"
 echo "══════════════════════════════════════════════"
 echo ""
