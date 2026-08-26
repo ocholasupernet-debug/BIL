@@ -95,6 +95,43 @@ The deploy script:
 
 ---
 
+## If you only have CyberPanel (no SSH terminal)
+
+You can deploy from the GitHub connection entirely through CyberPanel:
+
+1. Open **CyberPanel → Git Manager** and edit the repository.
+2. Set **Deploy Path** to the website root or directly to its
+   `public_html` directory, for example:
+   `/home/<cpuser>/isplatty.org/` or
+   `/home/<cpuser>/isplatty.org/public_html/`
+3. Set **Script to Execute** to:
+   `bash deploy/cyberpanel/deploy.sh`
+4. Run **Deploy/Pull**. The script automatically detects whether the deploy
+   path itself is `public_html` or contains a `public_html/` directory.
+5. In **CyberPanel → File Manager**, create `.env` in the website root and add
+   the required `VITE_SUPABASE_URL` and `VITE_SUPABASE_KEY` values before
+   deploying again. Keep service-role, payment, router, and session secrets
+   server-side.
+
+The deployment script can use an existing `pnpm`, Node Corepack, or `npx`, so
+you do not need to open a terminal just to install pnpm.
+
+The script does not require PM2 to finish the frontend deployment. If PM2 is
+not installed, configure the API in **CyberPanel → Node.js Apps** instead:
+
+- **App Root:** the same website root used by Git Manager
+- **App URL:** `/api/`
+- **Startup File:** `artifacts/api-server/dist/index.mjs`
+- **Environment:** `NODE_ENV=production`, `PORT=8080`, plus the server-side
+  values from `.env.example`
+
+After saving the Node.js App, use **Graceful Restart** in CyberPanel. Verify:
+
+- `https://isplatty.org/` loads the dashboard
+- `https://isplatty.org/api/healthz` returns `{"status":"ok"}`
+
+---
+
 ## Step 4 — Set Up the API Proxy in CyberPanel
 
 The API runs on port 8080 (PM2). You need OLS to proxy `/api/` to it.
