@@ -54,6 +54,13 @@ if (process.env.SERVE_STATIC === "true") {
   if (existsSync(staticDir)) {
     app.use(express.static(staticDir));
 
+    // Never let an unknown API route fall through to the SPA document.
+    // A JSON 404 keeps health checks and API clients from treating HTML as
+    // a successful API response.
+    app.use("/api", (_req, res) => {
+      res.status(404).json({ error: "API route not found" });
+    });
+
     // SPA fallback — send index.html for all non-API routes
     app.get("/{*path}", (_req, res) => {
       res.sendFile(path.join(staticDir, "index.html"));
