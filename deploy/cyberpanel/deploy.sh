@@ -100,8 +100,30 @@ if command -v pm2 >/dev/null 2>&1; then
   fi
   echo "  ✓ API managed by PM2"
 else
-  echo "  ⚠ PM2 not found — leave the API running through CyberPanel Node.js Apps"
-  echo "    Startup file: artifacts/api-server/dist/index.mjs"
+  # Git Manager can still launch the API when neither PM2 nor the Node.js Apps
+  # panel is available. The PID file lets later Git pulls replace the old
+  # process with the newly built bundle.
+  API_PID_FILE="$PROJECT_DIR/logs/api.pid"
+  if [ -f "$API_PID_FILE" ]; then
+    OLD_PID="$(cat "$API_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+      kill "$OLD_PID" 2>/dev/null || true
+      for _ in 1 2 3 4 5; do
+        kill -0 "$OLD_PID" 2>/dev/null || break
+        sleep 1
+      done
+    fi
+    rm -f "$API_PID_FILE"
+  fi
+
+  API_PORT="${APP_PORT:-${PORT:-8080}}"
+  NODE_ENV=production PORT="$API_PORT" SERVE_STATIC=false \
+    nohup node "$PROJECT_DIR/artifacts/api-server/dist/index.mjs" \
+    >> "$PROJECT_DIR/logs/api-combined.log" 2>&1 &
+  API_PID=$!
+  echo "$API_PID" > "$API_PID_FILE"
+  echo "  ✓ API started in background (PID $API_PID, port $API_PORT)"
+  echo "    Configure the CyberPanel vHost proxy for /api/ → 127.0.0.1:$API_PORT"
 fi
 
 echo ""
