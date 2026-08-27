@@ -245,12 +245,12 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
 
   const result = await testConnection(creds);
   res.status(result.ok ? 200 : 503).json({
+    ...result,
     routerId: id,
     routerName: row.name,
     configuredHost: row.host,
     vpnFallbackIp: row.bridge_ip,
     warnings: [...warnings, ...result.warnings],
-    ...result,
   });
 });
 
