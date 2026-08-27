@@ -28,6 +28,11 @@ jobs:
             echo "=== Starting deploy at $(date) ==="
             cd /var/www/ocholasupernet
 
+            # Load the deployment script from the pushed revision. A running
+            # shell script cannot update its own already-loaded instructions.
+            git fetch origin main
+            git reset --hard origin/main
+
             # Inject Supabase credentials into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
             upsert_env() {

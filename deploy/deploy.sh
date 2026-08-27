@@ -21,6 +21,33 @@ resolve_ols_path() {
 find_public_html() {
   local vhost_conf doc_root vh_root main_conf nginx_conf
 
+  # The current VPS uses nginx as a full reverse proxy to PM2. Detect this
+  # active topology first so stale CyberPanel directories can never win.
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    for nginx_conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+      [ -r "$nginx_conf" ] || continue
+      grep -Eq 'server_name[^;]*isplatty\.org' "$nginx_conf" || continue
+
+      if grep -Eq 'proxy_pass[[:space:]]+http://(127\.0\.0\.1|localhost):8080' "$nginx_conf"; then
+        printf '%s\n' "$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
+        return
+      fi
+
+      doc_root=$(awk '$1 == "root" { gsub(/;/, "", $2); print $2; exit }' "$nginx_conf")
+      if [ -n "$doc_root" ]; then
+        printf '%s\n' "$doc_root"
+        return
+      fi
+    done
+  fi
+
+  # Only use a LiteSpeed root when LiteSpeed is active and the exact
+  # isplatty.org vhost configuration exists.
+  if ! systemctl is-active --quiet lsws 2>/dev/null &&
+     ! systemctl is-active --quiet openlitespeed 2>/dev/null
+  then
+    return
+  fi
   for vhost_conf in \
     /usr/local/lsws/conf/vhosts/isplatty.org/vhost.conf \
     /usr/local/lsws/conf/vhosts/isplatty.org/vhconf.conf
@@ -45,33 +72,6 @@ find_public_html() {
     vh_root=$(resolve_ols_path "${vh_root:-$(dirname "$vhost_conf")}")
     resolve_ols_path "$doc_root" "$vh_root"
     return
-  done
-
-  for doc_root in \
-    /home/isplatty.org/public_html \
-    /home/ocholasupernet/public_html \
-    /usr/local/lsws/Example/html
-  do
-    [ -d "$doc_root" ] && printf '%s\n' "$doc_root" && return
-  done
-
-  doc_root=$(find /home /usr/local/lsws -maxdepth 5 -type d -name public_html 2>/dev/null | head -1)
-  if [ -n "$doc_root" ]; then
-    printf '%s\n' "$doc_root"
-    return
-  fi
-
-  # The current VPS uses nginx as a full reverse proxy to PM2. In standalone
-  # mode the API serves the frontend directly from the build output directory,
-  # making that directory the active document root.
-  for nginx_conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
-    [ -r "$nginx_conf" ] || continue
-    if grep -Eq 'server_name[^;]*isplatty\.org' "$nginx_conf" &&
-       grep -Eq 'proxy_pass[[:space:]]+http://(127\.0\.0\.1|localhost):8080' "$nginx_conf"
-    then
-      printf '%s\n' "$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
-      return
-    fi
   done
 }
 
