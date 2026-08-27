@@ -15,11 +15,14 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
+          host: 102.203.116.204
+          username: root
           key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
           port: 22
+          timeout: 30s
           command_timeout: 15m
+          script_stop: true
           envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY
           script: |
             set -e
