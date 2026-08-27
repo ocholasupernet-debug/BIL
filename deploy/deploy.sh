@@ -114,45 +114,11 @@ apply_supabase_migration() {
   }
 
   if [ -n "$database_url" ]; then
-    command -v psql >/dev/null 2>&1 || {
-      echo "      ✗ psql is required when SUPABASE_DB_URL is configured"
-      exit 1
-    }
-    command -v node >/dev/null 2>&1 || {
-      echo "      ✗ Node.js is required to normalize SUPABASE_DB_URL safely"
-      exit 1
-    }
-
-    # Connection strings copied from Supabase may contain an unescaped @ (or
-    # another reserved character) in the password. Encode only the user-info
-    # segment so psql cannot mistake part of the password for the hostname.
-    local normalized_database_url
-    normalized_database_url=$(DATABASE_URL_TO_NORMALIZE="$database_url" node <<'NODE'
-const raw = process.env.DATABASE_URL_TO_NORMALIZE || "";
-const schemeEnd = raw.indexOf("://");
-const userInfoStart = schemeEnd + 3;
-const passwordStart = raw.indexOf(":", userInfoStart);
-const hostStart = raw.lastIndexOf("@");
-if (schemeEnd < 0 || passwordStart < userInfoStart || hostStart < passwordStart) {
-  process.exit(1);
-}
-const username = raw.slice(userInfoStart, passwordStart);
-const password = raw.slice(passwordStart + 1, hostStart);
-const decodeSafely = (value) => {
-  try { return decodeURIComponent(value); } catch { return value; }
-};
-process.stdout.write(
-  `${raw.slice(0, userInfoStart)}${encodeURIComponent(decodeSafely(username))}:` +
-  `${encodeURIComponent(decodeSafely(password))}${raw.slice(hostStart)}`,
-);
-NODE
-    ) || {
-      echo "      ✗ SUPABASE_DB_URL is not a valid Postgres connection string"
-      exit 1
-    }
     echo "      Applying admin password setup migration..."
-    psql "$normalized_database_url" -v ON_ERROR_STOP=1 -f "$migration_file"
-    unset normalized_database_url
+    (
+      cd "$PROJECT_DIR/artifacts/api-server"
+      SUPABASE_DB_URL="$database_url" node scripts/apply-admin-password-migration.mjs
+    )
     echo "      ✓ Supabase migration applied"
     return
   fi
