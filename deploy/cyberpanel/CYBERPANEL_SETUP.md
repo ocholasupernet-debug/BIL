@@ -108,28 +108,16 @@ You can deploy from the GitHub connection entirely through CyberPanel:
    `bash deploy/cyberpanel/deploy.sh`
 4. Run **Deploy/Pull**. The script automatically detects whether the deploy
    path itself is `public_html` or contains a `public_html/` directory.
-5. In **CyberPanel → File Manager**, create `.env` in the website root and add
-   the required `VITE_SUPABASE_URL` and `VITE_SUPABASE_KEY` values before
-   deploying again. Keep service-role, payment, router, and session secrets
-   server-side.
+5. In **CyberPanel → File Manager**, create `.env` in the website root
+   (the directory **above** `public_html`) and add the required
+   `VITE_SUPABASE_URL` and `VITE_SUPABASE_KEY` values before deploying again.
+   Keep service-role, payment, router, and session secrets server-side.
 
 The deployment script can use an existing `pnpm`, Node Corepack, or `npx`, so
 you do not need to open a terminal just to install pnpm.
 
-The script does not require PM2 to finish the deployment. If PM2 and
-**Node.js Apps** are unavailable, it starts the compiled API in the background
-and records its process ID in `logs/api.pid`. The API is restarted automatically
-on the next Git Manager deployment.
-
-In that case, configure the API proxy through the CyberPanel web panel:
-
-1. Open **Websites → isplatty.org → vHost Conf**.
-2. Paste the contents of `deploy/cyberpanel/ols-proxy.conf`.
-3. Save and choose **Graceful Restart**.
-
-The proxy must send `/api/` and `/scripts/` to `127.0.0.1:8080`.
-
-If **Node.js Apps** is available, configure the API there instead:
+The script does not require PM2 to finish the frontend deployment. If PM2 is
+not installed, configure the API in **CyberPanel → Node.js Apps** instead:
 
 - **App Root:** the same website root used by Git Manager
 - **App URL:** `/api/`

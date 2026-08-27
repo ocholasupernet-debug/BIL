@@ -3,6 +3,14 @@ import { HealthCheckResponse } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
+function checkAny(...keys: string[]): string {
+  const key = keys.find(candidate => !!process.env[candidate]);
+  if (!key) return "missing";
+  const value = process.env[key];
+  if (!value || value.length < 4) return "too-short";
+  return `set(${value.length})`;
+}
+
 router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
   res.json(data);
@@ -19,10 +27,15 @@ router.get("/debug/env", (_req, res) => {
   res.json({
     SUPABASE_URL:         check("SUPABASE_URL"),
     VITE_SUPABASE_URL:    check("VITE_SUPABASE_URL"),
-    SUPABASE_SERVICE_KEY: check("SUPABASE_SERVICE_KEY"),
+    SUPABASE_SERVICE_KEY: checkAny("SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
+    SUPABASE_SERVICE_ROLE_KEY: check("SUPABASE_SERVICE_ROLE_KEY"),
     VITE_SUPABASE_KEY:    check("VITE_SUPABASE_KEY"),
     HB_URL_resolved:      !!(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL),
-    HB_KEY_resolved:      !!(process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_KEY),
+    HB_KEY_resolved:      !!(
+      process.env.SUPABASE_SERVICE_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.VITE_SUPABASE_KEY
+    ),
     NODE_ENV:             process.env.NODE_ENV ?? "not-set",
     PORT:                 process.env.PORT ?? "not-set",
   });

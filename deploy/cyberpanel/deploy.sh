@@ -10,6 +10,12 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$PROJECT_DIR"
 
+SITE_ROOT="$PROJECT_DIR"
+if [ "$(basename "$PROJECT_DIR")" = "public_html" ]; then
+  SITE_ROOT="$(dirname "$PROJECT_DIR")"
+fi
+ENV_FILE="${ENV_FILE:-$SITE_ROOT/.env}"
+
 if command -v pnpm >/dev/null 2>&1; then
   PNPM_CMD=(pnpm)
 elif command -v corepack >/dev/null 2>&1; then
@@ -33,10 +39,10 @@ echo "[1/5] Installing dependencies..."
 
 # Load build/runtime settings from the project root when present. This lets
 # CyberPanel Git Manager builds embed VITE_* values without requiring SSH.
-if [ -f "$PROJECT_DIR/.env" ]; then
+if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1091
-  source "$PROJECT_DIR/.env"
+  source "$ENV_FILE"
   set +a
   echo "  ✓ Loaded .env"
 else
@@ -92,7 +98,6 @@ echo "[5/5] Restarting PM2..."
 mkdir -p logs
 
 if command -v pm2 >/dev/null 2>&1; then
-  API_RUNNER="PM2"
   if pm2 list 2>/dev/null | grep -q "ocholanet-api"; then
     pm2 reload ecosystem.config.cjs --env production --update-env
   else
@@ -101,38 +106,15 @@ if command -v pm2 >/dev/null 2>&1; then
   fi
   echo "  ✓ API managed by PM2"
 else
-  API_RUNNER="background Node process"
-  # Git Manager can still launch the API when neither PM2 nor the Node.js Apps
-  # panel is available. The PID file lets later Git pulls replace the old
-  # process with the newly built bundle.
-  API_PID_FILE="$PROJECT_DIR/logs/api.pid"
-  if [ -f "$API_PID_FILE" ]; then
-    OLD_PID="$(cat "$API_PID_FILE" 2>/dev/null || true)"
-    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-      kill "$OLD_PID" 2>/dev/null || true
-      for _ in 1 2 3 4 5; do
-        kill -0 "$OLD_PID" 2>/dev/null || break
-        sleep 1
-      done
-    fi
-    rm -f "$API_PID_FILE"
-  fi
-
-  API_PORT="${APP_PORT:-${PORT:-8080}}"
-  NODE_ENV=production PORT="$API_PORT" SERVE_STATIC=false \
-    nohup node "$PROJECT_DIR/artifacts/api-server/dist/index.mjs" \
-    >> "$PROJECT_DIR/logs/api-combined.log" 2>&1 &
-  API_PID=$!
-  echo "$API_PID" > "$API_PID_FILE"
-  echo "  ✓ API started in background (PID $API_PID, port $API_PORT)"
-  echo "    Configure the CyberPanel vHost proxy for /api/ → 127.0.0.1:$API_PORT"
+  echo "  ⚠ PM2 not found — leave the API running through CyberPanel Node.js Apps"
+  echo "    Startup file: artifacts/api-server/dist/index.mjs"
 fi
 
 echo ""
 echo "══════════════════════════════════════════════"
 echo "  ✓  Deploy complete!"
 echo "  Site  → https://isplatty.org"
-echo "  API   → $API_RUNNER on port ${API_PORT:-8080}"
+echo "  API   → PM2 (ocholanet-api) port 8080"
 echo "  Files → $PUBLIC_HTML"
 echo "══════════════════════════════════════════════"
 echo ""
