@@ -351,13 +351,29 @@ export function upsertPaymentDestination(input: {
  */
 export function ensureMpesaRegistrationDestination(settings: Pick<MpesaSettings, "shortcode" | "tillNumber">): PaymentDestinationSettings {
   const current = getPaymentDestinations();
+  const type: PaymentDestinationType = settings.tillNumber ? "till" : "paybill";
+  const number = (settings.tillNumber || settings.shortcode).trim();
   const selected = current.destinations.find(row =>
     row.id === current.registrationDestinationId && row.active,
   );
-  if (selected) return current;
+  if (selected) {
+    const legacyGeneratedName = `M-Pesa PayBill ${number}`;
+    if (selected.type === "paybill" && selected.number === number && selected.name === legacyGeneratedName) {
+      const renamed = {
+        ...selected,
+        name: `M-Pesa Business Shortcode ${number}`,
+        updatedAt: new Date().toISOString(),
+      };
+      const next = {
+        ...current,
+        destinations: current.destinations.map(row => row.id === renamed.id ? renamed : row),
+      };
+      savePaymentDestinations(next);
+      return next;
+    }
+    return current;
+  }
 
-  const type: PaymentDestinationType = settings.tillNumber ? "till" : "paybill";
-  const number = (settings.tillNumber || settings.shortcode).trim();
   if (!number) return current;
 
   const existing = current.destinations.find(row =>
@@ -367,7 +383,7 @@ export function ensureMpesaRegistrationDestination(settings: Pick<MpesaSettings,
   const destination: PaymentDestination = existing ?? {
     id: `destination_${randomUUID()}`,
     type,
-    name: type === "till" ? `M-Pesa Till ${number}` : `M-Pesa PayBill ${number}`,
+    name: type === "till" ? `M-Pesa Till ${number}` : `M-Pesa Business Shortcode ${number}`,
     number,
     accountReference: "ISP Registration",
     instructions: "",
