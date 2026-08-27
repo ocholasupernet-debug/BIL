@@ -86,7 +86,7 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
   const mpesaSettings = await getMpesaSettings();
   const schemaReady = await registrationSchemaReady();
   let destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
-  if (!destination && isMpesaConfigured(mpesaSettings)) {
+  if (isMpesaConfigured(mpesaSettings)) {
     destinations = ensureMpesaRegistrationDestination(mpesaSettings);
     destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
   }
@@ -126,7 +126,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const registrationFee = settings.registrationFee;
   let destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
   const config = destination?.type === "bank" ? null : await getMpesaSettings();
-  if (!destination && config && isMpesaConfigured(config)) {
+  if (config && isMpesaConfigured(config)) {
     settings = ensureMpesaRegistrationDestination(config);
     destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
   }
