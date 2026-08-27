@@ -17,7 +17,12 @@ function resolveSupabaseUrl(): string {
 
 const SUPABASE_URL = resolveSupabaseUrl();
 
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+/* Prefer the canonical name, but ignore empty legacy values so they cannot
+   mask a valid service-role key from the deployment environment. */
+const SERVICE_KEY = [
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  process.env.SUPABASE_SERVICE_KEY,
+].find(value => !!value?.trim())?.trim() ?? "";
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
 const BEST_KEY    = SERVICE_KEY || ANON_KEY;
 

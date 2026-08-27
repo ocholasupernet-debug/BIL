@@ -37,14 +37,13 @@ module.exports = {
         SERVE_STATIC: "true",
         VITE_SUPABASE_URL:    process.env.VITE_SUPABASE_URL || "",
         VITE_SUPABASE_KEY:    process.env.VITE_SUPABASE_KEY || "",
-           SESSION_SECRET:       process.env.SESSION_SECRET || "",
+         SESSION_SECRET:       process.env.SESSION_SECRET || "",
         /* Pass service-role key under the canonical name the API uses.
-           Accepts both SUPABASE_SERVICE_ROLE_KEY (Supabase dashboard name)
-           and the legacy SUPABASE_SERVICE_KEY — whichever is set in .env. */
-        ...(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+            Accepts the legacy name only for older .env files. */
+         ...(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
           ? {
               SUPABASE_SERVICE_ROLE_KEY:
-                process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY,
+                 process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY,
             }
           : {}),
       },
