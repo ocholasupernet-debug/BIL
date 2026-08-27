@@ -193,6 +193,17 @@ else
   echo "      ✓ Synced to $PUBLIC_HTML"
 fi
 
+# 6b. If a DNS-01 wildcard certificate is installed, enable wildcard
+#     subdomain routing without replacing the existing Certbot-managed apex
+#     configuration. The helper intentionally skips apex-only certificates.
+echo "[6b/7] Configuring wildcard subdomain routing..."
+if command -v nginx >/dev/null 2>&1 && [ -f "$PROJECT_DIR/deploy/configure-wildcard-nginx.sh" ]; then
+  DOMAIN="isplatty.org" PROJECT_DIR="$PROJECT_DIR" \
+    bash "$PROJECT_DIR/deploy/configure-wildcard-nginx.sh"
+else
+  echo "      ⚠ Nginx wildcard helper skipped (nginx is not active)"
+fi
+
 # 7. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit

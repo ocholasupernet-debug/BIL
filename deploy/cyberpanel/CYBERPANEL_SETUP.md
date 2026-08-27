@@ -188,6 +188,10 @@ sudo certbot certonly --manual --preferred-challenges dns \
   -d isplatty.org -d "*.isplatty.org"
 ```
 
+After the certificate is issued, run the normal deployment script once more.
+It will create the wildcard Nginx vhost only when the certificate actually
+contains `DNS:*.isplatty.org`.
+
 ---
 
 ## Updating After a Code Push
