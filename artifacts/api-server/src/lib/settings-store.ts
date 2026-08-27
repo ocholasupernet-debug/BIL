@@ -7,7 +7,12 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "crypto";
 import { logger } from "./logger.js";
-import { sbSelect, sbUpsert, supabaseConfigured } from "./supabase-client.js";
+import {
+  sbSelect,
+  sbUpsertStrict,
+  supabaseConfigured,
+  supabaseServiceRoleConfigured,
+} from "./supabase-client.js";
 
 const DATA_DIR  = path.resolve(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "settings.json");
@@ -189,9 +194,15 @@ export async function getMpesaSettings(): Promise<MpesaSettings> {
 /** Encrypts and saves Daraja configuration to Supabase. */
 export async function saveMpesaSettings(settings: MpesaSettings): Promise<void> {
   if (!supabaseConfigured) throw new Error("Supabase must be configured to save Daraja settings.");
+  if (!supabaseServiceRoleConfigured) {
+    throw new Error("A Supabase service-role key is required for secure Daraja storage.");
+  }
+  if (!encryptionKey()) {
+    throw new Error("SESSION_SECRET is required to encrypt Daraja settings.");
+  }
   const normalised = normaliseMpesaSettings(settings);
   const encrypted = encryptMpesaSettings(normalised);
-  const saved = await sbUpsert<EncryptedDarajaSettings>(
+  const saved = await sbUpsertStrict<EncryptedDarajaSettings>(
     "platform_secure_settings",
     "id",
     { id: DARAJA_SETTINGS_ID, ...encrypted, updated_at: new Date().toISOString() },

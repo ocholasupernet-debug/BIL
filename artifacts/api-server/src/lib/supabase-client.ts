@@ -80,6 +80,26 @@ export async function sbUpsert<T>(
   return res.json() as Promise<T[]>;
 }
 
+/** INSERT or UPDATE rows and surface a safe, actionable write failure to callers. */
+export async function sbUpsertStrict<T>(
+  table: string,
+  conflictColumn: string,
+  payload: Record<string, unknown>,
+): Promise<T[]> {
+  if (!supabaseConfigured) {
+    throw new Error("Supabase is not configured for secure storage.");
+  }
+  const res = await fetch(url(table, `on_conflict=${encodeURIComponent(conflictColumn)}`), {
+    method: "POST",
+    headers: headers({ Prefer: "resolution=merge-duplicates,return=representation" }),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase rejected the secure settings write (HTTP ${res.status}).`);
+  }
+  return res.json() as Promise<T[]>;
+}
+
 /** Invoke a Supabase RPC function using the server-only service role. */
 export async function sbRpc<T>(
   functionName: string,

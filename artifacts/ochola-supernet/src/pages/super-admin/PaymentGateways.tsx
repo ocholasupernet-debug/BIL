@@ -83,12 +83,15 @@ const emptyDestination = (): Omit<PaymentDestination, "id"> & { id?: string } =>
   active: true,
 });
 
+const automaticMpesaCallbackUrl = (): string =>
+  typeof window === "undefined" ? "" : new URL("/api/mpesa/callback", window.location.origin).toString();
+
 const emptyMpesaSettings = (): MpesaSettings => ({
   consumerKey: "",
   consumerSecret: "",
   shortcode: "",
   passkey: "",
-  callbackUrl: "",
+  callbackUrl: automaticMpesaCallbackUrl(),
   env: "production",
   tillNumber: "",
   replacePassword: "",
@@ -206,7 +209,11 @@ export default function SuperAdminPaymentGateways() {
           settings?: Omit<MpesaSettings, "replacePassword">;
         };
         if (!response.ok || !data.ok || !data.settings) throw new Error(data.error || "Could not load M-Pesa settings.");
-        setMpesa({ ...emptyMpesaSettings(), ...data.settings });
+        setMpesa({
+          ...emptyMpesaSettings(),
+          ...data.settings,
+          callbackUrl: data.settings.callbackUrl || automaticMpesaCallbackUrl(),
+        });
         setMpesaConfigured(!!data.configured);
       })
       .catch(error => setMpesaError(error instanceof Error ? error.message : "Could not load M-Pesa settings."));
@@ -395,8 +402,8 @@ export default function SuperAdminPaymentGateways() {
               <input style={inp} inputMode="numeric" value={mpesa.tillNumber} onChange={e => updateMpesa("tillNumber", e.target.value)} />
             </Field>
             <div style={{ gridColumn: "1 / -1" }}>
-              <Field label="Callback URL" hint="Required for live mode. Enter the deployed HTTPS address ending in /api/mpesa/callback.">
-                <input style={inp} type="url" value={mpesa.callbackUrl} onChange={e => updateMpesa("callbackUrl", e.target.value)} />
+              <Field label="Callback URL" hint="Generated automatically from your deployed HTTPS domain and used for every Daraja STK request.">
+                <input style={{ ...inp, color: C.sub, cursor: "not-allowed" }} type="url" value={mpesa.callbackUrl} readOnly aria-readonly="true" />
               </Field>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>

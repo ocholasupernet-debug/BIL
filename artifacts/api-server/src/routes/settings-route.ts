@@ -24,6 +24,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { extractToken, validateToken } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
+const MPESA_CALLBACK_PATH = "/api/mpesa/callback";
 
 function isSuperAdminRequest(req: Request): boolean {
   return isActiveSuperAdminToken(String(req.headers["x-sa-token"] ?? ""));
@@ -33,12 +34,29 @@ function configuredCallbackUrl(): string {
   return process.env.MPESA_CALLBACK_URL?.trim() ?? "";
 }
 
+function automaticCallbackUrl(req: Request): string {
+  const configured = configuredCallbackUrl();
+  if (isValidLiveCallback(configured)) return configured;
+
+  const forwardedHost = req.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || req.get("host")?.trim();
+  if (!host) return "";
+
+  try {
+    const parsed = new URL(`https://${host}`);
+    if (!parsed.hostname) return "";
+    return `https://${parsed.host}${MPESA_CALLBACK_PATH}`;
+  } catch {
+    return "";
+  }
+}
+
 function isValidLiveCallback(value: string): boolean {
   try {
     const parsed = new URL(value);
     return parsed.protocol === "https:" &&
       !!parsed.hostname &&
-      parsed.pathname === "/api/mpesa/callback";
+      parsed.pathname === MPESA_CALLBACK_PATH;
   } catch {
     return false;
   }
@@ -411,7 +429,7 @@ router.get("/super-admin/mpesa", async (req: Request, res: Response): Promise<vo
       consumerSecret: s.consumerSecret ? "**hidden**" : "",
       shortcode:      s.shortcode,
       passkey:        s.passkey        ? "**hidden**" : "",
-      callbackUrl:    s.callbackUrl || configuredCallbackUrl(),
+      callbackUrl:    automaticCallbackUrl(req) || s.callbackUrl,
       env:            s.env,
       tillNumber:     s.tillNumber,
       hasTillNumber:  !!s.tillNumber,
@@ -433,7 +451,6 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
 
   /* Merge with existing — don't overwrite a secret if the UI sends "**hidden**" placeholder */
   const current = await getMpesaSettings();
-  const requestedCallback = typeof callbackUrl === "string" ? callbackUrl.trim() : "";
   const hasNewCredential = [consumerKey, consumerSecret, passkey].some(value =>
     typeof value === "string" && value.trim().length > 0 && value !== "**hidden**"
   );
@@ -462,20 +479,12 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
     return;
   }
 
-  if (requestedCallback && !isValidLiveCallback(requestedCallback)) {
-    res.status(400).json({
-      ok: false,
-      error: "Live callback URL must use HTTPS and end with /api/mpesa/callback.",
-    });
-    return;
-  }
-
   const next: MpesaSettings = {
     consumerKey:    (consumerKey    && consumerKey    !== "**hidden**") ? consumerKey    : current.consumerKey,
     consumerSecret: (consumerSecret && consumerSecret !== "**hidden**") ? consumerSecret : current.consumerSecret,
     shortcode:      shortcode      ?? current.shortcode,
     passkey:        (passkey        && passkey        !== "**hidden**") ? passkey        : current.passkey,
-    callbackUrl:    requestedCallback || current.callbackUrl || configuredCallbackUrl(),
+    callbackUrl:    automaticCallbackUrl(req) || current.callbackUrl,
     env:            (env === "production" || env === "sandbox") ? env : current.env,
     tillNumber:     typeof tillNumber === "string" ? tillNumber.trim() : current.tillNumber,
   };
@@ -491,9 +500,11 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
     await saveMpesaSettings(next);
     res.json({ ok: true, configured: isMpesaConfigured(next) });
   } catch (err) {
+    const reason = err instanceof Error ? err.message : "The secure settings write could not be completed.";
+    console.error("[settings/mpesa] secure settings save failed", { reason });
     res.status(503).json({
       ok: false,
-      error: "Secure M-Pesa storage is unavailable. Apply the Supabase secure settings migration, then try again.",
+      error: reason,
     });
   }
 });
