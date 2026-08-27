@@ -217,7 +217,7 @@ function resolveOrigin(host: string): string {
    Sub-script URLs use the requesting ISP's own subdomain so each
    ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-function buildMainhotspotRsc(
+export function buildMainhotspotRsc(
   scriptsBase: string,
   progressUrl: string = "",
   routerName: string = "",

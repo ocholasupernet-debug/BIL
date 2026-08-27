@@ -135,7 +135,7 @@ function deriveNet(ip: string): { gateway: string; network: string; poolStart: s
 
 /* ══════════════════════════ Script generators ══════════════════════════ */
 
-function genPPPoEOnly(
+export function genPPPoEOnly(
   router: DbRouter, companyName: string, ros: number,
   adminSubdomain: string
 ): string {
@@ -254,7 +254,7 @@ function genPPPoEOnly(
 `;
 }
 
-function genPPPoEOverHotspot(
+export function genPPPoEOverHotspot(
   router: DbRouter, companyName: string, ros: number,
   adminSubdomain: string
 ): string {

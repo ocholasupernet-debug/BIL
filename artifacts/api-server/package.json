@@ -7,7 +7,8 @@
     "dev": "export NODE_ENV=development PORT=8080 && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "sh -c 'set -e; trap \"rm -f .generated-scripts.test.mjs .generated-scripts.test.mjs.map\" EXIT; pnpm exec esbuild test/generated-scripts.test.ts --bundle --packages=external --platform=node --format=esm --outfile=.generated-scripts.test.mjs --external:node-routeros; node --test .generated-scripts.test.mjs'"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",
