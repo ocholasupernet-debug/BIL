@@ -90,12 +90,78 @@ git reset --hard origin/main
 echo "      → Now on: $(git log -1 --format='%h %s')"
 
 # 2. Install dependencies (no frozen-lockfile so it never blocks)
-echo "[2/6] Installing dependencies..."
+echo "[2/7] Installing dependencies..."
 pnpm install --no-frozen-lockfile
 
-# 3. Build the frontend (VPS config — no Replit plugins)
-#    Source .env so VITE_SUPABASE_URL / VITE_SUPABASE_KEY are embedded at build time
-echo "[3/6] Building frontend..."
+# Load deployment values from the VPS environment before database checks and
+# builds. The workflow writes the values into .env before calling this script.
+load_deploy_env() {
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_DIR/.env"
+    set +a
+  fi
+}
+
+apply_supabase_migration() {
+  local migration_file="$PROJECT_DIR/artifacts/api-server/migrations/2026_admin_initial_password_setup.sql"
+  local database_url="${SUPABASE_DB_URL:-${SUPABASE_DATABASE_URL:-}}"
+
+  [ -f "$migration_file" ] || {
+    echo "      ✗ Migration file not found: $migration_file"
+    exit 1
+  }
+
+  if [ -n "$database_url" ]; then
+    command -v psql >/dev/null 2>&1 || {
+      echo "      ✗ psql is required when SUPABASE_DB_URL is configured"
+      exit 1
+    }
+    echo "      Applying admin password setup migration..."
+    psql "$database_url" -v ON_ERROR_STOP=1 -f "$migration_file"
+    echo "      ✓ Supabase migration applied"
+    return
+  fi
+
+  # A direct Postgres URL is intentionally required for DDL. If the VPS only
+  # has REST credentials, verify that this one-time migration is already
+  # applied instead of pretending REST can execute arbitrary SQL.
+  local supabase_url="${VITE_SUPABASE_URL:-${SUPABASE_URL:-}}"
+  local service_key="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}"
+  if [ -z "$supabase_url" ] || [ -z "$service_key" ]; then
+    echo "      ✗ Set SUPABASE_DB_URL to apply the Supabase migration, or provide"
+    echo "        VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to verify it."
+    exit 1
+  fi
+
+  local schema_status
+  schema_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --max-time 20 \
+    -H "apikey: $service_key" \
+    -H "Authorization: Bearer $service_key" \
+    "$supabase_url/rest/v1/isp_admins?select=must_change_password&limit=1")
+  case "$schema_status" in
+    2??)
+      echo "      ✓ Supabase migration already applied (must_change_password is queryable)"
+      ;;
+    *)
+      echo "      ✗ Supabase migration is not applied (REST check returned HTTP $schema_status)"
+      echo "        Configure SUPABASE_DB_URL so deployment can apply it safely."
+      exit 1
+      ;;
+  esac
+}
+
+load_deploy_env
+
+# 3. Apply the one-time schema migration before building or restarting the API.
+echo "[3/7] Applying Supabase schema migration..."
+apply_supabase_migration
+
+# 4. Build the frontend (VPS config — no Replit plugins)
+#    .env has already been loaded so VITE_SUPABASE_URL / VITE_SUPABASE_KEY are embedded at build time
+echo "[4/7] Building frontend..."
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a
   echo "      ✓ Sourced .env (VITE_SUPABASE_URL=${VITE_SUPABASE_URL:+set})"
@@ -106,14 +172,14 @@ cd "$PROJECT_DIR/artifacts/ochola-supernet"
 BASE_PATH="/" pnpm run build:vps
 cd "$PROJECT_DIR"
 
-# 4. Build the API server
-echo "[4/6] Building API server..."
+# 5. Build the API server
+echo "[5/7] Building API server..."
 cd "$PROJECT_DIR/artifacts/api-server"
 pnpm run build
 cd "$PROJECT_DIR"
 
-# 5. Publish frontend build → the active web root
-echo "[5/6] Publishing frontend to the active web root..."
+# 6. Publish frontend build → the active web root
+echo "[6/7] Publishing frontend to the active web root..."
 if [ -z "$PUBLIC_HTML" ] || [ ! -d "$PUBLIC_HTML" ]; then
   echo "      ✗ Active web root not found: ${PUBLIC_HTML:-NOT FOUND}"
   exit 1
@@ -128,11 +194,11 @@ else
   echo "      ✓ Synced to $PUBLIC_HTML"
 fi
 
-# 6. Restart API via PM2
+# 7. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
 #    a stale legacy value that could mask the canonical service-role key.
-echo "[6/6] Restarting PM2..."
+echo "[7/7] Restarting PM2..."
 mkdir -p logs
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a

@@ -22,7 +22,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SESSION_SECRET
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -48,6 +48,7 @@ jobs:
             upsert_env "VITE_SUPABASE_URL"        "$VITE_SUPABASE_URL"
             upsert_env "VITE_SUPABASE_KEY"         "$VITE_SUPABASE_KEY"
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
+            upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
 
             bash deploy/deploy.sh
@@ -56,4 +57,5 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
