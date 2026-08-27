@@ -8,7 +8,7 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# Resolve the document root used by the active isplatty.org OpenLiteSpeed vhost.
+# Resolve the document root used by the active isplatty.org web server.
 # PUBLIC_HTML remains an explicit override for non-standard installations.
 resolve_ols_path() {
   local path="$1"
@@ -19,7 +19,7 @@ resolve_ols_path() {
 }
 
 find_public_html() {
-  local vhost_conf doc_root vh_root main_conf
+  local vhost_conf doc_root vh_root main_conf nginx_conf
 
   for vhost_conf in \
     /usr/local/lsws/conf/vhosts/isplatty.org/vhost.conf \
@@ -55,7 +55,24 @@ find_public_html() {
     [ -d "$doc_root" ] && printf '%s\n' "$doc_root" && return
   done
 
-  find /home /usr/local/lsws -maxdepth 5 -type d -name public_html 2>/dev/null | head -1
+  doc_root=$(find /home /usr/local/lsws -maxdepth 5 -type d -name public_html 2>/dev/null | head -1)
+  if [ -n "$doc_root" ]; then
+    printf '%s\n' "$doc_root"
+    return
+  fi
+
+  # The current VPS uses nginx as a full reverse proxy to PM2. In standalone
+  # mode the API serves the frontend directly from the build output directory,
+  # making that directory the active document root.
+  for nginx_conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [ -r "$nginx_conf" ] || continue
+    if grep -Eq 'server_name[^;]*isplatty\.org' "$nginx_conf" &&
+       grep -Eq 'proxy_pass[[:space:]]+http://(127\.0\.0\.1|localhost):8080' "$nginx_conf"
+    then
+      printf '%s\n' "$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
+      return
+    fi
+  done
 }
 
 PUBLIC_HTML="${PUBLIC_HTML:-$(find_public_html)}"
@@ -63,7 +80,7 @@ PUBLIC_HTML="${PUBLIC_HTML:-$(find_public_html)}"
 echo "══════════════════════════════════════════"
 echo "  OcholaSupernet — Deploying to VPS"
 echo "  Dir:         $PROJECT_DIR"
-echo "  public_html: ${PUBLIC_HTML:-NOT FOUND}"
+echo "  web root:    ${PUBLIC_HTML:-NOT FOUND}"
 echo "══════════════════════════════════════════"
 
 # 1. Force pull latest code (discard any local changes)
@@ -95,16 +112,21 @@ cd "$PROJECT_DIR/artifacts/api-server"
 pnpm run build
 cd "$PROJECT_DIR"
 
-# 5. Copy frontend build → the OpenLiteSpeed document root
-echo "[5/6] Syncing frontend to the OpenLiteSpeed document root..."
+# 5. Publish frontend build → the active web root
+echo "[5/6] Publishing frontend to the active web root..."
 if [ -z "$PUBLIC_HTML" ] || [ ! -d "$PUBLIC_HTML" ]; then
-  echo "      ✗ OpenLiteSpeed document root not found: ${PUBLIC_HTML:-NOT FOUND}"
+  echo "      ✗ Active web root not found: ${PUBLIC_HTML:-NOT FOUND}"
   exit 1
 fi
-rsync -a --delete \
-  "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/" \
-  "$PUBLIC_HTML/"
-echo "      ✓ Synced to $PUBLIC_HTML"
+BUILD_OUTPUT="$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
+if [ "$(readlink -f "$BUILD_OUTPUT")" = "$(readlink -f "$PUBLIC_HTML")" ]; then
+  echo "      ✓ Build output is the active web root: $PUBLIC_HTML"
+else
+  rsync -a --delete \
+    "$BUILD_OUTPUT/" \
+    "$PUBLIC_HTML/"
+  echo "      ✓ Synced to $PUBLIC_HTML"
+fi
 
 # 6. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
