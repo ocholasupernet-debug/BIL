@@ -21,7 +21,6 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          script_stop: true
           envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY
           script: |
             set -e

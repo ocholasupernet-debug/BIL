@@ -6,6 +6,9 @@ packages:
 
 autoInstallPeers: false
 
+allowBuilds:
+  esbuild: true
+
 catalog:
   '@replit/vite-plugin-cartographer': ^0.5.1
   '@replit/vite-plugin-dev-banner': ^0.1.1
