@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, Eye, EyeOff, ShieldCheck, Router, CreditCard, Sparkles } from "lucide-react";
+import { Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
@@ -30,10 +30,6 @@ export default function AdminRegister() {
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentPhone, setPaymentPhone] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [checkingCompany, setCheckingCompany] = useState(false);
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
@@ -46,6 +42,7 @@ export default function AdminRegister() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [registeredUsername, setRegisteredUsername] = useState("");
+  const [registeredSubdomain, setRegisteredSubdomain] = useState("");
   const [serverErr, setServerErr] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [checkoutId, setCheckoutId] = useState("");
@@ -120,11 +117,12 @@ export default function AdminRegister() {
         const data = await response.json() as {
           paid?: boolean;
           status?: string;
-          registration?: { username?: string };
+          registration?: { username?: string; subdomain?: string };
         };
         if (data.paid && data.registration?.username) {
           window.clearInterval(poll);
           setRegisteredUsername(data.registration.username);
+          setRegisteredSubdomain(data.registration.subdomain || slugify(company));
           setAwaitingPayment(false);
           setSuccess(true);
         } else if (data.status === "failed") {
@@ -149,8 +147,6 @@ export default function AdminRegister() {
     else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
     }
-    if (password.length < 10) e.password = "Choose a password with at least 10 characters";
-    if (password !== confirmPassword) e.confirmPassword = "Passwords do not match";
     return e;
   };
 
@@ -166,17 +162,18 @@ export default function AdminRegister() {
       const response = await fetch("/api/registration/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim(), password }),
+        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim() }),
       });
       const data = await response.json() as {
         ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean;
-        username?: string; destination?: RegistrationDestination;
+        username?: string; subdomain?: string; destination?: RegistrationDestination;
       };
       if (!response.ok || !data.ok) {
         throw new Error(data.error || "Could not start the registration payment.");
       }
       if (data.manualPayment) {
         setRegisteredUsername(data.username || "");
+        setRegisteredSubdomain(data.subdomain || slugify(company));
         setManualPayment(data.destination || registrationDestination);
         return;
       }
@@ -208,15 +205,8 @@ export default function AdminRegister() {
     maximumFractionDigits: 0,
   }).format(registrationFee.amount);
 
-  const passwordChecks = [
-    password.length >= 10,
-    /[A-Z]/.test(password),
-    /\d/.test(password),
-  ];
-  const passwordScore = passwordChecks.filter(Boolean).length;
-
   if (success) {
-    const subdomainUrl = `https://${registeredUsername}.isplatty.org/admin/login`;
+    const subdomainUrl = `https://${registeredSubdomain}.isplatty.org`;
     return (
       <div className="register-state-page" style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
         <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
@@ -232,12 +222,15 @@ export default function AdminRegister() {
               <p style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Your Login Credentials</p>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>Username</span>
-                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>{registeredUsername}</span>
+                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>{registeredUsername || "admin"}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>Password</span>
-                <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text)" }}>Use the password you chose</span>
+                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>admin</span>
               </div>
+              <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.45, margin: "0 0 12px" }}>
+                Sign in with these temporary details, then create your own password to access the workspace.
+              </p>
               <div style={{ borderTop: "1px solid var(--isp-border)", paddingTop: 12 }}>
                 <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginBottom: 4 }}>Your portal URL</p>
                 <p style={{ fontSize: "0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", wordBreak: "break-all" }}>{subdomainUrl}</p>
@@ -457,29 +450,6 @@ export default function AdminRegister() {
                The STK Push will be sent here. This number may be reused for multiple ISP registrations.
              </p>
              {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
-                </div>
-              </div>
-
-              <div className="register-form-section">
-                <div className="register-section-heading"><span>03</span><div><strong>Secure your workspace</strong><small>Create the password you’ll use to sign in</small></div></div>
-                <div className="register-two-col">
-                  <div>
-                    <label className="register-label">Create Password</label>
-                    <div style={{ position: "relative" }}>
-                      <input type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" placeholder="At least 10 characters" className="register-input" style={inputStyle(!!errors.password, null, false)} />
-                      <button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword(!showPassword)} className="register-password-toggle">{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-                    </div>
-                    {password.length > 0 && <div className="register-password-meter"><div className="register-meter-bars">{[0, 1, 2].map(i => <span key={i} className={i < passwordScore ? (passwordScore === 3 ? "strong" : "active") : ""} />)}</div><small>{passwordScore === 3 ? "Strong password" : passwordScore === 2 ? "Good password" : "Add uppercase letters and numbers"}</small></div>}
-                    {errors.password && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.password}</p>}
-                  </div>
-                  <div>
-                    <label className="register-label">Confirm Password</label>
-                    <div style={{ position: "relative" }}>
-                      <input type={showConfirmPassword ? "text" : "password"} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" placeholder="Re-enter your password" className="register-input" style={inputStyle(!!errors.confirmPassword, null, false)} />
-                      <button type="button" aria-label={showConfirmPassword ? "Hide password" : "Show password"} onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="register-password-toggle">{showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-                    </div>
-                    {errors.confirmPassword && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.confirmPassword}</p>}
-                  </div>
                 </div>
               </div>
 

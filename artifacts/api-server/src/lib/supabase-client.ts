@@ -54,6 +54,21 @@ export async function sbSelect<T>(
   return res.json() as Promise<T[]>;
 }
 
+/** SELECT rows and surface a safe failure to callers that require the schema. */
+export async function sbSelectStrict<T>(
+  table: string,
+  query: string,
+): Promise<T[]> {
+  if (!supabaseConfigured) {
+    throw new Error("Supabase is not configured.");
+  }
+  const res = await fetch(url(table, query), { headers: headers() });
+  if (!res.ok) {
+    throw new Error(`Supabase rejected the schema check (HTTP ${res.status}).`);
+  }
+  return res.json() as Promise<T[]>;
+}
+
 /** INSERT row(s). Returns the inserted rows. */
 export async function sbInsert<T>(
   table: string,

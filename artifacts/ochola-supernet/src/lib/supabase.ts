@@ -58,6 +58,18 @@ export function clearAdminAuth() {
   } catch {}
 }
 
+export function setPasswordSetupToken(token: string): void {
+  try { sessionStorage.setItem("ochola_password_setup_token", token); } catch {}
+}
+
+export function getPasswordSetupToken(): string {
+  try { return sessionStorage.getItem("ochola_password_setup_token") || ""; } catch { return ""; }
+}
+
+export function clearPasswordSetupToken(): void {
+  try { sessionStorage.removeItem("ochola_password_setup_token"); } catch {}
+}
+
 export function getAdminName(): string {
   try { return localStorage.getItem("ochola_admin_name") || ""; } catch { return ""; }
 }

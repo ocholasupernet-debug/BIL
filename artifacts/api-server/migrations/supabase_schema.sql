@@ -30,13 +30,14 @@ grant select, insert, update on table platform_secure_settings to service_role;
 create table if not exists isp_admins (
   id              bigserial primary key,
   name            text not null,
-  username        text unique,
+  username        text,
   fullname        text,
   email           text,
   phone           text,
   payment_phone   text,
   subdomain       text unique,
   password        text,
+  must_change_password boolean not null default false,
   is_active       boolean not null default true,
   role            text not null default 'isp_admin',
   area            text,                               -- country name (e.g. "Kenya")
@@ -49,6 +50,9 @@ create table if not exists isp_admins (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+create unique index if not exists isp_admins_subdomain_username_key
+  on isp_admins(subdomain, username)
+  where username is not null;
 create index if not exists isp_admins_subdomain_idx on isp_admins(subdomain);
 create index if not exists isp_admins_username_idx  on isp_admins(username);
 

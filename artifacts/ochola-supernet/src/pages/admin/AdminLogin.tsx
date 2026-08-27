@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Zap } from "lucide-react";
-import { supabase, setAdminAuth } from "@/lib/supabase";
+import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken, supabase } from "@/lib/supabase";
 import { getHostSubdomain } from "@/lib/subdomain";
 
 interface CompanyInfo {
@@ -25,14 +25,19 @@ export default function AdminLogin() {
     const sub = getHostSubdomain();
     if (!sub) return;
     setCompanyLoading(true);
-    supabase
-      .from("isp_admins")
-      .select("id, name, subdomain")
-      .ilike("subdomain", sub)
-      .eq("is_active", true)
-      .single()
-      .then(({ data }) => { if (data) setCompany(data as CompanyInfo); })
-      .finally(() => setCompanyLoading(false));
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from("isp_admins")
+          .select("id, name, subdomain")
+          .ilike("subdomain", sub)
+          .eq("is_active", true)
+          .single();
+        if (data) setCompany(data as CompanyInfo);
+      } finally {
+        setCompanyLoading(false);
+      }
+    })();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -52,10 +57,12 @@ export default function AdminLogin() {
       const apiSession = await apiLogin.json() as {
         ok?: boolean;
         token?: string;
+        requiresPasswordSetup?: boolean;
+        setupToken?: string;
         error?: string;
         admin?: { id: number; name?: string; username: string; role?: string; subdomain?: string; area?: string; currency?: string };
       };
-      if (!apiLogin.ok || !apiSession.ok || !apiSession.token || !apiSession.admin) {
+      if (!apiLogin.ok || !apiSession.ok || !apiSession.admin) {
         setError(apiSession.error || "Could not create a secure admin session. Please try again.");
         return;
       }
@@ -64,6 +71,22 @@ export default function AdminLogin() {
         setError("Invalid username or password.");
         return;
       }
+      if (apiSession.requiresPasswordSetup) {
+        if (!apiSession.setupToken) {
+          setError("Could not start password setup. Please try again.");
+          return;
+        }
+        clearAdminAuth();
+        clearPasswordSetupToken();
+        setPasswordSetupToken(apiSession.setupToken);
+        setLocation("/admin/set-password");
+        return;
+      }
+      if (!apiSession.token) {
+        setError("Could not create a secure admin session. Please try again.");
+        return;
+      }
+      clearPasswordSetupToken();
       setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, apiSession.token);
       /* store country + currency so formatCurrency works immediately */
       try {

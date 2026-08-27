@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { processDeferredMpesaCallbacks } from "./mpesa-route.js";
-import { sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbInsert, sbRpc, sbSelect, sbSelectStrict, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import {
   ensureMpesaRegistrationDestination,
   getMpesaSettings,
@@ -12,6 +12,8 @@ import { logger } from "../lib/logger.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 
 const router: IRouter = Router();
+const INITIAL_ADMIN_USERNAME = "admin";
+const INITIAL_ADMIN_PASSWORD = "admin";
 
 function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -81,10 +83,27 @@ async function registrationSchemaReady(): Promise<boolean> {
   }
 }
 
+async function adminPasswordSetupSchemaReady(): Promise<boolean> {
+  try {
+    await sbSelectStrict<{ must_change_password: boolean }>(
+      "isp_admins",
+      "select=must_change_password&limit=1",
+    );
+    return true;
+  } catch (error) {
+    logger.warn({ err: error }, "[registration] password setup schema readiness check failed");
+    return false;
+  }
+}
+
 router.get("/registration/config", async (_req: Request, res: Response): Promise<void> => {
   let destinations = getPaymentDestinations();
   const mpesaSettings = await getMpesaSettings();
-  const schemaReady = await registrationSchemaReady();
+  const [paymentSchemaReady, passwordSetupSchemaReady] = await Promise.all([
+    registrationSchemaReady(),
+    adminPasswordSetupSchemaReady(),
+  ]);
+  const schemaReady = paymentSchemaReady && passwordSetupSchemaReady;
   let destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
   if (isMpesaConfigured(mpesaSettings)) {
     destinations = ensureMpesaRegistrationDestination(mpesaSettings);
@@ -111,14 +130,13 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const company = typeof req.body?.company === "string" ? req.body.company.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
-  const userPassword = typeof req.body?.password === "string" ? req.body.password : "";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
 
   if (company.length < 2 || !slug || !/^2547\d{8}$/.test(formattedPhone) ||
-      !/^2547\d{8}$/.test(formattedPaymentPhone) || userPassword.length < 10) {
-    res.status(400).json({ ok: false, error: "Enter a company name, valid contact and M-Pesa payment numbers, and a password of at least 10 characters." });
+      !/^2547\d{8}$/.test(formattedPaymentPhone)) {
+    res.status(400).json({ ok: false, error: "Enter a company name and valid contact and M-Pesa payment numbers." });
     return;
   }
 
@@ -134,8 +152,8 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(503).json({ ok: false, error: "No active payment destination has been selected for registration." });
     return;
   }
-  if (!await registrationSchemaReady()) {
-    res.status(503).json({ ok: false, error: "Registration payments are temporarily unavailable while the payment database migration is completed." });
+  if (!await registrationSchemaReady() || !await adminPasswordSetupSchemaReady()) {
+    res.status(503).json({ ok: false, error: "Registration is temporarily unavailable while the account setup database migration is completed." });
     return;
   }
   if (destination.type !== "bank" && (!config || !isMpesaConfigured(config))) {
@@ -162,10 +180,11 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
-  const pendingAdmins = await sbInsert<{ id: number; username: string }>("isp_admins", {
-    name: company, phone, payment_phone: formattedPaymentPhone, username: slug,
-    password: await hashIspAdminPassword(userPassword), is_active: false, role: "isp_admin",
-    subdomain: slug, status: "pending_payment", created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  const pendingAdmins = await sbInsert<{ id: number; username: string; subdomain: string }>("isp_admins", {
+    name: company, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
+    password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
+    is_active: false, role: "isp_admin", subdomain: slug, status: "pending_payment",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   });
   const pendingAdmin = pendingAdmins[0];
   if (!pendingAdmin) {
@@ -192,7 +211,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
           type: destination.type, name: destination.name, number: destination.number,
           accountReference: destination.accountReference, instructions: destination.instructions,
         },
-        username: pendingAdmin.username,
+        username: pendingAdmin.username, subdomain: pendingAdmin.subdomain,
       });
       return;
     }
@@ -251,7 +270,10 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       return;
     }
     await processDeferredMpesaCallbacks(checkoutId);
-    res.json({ ok: true, CheckoutRequestID: checkoutId, registrationFee: { amount: registrationFee, currency: "KES" }, username: pendingAdmin.username });
+    res.json({
+      ok: true, CheckoutRequestID: checkoutId, registrationFee: { amount: registrationFee, currency: "KES" },
+      username: pendingAdmin.username, subdomain: pendingAdmin.subdomain,
+    });
   } catch (error) {
     await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
     logger.error({ err: error, adminId: pendingAdmin.id }, "[registration/payment] failed");

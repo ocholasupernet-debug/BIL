@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { KeyRound, Eye, EyeOff, CheckCircle2, AlertCircle, Zap } from "lucide-react";
-import { supabase, ADMIN_ID, isLoggedIn } from "@/lib/supabase";
+import { clearPasswordSetupToken, getPasswordSetupToken, setAdminAuth } from "@/lib/supabase";
 
 export default function AdminSetPassword() {
   const [, setLocation] = useLocation();
@@ -14,8 +14,8 @@ export default function AdminSetPassword() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    if (!isLoggedIn()) setLocation("/admin/login");
-  }, []);
+    if (!getPasswordSetupToken()) setLocation("/admin/login");
+  }, [setLocation]);
 
   const getStrength = (pw: string) => {
     if (pw.length === 0) return 0;
@@ -35,8 +35,8 @@ export default function AdminSetPassword() {
     e.preventDefault();
     setError("");
 
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (password.length < 10 || password.toLowerCase() === "admin") {
+      setError("Choose a new password with at least 10 characters.");
       return;
     }
     if (password !== confirm) {
@@ -46,12 +46,28 @@ export default function AdminSetPassword() {
 
     setLoading(true);
     try {
-      const { error: dbErr } = await supabase
-        .from("isp_admins")
-        .update({ password })
-        .eq("id", ADMIN_ID);
-
-      if (dbErr) throw dbErr;
+      const token = getPasswordSetupToken();
+      const response = await fetch("/api/auth/admin/set-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ password, confirmPassword: confirm }),
+      });
+      const result = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        token?: string;
+        admin?: { id: number; name?: string; username: string; role?: string; area?: string; currency?: string };
+      };
+      if (!response.ok || !result.ok || !result.token || !result.admin) {
+        throw new Error(result.error || "Failed to update password.");
+      }
+      const admin = result.admin;
+      clearPasswordSetupToken();
+      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, result.token);
+      try {
+        if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);
+        if (admin.area) localStorage.setItem("ochola_admin_country", admin.area);
+      } catch {}
       setDone(true);
       setTimeout(() => setLocation("/admin/dashboard"), 1800);
     } catch {
@@ -120,7 +136,7 @@ export default function AdminSetPassword() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="Minimum 6 characters"
+                  placeholder="At least 10 characters"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
                   onBlur={e => { e.target.style.borderColor = "var(--isp-input-border)"; e.target.style.boxShadow = "none"; }}

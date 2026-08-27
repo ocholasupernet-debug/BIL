@@ -12,11 +12,14 @@ declare global {
 
 const TOKEN_SIGNING_SECRET = process.env.TOKEN_SIGNING_SECRET ?? process.env.SESSION_SECRET ?? "";
 const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const PASSWORD_SETUP_TOKEN_TTL_MS = 15 * 60 * 1000;
 const MAX_CLOCK_SKEW_S = 300;
 const PAYMENT_INTENT_TTL_MS = 5 * 60 * 1000;
 
+export type ApiTokenType = "a" | "c" | "p";
+
 export interface ApiTokenPayload {
-  type: "a" | "c";
+  type: ApiTokenType;
   uid: string;
   time: number;
 }
@@ -32,7 +35,7 @@ export interface PaymentIntentPayload {
 
 export const apiTokenSigningConfigured = !!TOKEN_SIGNING_SECRET;
 
-export function generateToken(type: "a" | "c", uid: string): string {
+export function generateToken(type: ApiTokenType, uid: string): string {
   if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
   const time = Math.floor(Date.now() / 1000);
   const hash = createHmac("sha256", TOKEN_SIGNING_SECRET)
@@ -48,7 +51,7 @@ export function validateToken(token: string): ApiTokenPayload | null {
   if (parts.length !== 4) return null;
 
   const [type, uid, timeStr, hash] = parts;
-  if (type !== "a" && type !== "c") return null;
+  if (type !== "a" && type !== "c" && type !== "p") return null;
 
   const time = parseInt(timeStr, 10);
   if (isNaN(time)) return null;
@@ -58,7 +61,7 @@ export function validateToken(token: string): ApiTokenPayload | null {
 
   if (time !== 0) {
     const ageMs = (nowS - time) * 1000;
-    if (ageMs > TOKEN_TTL_MS) return null;
+    if (ageMs > (type === "p" ? PASSWORD_SETUP_TOKEN_TTL_MS : TOKEN_TTL_MS)) return null;
   }
 
   const expected = createHmac("sha256", TOKEN_SIGNING_SECRET)
@@ -66,7 +69,7 @@ export function validateToken(token: string): ApiTokenPayload | null {
     .digest("hex");
   if (hash !== expected) return null;
 
-  return { type: type as "a" | "c", uid, time };
+  return { type: type as ApiTokenType, uid, time };
 }
 
 export function generatePaymentIntent(payload: Omit<PaymentIntentPayload, "issuedAt" | "nonce">): string {
