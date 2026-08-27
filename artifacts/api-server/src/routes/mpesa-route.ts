@@ -126,11 +126,11 @@ function resolveDarajaPayment(
   if (paymentGateway === "mpesa_paybill") {
     return {
       businessShortcode: settings.shortcode,
-      destination: mpesaPaybill.paybillNumber || settings.shortcode,
+      destination: mpesaPaybill.paybillNumber,
       accountReference: mpesaPaybill.accountNumber || undefined,
     };
   }
-  return { businessShortcode: settings.shortcode, destination: settings.shortcode };
+  return { businessShortcode: settings.shortcode, destination: "" };
 }
 
 function paymentGatewayLabel(paymentGateway: PaymentGateway): string {
@@ -512,10 +512,15 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
      }
       const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
       const { businessShortcode, destination } = payment;
-     if (paymentGateway === "mpesa_till_push" && !destination) {
-       res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
-      return;
-    }
+      if (!destination) {
+        res.status(400).json({
+          ok: false,
+          error: paymentGateway === "mpesa_till_push"
+            ? "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways."
+            : "M-Pesa PayBill is not configured for this ISP. Add the receiving PayBill number and account number in Admin Settings → Payment Gateways.",
+        });
+        return;
+      }
 
     const resolvedCallbackUrl = callbackUrl(cfg);
     if (!hasValidCallbackUrl(resolvedCallbackUrl)) {

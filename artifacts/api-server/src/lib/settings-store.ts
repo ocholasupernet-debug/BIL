@@ -345,37 +345,39 @@ export function upsertPaymentDestination(input: {
 }
 
 /**
- * Makes the configured Daraja collection number usable for registration when
- * an administrator has not selected a separate registration destination yet.
- * Existing active selections are never changed.
+ * Makes a separately configured M-Pesa Till usable for registration when an
+ * administrator has not selected a separate registration destination yet.
+ * The Daraja business shortcode is an API credential, not a PayBill destination.
  */
 export function ensureMpesaRegistrationDestination(settings: Pick<MpesaSettings, "shortcode" | "tillNumber">): PaymentDestinationSettings {
-  const current = getPaymentDestinations();
-  const type: PaymentDestinationType = settings.tillNumber ? "till" : "paybill";
-  const number = (settings.tillNumber || settings.shortcode).trim();
+  let current = getPaymentDestinations();
   const selected = current.destinations.find(row =>
     row.id === current.registrationDestinationId && row.active,
   );
-  if (selected) {
-    const legacyGeneratedName = `M-Pesa PayBill ${number}`;
-    if (selected.type === "paybill" && selected.number === number && selected.name === legacyGeneratedName) {
-      const renamed = {
-        ...selected,
-        name: `M-Pesa Business Shortcode ${number}`,
-        updatedAt: new Date().toISOString(),
-      };
-      const next = {
-        ...current,
-        destinations: current.destinations.map(row => row.id === renamed.id ? renamed : row),
-      };
-      savePaymentDestinations(next);
-      return next;
-    }
-    return current;
+
+  const isGeneratedShortcodeDestination = !!selected &&
+    selected.type === "paybill" &&
+    selected.accountReference === "ISP Registration" &&
+    (selected.name === `M-Pesa PayBill ${selected.number}` ||
+      selected.name === `M-Pesa Business Shortcode ${selected.number}`);
+  if (isGeneratedShortcodeDestination) {
+    current = {
+      ...current,
+      registrationDestinationId: "",
+      destinations: current.destinations.filter(row => row.id !== selected.id),
+    };
+    savePaymentDestinations(current);
   }
 
+  const activeSelection = current.destinations.find(row =>
+    row.id === current.registrationDestinationId && row.active,
+  );
+  if (activeSelection) return current;
+
+  const number = settings.tillNumber.trim();
   if (!number) return current;
 
+  const type: PaymentDestinationType = "till";
   const existing = current.destinations.find(row =>
     row.active && row.type === type && row.number === number,
   );
@@ -383,7 +385,7 @@ export function ensureMpesaRegistrationDestination(settings: Pick<MpesaSettings,
   const destination: PaymentDestination = existing ?? {
     id: `destination_${randomUUID()}`,
     type,
-    name: type === "till" ? `M-Pesa Till ${number}` : `M-Pesa Business Shortcode ${number}`,
+    name: `M-Pesa Till ${number}`,
     number,
     accountReference: "ISP Registration",
     instructions: "",

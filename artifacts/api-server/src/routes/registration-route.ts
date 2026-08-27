@@ -59,16 +59,6 @@ function hasUsableCallback(settings: Awaited<ReturnType<typeof getMpesaSettings>
   }
 }
 
-function automaticDestinationMatchesMpesa(
-  destination: { type: "bank" | "till" | "paybill"; number: string },
-  settings: Awaited<ReturnType<typeof getMpesaSettings>>,
-): boolean {
-  if (destination.type === "bank") return false;
-  return destination.type === "paybill"
-    ? destination.number === settings.shortcode
-    : destination.number === (settings.tillNumber || settings.shortcode);
-}
-
 async function registrationSchemaReady(): Promise<boolean> {
   if (!supabaseServiceRoleConfigured) return false;
   try {
@@ -111,7 +101,7 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
   }
   const automaticPaymentAvailable = !!destination && destination.type !== "bank" &&
     schemaReady && isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings) &&
-    automaticDestinationMatchesMpesa(destination, mpesaSettings);
+    !!destination.number;
 
   res.json({
     ok: true,
@@ -158,10 +148,6 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
   if (destination.type !== "bank" && (!config || !isMpesaConfigured(config))) {
     res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
-    return;
-  }
-  if (destination.type !== "bank" && config && !automaticDestinationMatchesMpesa(destination, config)) {
-    res.status(503).json({ ok: false, error: "The selected registration destination does not match the configured M-Pesa Daraja collection number." });
     return;
   }
   if (!supabaseServiceRoleConfigured) {

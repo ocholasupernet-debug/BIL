@@ -627,7 +627,7 @@ export default function HotspotLogin() {
                         </div>
                         {mpesaStatus?.shortcode && (
                           <p style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginBottom: 16 }}>
-                            Paybill: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
+                            Daraja shortcode: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
                           </p>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
@@ -660,7 +660,7 @@ export default function HotspotLogin() {
                           Enter your PIN on your phone to pay <strong style={{ color: "#34d399" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong>
                         </p>
                         <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginBottom: 20 }}>
-                          {mpesaStatus?.shortcode && <>Paybill: {mpesaStatus.shortcode} &middot; </>}
+                          {mpesaStatus?.shortcode && <>Daraja shortcode: {mpesaStatus.shortcode} &middot; </>}
                           {mpesaStatus?.env === "sandbox" ? "Sandbox Mode" : "Live Payment"}
                         </p>
                         {pollTimedOut ? (
@@ -797,7 +797,7 @@ export default function HotspotLogin() {
                                           : mpesaStatus?.paymentGateway === "mpesa_till_push" && mpesaStatus.hasTillNumber
                                          ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
                                          : mpesaStatus?.shortcode
-                                         ? <>PayBill {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
+                                          ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
                                         : <>Secured by Safaricom M-Pesa</>
                                       }
                                     </div>
@@ -924,10 +924,10 @@ export default function HotspotLogin() {
                         <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                       </div>
                       <h3>Voucher Activated!</h3>
-                      {voucherInfo?.plan_name && (
+                      {typeof voucherInfo?.plan_name === "string" && (
                         <p>Plan: <strong style={{ color: "#fff" }}>{String(voucherInfo.plan_name)}</strong></p>
                       )}
-                      {voucherInfo?.duration && (
+                      {typeof voucherInfo?.duration === "string" && (
                         <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{String(voucherInfo.duration)}</strong></p>
                       )}
                       <div className="hp-connected-badge">

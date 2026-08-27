@@ -105,7 +105,7 @@ const GATEWAYS: { id: string; name: string; logo: string; color: string; fields:
   { id: "mpesa", name: "M-Pesa (Safaricom Daraja)", logo: "🟢", color: "#00a651",
     fields: [
       { key: "consumerKey", label: "Consumer Key" }, { key: "consumerSecret", label: "Consumer Secret" },
-      { key: "shortCode", label: "Business Short Code", hint: "Till number or Paybill" },
+      { key: "shortCode", label: "Daraja Business Shortcode", hint: "Used only as the BusinessShortCode for Safaricom Daraja API requests—not as a PayBill or Till receiving number." },
       { key: "passKey", label: "Lipa Na M-Pesa Passkey" },
       { key: "callbackUrl", label: "Callback URL", hint: "e.g. https://api.isplatty.org/mpesa/callback" },
     ],
@@ -388,7 +388,7 @@ export default function SuperAdminPaymentGateways() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
             <SecretField label="Consumer Key" value={mpesa.consumerKey} onChange={value => updateMpesa("consumerKey", value)} />
             <SecretField label="Consumer Secret" value={mpesa.consumerSecret} onChange={value => updateMpesa("consumerSecret", value)} />
-            <Field label="Business shortcode">
+            <Field label="Daraja Business shortcode" hint="Used only by the Safaricom Daraja API. Enter a separate PayBill or Till under Collection destinations.">
               <input style={inp} inputMode="numeric" value={mpesa.shortcode} onChange={e => updateMpesa("shortcode", e.target.value)} />
             </Field>
             <SecretField label="Lipa na M-Pesa passkey" value={mpesa.passkey} onChange={value => updateMpesa("passkey", value)} />
@@ -398,7 +398,7 @@ export default function SuperAdminPaymentGateways() {
                 <option value="sandbox">Sandbox / Test</option>
               </select>
             </Field>
-            <Field label="Till number (optional)">
+            <Field label="Daraja Till number (optional)" hint="Only used for Buy Goods / Till Push. It is separate from the Daraja Business shortcode.">
               <input style={inp} inputMode="numeric" value={mpesa.tillNumber} onChange={e => updateMpesa("tillNumber", e.target.value)} />
             </Field>
             <div style={{ gridColumn: "1 / -1" }}>
@@ -423,7 +423,7 @@ export default function SuperAdminPaymentGateways() {
             <div style={{ color: "white", fontWeight: 750 }}>Collection destinations</div>
           </div>
           <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.5, margin: "0 0 18px" }}>
-            Choose where platform registration and renewal payments are collected. Till and PayBill support automatic M-Pesa prompts; bank accounts switch registration to manual payment instructions.
+            Choose where platform registration and renewal payments are collected. The Daraja Business shortcode above is used only for API authentication; select a separate Till or PayBill receiving destination here.
           </p>
 
           {destinationError && (

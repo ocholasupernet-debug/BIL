@@ -99,15 +99,6 @@ function isValidCollectionNumber(type: PaymentDestinationType, value: string): b
   return /^\d{5,10}$/.test(value);
 }
 
-function automaticDestinationMatchesMpesa(
-  destination: { type: PaymentDestinationType; number: string },
-  settings: MpesaSettings,
-): boolean {
-  if (destination.type === "bank") return true;
-  if (destination.type === "paybill") return destination.number === settings.shortcode;
-  return destination.number === (settings.tillNumber || settings.shortcode);
-}
-
 const PAYMENT_GATEWAY_IDS = new Set([
   "mpesa_paybill",
   "mpesa_till_push",
@@ -552,16 +543,6 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
         const mpesa = await getMpesaSettings();
         if (!isMpesaConfigured(mpesa)) {
           res.status(400).json({ ok: false, error: "Save matching M-Pesa Daraja settings before selecting an automatic registration destination." });
-          return;
-        }
-        if (!automaticDestinationMatchesMpesa(destination, mpesa)) {
-          const expectedNumber = destination.type === "paybill"
-            ? mpesa.shortcode
-            : (mpesa.tillNumber || mpesa.shortcode);
-          res.status(400).json({
-            ok: false,
-            error: `The selected ${destination.type === "paybill" ? "PayBill" : "Till"} must match the configured Daraja collection number (${expectedNumber}).`,
-          });
           return;
         }
       }
