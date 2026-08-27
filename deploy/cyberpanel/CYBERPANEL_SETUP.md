@@ -188,9 +188,17 @@ sudo certbot certonly --manual --preferred-challenges dns \
   -d isplatty.org -d "*.isplatty.org"
 ```
 
-After the certificate is issued, run the normal deployment script once more.
-It will create the wildcard Nginx vhost only when the certificate actually
-contains `DNS:*.isplatty.org`.
+The certificate must contain both `DNS:isplatty.org` and
+`DNS:*.isplatty.org`. After the certificate is issued, run the normal
+deployment script once more. The deployment will:
+
+1. Generate the wildcard Nginx vhost without replacing the apex vhost.
+2. Serve the React SPA from the built `dist/public` directory.
+3. Proxy each ISP host's `/api/` routes to the API on port 8080.
+4. Verify that Nginx loaded the wildcard vhost after its configuration reload.
+
+If the certificate is missing either SAN, deployment stops instead of silently
+serving ISP hosts with an apex-only certificate.
 
 ---
 

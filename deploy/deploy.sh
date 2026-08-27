@@ -193,11 +193,13 @@ else
   echo "      ✓ Synced to $PUBLIC_HTML"
 fi
 
-# 6b. If a DNS-01 wildcard certificate is installed, enable wildcard
-#     subdomain routing without replacing the existing Certbot-managed apex
-#     configuration. The helper intentionally skips apex-only certificates.
+# 6b. Require and enable DNS-01 wildcard subdomain routing without replacing
+#     the existing Certbot-managed apex configuration. The helper also checks
+#     that the generated vhost is present in nginx's loaded configuration.
 echo "[6b/7] Configuring wildcard subdomain routing..."
-if command -v nginx >/dev/null 2>&1 && [ -f "$PROJECT_DIR/deploy/configure-wildcard-nginx.sh" ]; then
+if command -v nginx >/dev/null 2>&1 &&
+   systemctl is-active --quiet nginx 2>/dev/null &&
+   [ -f "$PROJECT_DIR/deploy/configure-wildcard-nginx.sh" ]; then
   DOMAIN="isplatty.org" PROJECT_DIR="$PROJECT_DIR" \
     bash "$PROJECT_DIR/deploy/configure-wildcard-nginx.sh"
 else

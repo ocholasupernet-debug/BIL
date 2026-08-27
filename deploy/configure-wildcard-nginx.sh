@@ -1,31 +1,41 @@
 #!/bin/bash
 ##############################################################
-# Configure the wildcard ISP-host vhost after a wildcard
+# Configure the wildcard ISP-host vhost after a DNS-01 wildcard
 # Let's Encrypt certificate has been issued.
 #
-# This is intentionally a no-op until the certificate contains
-# DNS:*.isplatty.org. That prevents a deployment from routing
-# wildcard HTTPS traffic through an apex-only certificate.
+# This helper is deliberately strict: a successful deployment must have
+# one certificate covering both the apex and every first-level ISP host.
 ##############################################################
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-isplatty.org}"
 PROJECT_DIR="${PROJECT_DIR:-/var/www/ocholasupernet}"
-CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
+CERT_DIR="${CERT_DIR:-/etc/letsencrypt/live/$DOMAIN}"
 CERT_FILE="$CERT_DIR/fullchain.pem"
 KEY_FILE="$CERT_DIR/privkey.pem"
-WILDCARD_CONF="/etc/nginx/conf.d/${DOMAIN}-wildcard.conf"
+WILDCARD_CONF="${WILDCARD_CONF:-/etc/nginx/conf.d/${DOMAIN}-wildcard.conf}"
 
 if [ ! -r "$CERT_FILE" ] || [ ! -r "$KEY_FILE" ]; then
-  echo "  ⚠ Wildcard vhost skipped: certificate files are not available."
-  exit 0
+  echo "  ✗ Wildcard vhost cannot be enabled: certificate files are not available."
+  echo "    Issue a DNS-01 certificate for ${DOMAIN} and *.${DOMAIN}, then deploy again."
+  exit 1
 fi
 
-if ! openssl x509 -in "$CERT_FILE" -noout -ext subjectAltName 2>/dev/null \
-  | grep -Fq "DNS:*.${DOMAIN}"; then
-  echo "  ⚠ Wildcard vhost skipped: $CERT_FILE does not contain DNS:*.${DOMAIN}."
-  echo "    Issue a DNS-01 wildcard certificate, then run deployment again."
-  exit 0
+certificate_has_dns_name() {
+  local name="$1"
+  openssl x509 -in "$CERT_FILE" -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' \
+    | tr -s '[:space:]' '\n' \
+    | grep -Fxq "DNS:${name}"
+}
+
+if ! certificate_has_dns_name "$DOMAIN" ||
+   ! certificate_has_dns_name "*.${DOMAIN}"; then
+  echo "  ✗ Wildcard vhost cannot be enabled: $CERT_FILE must contain both:"
+  echo "      DNS:${DOMAIN}"
+  echo "      DNS:*.${DOMAIN}"
+  echo "    Issue a DNS-01 certificate for both names, then deploy again."
+  exit 1
 fi
 
 cat > "$WILDCARD_CONF" <<NGINX
@@ -70,4 +80,13 @@ NGINX
 
 nginx -t
 systemctl reload nginx
+
+# Check the loaded configuration, not only the file we just generated.
+# This catches include-order and syntax mistakes that could otherwise leave
+# the old apex-only/default vhost serving ISP hostnames.
+if ! nginx -T 2>/dev/null | grep -Fq "server_name *.${DOMAIN};"; then
+  echo "  ✗ Wildcard vhost was written but is not active in nginx."
+  exit 1
+fi
+
 echo "  ✓ Wildcard Nginx vhost enabled for *.${DOMAIN}"
