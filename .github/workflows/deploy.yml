@@ -22,7 +22,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SESSION_SECRET
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -33,7 +33,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # Inject Supabase credentials into .env so PM2 always has them
+            # Inject Supabase credentials and the encryption key into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
             upsert_env() {
               local key="$1" val="$2"
@@ -48,6 +48,7 @@ jobs:
             upsert_env "VITE_SUPABASE_URL"        "$VITE_SUPABASE_URL"
             upsert_env "VITE_SUPABASE_KEY"         "$VITE_SUPABASE_KEY"
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
+            upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
 
             bash deploy/deploy.sh
             echo "=== Deploy finished at $(date) ==="
@@ -55,3 +56,4 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
