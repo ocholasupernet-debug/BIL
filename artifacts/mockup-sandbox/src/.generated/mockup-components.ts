@@ -4,5 +4,6 @@ export const modules: ModuleMap = {
   "./components/mockups/isp-dashboard/Current.tsx": () => import("../components/mockups/isp-dashboard/Current.tsx"),
   "./components/mockups/isp-dashboard/EmeraldFinance.tsx": () => import("../components/mockups/isp-dashboard/EmeraldFinance.tsx"),
   "./components/mockups/isp-dashboard/ExecutiveNavy.tsx": () => import("../components/mockups/isp-dashboard/ExecutiveNavy.tsx"),
-  "./components/mockups/isp-dashboard/SlateProfessional.tsx": () => import("../components/mockups/isp-dashboard/SlateProfessional.tsx")
+  "./components/mockups/isp-dashboard/SlateProfessional.tsx": () => import("../components/mockups/isp-dashboard/SlateProfessional.tsx"),
+  "./components/mockups/templates/JapaneseOmakaseLandingPage-Wi8wKo/App.tsx": () => import("../components/mockups/templates/JapaneseOmakaseLandingPage-Wi8wKo/App.tsx")
 };

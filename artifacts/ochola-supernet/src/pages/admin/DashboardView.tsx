@@ -6,7 +6,6 @@ import {
   BarChart3,
   ChevronRight,
   CircleDot,
-  Clock3,
   CreditCard,
   DollarSign,
   Minus,
@@ -66,13 +65,15 @@ function KpiCell({
   value,
   highlight = false,
   icon,
+  href,
 }: {
   label: string;
   value: React.ReactNode;
   highlight?: boolean;
   icon?: React.ReactNode;
+  href?: string;
 }) {
-  return (
+  const cell = (
     <div className="isp-dashboard-kpi-cell">
       <div className="isp-dashboard-kpi-label">
         <span>{label}</span>
@@ -81,6 +82,8 @@ function KpiCell({
       <div className={`isp-dashboard-kpi-value ${highlight ? "isp-dashboard-kpi-value--accent" : ""}`}>{value}</div>
     </div>
   );
+
+  return href ? <Link href={href} className="isp-dashboard-kpi-link">{cell}</Link> : cell;
 }
 
 function DonutChart({ insights }: { insights: DashboardViewProps["userInsights"] }) {
@@ -220,12 +223,12 @@ export function DashboardView({
       <section className="isp-dashboard-kpi-strip" aria-label="Performance summary">
         <KpiCell label="Income today" value={txLoading ? "…" : fmtMoney(incomeToday)} icon={<DollarSign size={14} />} />
         <KpiCell label="This month" value={txLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={14} />} />
-        <KpiCell label="Transactions" value={txLoading ? "…" : transactionCount} icon={<CreditCard size={14} />} />
-        <KpiCell label="Total revenue" value={txLoading ? "…" : fmtMoney(totalRevenue)} icon={<BarChart3 size={14} />} />
-        <KpiCell label="Online now" value={liveCountLoading && totalOnlineNow === 0 ? "…" : totalOnlineNow} highlight icon={<CircleDot size={14} />} />
-        <KpiCell label="Vouchers left" value="0" icon={<Ticket size={14} />} />
-        <KpiCell label="Support tickets" value="0" icon={<AlertCircle size={14} />} />
-        <KpiCell label="Routers online" value={routersLoading ? "…" : `${onlineRouters} / ${routers.length}`} icon={<RouterIcon size={14} />} />
+        <KpiCell label="Transactions" value={txLoading ? "…" : transactionCount} href="/admin/transactions" icon={<CreditCard size={14} />} />
+        <KpiCell label="Total revenue" value={txLoading ? "…" : fmtMoney(totalRevenue)} href="/admin/transactions" icon={<BarChart3 size={14} />} />
+        <KpiCell label="Online now" value={liveCountLoading && totalOnlineNow === 0 ? "…" : totalOnlineNow} href="/admin/customers" highlight icon={<CircleDot size={14} />} />
+        <KpiCell label="Vouchers left" value="0" href="/admin/vouchers" icon={<Ticket size={14} />} />
+        <KpiCell label="Support tickets" value="0" href="/admin/support" icon={<AlertCircle size={14} />} />
+        <KpiCell label="Routers online" value={routersLoading ? "…" : `${onlineRouters} / ${routers.length}`} href="/admin/network" icon={<RouterIcon size={14} />} />
       </section>
 
       <section className="isp-dashboard-section">
@@ -307,6 +310,7 @@ export function DashboardView({
                     <span>Configured and ready to process</span>
                   </div>
                   <span className="isp-dashboard-active-badge"><span className="isp-dashboard-live-dot" /> Active</span>
+                  <Link href="/admin/settings" className="isp-dashboard-gateway-link" aria-label="Open payment gateway settings"><ArrowUpRight size={14} /></Link>
                 </div>
               </section>
 
