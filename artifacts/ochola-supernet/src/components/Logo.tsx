@@ -1,36 +1,49 @@
-import React from "react";
-
 interface LogoProps {
   size?: "xs" | "sm" | "md" | "lg";
   iconOnly?: boolean;
 }
 
-const heights: Record<string, number> = { xs: 28, sm: 36, md: 48, lg: 64 };
+const sizes = {
+  xs: { mark: 28, icon: 14, text: "0.8rem", gap: 8 },
+  sm: { mark: 36, icon: 18, text: "0.95rem", gap: 10 },
+  md: { mark: 44, icon: 22, text: "1.1rem", gap: 11 },
+  lg: { mark: 56, icon: 28, text: "1.35rem", gap: 13 },
+};
 
 export function Logo({ size = "md", iconOnly = false }: LogoProps) {
-  const h = heights[size];
+  const s = sizes[size];
 
   return (
-    <div style={{
-      width: h,
-      height: h,
-      borderRadius: "50%",
-      overflow: "hidden",
-      flexShrink: 0,
-      background: "#fff",
-      boxShadow: "0 0 0 2px rgba(255,255,255,0.15)",
-    }}>
-      <img
-        src="/logo.jpg"
-        alt="OcholaSupernet"
+    <div style={{ display: "inline-flex", alignItems: "center", gap: s.gap, flexShrink: 0 }}>
+      <div
+        aria-hidden="true"
         style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          objectPosition: "center top",
-          display: "block",
+          width: s.mark,
+          height: s.mark,
+          borderRadius: s.mark * 0.28,
+          flexShrink: 0,
+          display: "grid",
+          placeItems: "center",
+          background: "linear-gradient(145deg, #4f8cff 0%, #2563eb 48%, #6d4aff 100%)",
+          boxShadow: "0 8px 20px rgba(37, 99, 235, 0.28), inset 0 1px 0 rgba(255,255,255,0.3)",
         }}
-      />
+      >
+        <svg width={s.icon} height={s.icon} viewBox="0 0 24 24" fill="none">
+          <path d="M4 16.5a11 11 0 0 1 16 0M7.5 13a6.3 6.3 0 0 1 9 0M11 9.7a1.45 1.45 0 0 1 2 0" stroke="white" strokeWidth="2.1" strokeLinecap="round" />
+          <circle cx="12" cy="18.4" r="1.45" fill="white" />
+        </svg>
+      </div>
+      {!iconOnly && (
+        <span style={{
+          fontSize: s.text,
+          fontWeight: 800,
+          color: "currentColor",
+          letterSpacing: "-0.045em",
+          lineHeight: 1,
+        }}>
+          ISPlatty
+        </span>
+      )}
     </div>
   );
 }
