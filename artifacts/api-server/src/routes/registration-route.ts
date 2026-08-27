@@ -2,7 +2,12 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { processDeferredMpesaCallbacks } from "./mpesa-route.js";
 import { sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
-import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
+import {
+  ensureMpesaRegistrationDestination,
+  getMpesaSettings,
+  getPaymentDestinations,
+  isMpesaConfigured,
+} from "../lib/settings-store.js";
 import { logger } from "../lib/logger.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 
@@ -77,10 +82,14 @@ async function registrationSchemaReady(): Promise<boolean> {
 }
 
 router.get("/registration/config", async (_req: Request, res: Response): Promise<void> => {
-  const destinations = getPaymentDestinations();
+  let destinations = getPaymentDestinations();
   const mpesaSettings = await getMpesaSettings();
   const schemaReady = await registrationSchemaReady();
-  const destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
+  let destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
+  if (!destination && isMpesaConfigured(mpesaSettings)) {
+    destinations = ensureMpesaRegistrationDestination(mpesaSettings);
+    destination = destinations.destinations.find(row => row.id === destinations.registrationDestinationId && row.active);
+  }
   const automaticPaymentAvailable = !!destination && destination.type !== "bank" &&
     schemaReady && isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings) &&
     automaticDestinationMatchesMpesa(destination, mpesaSettings);
@@ -113,14 +122,18 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
-  const settings = getPaymentDestinations();
+  let settings = getPaymentDestinations();
   const registrationFee = settings.registrationFee;
-  const destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
+  let destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
+  const config = destination?.type === "bank" ? null : await getMpesaSettings();
+  if (!destination && config && isMpesaConfigured(config)) {
+    settings = ensureMpesaRegistrationDestination(config);
+    destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
+  }
   if (!destination) {
     res.status(503).json({ ok: false, error: "No active payment destination has been selected for registration." });
     return;
   }
-  const config = destination.type === "bank" ? null : await getMpesaSettings();
   if (!await registrationSchemaReady()) {
     res.status(503).json({ ok: false, error: "Registration payments are temporarily unavailable while the payment database migration is completed." });
     return;

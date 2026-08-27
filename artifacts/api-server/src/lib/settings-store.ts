@@ -344,6 +344,47 @@ export function upsertPaymentDestination(input: {
   return next;
 }
 
+/**
+ * Makes the configured Daraja collection number usable for registration when
+ * an administrator has not selected a separate registration destination yet.
+ * Existing active selections are never changed.
+ */
+export function ensureMpesaRegistrationDestination(settings: Pick<MpesaSettings, "shortcode" | "tillNumber">): PaymentDestinationSettings {
+  const current = getPaymentDestinations();
+  const selected = current.destinations.find(row =>
+    row.id === current.registrationDestinationId && row.active,
+  );
+  if (selected) return current;
+
+  const type: PaymentDestinationType = settings.tillNumber ? "till" : "paybill";
+  const number = (settings.tillNumber || settings.shortcode).trim();
+  if (!number) return current;
+
+  const existing = current.destinations.find(row =>
+    row.active && row.type === type && row.number === number,
+  );
+  const now = new Date().toISOString();
+  const destination: PaymentDestination = existing ?? {
+    id: `destination_${randomUUID()}`,
+    type,
+    name: type === "till" ? `M-Pesa Till ${number}` : `M-Pesa PayBill ${number}`,
+    number,
+    accountReference: "ISP Registration",
+    instructions: "",
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const next: PaymentDestinationSettings = {
+    ...current,
+    registrationDestinationId: destination.id,
+    destinations: existing ? current.destinations : [...current.destinations, destination],
+  };
+  savePaymentDestinations(next);
+  logger.info({ type, number }, "[settings-store] selected configured M-Pesa destination for registration");
+  return next;
+}
+
 export function deletePaymentDestination(id: string): PaymentDestinationSettings {
   const current = getPaymentDestinations();
   const next = {
