@@ -8,12 +8,57 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# CyberPanel serves static files from public_html/
-if   [ -d "/home/isplatty.org/public_html" ];  then PUBLIC_HTML="/home/isplatty.org/public_html"
-elif [ -d "/home/ocholasupernet/public_html" ]; then PUBLIC_HTML="/home/ocholasupernet/public_html"
-else
-  PUBLIC_HTML=$(find /home -maxdepth 3 -name "public_html" -type d 2>/dev/null | head -1)
-fi
+# Resolve the document root used by the active isplatty.org OpenLiteSpeed vhost.
+# PUBLIC_HTML remains an explicit override for non-standard installations.
+resolve_ols_path() {
+  local path="$1"
+  local vh_root="${2:-}"
+  path="${path//\$SERVER_ROOT/\/usr\/local\/lsws}"
+  path="${path//\$VH_ROOT/$vh_root}"
+  readlink -f "$path" 2>/dev/null || printf '%s\n' "${path%/}"
+}
+
+find_public_html() {
+  local vhost_conf doc_root vh_root main_conf
+
+  for vhost_conf in \
+    /usr/local/lsws/conf/vhosts/isplatty.org/vhost.conf \
+    /usr/local/lsws/conf/vhosts/isplatty.org/vhconf.conf
+  do
+    [ -r "$vhost_conf" ] || continue
+    doc_root=$(awk '$1 == "docRoot" { print $2; exit }' "$vhost_conf")
+    [ -n "$doc_root" ] || continue
+
+    vh_root=$(awk '$1 == "vhRoot" { print $2; exit }' "$vhost_conf")
+    if [ -z "$vh_root" ]; then
+      for main_conf in /usr/local/lsws/conf/httpd_config.conf /usr/local/lsws/conf/httpd_config.xml; do
+        [ -r "$main_conf" ] || continue
+        vh_root=$(awk '
+          $1 == "virtualhost" && $2 == "isplatty.org" { in_vhost=1; next }
+          in_vhost && $1 == "vhRoot" { print $2; exit }
+          in_vhost && /^}/ { exit }
+        ' "$main_conf")
+        [ -n "$vh_root" ] && break
+      done
+    fi
+
+    vh_root=$(resolve_ols_path "${vh_root:-$(dirname "$vhost_conf")}")
+    resolve_ols_path "$doc_root" "$vh_root"
+    return
+  done
+
+  for doc_root in \
+    /home/isplatty.org/public_html \
+    /home/ocholasupernet/public_html \
+    /usr/local/lsws/Example/html
+  do
+    [ -d "$doc_root" ] && printf '%s\n' "$doc_root" && return
+  done
+
+  find /home /usr/local/lsws -maxdepth 5 -type d -name public_html 2>/dev/null | head -1
+}
+
+PUBLIC_HTML="${PUBLIC_HTML:-$(find_public_html)}"
 
 echo "══════════════════════════════════════════"
 echo "  OcholaSupernet — Deploying to VPS"
@@ -50,16 +95,16 @@ cd "$PROJECT_DIR/artifacts/api-server"
 pnpm run build
 cd "$PROJECT_DIR"
 
-# 5. Copy frontend build → CyberPanel public_html (LiteSpeed serves from here)
-echo "[5/6] Syncing frontend to public_html/..."
-if [ -n "$PUBLIC_HTML" ]; then
-  rsync -a --delete \
-    "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/" \
-    "$PUBLIC_HTML/"
-  echo "      ✓ Synced to $PUBLIC_HTML"
-else
-  echo "      ⚠ public_html not found — skipping rsync"
+# 5. Copy frontend build → the OpenLiteSpeed document root
+echo "[5/6] Syncing frontend to the OpenLiteSpeed document root..."
+if [ -z "$PUBLIC_HTML" ] || [ ! -d "$PUBLIC_HTML" ]; then
+  echo "      ✗ OpenLiteSpeed document root not found: ${PUBLIC_HTML:-NOT FOUND}"
+  exit 1
 fi
+rsync -a --delete \
+  "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/" \
+  "$PUBLIC_HTML/"
+echo "      ✓ Synced to $PUBLIC_HTML"
 
 # 6. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
