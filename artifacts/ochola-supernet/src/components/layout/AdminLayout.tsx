@@ -230,7 +230,7 @@ const SIDEBAR_W = 248;
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [expanded, setExpanded]       = useState<string[]>(["Network", "Customers"]);
+  const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const { toggle, isDark }            = useTheme();
   const brand                         = useBrand();
