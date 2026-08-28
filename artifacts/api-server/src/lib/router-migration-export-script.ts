@@ -1,3 +1,5 @@
+import { buildMigrationTunnelScript, type MigrationTunnelScriptOptions } from "./migration-tunnel.js";
+
 /**
  * This is deliberately a command-only helper. It is not an installer and must
  * not be imported as a configuration change on the active/source router.
@@ -22,16 +24,26 @@ function rscEscape(value: string): string {
  * Build the domain-connected collector. RouterOS needs a temporary file as
  * the bridge between `/export` and HTTP POST. RouterOS limits `http-data`
  * variables to roughly 4KB, so the file contents are sent in ordered chunks
- * and the server assembles them before parsing.
+ * and the server assembles them before parsing. When tunnel options are
+ * supplied, the script prepends the connection-only migration tunnel setup;
+ * the export portion remains read-only.
  */
-export function buildDomainRouterExportScript(uploadUrl: string): string {
+export function buildDomainRouterExportScript(uploadUrl: string, tunnel?: MigrationTunnelScriptOptions): string {
   const safeUploadUrl = rscEscape(uploadUrl);
-  return `# OcholaSupernet domain-connected RouterOS migration collector
+  const tunnelSetup = tunnel
+    ? `${buildMigrationTunnelScript(tunnel)}
+# The temporary interface and the two tunnel-bound API firewall rules above
+# are the only connection changes made by this collector.
+`
+    : `# No temporary tunnel was requested for this collector.
+`;
+  return `${tunnelSetup}# OcholaSupernet domain-connected RouterOS migration collector
 # Run this script on the ACTIVE/source MikroTik only.
 # It reads the complete configuration with sensitive values, uploads it over
 # HTTPS in small chunks to the one-time migration session, then removes its
 # temporary file.
-# It does not add, set, remove, enable, disable, reboot, or restart configuration.
+# Apart from an optional connection-only migration tunnel, it does not add,
+# set, enable, disable, reboot, or restart configuration.
 :local exportFile "ochola-router-migration-export.rsc"
 :do { /file remove [find name=$exportFile] } on-error={}
 :do {

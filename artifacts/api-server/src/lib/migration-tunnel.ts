@@ -62,8 +62,8 @@ export function buildMigrationTunnelScript(options: MigrationTunnelScriptOptions
 :do { /interface ovpn-client remove [find name="${interfaceName}"] } on-error={}
 /interface ovpn-client add name=$migrationTunnelInterfaceName connect-to="${endpoint}" port=${options.port} mode=ip user="${username}" password="${password}" cipher=aes256 auth=sha1 add-default-route=no disabled=no comment="${firewallComment}"
 :if ([:len [/interface ovpn-client find name=$migrationTunnelInterfaceName]] = 0) do={ :error "OcholaSupernet: temporary migration tunnel interface was not created" }
-/ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728 src-address=${serverIp} comment="${firewallComment}"
-/ip firewall filter add chain=input action=accept protocol=icmp src-address=${serverIp} comment="${firewallComment}"
+/ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728 src-address=${serverIp} in-interface="${interfaceName}" comment="${firewallComment}"
+/ip firewall filter add chain=input action=accept protocol=icmp src-address=${serverIp} in-interface="${interfaceName}" comment="${firewallComment}"
 /system scheduler add name="${schedulerName}" interval=1h on-event="${cleanup}"
 :put ("OcholaSupernet: migration tunnel configured; management address " . $migrationTunnelIp)
 :put "OcholaSupernet: the migration tunnel will self-destruct after one hour."

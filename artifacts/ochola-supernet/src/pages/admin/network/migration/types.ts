@@ -48,6 +48,14 @@ export interface CollectorSession {
   migrationId?: string;
   summary?: ExportResponse["summary"];
   findings?: ExportResponse["findings"];
+  tunnel?: {
+    leaseId: string;
+    routerId: number;
+    address: string;
+    technology: string;
+    expiresAt: string;
+    status: MigrationTunnelSession["status"];
+  };
 }
 
 export interface DryRunResponse {

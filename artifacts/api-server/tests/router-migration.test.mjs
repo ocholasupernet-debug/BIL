@@ -23,6 +23,7 @@ test("downloadable helper is read-only and does not create a router file", () =>
   assert.match(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /\/export show-sensitive terse/);
   assert.doesNotMatch(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /file\s*=/i);
   assert.doesNotMatch(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /\/file\//i);
+  assert.doesNotMatch(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /\/interface ovpn-client add/);
 });
 test("domain collector uses HTTP POST data chunks instead of unsupported HTTP file upload", () => {
   const script = exportScript.buildDomainRouterExportScript("https://isplatty.org/api/router-migrations/collector-upload?token=test");
@@ -53,7 +54,29 @@ test("temporary tunnel script is address-bound and self-removing", () => {
   assert.match(script, /interval=1h/);
   assert.match(script, /\/interface ovpn-client remove/);
   assert.match(script, /\/ip firewall filter remove/);
+  assert.match(script, /dst-port=8728 src-address=10\.8\.0\.1 in-interface="ochola-mig-1-abcd"/);
   assert.doesNotMatch(script, /\/ip route add/);
+});
+test("domain collector can add only a connection-scoped tunnel", () => {
+  const script = exportScript.buildDomainRouterExportScript(
+    "https://isplatty.org/api/router-migrations/collector-upload?token=test",
+    {
+      endpoint: "vpn.example.test",
+      port: 1194,
+      username: "ochola-mig-1-abcd",
+      password: "one-time-secret",
+      tunnelIp: "10.8.0.42",
+      interfaceName: "ochola-mig-1-abcd",
+      firewallComment: "ochola-migration:42",
+      schedulerName: "ochola-migration-expiry-42",
+    },
+  );
+  assert.match(script, /temporary migration tunnel interface was not created/);
+  assert.match(script, /in-interface="ochola-mig-1-abcd"/);
+  assert.match(script, /\/export show-sensitive terse file=\$exportFile/);
+  assert.match(script, /interval=1h/);
+  assert.doesNotMatch(script, /\/ip route add/);
+  assert.doesNotMatch(script, /add-default-route=yes/);
 });
 test("terminal export parser keeps sensitive values server-side and maps portable sections", () => {
   const pkg = exporter.parseRouterOsExport(`
@@ -126,4 +149,11 @@ test("database schema enforces one expiring lease per target router", async () =
   assert.match(sql, /on conflict \(target_router_id\) do nothing/);
   assert.match(sql, /expires_at <= now\(\)/);
   assert.match(sql, /renew_router_migration_target_lease/);
+  assert.match(sql, /tunnel_lease_id bigint references router_migration_tunnel_leases/);
+});
+test("collector tunnel association requires an owned router and lease", async () => {
+  const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
+  assert.match(route, /ownedRouter\(sourceRouterId, a\)/);
+  assert.match(route, /tunnel = await tunnelFor\(sourceRouterId, a, tunnelId\)/);
+  assert.match(route, /id=eq\.\$\{positive\(session\.tunnel_lease_id\)\}&admin_id=eq\.\$\{session\.admin_id\}/);
 });

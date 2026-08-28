@@ -38,11 +38,18 @@ export async function saveTerminalExport({ sourceLabel, exportText }: { sourceLa
   return data;
 }
 
-export async function createCollectorSession(sourceLabel: string) {
+export async function createCollectorSession(
+  sourceLabel: string,
+  options?: { sourceRouterId?: number; tunnelId?: string },
+) {
   const res = await fetch("/api/router-migrations/collector-session", {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify({ sourceLabel }),
+    body: JSON.stringify({
+      sourceLabel,
+      ...(options?.sourceRouterId ? { sourceRouterId: options.sourceRouterId } : {}),
+      ...(options?.tunnelId ? { tunnelId: options.tunnelId } : {}),
+    }),
   });
   const data = await res.json();
   if (res.status === 401) throw new Error("Unauthorized");

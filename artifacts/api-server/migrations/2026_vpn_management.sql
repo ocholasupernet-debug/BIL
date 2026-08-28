@@ -120,6 +120,8 @@ create unique index if not exists router_migration_tunnel_active_source_idx
   where status in ('issued','script_issued','connected','exported');
 create index if not exists router_migration_tunnel_expiry_idx
   on router_migration_tunnel_leases(status, expires_at);
+alter table if exists router_migration_collector_tokens
+  add column if not exists tunnel_lease_id bigint references router_migration_tunnel_leases(id) on delete set null;
 alter table router_migration_tunnel_leases enable row level security;
 revoke all on table router_migration_tunnel_leases from anon, authenticated;
 grant select, insert, update on table router_migration_tunnel_leases to service_role;

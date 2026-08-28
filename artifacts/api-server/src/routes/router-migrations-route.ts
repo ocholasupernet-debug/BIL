@@ -18,7 +18,15 @@ const router: IRouter = Router();
 const locks = new Set<string>();
 type RouterRow = { id: number; admin_id: number; name: string; host: string; bridge_ip?: string; router_username: string; router_secret?: string; identity?: string; serial?: string };
 type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; findings_json?: Record<string, unknown>; status: string };
-type CollectorToken = { token_hash: string; admin_id: number; source_label: string; expires_at: string; used_at?: string | null; migration_job_id?: number | null };
+type CollectorToken = {
+  token_hash: string;
+  admin_id: number;
+  source_label: string;
+  expires_at: string;
+  used_at?: string | null;
+  migration_job_id?: number | null;
+  tunnel_lease_id?: number | null;
+};
 type CollectorChunk = { token_hash: string; chunk_index: number; ciphertext: string; iv: string; auth_tag: string };
 type TunnelLease = {
   id: number;
@@ -111,6 +119,9 @@ function tunnelEndpoint(req: Request): string {
 function tunnelInterfaceName(routerId: number, leaseToken: string): string {
   return `ochola-mig-${routerId}-${leaseToken.slice(0, 8)}`;
 }
+function tunnelInterfaceNameForLease(lease: TunnelLease): string {
+  return tunnelInterfaceName(lease.source_router_id, lease.bootstrap_token_hash);
+}
 
 function activeTunnelStatuses(): string {
   return "in.(issued,script_issued,connected,exported)";
@@ -162,7 +173,29 @@ async function expireDueTunnels(): Promise<void> {
   }
 }
 
-const tunnelExpiryTimer = setInterval(() => { void expireDueTunnels(); }, 60_000);
+async function expireDueCollectors(): Promise<void> {
+  try {
+    const sessions = await sbSelectStrict<CollectorToken>(
+      "router_migration_collector_tokens",
+      `expires_at=lt.${encodeURIComponent(new Date().toISOString())}&used_at=is.null&tunnel_lease_id=not.is.null&select=admin_id,tunnel_lease_id`,
+    );
+    await Promise.all(sessions.map(async session => {
+      if (!session.tunnel_lease_id) return;
+      const leases = await sbSelectStrict<TunnelLease>(
+        "router_migration_tunnel_leases",
+        `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+      );
+      if (leases[0]) await expireTunnel(leases[0]);
+    }));
+  } catch {
+    /* The additive collector-tunnel column may not be deployed yet. */
+  }
+}
+
+const tunnelExpiryTimer = setInterval(() => {
+  void expireDueTunnels();
+  void expireDueCollectors();
+}, 60_000);
 tunnelExpiryTimer.unref();
 
 async function revokeTunnel(lease: TunnelLease, status: "revoked" | "expired" = "revoked"): Promise<void> {
@@ -174,6 +207,22 @@ async function revokeTunnel(lease: TunnelLease, status: "revoked" | "expired" = 
     `id=eq.${lease.id}&admin_id=eq.${lease.admin_id}&status=neq.revoked`,
     { status, revoked_at: now, audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: status, at: now }] } },
   );
+}
+
+function tunnelScriptOptions(lease: TunnelLease) {
+  const encrypted = decrypt(lease as unknown as Job);
+  const password = String(encrypted.password ?? "");
+  if (!password) throw new Error("Migration tunnel credential is unavailable.");
+  return {
+    endpoint: lease.server_endpoint,
+    port: 1194,
+    username: lease.username,
+    password,
+    tunnelIp: lease.assigned_ip,
+    interfaceName: tunnelInterfaceNameForLease(lease),
+    firewallComment: `ochola-migration:${lease.id}`,
+    schedulerName: `ochola-migration-expiry-${lease.id}`,
+  };
 }
 
 async function leaseCredentials(row: RouterRow, lease: TunnelLease): Promise<RouterCredentials> {
@@ -253,7 +302,7 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex > 2500) throw new Error("Invalid collector chunk.");
     const rawChunk = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
     if (!rawChunk || Buffer.byteLength(rawChunk, "utf8") > 3800) throw new Error("Collector chunk is empty or too large.");
-    const sessions = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id&limit=1`);
+    const sessions = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`);
     const session = sessions[0];
     if (!session) {
       res.status(401).json({ ok: false, error: "Invalid, expired, or already used collector session." });
@@ -262,6 +311,21 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     if (session.used_at || session.migration_job_id || new Date(session.expires_at).getTime() <= Date.now()) {
       res.status(409).json({ ok: false, error: "Collector session is expired or already completed." });
       return;
+    }
+    let tunnel: TunnelLease | undefined;
+    if (session.tunnel_lease_id) {
+      const leases = await sbSelectStrict<TunnelLease>(
+        "router_migration_tunnel_leases",
+        `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+      );
+      tunnel = leases[0];
+      if (!tunnel || !["issued", "script_issued", "connected", "exported"].includes(tunnel.status)) {
+        throw new Error("The migration tunnel is no longer available.");
+      }
+      if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
+        await expireTunnel(tunnel);
+        throw new Error("The migration tunnel has expired.");
+      }
     }
     const existing = await sbSelectStrict<CollectorChunk>("router_migration_collector_chunks", `token_hash=eq.${tokenHash}&chunk_index=eq.${chunkIndex}&select=token_hash,chunk_index,ciphertext,iv,auth_tag&limit=1`);
     if (!existing[0]) {
@@ -294,11 +358,41 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
       status: "exported",
       ...secure,
       findings_json: findings,
-      audit_json: { exported_at: new Date().toISOString(), source_read_only: true, source_mode: "domain_collector", source_label: session.source_label, summary },
+      audit_json: {
+        exported_at: new Date().toISOString(),
+        source_read_only: true,
+        source_mode: "domain_collector",
+        source_label: session.source_label,
+        summary,
+        ...(tunnel ? {
+          tunnel_lease_id: tunnel.id,
+          tunnel_address: tunnel.assigned_ip,
+          tunnel_technology: tunnel.technology,
+          collector_source_router_id: tunnel.source_router_id,
+        } : {}),
+      },
     });
     const migrationId = rows[0]?.id;
     if (!migrationId) throw new Error("Collected export could not be saved.");
     await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&admin_id=eq.${session.admin_id}`, { migration_job_id: migrationId });
+    if (tunnel) {
+      await sbUpdateStrict(
+        "router_migration_tunnel_leases",
+        `id=eq.${tunnel.id}&admin_id=eq.${session.admin_id}`,
+        {
+          migration_job_id: migrationId,
+          status: "exported",
+          audit_json: {
+            ...(tunnel.audit_json ?? {}),
+            events: [
+              ...(Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : []),
+              { event: "collector_exported", at: new Date().toISOString(), migration_job_id: migrationId },
+            ],
+          },
+        },
+      );
+      await revokeTunnel(tunnel);
+    }
     res.json({ ok: true, migrationId: String(migrationId), status: "exported" });
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Collector upload failed." });
@@ -324,22 +418,7 @@ router.get("/router-migrations/tunnel-bootstrap", async (req, res) => {
       res.status(401).send("Invalid or expired migration tunnel session.");
       return;
     }
-    const encrypted = decrypt(lease as unknown as Job);
-    const password = String(encrypted.password ?? "");
-    if (!password) {
-      res.status(500).send("Migration tunnel credential is unavailable.");
-      return;
-    }
-    const script = buildMigrationTunnelScript({
-      endpoint: lease.server_endpoint,
-      port: 1194,
-      username: lease.username,
-      password,
-      tunnelIp: lease.assigned_ip,
-      interfaceName: tunnelInterfaceName(lease.source_router_id, token),
-      firewallComment: `ochola-migration:${lease.id}`,
-      schedulerName: `ochola-migration-expiry-${lease.id}`,
-    });
+    const script = buildMigrationTunnelScript(tunnelScriptOptions(lease));
     const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
     await sbUpdateStrict(
       "router_migration_tunnel_leases",
@@ -353,6 +432,62 @@ router.get("/router-migrations/tunnel-bootstrap", async (req, res) => {
     res.type("text/plain").set("Content-Disposition", 'inline; filename="ochola-migration-tunnel.rsc"').send(script);
   } catch {
     res.status(401).send("Invalid or expired migration tunnel session.");
+  }
+});
+
+/* A collector session may be bound to the same registered-router lease. This
+   endpoint keeps tunnel secrets server-side while returning one combined RSC:
+   connection-only tunnel setup first, read-only export second. */
+router.get("/router-migrations/collector-script", async (req, res) => {
+  try {
+    const token = collectorToken(req);
+    const tokenHash = collectorHash(token);
+    const sessions = await sbSelectStrict<CollectorToken>(
+      "router_migration_collector_tokens",
+      `token_hash=eq.${tokenHash}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`,
+    );
+    const session = sessions[0];
+    if (!session || session.used_at || session.migration_job_id || new Date(session.expires_at).getTime() <= Date.now()) {
+      res.status(401).send("# Invalid or expired migration collector session.");
+      return;
+    }
+
+    let tunnel: TunnelLease | undefined;
+    if (session.tunnel_lease_id) {
+      const leases = await sbSelectStrict<TunnelLease>(
+        "router_migration_tunnel_leases",
+        `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+      );
+      tunnel = leases[0];
+      if (!tunnel || !["issued", "script_issued", "connected", "exported"].includes(tunnel.status)) {
+        res.status(409).send("# The migration tunnel is no longer available. Start a new tunnel session.");
+        return;
+      }
+      if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
+        await expireTunnel(tunnel);
+        res.status(409).send("# The migration tunnel has expired. Start a new tunnel session.");
+        return;
+      }
+    }
+
+    const origin = publicOrigin(req);
+    const uploadUrl = `${origin}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
+    const script = buildDomainRouterExportScript(uploadUrl, tunnel ? tunnelScriptOptions(tunnel) : undefined);
+    if (tunnel && tunnel.status === "issued") {
+      const events = Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : [];
+      await sbUpdateStrict(
+        "router_migration_tunnel_leases",
+        `id=eq.${tunnel.id}&admin_id=eq.${session.admin_id}&status=eq.issued`,
+        {
+          status: "script_issued",
+          bootstrap_fetched_at: new Date().toISOString(),
+          audit_json: { ...(tunnel.audit_json ?? {}), events: [...events, { event: "collector_script_issued", at: new Date().toISOString() }] },
+        },
+      ).catch(() => undefined);
+    }
+    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-collector.rsc"').send(script);
+  } catch {
+    res.status(401).send("# Invalid or expired migration collector session.");
   }
 });
 
@@ -426,7 +561,7 @@ router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req
   }
 
   const scriptUrl = `${publicOrigin(req)}/api/router-migrations/tunnel-bootstrap?token=${encodeURIComponent(bootstrapToken)}`;
-  const interfaceName = tunnelInterfaceName(sourceRouterId, bootstrapToken);
+  const interfaceName = tunnelInterfaceNameForLease(lease);
   const command = `/tool fetch url="${scriptUrl}" dst-path=ochola-migration-tunnel.rsc mode=https check-certificate=no; /import ochola-migration-tunnel.rsc; /file remove [find name="ochola-migration-tunnel.rsc"]`;
   res.status(201).json({
     ok: true,
@@ -462,30 +597,79 @@ router.get("/router-migrations/tunnel-session/:id", async (req, res) => guarded(
 router.post("/router-migrations/collector-session", async (req, res) => guarded(req, async a => {
   const sourceLabel = typeof req.body.sourceLabel === "string" ? req.body.sourceLabel.trim().slice(0, 120) : "";
   if (!sourceLabel) throw new Error("Give this source router a name.");
+  const sourceRouterId = req.body.sourceRouterId ? positive(req.body.sourceRouterId) : undefined;
+  const tunnelId = req.body.tunnelId ? positive(req.body.tunnelId) : undefined;
+  let tunnel: TunnelLease | undefined;
+  if (sourceRouterId || tunnelId) {
+    if (!sourceRouterId || !tunnelId) throw new Error("A tunnel-enabled collector requires both a registered source router and its tunnel session.");
+    await ownedRouter(sourceRouterId, a);
+    tunnel = await tunnelFor(sourceRouterId, a, tunnelId);
+  }
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-  await sbInsertStrict<CollectorToken>("router_migration_collector_tokens", { token_hash: collectorHash(token), admin_id: a, source_label: sourceLabel, expires_at: expiresAt });
-  // Use the API-prefixed route here. Some production reverse proxies send
-  // root /scripts/* requests to the SPA fallback instead of the API server,
-  // which makes RouterOS download index.html rather than executable RSC.
-  const scriptUrl = `${publicOrigin(req)}/api/scripts/router-migration-collector.rsc?token=${encodeURIComponent(token)}`;
+  await sbInsertStrict<CollectorToken>("router_migration_collector_tokens", {
+    token_hash: collectorHash(token),
+    admin_id: a,
+    source_label: sourceLabel,
+    expires_at: expiresAt,
+    tunnel_lease_id: tunnel?.id ?? null,
+  });
+  const scriptUrl = `${publicOrigin(req)}/api/router-migrations/collector-script?token=${encodeURIComponent(token)}`;
   const command = `/tool fetch url="${scriptUrl}" dst-path="ochola-router-migration-collector.rsc" mode=https check-certificate=no; /import ochola-router-migration-collector.rsc; /file remove [find name="ochola-router-migration-collector.rsc"]`;
-  res.status(201).json({ sourceLabel, token, scriptUrl, command, expiresAt, status: "waiting" });
+  res.status(201).json({
+    sourceLabel,
+    token,
+    scriptUrl,
+    command,
+    expiresAt,
+    status: "waiting",
+    ...(tunnel ? {
+      tunnel: {
+        leaseId: String(tunnel.id),
+        routerId: tunnel.source_router_id,
+        address: tunnel.assigned_ip,
+        technology: tunnel.technology,
+        expiresAt: tunnel.expires_at,
+        status: tunnel.status,
+      },
+    } : {}),
+  });
 }, res));
 router.get("/router-migrations/collector-session/status", async (req, res) => guarded(req, async a => {
   const token = collectorToken(req);
-  const rows = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${a}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id&limit=1`);
+  const rows = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${a}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`);
   const session = rows[0];
   if (!session) throw new Error("Collector session not found.");
   const expired = new Date(session.expires_at).getTime() <= Date.now();
+  let tunnel: TunnelLease | undefined;
+  if (session.tunnel_lease_id) {
+    const leases = await sbSelectStrict<TunnelLease>(
+      "router_migration_tunnel_leases",
+      `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${a}&select=id,source_router_id,technology,assigned_ip,status,expires_at,verified_at&limit=1`,
+    );
+    tunnel = leases[0];
+  }
   if (!session.migration_job_id) {
-    res.json({ status: expired ? "expired" : session.used_at ? "processing" : "waiting", sourceLabel: session.source_label, expiresAt: session.expires_at });
+    res.json({
+      status: expired ? "expired" : session.used_at ? "processing" : "waiting",
+      sourceLabel: session.source_label,
+      expiresAt: session.expires_at,
+      ...(tunnel ? { tunnel: { leaseId: String(tunnel.id), routerId: tunnel.source_router_id, address: tunnel.assigned_ip, technology: tunnel.technology, expiresAt: tunnel.expires_at, status: tunnel.status } } : {}),
+    });
     return;
   }
   const jobs = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${session.migration_job_id}&admin_id=eq.${a}&select=id,status,source_label,source_mode,findings_json,audit_json&limit=1`);
   const job = jobs[0];
   const audit = job?.audit_json ?? {};
-  res.json({ status: job?.status ?? "processing", migrationId: String(session.migration_job_id), sourceLabel: session.source_label, sourceMode: "domain_collector", summary: audit.summary ?? {}, findings: job?.findings_json ?? {} });
+  res.json({
+    status: job?.status ?? "processing",
+    migrationId: String(session.migration_job_id),
+    sourceLabel: session.source_label,
+    sourceMode: "domain_collector",
+    summary: audit.summary ?? {},
+    findings: job?.findings_json ?? {},
+    ...(tunnel ? { tunnel: { leaseId: String(tunnel.id), routerId: tunnel.source_router_id, address: tunnel.assigned_ip, technology: tunnel.technology, expiresAt: tunnel.expires_at, status: tunnel.status } } : {}),
+  });
 }, res));
 router.get("/router-migrations/:id/tunnel", async (req, res) => guarded(req, async a => {
   const job = await jobFor(positive(req.params.id), a);
