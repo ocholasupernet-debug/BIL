@@ -109,7 +109,10 @@ router.post("/router-migrations/collector-session", async (req, res) => guarded(
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   await sbInsertStrict<CollectorToken>("router_migration_collector_tokens", { token_hash: collectorHash(token), admin_id: a, source_label: sourceLabel, expires_at: expiresAt });
-  const scriptUrl = `${publicOrigin(req)}/scripts/router-migration-collector.rsc?token=${encodeURIComponent(token)}`;
+  // Use the API-prefixed route here. Some production reverse proxies send
+  // root /scripts/* requests to the SPA fallback instead of the API server,
+  // which makes RouterOS download index.html rather than executable RSC.
+  const scriptUrl = `${publicOrigin(req)}/api/scripts/router-migration-collector.rsc?token=${encodeURIComponent(token)}`;
   const command = `/tool fetch url="${scriptUrl}" dst-path="ochola-router-migration-collector.rsc" mode=https check-certificate=no; /import ochola-router-migration-collector.rsc; /file remove [find name="ochola-router-migration-collector.rsc"]`;
   res.status(201).json({ sourceLabel, token, scriptUrl, command, expiresAt, status: "waiting" });
 }, res));
