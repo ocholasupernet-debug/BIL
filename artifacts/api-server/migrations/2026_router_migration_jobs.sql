@@ -28,7 +28,7 @@ alter table router_migration_jobs alter column source_router_id drop not null;
 alter table router_migration_jobs add column if not exists source_label text;
 alter table router_migration_jobs add column if not exists source_mode text not null default 'connected_router';
 alter table router_migration_jobs drop constraint if exists router_migration_jobs_source_mode_check;
-alter table router_migration_jobs add constraint router_migration_jobs_source_mode_check check (source_mode in ('connected_router', 'terminal_script'));
+alter table router_migration_jobs add constraint router_migration_jobs_source_mode_check check (source_mode in ('connected_router', 'terminal_script', 'domain_collector'));
 create index if not exists router_migration_jobs_admin_created_idx on router_migration_jobs(admin_id, created_at desc);
 create index if not exists router_migration_jobs_source_idx on router_migration_jobs(source_router_id);
 create index if not exists router_migration_jobs_target_idx on router_migration_jobs(target_router_id);
@@ -36,6 +36,39 @@ alter table router_migration_jobs enable row level security;
 revoke all on table router_migration_jobs from anon, authenticated;
 grant select, insert, update on table router_migration_jobs to service_role;
 grant usage, select on sequence router_migration_jobs_id_seq to service_role;
+
+-- One-time bearer sessions let a source MikroTik upload its export without
+-- receiving a browser/admin credential.
+create table if not exists router_migration_collector_tokens (
+  token_hash text primary key,
+  admin_id bigint not null references isp_admins(id) on delete cascade,
+  source_label text not null,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  migration_job_id bigint references router_migration_jobs(id) on delete set null
+);
+create index if not exists router_migration_collector_tokens_admin_idx
+  on router_migration_collector_tokens(admin_id, expires_at);
+alter table router_migration_collector_tokens enable row level security;
+revoke all on table router_migration_collector_tokens from anon, authenticated;
+grant select, insert, update on table router_migration_collector_tokens to service_role;
+
+create or replace function consume_router_migration_collector_token(p_token_hash text)
+returns table(admin_id bigint, source_label text)
+language plpgsql security definer set search_path = public
+as $$
+begin
+  return query
+  update router_migration_collector_tokens
+     set used_at = now()
+   where token_hash = p_token_hash
+     and used_at is null
+     and expires_at > now()
+  returning router_migration_collector_tokens.admin_id,
+            router_migration_collector_tokens.source_label;
+end $$;
+revoke all on function consume_router_migration_collector_token(text) from public;
+grant execute on function consume_router_migration_collector_token(text) to service_role;
 
 create table if not exists router_migration_target_leases (
   target_router_id bigint primary key references isp_routers(id) on delete cascade,

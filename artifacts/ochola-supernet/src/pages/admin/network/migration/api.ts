@@ -38,6 +38,26 @@ export async function saveTerminalExport({ sourceLabel, exportText }: { sourceLa
   return data;
 }
 
+export async function createCollectorSession(sourceLabel: string) {
+  const res = await fetch("/api/router-migrations/collector-session", {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ sourceLabel }),
+  });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to create collector session");
+  return data;
+}
+
+export async function getCollectorSessionStatus(token: string) {
+  const res = await fetch(`/api/router-migrations/collector-session/status?token=${encodeURIComponent(token)}`, { headers: getHeaders() });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to check collector session");
+  return data;
+}
+
 export async function analyzeSource(sourceRouterId: number) {
   const res = await fetch("/api/router-migrations/analyze", {
     method: "POST",

@@ -22,6 +22,18 @@ export interface ExportResponse {
   findings: { warnings: string[]; manual: string[]; unsupported: string[] };
 }
 
+export interface CollectorSession {
+  sourceLabel: string;
+  token: string;
+  scriptUrl: string;
+  command: string;
+  expiresAt: string;
+  status: "waiting" | "processing" | "expired" | "exported" | "target_selected" | "dry_run" | "completed" | "failed";
+  migrationId?: string;
+  summary?: ExportResponse["summary"];
+  findings?: ExportResponse["findings"];
+}
+
 export interface DryRunResponse {
   success: boolean;
   warnings: string[];

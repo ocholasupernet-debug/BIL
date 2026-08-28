@@ -18,14 +18,14 @@ import {
 } from "lucide-react";
 import {
   fetchRouters,
-  downloadReadOnlyExportScript,
-  saveTerminalExport,
+  createCollectorSession,
+  getCollectorSessionStatus,
   setTargetRouter,
   runDryRun,
   runImport,
   getReport
 } from "./api";
-import type { RouterSummary, ExportResponse, DryRunResponse, ReportResponse } from "./types";
+import type { RouterSummary, CollectorSession, ExportResponse, DryRunResponse, ReportResponse } from "./types";
 import { useToast } from "@/hooks/use-toast";
 
 const STEPS = [
@@ -44,7 +44,7 @@ export default function NetworkMigration() {
   const [targetRouterId, setTargetRouterId] = useState<number | null>(null);
   const [migrationId, setMigrationId] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
-  const [sourceExportText, setSourceExportText] = useState("");
+  const [collector, setCollector] = useState<CollectorSession | null>(null);
 
   const [exportData, setExportData] = useState<ExportResponse | null>(null);
   const [dryRunData, setDryRunData] = useState<DryRunResponse | null>(null);
@@ -60,15 +60,31 @@ export default function NetworkMigration() {
     retry: 1,
   });
 
-  const sourceExportMutation = useMutation({
-    mutationFn: saveTerminalExport,
+  const collectorMutation = useMutation({
+    mutationFn: createCollectorSession,
     onSuccess: (data) => {
-      setExportData(data);
-      setMigrationId(data.id);
-      setSourceExportText("");
-      setCurrentStep(2);
+      setCollector(data);
     },
-    onError: (err: any) => toast({ title: "Router export could not be saved", description: err.message, variant: "destructive" })
+    onError: (err: any) => toast({ title: "Collector could not be created", description: err.message, variant: "destructive" })
+  });
+
+  const collectorStatusMutation = useMutation({
+    mutationFn: getCollectorSessionStatus,
+    onSuccess: (data) => {
+      setCollector(current => current ? { ...current, ...data } : current);
+      if (data.migrationId && data.summary && data.findings) {
+        setMigrationId(data.migrationId);
+        setExportData({
+          id: data.migrationId,
+          status: data.status,
+          sourceLabel: data.sourceLabel,
+          sourceMode: data.sourceMode,
+          summary: data.summary,
+          findings: data.findings,
+        });
+      }
+    },
+    onError: (err: any) => toast({ title: "Collection status unavailable", description: err.message, variant: "destructive" })
   });
 
   const targetMutation = useMutation({
@@ -140,23 +156,19 @@ export default function NetworkMigration() {
     URL.revokeObjectURL(url);
   };
 
-  const downloadReadOnlyScript = async () => {
+  const copyCollectorCommand = async () => {
+    if (!collector) return;
     try {
-      const blob = await downloadReadOnlyExportScript();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "ocholasupernet-read-only-export.rsc";
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      toast({ title: "Script download failed", description: error instanceof Error ? error.message : "Could not download the script.", variant: "destructive" });
+      await navigator.clipboard.writeText(collector.command);
+      toast({ title: "Command copied", description: "Paste it into the active MikroTik terminal." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select and copy the command manually.", variant: "destructive" });
     }
   };
 
   const handleNext = () => {
     if (currentStep === 1) {
-      if (sourceLabel.trim() && sourceExportText.trim()) sourceExportMutation.mutate({ sourceLabel: sourceLabel.trim(), exportText: sourceExportText });
+      if (collector?.migrationId) setCurrentStep(2);
     } else if (currentStep === 2) {
       setCurrentStep(3);
     } else if (currentStep === 3) {
@@ -246,34 +258,47 @@ export default function NetworkMigration() {
                 <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
                   <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Run the collector on the active MikroTik first</h3>
                   <ol className="text-xs text-[var(--isp-text-muted)] space-y-2 list-decimal pl-5">
-                    <li>Download the read-only helper and run it in the source router terminal.</li>
-                    <li>Copy all terminal output, including the section headers and <code>add</code> lines.</li>
-                    <li>Paste the output below. The source router does not need to be registered or connected to the web app.</li>
+                    <li>Give the source router a name and create a one-time collector session.</li>
+                    <li>Paste the displayed command into the active MikroTik terminal.</li>
+                    <li>The domain-hosted script reads the router and uploads the export automatically.</li>
                   </ol>
-                  <button type="button" className="btn btn-primary mt-4" onClick={downloadReadOnlyScript}>
-                    <FileCheck size={14} /> Download collector script
-                  </button>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router name</label>
                   <input className="isp-input py-3 w-full" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Paste collected RouterOS output</label>
-                  <textarea
-                    className="isp-input w-full min-h-[220px] font-mono text-xs leading-relaxed"
-                    value={sourceExportText}
-                    onChange={e => setSourceExportText(e.target.value)}
-                    placeholder={"/export show-sensitive terse\n\nPaste the complete output here..."}
-                    spellCheck={false}
-                  />
-                  <div className="flex justify-between gap-3 text-[11px] text-[var(--isp-text-muted)]">
-                    <span>{sourceExportText.length.toLocaleString()} characters pasted</span>
-                    <span>Includes sensitive values; encrypted before storage.</span>
+                {!collector && (
+                  <button type="button" className="btn btn-primary" onClick={() => collectorMutation.mutate(sourceLabel.trim())} disabled={!sourceLabel.trim() || collectorMutation.isPending}>
+                    {collectorMutation.isPending ? <><RefreshCw size={14} className="animate-spin" /> Creating session...</> : <><Terminal size={14} /> Create domain collector</>}
+                  </button>
+                )}
+                {collector && (
+                  <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
+                    <div>
+                      <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Domain-linked RouterOS command</label>
+                      <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        <button type="button" className="btn btn-ghost" onClick={copyCollectorCommand}><FileCheck size={14} /> Copy command</button>
+                        <a className="btn btn-ghost" href={collector.scriptUrl} target="_blank" rel="noreferrer"><FileCheck size={14} /> View hosted script</a>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 border-t border-[var(--isp-border)] pt-3">
+                      <div>
+                        <strong className="block text-xs text-[var(--isp-text)]">
+                          {collector.status === "waiting" ? "Waiting for the MikroTik..." : collector.migrationId ? "Export received and saved" : "Processing router export..."}
+                        </strong>
+                        <span className="text-[11px] text-[var(--isp-text-muted)]">Session expires {new Date(collector.expiresAt).toLocaleTimeString()}</span>
+                      </div>
+                      {!collector.migrationId && (
+                        <button type="button" className="btn btn-ghost shrink-0" onClick={() => collectorStatusMutation.mutate(collector.token)} disabled={collectorStatusMutation.isPending}>
+                          <RefreshCw size={14} className={collectorStatusMutation.isPending ? "animate-spin" : ""} /> Check collection
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
                 <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-600">
-                  The output may contain passwords and other sensitive values. Paste it only into this tenant’s authenticated migration page. It is never returned to the browser after saving.
+                  The collector includes passwords and other sensitive values. Use it only on the intended source router, keep the one-time URL private, and wait for the web app to confirm collection.
                 </div>
               </div>
             )}
@@ -595,7 +620,7 @@ export default function NetworkMigration() {
               <button 
                 className="btn btn-ghost" 
                 onClick={() => window.location.reload()}
-                disabled={sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
+                disabled={collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
               >
                 Cancel
               </button>
@@ -617,18 +642,18 @@ export default function NetworkMigration() {
                   className={`btn ${currentStep === 6 ? 'btn-danger' : 'btn-primary'}`}
                   onClick={handleNext}
                   disabled={
-                    (currentStep === 1 && (!sourceLabel.trim() || !sourceExportText.trim())) ||
+                    (currentStep === 1 && !collector?.migrationId) ||
                     (currentStep === 4 && !targetRouterId) ||
                     (currentStep === 5 && (isDryRunDirty() || dryRunData?.plannedChanges.length === 0 || selectedIds.size === 0)) ||
                     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER") ||
-                    sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
+                    collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
                   }
                 >
-                  {sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
+                  {collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
                     <><RefreshCw size={14} className="animate-spin" /> Processing...</>
                   ) : (
                     <>
-                      {currentStep === 1 && 'Save Collected Export'}
+                      {currentStep === 1 && 'Continue to Collected Export'}
                       {currentStep === 2 && 'Review Collected Data'}
                       {currentStep === 3 && 'Acknowledge & Continue'}
                       {currentStep === 4 && 'Prepare Dry Run'}

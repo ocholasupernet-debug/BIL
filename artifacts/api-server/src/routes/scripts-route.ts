@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import path from "path";
 import { ensureClientCert } from "./vpn-route.js";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
+import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
 
 const router: IRouter = Router();
 
@@ -1467,6 +1468,23 @@ router.get("/scripts/deployable-sources", (req, res): void => {
     return content ? content.source : source;
   });
   res.json({ sources });
+});
+
+/* Domain-connected source collector. The token is short-lived and is only
+   embedded in the upload URL of the script generated for one admin session. */
+router.get("/scripts/router-migration-collector.rsc", (req, res): void => {
+  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) {
+    res.status(401).type("text/plain").send("# Invalid or expired migration collector session.");
+    return;
+  }
+  const origin = resolveOrigin((req.headers.host ?? "") as string);
+  const uploadUrl = `${origin}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
+  res
+    .set("Content-Type", "text/plain; charset=utf-8")
+    .set("Content-Disposition", 'attachment; filename="router-migration-collector.rsc"')
+    .set("Cache-Control", "no-store")
+    .send(buildDomainRouterExportScript(uploadUrl));
 });
 
 /* ═══════════════════════════════════════════════════════════════

@@ -1,16 +1,17 @@
-import { Router, type IRouter, type Request } from "express";
+import express, { Router, type IRouter, type Request } from "express";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { requireAdmin } from "../lib/api-auth.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
 import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
-import { READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
+import { buildDomainRouterExportScript, READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
 
 const router: IRouter = Router();
 const locks = new Set<string>();
 type RouterRow = { id: number; admin_id: number; name: string; host: string; bridge_ip?: string; router_username: string; router_secret?: string; identity?: string; serial?: string };
-type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; status: string };
+type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; findings_json?: Record<string, unknown>; status: string };
+type CollectorToken = { token_hash: string; admin_id: number; source_label: string; expires_at: string; used_at?: string | null; migration_job_id?: number | null };
 
 function admin(req: Request): number { const id = Number(req.authUser?.uid); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid administrator identity."); return id; }
 function positive(value: unknown): number { const id = Number(value); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid numeric identifier."); return id; }
@@ -18,6 +19,31 @@ function creds(row: RouterRow): RouterCredentials { return { host: row.host, bri
 function key() { const secret = process.env.SESSION_SECRET ?? process.env.TOKEN_SIGNING_SECRET; if (!secret) throw new Error("Migration encryption is not configured."); return createHash("sha256").update(secret).digest(); }
 function encrypt(value: unknown) { const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key(), iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]); return { ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64") }; }
 function decrypt(job: Job) { if (!job.ciphertext || !job.iv || !job.auth_tag) throw new Error("Migration package is unavailable."); const decipher = createDecipheriv("aes-256-gcm", key(), Buffer.from(job.iv, "base64")); decipher.setAuthTag(Buffer.from(job.auth_tag, "base64")); return JSON.parse(Buffer.concat([decipher.update(Buffer.from(job.ciphertext, "base64")), decipher.final()]).toString("utf8")) as Record<string, unknown>; }
+function collectorHash(token: string) { return createHash("sha256").update(token).digest("hex"); }
+function publicOrigin(req: Request) {
+  const configured = process.env.PUBLIC_APP_ORIGIN?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  const host = String(req.headers.host ?? "").split(":")[0];
+  if (host === "isplatty.org" || host.endsWith(".isplatty.org")) return `https://${host}`;
+  return host === "localhost" || host === "127.0.0.1" ? `http://${req.headers.host}` : `https://${req.headers.host}`;
+}
+function summaryFor(pkg: Record<string, unknown>) {
+  const pools = Array.isArray(pkg.ip_pools) ? pkg.ip_pools.length : 0;
+  const users = (Array.isArray(pkg.ppp_secrets) ? pkg.ppp_secrets.length : 0) + (Array.isArray(pkg.hotspot_users) ? pkg.hotspot_users.length : 0);
+  const configs = Object.values(pkg).reduce<number>((sum, value) => sum + (Array.isArray(value) ? value.length : 0), 0);
+  return { configs, users, queues: Array.isArray(pkg.queues) ? pkg.queues.length : 0, pools };
+}
+function findingsFor(pkg: Record<string, unknown>, plan: ReturnType<typeof buildMigrationPlan>) {
+  const warnings = Array.isArray(pkg.warnings) ? pkg.warnings.map(String) : [];
+  const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
+  const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
+  return { warnings, manual, unsupported };
+}
+function collectorToken(req: Request): string {
+  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) throw new Error("Invalid or expired collector session.");
+  return token;
+}
 async function ownedRouter(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`); if (!rows[0]) throw new Error("Router not found."); return rows[0]; }
 async function jobFor(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&admin_id=eq.${adminId}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
 async function guarded(req: Request, fn: (adminId: number) => Promise<void>, res: any) { try { const id = admin(req); const lock = `${id}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`; if (locks.has(lock)) { res.status(409).json({ ok: false, error: "Migration is already in progress." }); return; } locks.add(lock); try { await fn(id); } finally { locks.delete(lock); } } catch (e) { res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." }); } }
@@ -33,6 +59,41 @@ async function observeDevice(row: RouterRow) {
   return { identity: identity[0]?.name, fingerprint, version: resource[0]?.version, boardName: resource[0]?.["board-name"] ?? resource[0]?.board };
 }
 
+/* This is intentionally before the admin middleware below. The MikroTik has
+   no browser session; the short-lived, one-time collector token is its auth. */
+router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", limit: "8mb" }), async (req, res) => {
+  try {
+    const token = collectorToken(req);
+    const claimed = await sbRpc<CollectorToken>("consume_router_migration_collector_token", { p_token_hash: collectorHash(token) });
+    const session = claimed[0];
+    if (!session) {
+      res.status(401).json({ ok: false, error: "Invalid, expired, or already used collector session." });
+      return;
+    }
+    const rawExport = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    const pkg = parseRouterOsExport(rawExport);
+    const plan = buildMigrationPlan(pkg);
+    const findings = findingsFor(pkg, plan);
+    const summary = summaryFor(pkg);
+    const secure = encrypt({ ...pkg, raw_export: rawExport });
+    const rows = await sbInsertStrict<Job>("router_migration_jobs", {
+      admin_id: session.admin_id,
+      source_router_id: null,
+      source_label: session.source_label,
+      source_mode: "domain_collector",
+      status: "exported",
+      ...secure,
+      findings_json: findings,
+      audit_json: { exported_at: new Date().toISOString(), source_read_only: true, source_mode: "domain_collector", source_label: session.source_label, summary },
+    });
+    const migrationId = rows[0]?.id;
+    if (!migrationId) throw new Error("Collected export could not be saved.");
+    await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${session.admin_id}`, { migration_job_id: migrationId });
+    res.json({ ok: true, migrationId: String(migrationId), status: "exported" });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Collector upload failed." });
+  }
+});
 router.use("/router-migrations", requireAdmin());
 router.get("/router-migrations/read-only-export-script", (req, res) => {
   try {
@@ -42,6 +103,31 @@ router.get("/router-migrations/read-only-export-script", (req, res) => {
     res.status(401).json({ ok: false, error: "Invalid administrator identity." });
   }
 });
+router.post("/router-migrations/collector-session", async (req, res) => guarded(req, async a => {
+  const sourceLabel = typeof req.body.sourceLabel === "string" ? req.body.sourceLabel.trim().slice(0, 120) : "";
+  if (!sourceLabel) throw new Error("Give this source router a name.");
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  await sbInsertStrict<CollectorToken>("router_migration_collector_tokens", { token_hash: collectorHash(token), admin_id: a, source_label: sourceLabel, expires_at: expiresAt });
+  const scriptUrl = `${publicOrigin(req)}/scripts/router-migration-collector.rsc?token=${encodeURIComponent(token)}`;
+  const command = `/tool fetch url="${scriptUrl}" dst-path="ochola-router-migration-collector.rsc" mode=https check-certificate=no; /import ochola-router-migration-collector.rsc; /file remove [find name="ochola-router-migration-collector.rsc"]`;
+  res.status(201).json({ sourceLabel, token, scriptUrl, command, expiresAt, status: "waiting" });
+}, res));
+router.get("/router-migrations/collector-session/status", async (req, res) => guarded(req, async a => {
+  const token = collectorToken(req);
+  const rows = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${a}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id&limit=1`);
+  const session = rows[0];
+  if (!session) throw new Error("Collector session not found.");
+  const expired = new Date(session.expires_at).getTime() <= Date.now();
+  if (!session.migration_job_id) {
+    res.json({ status: expired ? "expired" : session.used_at ? "processing" : "waiting", sourceLabel: session.source_label, expiresAt: session.expires_at });
+    return;
+  }
+  const jobs = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${session.migration_job_id}&admin_id=eq.${a}&select=id,status,source_label,source_mode,findings_json,audit_json&limit=1`);
+  const job = jobs[0];
+  const audit = job?.audit_json ?? {};
+  res.json({ status: job?.status ?? "processing", migrationId: String(session.migration_job_id), sourceLabel: session.source_label, sourceMode: "domain_collector", summary: audit.summary ?? {}, findings: job?.findings_json ?? {} });
+}, res));
 router.get("/router-migrations/routers", async (req, res) => guarded(req, async a => {
   const rows = await sbSelectStrict<RouterRow>("isp_routers", `admin_id=eq.${a}&select=id,name,host,status,ros_version&order=name.asc`);
   res.json({ routers: rows });
