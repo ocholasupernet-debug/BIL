@@ -18,6 +18,7 @@ import bridgeRouter from "./bridge-route.js";
 import mpesaRouter from "./mpesa-route.js";
 import settingsRouter from "./settings-route.js";
 import superAdminAuthRouter from "./super-admin-auth-route.js";
+import superAdminBillingRouter from "./super-admin-billing-route.js";
 import apiAuthRouter from "./api-auth-route.js";
 import registrationRouter from "./registration-route.js";
 
@@ -42,6 +43,7 @@ router.use(bridgeRouter);
 router.use(mpesaRouter);
 router.use(settingsRouter);
 router.use(superAdminAuthRouter);
+router.use(superAdminBillingRouter);
 router.use(apiAuthRouter);
 router.use(registrationRouter);
 

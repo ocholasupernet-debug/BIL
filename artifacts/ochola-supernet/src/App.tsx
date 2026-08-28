@@ -41,6 +41,7 @@ import SuperAdminAdmins from "./pages/super-admin/Admins";
 import SuperAdminRoles from "./pages/super-admin/Roles";
 import SuperAdminSystemSettings from "./pages/super-admin/SystemSettings";
 import SuperAdminPaymentGateways from "./pages/super-admin/PaymentGateways";
+import SuperAdminPaymentsPackages from "./pages/super-admin/PaymentsPackages";
 import SuperAdminRouters from "./pages/super-admin/Routers";
 import SuperAdminBillingEngine from "./pages/super-admin/BillingEngine";
 import SuperAdminReports from "./pages/super-admin/Reports";
@@ -165,6 +166,7 @@ function Router() {
       <Route path="/super-admin/roles"          component={SuperAdminRoles}            />
       <Route path="/super-admin/settings"       component={SuperAdminSystemSettings}   />
       <Route path="/super-admin/payments"       component={SuperAdminPaymentGateways}  />
+      <Route path="/super-admin/payment-packages" component={SuperAdminPaymentsPackages} />
       <Route path="/super-admin/routers"        component={SuperAdminRouters}          />
       <Route path="/super-admin/billing"        component={SuperAdminBillingEngine}    />
       <Route path="/super-admin/reports"        component={SuperAdminReports}          />

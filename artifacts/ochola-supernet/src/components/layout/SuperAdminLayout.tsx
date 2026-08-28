@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
 import { useTheme } from "@/hooks/use-theme";
 import {
-  LayoutDashboard, Users, ShieldCheck, Settings, CreditCard,
+  LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
   Plug, Gauge, LogOut, Menu, X, ChevronRight,
   Globe, LogIn, Sun, Moon, Clock,
@@ -71,6 +71,7 @@ const NAV: NavSection[] = [
   {
     label: "Finance",
     items: [
+      { name: "Payments & Packages", href: "/super-admin/payment-packages", icon: Package },
       { name: "Payment Gateways", href: "/super-admin/payments", icon: CreditCard },
       { name: "Billing Engine",   href: "/super-admin/billing",  icon: Receipt    },
       { name: "Reports",          href: "/super-admin/reports",  icon: BarChart3  },

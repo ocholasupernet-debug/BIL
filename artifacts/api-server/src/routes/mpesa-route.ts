@@ -15,6 +15,7 @@ import { sbDelete, sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfi
 import { logger } from "../lib/logger.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
+import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 
 const router: IRouter = Router();
 
@@ -686,14 +687,31 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const adminAuth = validateToken(extractToken(req));
   const hasAdminSession = !!adminAuth && adminAuth.type === "a" &&
     (adminAuth.uid === "superadmin" || Number(adminAuth.uid) === scopedAdminId);
+  const superAdminToken = typeof req.headers["x-sa-token"] === "string" ? req.headers["x-sa-token"] : "";
+  const hasSuperAdminSession = isActiveSuperAdminToken(superAdminToken);
   const hasMatchingIntent = !!intent &&
     intent.adminId === scopedAdminId &&
     intent.planId === requestedPlanId &&
     intent.amount === requestedAmount &&
     intent.phone === normalised;
-  if (!hasAdminSession && !hasMatchingIntent) {
+  if (!hasSuperAdminSession && !hasAdminSession && !hasMatchingIntent) {
     res.status(401).json({ ok: false, error: "Create a payment checkout from an active plan or sign in as this ISP Admin." });
     return;
+  }
+  if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
+    const plans = await sbSelect<{ id: number; price: number | string; name: string }>(
+      "isp_plans",
+      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name&limit=1`,
+    );
+    const plan = plans[0];
+    if (!plan) {
+      res.status(404).json({ ok: false, error: "The selected package is not available for payment." });
+      return;
+    }
+    if (requestedAmount !== Math.ceil(Number(plan.price))) {
+      res.status(400).json({ ok: false, error: "The package amount changed. Refresh the package list and try again." });
+      return;
+    }
   }
   if (!allowStkRequest(req, scopedAdminId, normalised)) {
     res.status(429).json({ ok: false, error: "Too many payment prompts. Please wait before trying again." });
