@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import {
   Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
   AlertCircle, User, Loader2, Shield, Clock,
-  ArrowRight, CreditCard,
+  ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -13,7 +13,7 @@ interface Plan {
   speed_down: number; speed_up: number;
   description: string | null; plan_type?: string; type?: string;
 }
-type Tab = "plans" | "login" | "voucher";
+type Tab = "plans" | "tv" | "login" | "voucher";
 const DEFAULT_PORTAL_ADMIN_ID = 5;
 
 function formatValidity(plan: Plan): string {
@@ -85,6 +85,7 @@ export default function HotspotLogin() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
   const [phone, setPhone] = useState("");
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
@@ -185,6 +186,22 @@ export default function HotspotLogin() {
     finally { setPayLoading(false); }
   };
 
+  const handleTabChange = (tab: Tab) => {
+    if (stkSent) return;
+    setActiveTab(tab);
+    setSelectedPlan(null);
+    setPhone("");
+    setPayError(null);
+    if (tab === "plans" || tab === "tv") setPaymentMode(tab === "tv" ? "tv" : "data");
+  };
+
+  const selectPlan = (plan: Plan) => {
+    setSelectedPlan(plan);
+    setPaymentMode(activeTab === "tv" ? "tv" : "data");
+    setPhone("");
+    setPayError(null);
+  };
+
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -232,9 +249,11 @@ export default function HotspotLogin() {
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "plans", label: "Buy Data", icon: <CreditCard size={16} /> },
+    { id: "tv", label: "Buy for TV", icon: <Tv size={16} /> },
     { id: "login", label: "Login", icon: <User size={16} /> },
     { id: "voucher", label: "Voucher", icon: <Ticket size={16} /> },
   ];
+  const isTvMode = paymentMode === "tv";
   const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
   const voucherDuration = voucherInfo?.duration == null ? "" : String(voucherInfo.duration);
 
@@ -253,27 +272,45 @@ export default function HotspotLogin() {
            /* The portal uses a dark glass layout even when the admin app is
               in its light theme. Keep its contrast self-contained so plan
               names and prices do not render white-on-white. */
-           background: #02090f;
+           background:
+             radial-gradient(circle at 50% -10%, var(--isp-accent-glow), transparent 34%),
+             radial-gradient(circle at 100% 70%, rgba(14,165,233,0.09), transparent 28%),
+             #02090f;
           color: #fff;
           overflow-x: hidden;
           position: relative;
+           isolation: isolate;
         }
 
-        .hp-bg-orb { display: none; }
+         .hp-root::before {
+           content: "";
+           position: absolute; inset: 0; z-index: -1; pointer-events: none;
+           opacity: 0.35;
+           background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+             linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+           background-size: 42px 42px;
+           mask-image: linear-gradient(to bottom, black, transparent 80%);
+         }
+
+         .hp-bg-orb {
+           position: absolute; border-radius: 50%; filter: blur(2px);
+           opacity: 0.6; pointer-events: none; z-index: -1;
+           animation: float 7s ease-in-out infinite;
+         }
 
         .hp-header {
           position: sticky; top: 0; z-index: 50;
           display: flex; align-items: center; justify-content: space-between;
-          padding: 0 20px; height: 60px;
-           background: rgba(3,11,20,0.94);
+           padding: 0 max(20px, calc((100vw - 1120px) / 2)); height: 72px;
+           background: rgba(3,11,20,0.72);
           backdrop-filter: blur(24px);
-          border-bottom: 1px solid rgba(255,255,255,0.05);
+           border-bottom: 1px solid rgba(255,255,255,0.08);
         }
 
         .hp-logo { display: flex; align-items: center; gap: 12px; }
         .hp-logo-icon {
-          width: 40px; height: 40px; border-radius: 12px;
-          background: var(--isp-accent);
+           width: 42px; height: 42px; border-radius: 13px;
+           background: linear-gradient(145deg, var(--isp-accent), var(--isp-accent-light, var(--isp-accent)));
           display: flex; align-items: center; justify-content: center;
           box-shadow: 0 4px 16px var(--isp-accent-border);
         }
@@ -293,21 +330,26 @@ export default function HotspotLogin() {
           box-shadow: 0 0 10px #34d399;
         }
 
-        .hp-main {
+         .hp-main {
           position: relative; z-index: 1;
-          max-width: 460px; margin: 0 auto;
-          padding: 28px 16px 60px;
+           max-width: 720px; margin: 0 auto;
+           padding: 54px 20px 72px;
         }
 
-        .hp-hero { text-align: center; margin-bottom: 28px; animation: fadeUp 0.5s ease-out; }
+         .hp-hero { text-align: center; margin-bottom: 32px; animation: fadeUp 0.5s ease-out; }
 
         .hp-wifi-wrap {
-          position: relative; width: 88px; height: 88px;
-          margin: 0 auto 22px;
+           position: relative; width: 104px; height: 104px;
+           margin: 0 auto 24px;
         }
+         .hp-wifi-wrap::before, .hp-wifi-wrap::after {
+           content: ""; position: absolute; border: 1px solid var(--isp-accent-border);
+           border-radius: 50%; inset: -12px; opacity: 0.55;
+         }
+         .hp-wifi-wrap::after { inset: -24px; opacity: 0.18; }
         .hp-wifi-box {
-          width: 88px; height: 88px; border-radius: 24px;
-          background: linear-gradient(135deg, var(--isp-accent-glow), var(--isp-accent-glow));
+           width: 104px; height: 104px; border-radius: 30px;
+           background: linear-gradient(145deg, var(--isp-accent-glow), rgba(14,165,233,0.12));
           border: 1.5px solid var(--isp-accent-border);
           display: flex; align-items: center; justify-content: center;
           position: relative; z-index: 2;
@@ -315,30 +357,33 @@ export default function HotspotLogin() {
         }
 
         .hp-title {
-          font-size: 32px; font-weight: 900; color: #fff;
+           font-size: clamp(34px, 7vw, 48px); font-weight: 900; color: #fff;
           letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 8px;
+           background: linear-gradient(135deg, #fff 20%, #b9d9ff 80%);
+           -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
         }
-        .hp-subtitle { font-size: 15px; color: rgba(255,255,255,0.45); font-weight: 500; margin-bottom: 16px; }
+         .hp-subtitle { max-width: 440px; margin: 0 auto 18px; font-size: 15px; color: rgba(255,255,255,0.52); font-weight: 500; line-height: 1.6; }
 
-        .hp-badges { display: flex; justify-content: center; gap: 20px; }
+         .hp-badges { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; }
         .hp-badge {
           display: flex; align-items: center; gap: 5px;
           font-size: 12px; color: rgba(255,255,255,0.35); font-weight: 600;
         }
 
         .hp-tabs {
-          display: flex; gap: 4px;
-          background: rgba(255,255,255,0.04);
+           display: flex; gap: 4px;
+           background: rgba(255,255,255,0.045);
           border: 1px solid rgba(255,255,255,0.06);
           border-radius: 14px; padding: 4px;
-          margin-bottom: 20px;
+           margin-bottom: 22px;
           animation: fadeUp 0.5s 0.1s ease-out both;
+           box-shadow: 0 16px 40px rgba(0,0,0,0.18);
         }
         .hp-tab {
           flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px;
           padding: 11px 8px; border-radius: 10px;
           border: none; cursor: pointer;
-          font-size: 13px; font-weight: 700;
+           font-size: 12px; font-weight: 700;
           font-family: 'Plus Jakarta Sans', sans-serif;
           transition: all 0.25s ease;
           background: transparent; color: rgba(255,255,255,0.35);
@@ -348,15 +393,17 @@ export default function HotspotLogin() {
           color: #fff;
         }
         .hp-tab:not(.active):hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); }
+         .hp-tab:disabled { cursor: not-allowed; opacity: 0.65; }
 
         .hp-section { animation: fadeUp 0.4s ease-out; }
 
         .hp-glass {
-          background: rgba(255,255,255,0.04);
+           background: linear-gradient(145deg, rgba(255,255,255,0.065), rgba(255,255,255,0.025));
           backdrop-filter: blur(24px);
           border: 1px solid rgba(255,255,255,0.07);
           border-radius: 20px;
           overflow: hidden;
+           box-shadow: 0 24px 70px rgba(0,0,0,0.16);
         }
 
         .hp-glass-header {
@@ -373,6 +420,36 @@ export default function HotspotLogin() {
         .hp-glass-desc { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; margin-top: 1px; }
         .hp-glass-body { padding: 20px; }
 
+         .hp-purchase-hero {
+           display: flex; align-items: center; justify-content: space-between; gap: 20px;
+           padding: 22px; margin-bottom: 14px; border-radius: 20px;
+           background: linear-gradient(135deg, var(--isp-accent-glow), rgba(14,165,233,0.05));
+           border: 1px solid var(--isp-accent-border);
+           color: #fff;
+         }
+         .hp-kicker {
+           color: var(--isp-accent); font-size: 10px; font-weight: 800;
+           text-transform: uppercase; letter-spacing: 0.14em; margin-bottom: 7px;
+         }
+         .hp-purchase-title { color: #fff; font-size: 22px; line-height: 1.2; font-weight: 850; margin-bottom: 7px; }
+         .hp-purchase-copy { color: rgba(255,255,255,0.5); font-size: 12px; line-height: 1.6; max-width: 480px; }
+         .hp-purchase-icon {
+           width: 58px; height: 58px; flex: 0 0 58px; border-radius: 18px;
+           display: flex; align-items: center; justify-content: center;
+           color: var(--isp-accent); background: rgba(255,255,255,0.1);
+           border: 1px solid rgba(255,255,255,0.12);
+         }
+         .hp-trust-row {
+           display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px;
+         }
+         .hp-trust-item {
+           display: flex; align-items: center; gap: 8px; min-width: 0;
+           padding: 10px 11px; border-radius: 12px;
+           color: rgba(255,255,255,0.48); background: rgba(255,255,255,0.03);
+           border: 1px solid rgba(255,255,255,0.05); font-size: 11px; font-weight: 700;
+         }
+         .hp-trust-item svg { color: #34d399; flex-shrink: 0; }
+
         .hp-plans-grid {
           display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
           margin-bottom: 16px;
@@ -386,8 +463,9 @@ export default function HotspotLogin() {
           border-radius: 16px; overflow: hidden;
           text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;
           color: #fff; transition: all 0.3s ease;
-          background: rgba(255,255,255,0.05);
+           background: rgba(255,255,255,0.045);
           border: 1.5px solid rgba(255,255,255,0.07);
+           box-shadow: 0 10px 28px rgba(0,0,0,0.1);
         }
         .hp-plan:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.12); }
         .hp-plan.expanded { grid-column: 1 / -1; cursor: default; }
@@ -413,6 +491,14 @@ export default function HotspotLogin() {
           display: flex; align-items: center; gap: 5px;
           font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.55);
         }
+         .hp-plan-action {
+           display: flex; align-items: center; justify-content: space-between;
+           margin-top: 16px; padding-top: 12px;
+           border-top: 1px solid rgba(255,255,255,0.06);
+           color: rgba(255,255,255,0.35); font-size: 11px; font-weight: 700;
+         }
+         .hp-plan-action svg { color: rgba(255,255,255,0.55); transition: transform 0.2s ease; }
+         .hp-plan:hover .hp-plan-action svg { transform: translate(2px, -2px); color: #fff; }
 
         .hp-plan-check {
           width: 22px; height: 22px; border-radius: 50%;
@@ -530,7 +616,7 @@ export default function HotspotLogin() {
         }
 
         .hp-footer {
-          text-align: center; margin-top: 32px;
+           text-align: center; margin-top: 38px;
           font-size: 11px; color: rgba(255,255,255,0.15); font-weight: 500;
         }
 
@@ -560,6 +646,19 @@ export default function HotspotLogin() {
           .hp-plan-price { font-size: 26px; }
           .hp-title { font-size: 26px; }
         }
+         @media (max-width: 560px) {
+           .hp-header { padding: 0 14px; }
+           .hp-logo-sub { display: none; }
+           .hp-status { padding: 6px 10px; }
+           .hp-main { padding: 42px 14px 56px; }
+           .hp-tabs { gap: 2px; }
+           .hp-tab { padding: 10px 4px; font-size: 10px; gap: 4px; }
+           .hp-tab svg { width: 14px; height: 14px; }
+           .hp-purchase-hero { padding: 18px; }
+           .hp-purchase-title { font-size: 19px; }
+           .hp-purchase-icon { width: 48px; height: 48px; flex-basis: 48px; border-radius: 15px; }
+           .hp-trust-row { grid-template-columns: 1fr; }
+         }
       `}</style>
 
       <div className="hp-root">
@@ -594,8 +693,8 @@ export default function HotspotLogin() {
                 <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
               </div>
             </div>
-            <h1 className="hp-title">Get Connected</h1>
-            <p className="hp-subtitle">Fast & reliable Wi-Fi by {brand.ispName}</p>
+             <h1 className="hp-title">Your world, connected.</h1>
+             <p className="hp-subtitle">Fast, reliable internet for your phone, home and TV — powered by {brand.ispName}.</p>
             <div className="hp-badges">
               <span className="hp-badge"><Shield size={12} /> Secure</span>
               <span className="hp-badge"><Zap size={12} /> Instant</span>
@@ -606,15 +705,15 @@ export default function HotspotLogin() {
           {/* Tabs */}
           <div className="hp-tabs">
             {TABS.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`hp-tab${activeTab === tab.id ? " active" : ""}`}>
+               <button key={tab.id} onClick={() => handleTabChange(tab.id)} disabled={stkSent}
+                 className={`hp-tab${activeTab === tab.id ? " active" : ""}`} aria-pressed={activeTab === tab.id}>
                 {tab.icon} {tab.label}
               </button>
             ))}
           </div>
 
           {/* ── BUY DATA ── */}
-          {activeTab === "plans" && (
+           {(activeTab === "plans" || activeTab === "tv") && (
             <div className="hp-section">
               {stkSent ? (
                 <div className="hp-glass">
@@ -624,9 +723,9 @@ export default function HotspotLogin() {
                         <div className="hp-success-icon">
                           <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                         </div>
-                        <h3>Payment Confirmed!</h3>
-                        <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
-                        <p style={{ fontSize: 12, marginBottom: 8 }}>You are now connected to the network.</p>
+                         <h3>{isTvMode ? "TV is ready to stream!" : "Payment Confirmed!"}</h3>
+                         <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
+                         <p style={{ fontSize: 12, marginBottom: 8 }}>{isTvMode ? "Connect your TV to Wi-Fi and start watching." : "You are now connected to the network."}</p>
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
                           Connected
@@ -689,8 +788,23 @@ export default function HotspotLogin() {
                     )}
                   </div>
                 </div>
-              ) : (
+                   ) : (
                 <>
+                   <div className="hp-purchase-hero">
+                     <div>
+                       <div className="hp-kicker">{isTvMode ? "TV CONNECT" : "HOTSPOT ACCESS"}</div>
+                       <h2 className="hp-purchase-title">{isTvMode ? "Bring streaming to life." : "Pick your perfect plan."}</h2>
+                       <p className="hp-purchase-copy">{isTvMode ? "Choose a plan for your smart TV or streaming device. Pay from your phone and connect instantly." : "Simple packages, instant activation, and no contracts. Choose a plan and get online in seconds."}</p>
+                     </div>
+                     <div className="hp-purchase-icon">
+                       {isTvMode ? <Tv size={27} strokeWidth={1.8} /> : <Sparkles size={27} strokeWidth={1.8} />}
+                     </div>
+                   </div>
+                   <div className="hp-trust-row">
+                     <div className="hp-trust-item"><CheckCircle2 size={14} /> Instant access</div>
+                     <div className="hp-trust-item"><Shield size={14} /> Secure payment</div>
+                     <div className="hp-trust-item"><Zap size={14} /> No contracts</div>
+                   </div>
                   {plansLoading ? (
                     <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
                       <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1s linear infinite" }} />
@@ -740,7 +854,9 @@ export default function HotspotLogin() {
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                       <Phone size={14} color="#22c55e" />
-                                      <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Pay with M-Pesa</span>
+                                      <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
+                                        {isTvMode ? "Pay for TV with M-Pesa" : "Pay with M-Pesa"}
+                                      </span>
                                     </div>
                                      {mpesaStatus && (
                                       <span style={{
@@ -789,7 +905,7 @@ export default function HotspotLogin() {
                                         {payLoading ? (
                                           <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                         ) : (
-                                          <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}</>
+                                           <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
                                         )}
                                       </button>
                                     </form>
@@ -814,7 +930,7 @@ export default function HotspotLogin() {
                                 </div>
                               </div>
                             ) : (
-                              <div className="hp-plan-body" onClick={() => { setSelectedPlan(plan); setPhone(""); setPayError(null); }} style={{ cursor: "pointer" }}>
+                             <div className="hp-plan-body" onClick={() => selectPlan(plan)} style={{ cursor: "pointer" }}>
                                 <div className="hp-plan-name" style={{ color: grad.light }}>{plan.name}</div>
                                 <div className="hp-plan-price">
                                   <span>{getCurrencySymbol()} </span>{plan.price}
@@ -829,6 +945,10 @@ export default function HotspotLogin() {
                                     </div>
                                   )}
                                 </div>
+                                 <div className="hp-plan-action">
+                                   <span>{isTvMode ? "Choose for TV" : "Choose plan"}</span>
+                                   <ArrowUpRight size={15} />
+                                 </div>
                               </div>
                             )}
                           </div>
