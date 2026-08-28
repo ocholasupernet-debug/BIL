@@ -235,6 +235,31 @@ export default function NetworkMigration() {
     return () => window.clearInterval(timer);
   }, [collector?.token, collector?.migrationId]);
 
+  const generateConfiguration = () => {
+    if (!sourceRouterId) {
+      toast({
+        title: "Choose a source router first",
+        description: "Select a registered source router to generate the two connection and export scripts.",
+      });
+      return;
+    }
+    if (!tunnel) {
+      tunnelMutation.mutate(sourceRouterId);
+      return;
+    }
+    if (!collector) {
+      collectorMutation.mutate({
+        sourceLabel: sourceLabel.trim() || sourceRouter?.name || `Router ${sourceRouterId}`,
+        sourceRouterId,
+        tunnelId: tunnel.leaseId,
+      });
+      return;
+    }
+    if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) {
+      analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
+    }
+  };
+
   const dryRunMutation = useMutation({
     mutationFn: runDryRun,
     onSuccess: (data, variables) => {
@@ -331,12 +356,7 @@ export default function NetworkMigration() {
   const handleNext = () => {
     if (currentStep === 1) {
       if (collector?.migrationId || migrationId) setCurrentStep(2);
-      else if (sourceRouterId) {
-        if (!tunnel) tunnelMutation.mutate(sourceRouterId);
-        else if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) {
-          analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
-        }
-      }
+      else generateConfiguration();
     } else if (currentStep === 2) setCurrentStep(3);
     else if (currentStep === 3) setCurrentStep(4);
     else if (currentStep === 4 && migrationId && targetRouterId) targetMutation.mutate({ id: migrationId, targetId: targetRouterId });
@@ -352,6 +372,7 @@ export default function NetworkMigration() {
     (currentStep === 4 && !targetRouterId) ||
     (currentStep === 5 && (!dryRunData || isDryRunDirty() || dryRunData.plannedChanges.length === 0 || selectedIds.size === 0)) ||
     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER");
+  const scriptsGenerated = Boolean(tunnel?.command && collector?.tunnelCommand && collector?.command);
 
   const renderStage = () => {
     if (currentStep === 1) {
@@ -398,8 +419,8 @@ export default function NetworkMigration() {
                 <div className="migration-tunnel revoked" style={{ marginTop: 12 }}>
                   <div className="migration-tunnel-title"><AlertTriangle size={14} /> No migration tunnel issued for this source</div>
                   <p className="migration-tunnel-copy">Issue a new one-hour connection-scoped tunnel before running the collector.</p>
-                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={() => tunnelMutation.mutate(sourceRouterId)} disabled={isBusy}>
-                    <ShieldCheck size={13} /> Issue one-hour tunnel
+                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={generateConfiguration} disabled={isBusy}>
+                    <Terminal size={13} /> Generate configuration
                   </button>
                 </div>
               )}
@@ -627,7 +648,17 @@ export default function NetworkMigration() {
             <h1 className="migration-page-title">Migration &amp; Disaster Recovery</h1>
             <p className="migration-page-subtitle">Move configuration between MikroTik routers with a read-only source, a bounded tunnel, and an explicit write boundary.</p>
           </div>
-          <div className="migration-record">MIGRATION <strong>{migrationId || "NEW SESSION"}</strong></div>
+          <div className="migration-page-header-actions">
+            <button
+              className="migration-button primary"
+              onClick={generateConfiguration}
+              disabled={isBusy || scriptsGenerated || !sourceRouterId}
+              title={!sourceRouterId ? "Choose a registered source router first" : undefined}
+            >
+              {scriptsGenerated ? <><CheckCircle2 size={13} /> Configuration generated</> : isBusy ? <><RefreshCw size={13} className="animate-spin" /> Generating…</> : <><Terminal size={13} /> Generate configuration</>}
+            </button>
+            <div className="migration-record">MIGRATION <strong>{migrationId || "NEW SESSION"}</strong></div>
+          </div>
         </div>
 
         <NetworkTabs active="migration" />
@@ -695,7 +726,7 @@ export default function NetworkMigration() {
               {currentStep > 1 ? <button className="migration-button ghost" onClick={() => setCurrentStep(step => step - 1)} disabled={isBusy}><ArrowLeft size={13} /> Back</button> : <button className="migration-button ghost" onClick={() => window.location.reload()} disabled={isBusy}><X size={13} /> Cancel</button>}
               <button className={`migration-button ${currentStep === 6 ? "danger" : "primary"}`} onClick={handleNext} disabled={primaryDisabled}>
                 {isBusy ? <><RefreshCw size={13} className="animate-spin" /> Processing…</> : <>
-                  {currentStep === 1 && !tunnel && "Issue one-hour tunnel"}
+                  {currentStep === 1 && !tunnel && "Generate configuration"}
                   {currentStep === 1 && tunnel && !migrationId && "Verify tunnel & export"}
                   {currentStep === 1 && migrationId && "Continue to export"}
                   {currentStep === 2 && "Review collected data"}

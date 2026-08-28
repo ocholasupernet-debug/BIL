@@ -41,6 +41,13 @@
   line-height: 1.5;
 }
 
+.migration-page-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
 .migration-record {
   flex-shrink: 0;
   padding: 9px 11px;
@@ -803,7 +810,9 @@
 
 @media (max-width: 760px) {
   .migration-page-header { display: block; }
-  .migration-record { display: inline-block; margin-top: 12px; }
+  .migration-page-header-actions { align-items: stretch; flex-direction: column; margin-top: 12px; }
+  .migration-page-header-actions .migration-button { width: 100%; }
+  .migration-record { display: block; }
   .migration-context { grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr); }
   .migration-context-state { grid-column: 1 / -1; justify-self: start; }
   .migration-workspace { grid-template-columns: 1fr; }
