@@ -34,6 +34,14 @@ function formatSpeed(mbps: number): string {
   return `${mbps}Mbps`;
 }
 
+function normalizeMacAddress(value: string): string {
+  const trimmed = value.trim();
+  if (!/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(trimmed) && !/^[0-9a-f]{12}$/i.test(trimmed)) return "";
+  const compact = trimmed.replace(/[:-]/g, "");
+  if (!/^[0-9a-f]{12}$/i.test(compact)) return "";
+  return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
+}
+
 const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", light: "#667eea" },
   { bg: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", light: "#f093fb" },
@@ -87,6 +95,7 @@ export default function HotspotLogin() {
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
   const [phone, setPhone] = useState("");
+  const [tvMacAddress, setTvMacAddress] = useState("");
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [stkSent, setStkSent] = useState(false);
@@ -159,12 +168,17 @@ export default function HotspotLogin() {
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan || !phone.trim()) return;
+    const macAddress = isTvMode ? normalizeMacAddress(tvMacAddress) : "";
+    if (isTvMode && !macAddress) {
+      setPayError("Enter the TV's 12-character MAC address, for example AA:BB:CC:DD:EE:FF.");
+      return;
+    }
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setPollTimedOut(false);
     try {
       const intentResponse = await fetch("/api/mpesa/intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), plan_id: selectedPlan.id, adminId }),
+        body: JSON.stringify({ phone: phone.trim(), plan_id: selectedPlan.id, adminId, ...(macAddress ? { mac_address: macAddress } : {}) }),
       });
       const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number };
       if (!intentResponse.ok || !intentData.ok || !intentData.paymentIntent || !intentData.amount) {
@@ -174,7 +188,7 @@ export default function HotspotLogin() {
       const res = await fetch("/api/mpesa/stk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), amount: intentData.amount, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName, paymentIntent: intentData.paymentIntent }),
+        body: JSON.stringify({ phone: phone.trim(), amount: intentData.amount, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName, paymentIntent: intentData.paymentIntent, ...(macAddress ? { mac_address: macAddress } : {}) }),
       });
       const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
       if (!res.ok || !data.ok) setPayError(data.error ?? "Failed to send STK push. Please try again.");
@@ -191,6 +205,7 @@ export default function HotspotLogin() {
     setActiveTab(tab);
     setSelectedPlan(null);
     setPhone("");
+    setTvMacAddress("");
     setPayError(null);
     if (tab === "plans" || tab === "tv") setPaymentMode(tab === "tv" ? "tv" : "data");
   };
@@ -199,6 +214,7 @@ export default function HotspotLogin() {
     setSelectedPlan(plan);
     setPaymentMode(activeTab === "tv" ? "tv" : "data");
     setPhone("");
+    setTvMacAddress("");
     setPayError(null);
   };
 
@@ -736,7 +752,7 @@ export default function HotspotLogin() {
                           </p>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); }}>
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setTvMacAddress(""); setCheckoutId(null); setPaymentConfirmed(false); }}>
                           Done
                         </button>
                       </>
@@ -750,7 +766,7 @@ export default function HotspotLogin() {
                         {payError && <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 8 }}>{payError}</p>}
                         <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>Check M-Pesa before retrying if you believe the amount was deducted.</p>
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setTvMacAddress(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
                           Try Again
                         </button>
                       </>
@@ -781,7 +797,7 @@ export default function HotspotLogin() {
                           </div>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
+                           onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setTvMacAddress(""); setCheckoutId(null); setPaymentConfirmed(false); setPaymentFailed(false); setPollTimedOut(false); }}>
                           {pollTimedOut ? "Try Again" : "Cancel & Start Over"}
                         </button>
                       </>
@@ -885,6 +901,29 @@ export default function HotspotLogin() {
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
+                                      {isTvMode && (
+                                        <div className="hp-input-group">
+                                          <label className="hp-label" htmlFor="tv-mac-address">TV or streaming device MAC address</label>
+                                          <div className="hp-input-wrap">
+                                            <Tv size={15} className="hp-input-icon" />
+                                            <input
+                                              id="tv-mac-address"
+                                              className="hp-input hp-input-left"
+                                              type="text"
+                                              inputMode="text"
+                                              autoComplete="off"
+                                              maxLength={17}
+                                              placeholder="AA:BB:CC:DD:EE:FF"
+                                              required
+                                              value={tvMacAddress}
+                                              onChange={e => setTvMacAddress(e.target.value.toUpperCase().replace(/[^0-9A-F:-]/g, ""))}
+                                            />
+                                          </div>
+                                          <p style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 6 }}>
+                                            Find it in your TV or streaming device network settings.
+                                          </p>
+                                        </div>
+                                      )}
                                       <div className="hp-input-group">
                                         <div className="hp-input-wrap">
                                           <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
@@ -923,7 +962,7 @@ export default function HotspotLogin() {
                                         : <>Secured by Safaricom M-Pesa</>
                                       }
                                     </div>
-                                    <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
+                                    <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setTvMacAddress(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan
                                     </button>
                                   </div>

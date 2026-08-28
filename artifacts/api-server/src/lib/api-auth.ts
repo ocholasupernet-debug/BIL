@@ -29,6 +29,7 @@ export interface PaymentIntentPayload {
   planId: number;
   amount: number;
   phone: string;
+  macAddress?: string;
   issuedAt: number;
   nonce: string;
 }
@@ -97,6 +98,7 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
     if (!Number.isSafeInteger(payload.adminId) || !Number.isSafeInteger(payload.planId) ||
         !Number.isFinite(payload.amount) || payload.amount <= 0 ||
         !/^2547\d{8}$/.test(payload.phone) || !payload.nonce ||
+        (payload.macAddress !== undefined && !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(payload.macAddress)) ||
         Date.now() - payload.issuedAt > PAYMENT_INTENT_TTL_MS ||
         payload.issuedAt > Date.now() + MAX_CLOCK_SKEW_S * 1000) return null;
     return payload;

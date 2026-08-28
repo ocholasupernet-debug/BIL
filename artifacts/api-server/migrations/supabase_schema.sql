@@ -135,6 +135,7 @@ create table if not exists isp_transactions (
   amount          numeric(12,2) not null,
   payment_method  text not null default 'mpesa',  -- mpesa | cash | stripe | flutterwave
   payment_phone   text,
+  mac_address     text,
   mpesa_receipt   text,
   merchant_request_id text,
   reference       text,
@@ -201,7 +202,9 @@ begin
     order by c.id limit 1 for update;
     if customer_id_to_credit is not null then
       update isp_customers
-      set wallet_balance = wallet_balance + tx.amount, updated_at = now()
+      set wallet_balance = wallet_balance + tx.amount,
+          mac_address = coalesce(tx.mac_address, mac_address),
+          updated_at = now()
       where id = customer_id_to_credit;
     end if;
   end if;

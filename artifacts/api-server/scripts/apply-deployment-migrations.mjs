@@ -35,6 +35,7 @@ if (!databaseUrl) {
 const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_admin_initial_password_setup.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_secure_mpesa_callback_processing.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_tv_mac_address.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

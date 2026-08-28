@@ -182,6 +182,21 @@ function normaliseKenyanPhone(value: string): string {
   return raw.startsWith("254") ? raw : `254${raw}`;
 }
 
+function normaliseMacAddress(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(trimmed) && !/^[0-9a-f]{12}$/i.test(trimmed)) return "";
+  const compact = trimmed.replace(/[:-]/g, "");
+  if (!/^[0-9a-f]{12}$/i.test(compact)) return "";
+  return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
+}
+
+function readMacAddress(value: unknown): { value: string; invalid: boolean } {
+  if (typeof value !== "string" || !value.trim()) return { value: "", invalid: false };
+  const normalized = normaliseMacAddress(value);
+  return { value: normalized, invalid: !normalized };
+}
+
 function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
   const key = `${req.ip}:${adminId}:${phone}`;
   const now = Date.now();
@@ -249,6 +264,7 @@ interface PendingMpesaTransaction {
   amount: number;
   payment_method: string;
   payment_phone: string | null;
+  mac_address: string | null;
 }
 
 interface SettlementResult {
@@ -329,7 +345,7 @@ async function processMpesaCallback(body: unknown): Promise<boolean> {
 
   const pendingRows = await sbSelect<PendingMpesaTransaction>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,amount,payment_method,payment_phone&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,amount,payment_method,payment_phone,mac_address&limit=1`,
   );
   const transaction = pendingRows[0];
   if (!transaction) {
@@ -420,8 +436,13 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const adminId = Number(req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
+  const mac = readMacAddress(req.body?.mac_address);
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
+    return;
+  }
+  if (mac.invalid) {
+    res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
   if (!await isActiveIspAdmin(adminId)) {
@@ -441,7 +462,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   try {
     res.json({
       ok: true,
-      paymentIntent: generatePaymentIntent({ adminId, planId, amount, phone }),
+      paymentIntent: generatePaymentIntent({ adminId, planId, amount, phone, ...(mac.value ? { macAddress: mac.value } : {}) }),
       amount,
     });
   } catch {
@@ -456,12 +477,17 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
  * Formats phone to 2547XXXXXXXX and sends STK Push via Daraja API.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, account_ref, adminId } = req.body as {
-    phone?: string; amount?: number; account_ref?: string; adminId?: number;
+  const { phone, amount, account_ref, adminId, mac_address } = req.body as {
+    phone?: string; amount?: number; account_ref?: string; adminId?: number; mac_address?: string;
   };
+  const mac = readMacAddress(mac_address);
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
+    return;
+  }
+  if (mac.invalid) {
+    res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
   const scopedAdminId = Number(adminId);
@@ -534,6 +560,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       amount: Math.ceil(Number(amount)),
       payment_method: "mpesa",
       payment_phone: formatted,
+      mac_address: mac.value || null,
       reference: `initiating:${randomUUID()}`,
       status: "initiating",
       notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${formatted}`,
@@ -662,12 +689,17 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string;
   };
+  const mac = readMacAddress(mac_address);
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
+    return;
+  }
+  if (mac.invalid) {
+    res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
   const scopedAdminId = Number(adminId);
@@ -694,6 +726,10 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     intent.planId === requestedPlanId &&
     intent.amount === requestedAmount &&
     intent.phone === normalised;
+  if (intent && (intent.macAddress ?? "") !== mac.value) {
+    res.status(400).json({ ok: false, error: "The TV MAC address changed. Start the payment again." });
+    return;
+  }
   if (!hasSuperAdminSession && !hasAdminSession && !hasMatchingIntent) {
     res.status(401).json({ ok: false, error: "Create a payment checkout from an active plan or sign in as this ISP Admin." });
     return;
@@ -760,6 +796,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        amount: Math.ceil(Number(amount)),
        payment_method: "mpesa",
        payment_phone: normalised,
+        mac_address: mac.value || null,
        reference: `initiating:${randomUUID()}`,
        status: "initiating",
        notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${normalised}`,
