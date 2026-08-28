@@ -24,6 +24,7 @@ import registrationRouter from "./registration-route.js";
 import routerMigrationsRouter from "./router-migrations-route.js";
 import vpnManagementRouter from "./vpn-management-route.js";
 import adminPageVisibilityRouter from "./admin-page-visibility-route.js";
+import dashboardPreferencesRouter from "./dashboard-preferences-route.js";
 
 const router: IRouter = Router();
 
@@ -52,5 +53,6 @@ router.use(registrationRouter);
 router.use(routerMigrationsRouter);
 router.use(vpnManagementRouter);
 router.use(adminPageVisibilityRouter);
+router.use(dashboardPreferencesRouter);
 
 export default router;

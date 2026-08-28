@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { BrandProvider } from "@/context/BrandContext";
 import { AdminPageVisibilityProvider, useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
+import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
 
 import LandingPage from "./pages/LandingPage";
@@ -214,12 +215,14 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <BrandProvider>
           <AdminPageVisibilityProvider>
-            <TooltipProvider>
-              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                <Router />
-              </WouterRouter>
-              <Toaster />
-            </TooltipProvider>
+            <DashboardPreferencesProvider>
+              <TooltipProvider>
+                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                  <Router />
+                </WouterRouter>
+                <Toaster />
+              </TooltipProvider>
+            </DashboardPreferencesProvider>
           </AdminPageVisibilityProvider>
         </BrandProvider>
       </QueryClientProvider>

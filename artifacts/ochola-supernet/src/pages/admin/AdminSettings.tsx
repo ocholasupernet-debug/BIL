@@ -2,6 +2,13 @@ import { useState, useRef, useEffect } from "react";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
+import {
+  DASHBOARD_COLOR_PRESETS,
+  DASHBOARD_LAYOUT_OPTIONS,
+  DASHBOARD_SHAPE_OPTIONS,
+  type DashboardPreferences,
+} from "@/lib/dashboard-preferences";
 import {
   Building2, CreditCard, MessageSquare, Radio, Wifi, Shield,
   Bell, Wrench, Check, Eye, EyeOff, Copy, Trash2, Plus,
@@ -1091,6 +1098,175 @@ function NotificationsTab() {
   );
 }
 
+function DashboardBuilderTab() {
+  const { preferences, loading, saving, savePreferences } = useDashboardPreferences();
+  const [draft, setDraft] = useState<DashboardPreferences>(preferences);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDraft(preferences);
+  }, [preferences]);
+
+  const updateDraft = (change: Partial<DashboardPreferences>) => {
+    setDraft(current => ({ ...current, ...change }));
+    setSaved(false);
+    setError("");
+  };
+
+  const saveDashboardPreferences = async () => {
+    setError("");
+    setSaved(false);
+    try {
+      await savePreferences(draft);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Dashboard appearance could not be saved.");
+    }
+  };
+
+  const previewStyle = {
+    "--dashboard-accent": draft.accentColor,
+    "--dashboard-accent-glow": `${draft.accentColor}1a`,
+    "--dashboard-accent-border": `${draft.accentColor}45`,
+  } as React.CSSProperties;
+
+  return (
+    <>
+      <Card title="Dashboard Page Builder" desc="Personalize the ISP dashboard without changing its live data or access controls.">
+        <div className="dashboard-builder-grid">
+          <div className="dashboard-builder-controls">
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Accent color</p>
+                  <span>Used for live status, links, highlights, and dashboard actions.</span>
+                </div>
+                <label className="dashboard-color-input" style={{ background: draft.accentColor }}>
+                  <input
+                    type="color"
+                    value={draft.accentColor}
+                    aria-label="Choose dashboard accent color"
+                    onChange={event => updateDraft({ accentColor: event.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="dashboard-color-presets">
+                {DASHBOARD_COLOR_PRESETS.map(preset => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    className={`dashboard-color-swatch${draft.accentColor === preset.value ? " dashboard-color-swatch--selected" : ""}`}
+                    style={{ background: preset.value }}
+                    aria-label={`Use ${preset.name}`}
+                    aria-pressed={draft.accentColor === preset.value}
+                    title={preset.name}
+                    onClick={() => updateDraft({ accentColor: preset.value })}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Card shape</p>
+                  <span>Set the visual weight of dashboard panels and summary cards.</span>
+                </div>
+              </div>
+              <div className="dashboard-builder-options">
+                {DASHBOARD_SHAPE_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`dashboard-builder-option${draft.cardShape === option.value ? " dashboard-builder-option--selected" : ""}`}
+                    aria-pressed={draft.cardShape === option.value}
+                    onClick={() => updateDraft({ cardShape: option.value })}
+                  >
+                    <span className={`dashboard-option-shape dashboard-option-shape--${option.value}`} />
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                    {draft.cardShape === option.value && <Check size={15} aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Layout template</p>
+                  <span>Choose how much space the dashboard gives each information group.</span>
+                </div>
+              </div>
+              <div className="dashboard-builder-options">
+                {DASHBOARD_LAYOUT_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`dashboard-builder-option${draft.layout === option.value ? " dashboard-builder-option--selected" : ""}`}
+                    aria-pressed={draft.layout === option.value}
+                    onClick={() => updateDraft({ layout: option.value })}
+                  >
+                    <span className={`dashboard-option-layout dashboard-option-layout--${option.value}`}><i /><i /><i /><i /></span>
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                    {draft.layout === option.value && <Check size={15} aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {error && <p className="dashboard-builder-message dashboard-builder-message--error" role="alert">{error}</p>}
+            {saved && <p className="dashboard-builder-message dashboard-builder-message--success" role="status">Dashboard appearance saved for this ISP.</p>}
+            <Row>
+              <button
+                type="button"
+                className="dashboard-builder-save"
+                onClick={saveDashboardPreferences}
+                disabled={loading || saving}
+              >
+                <Save size={14} /> {saving ? "Saving…" : "Save Dashboard Appearance"}
+              </button>
+            </Row>
+          </div>
+
+          <div className="dashboard-builder-preview-wrap">
+            <div className="dashboard-builder-preview-label"><Monitor size={14} /> Live preview</div>
+            <div className={`dashboard-builder-preview dashboard-page--${draft.layout} dashboard-shape--${draft.cardShape}`} style={previewStyle}>
+              <div className="dashboard-preview-hero">
+                <div><span className="dashboard-preview-eyebrow">● Live operations</span><strong>Good afternoon</strong><small>Network pulse, customer activity, and cashflow in one view.</small></div>
+                <span className="dashboard-preview-date">28 Aug 2026</span>
+              </div>
+              <div className="dashboard-preview-kpis">
+                {[
+                  ["Customers", "1,248", "dashboard-preview-kpi--accent"],
+                  ["Online now", "386", "dashboard-preview-kpi--green"],
+                  ["Income today", "Ksh 48,200", "dashboard-preview-kpi--amber"],
+                  ["Routers", "12", "dashboard-preview-kpi--plum"],
+                ].map(([label, value, tone]) => (
+                  <div key={label} className={`dashboard-preview-kpi ${tone}`}><span className="dashboard-preview-icon" /><span><strong>{value}</strong><small>{label}</small></span></div>
+                ))}
+              </div>
+              <div className="dashboard-preview-stats">{["Active plans", "Hotspot", "PPPoE", "Routers online"].map(label => <span key={label}><i />{label}</span>)}</div>
+              <div className="dashboard-preview-panels">
+                <div className="dashboard-preview-panel dashboard-preview-panel--wide"><span className="dashboard-preview-panel-title">Customer growth</span><div className="dashboard-preview-chart"><i /><i /><i /><i /><i /><i /></div></div>
+                <div className="dashboard-preview-panel"><span className="dashboard-preview-panel-title">Payment gateway</span><div className="dashboard-preview-line"><i /> Active</div><div className="dashboard-preview-line dashboard-preview-line--muted">M-Pesa PayBill</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="What this changes" desc="Your dashboard builder only controls presentation.">
+        <div className="dashboard-builder-notes">
+          <div><Palette size={16} /><span><strong>Brand-aware</strong><small>Appearance is saved to this ISP account and works with the existing brand theme.</small></span></div>
+          <div><LayoutDashboard size={16} /><span><strong>Data stays live</strong><small>Router health, customer counts, charts, transactions, and loading states are unchanged.</small></span></div>
+          <div><Shield size={16} /><span><strong>Safe fallback</strong><small>Dashboard remains available as the primary landing page even when other pages are hidden.</small></span></div>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 function SystemTab() {
   const [maintenance, setMaintenance] = useState(false);
   const [autoBackup, setAutoBackup]   = useState(true);
@@ -1724,6 +1900,7 @@ const TABS = [
   { id: "profile",       label: "ISP Profile",       icon: Building2    },
   { id: "billing",       label: "Billing & M-Pesa",  icon: CreditCard   },
   { id: "gateways",      label: "Payment Gateways",  icon: Wallet       },
+  { id: "dashboard",     label: "Dashboard Builder", icon: LayoutDashboard },
   { id: "sms",           label: "SMS & Email",        icon: MessageSquare},
   { id: "network",       label: "Network",            icon: Radio        },
   { id: "hotspot",       label: "Hotspot",            icon: Wifi         },
@@ -1779,6 +1956,7 @@ export default function AdminSettings() {
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
           {tab === "gateways"      && <PaymentGatewaysTab />}
+          {tab === "dashboard"     && <DashboardBuilderTab />}
           {tab === "sms"           && <SmsEmailTab />}
           {tab === "network"       && <NetworkTab />}
           {tab === "hotspot"       && <HotspotTab />}

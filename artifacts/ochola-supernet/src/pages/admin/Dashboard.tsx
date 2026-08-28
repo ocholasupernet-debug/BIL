@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
@@ -36,6 +36,7 @@ import {
   type DbTransaction,
 } from "@/lib/supabase";
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
+import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 
 async function fetchLiveCount(routerId: number): Promise<number> {
   const res = await fetch(`/api/router/${routerId}/live`);
@@ -233,6 +234,7 @@ function DonutChart({ insights }: { insights: { label: string; count: number; co
 }
 
 export default function Dashboard() {
+  const { preferences } = useDashboardPreferences();
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartMinimized, setChartMinimized] = useState(false);
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
@@ -327,7 +329,7 @@ export default function Dashboard() {
   })), [customers, now]);
   const maxCount = Math.max(...monthlyData.map((month) => month.count), 1);
   const userInsights = useMemo(() => [
-    { label: "Hotspot", count: customers.filter((customer) => customer.type === "hotspot").length, color: "var(--isp-accent)" },
+    { label: "Hotspot", count: customers.filter((customer) => customer.type === "hotspot").length, color: "var(--dashboard-accent, var(--isp-accent))" },
     { label: "PPPoE", count: customers.filter((customer) => customer.type === "pppoe").length, color: "#8879b7" },
     { label: "Static", count: customers.filter((customer) => customer.type === "static").length, color: "var(--isp-green)" },
   ], [customers]);
@@ -343,10 +345,15 @@ export default function Dashboard() {
     .reduce((sum, transaction) => sum + transaction.amount, 0);
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const hasError = routersError || customersError || txError;
+  const dashboardStyle = {
+    "--dashboard-accent": preferences.accentColor,
+    "--dashboard-accent-glow": `${preferences.accentColor}1a`,
+    "--dashboard-accent-border": `${preferences.accentColor}45`,
+  } as CSSProperties;
 
   return (
     <AdminLayout>
-      <div className="dashboard-page">
+      <div className={`dashboard-page dashboard-page--${preferences.layout} dashboard-shape--${preferences.cardShape}`} style={dashboardStyle}>
         <header className="dashboard-hero">
           <div>
             <div className="dashboard-eyebrow">
