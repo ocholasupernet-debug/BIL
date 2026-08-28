@@ -12,6 +12,7 @@ const locks = new Set<string>();
 type RouterRow = { id: number; admin_id: number; name: string; host: string; bridge_ip?: string; router_username: string; router_secret?: string; identity?: string; serial?: string };
 type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; findings_json?: Record<string, unknown>; status: string };
 type CollectorToken = { token_hash: string; admin_id: number; source_label: string; expires_at: string; used_at?: string | null; migration_job_id?: number | null };
+type CollectorChunk = { token_hash: string; chunk_index: number; ciphertext: string; iv: string; auth_tag: string };
 
 function admin(req: Request): number { const id = Number(req.authUser?.uid); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid administrator identity."); return id; }
 function positive(value: unknown): number { const id = Number(value); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid numeric identifier."); return id; }
@@ -19,6 +20,11 @@ function creds(row: RouterRow): RouterCredentials { return { host: row.host, bri
 function key() { const secret = process.env.SESSION_SECRET ?? process.env.TOKEN_SIGNING_SECRET; if (!secret) throw new Error("Migration encryption is not configured."); return createHash("sha256").update(secret).digest(); }
 function encrypt(value: unknown) { const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key(), iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]); return { ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64") }; }
 function decrypt(job: Job) { if (!job.ciphertext || !job.iv || !job.auth_tag) throw new Error("Migration package is unavailable."); const decipher = createDecipheriv("aes-256-gcm", key(), Buffer.from(job.iv, "base64")); decipher.setAuthTag(Buffer.from(job.auth_tag, "base64")); return JSON.parse(Buffer.concat([decipher.update(Buffer.from(job.ciphertext, "base64")), decipher.final()]).toString("utf8")) as Record<string, unknown>; }
+function decryptText(chunk: CollectorChunk) {
+  const decipher = createDecipheriv("aes-256-gcm", key(), Buffer.from(chunk.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(chunk.auth_tag, "base64"));
+  return Buffer.concat([decipher.update(Buffer.from(chunk.ciphertext, "base64")), decipher.final()]).toString("utf8");
+}
 function collectorHash(token: string) { return createHash("sha256").update(token).digest("hex"); }
 function publicOrigin(req: Request) {
   const configured = process.env.PUBLIC_APP_ORIGIN?.trim();
@@ -60,21 +66,50 @@ async function observeDevice(row: RouterRow) {
 }
 
 /* This is intentionally before the admin middleware below. The MikroTik has
-   no browser session; the short-lived, one-time collector token is its auth. */
+   no browser session; the short-lived, one-time collector token is its auth.
+   RouterOS sends the file as ordered HTTP chunks because its HTTP body
+   variable is limited to roughly 4KB. */
 router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", limit: "8mb" }), async (req, res) => {
   try {
     const token = collectorToken(req);
-    const claimed = await sbRpc<CollectorToken>("consume_router_migration_collector_token", { p_token_hash: collectorHash(token) });
-    const session = claimed[0];
+    const tokenHash = collectorHash(token);
+    const chunkIndex = Number(req.query.chunk);
+    const isFinal = req.query.final === "yes";
+    if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex > 2500) throw new Error("Invalid collector chunk.");
+    const rawChunk = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    if (!rawChunk || Buffer.byteLength(rawChunk, "utf8") > 3800) throw new Error("Collector chunk is empty or too large.");
+    const sessions = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id&limit=1`);
+    const session = sessions[0];
     if (!session) {
       res.status(401).json({ ok: false, error: "Invalid, expired, or already used collector session." });
       return;
     }
-    const rawExport = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+    if (session.used_at || session.migration_job_id || new Date(session.expires_at).getTime() <= Date.now()) {
+      res.status(409).json({ ok: false, error: "Collector session is expired or already completed." });
+      return;
+    }
+    const existing = await sbSelectStrict<CollectorChunk>("router_migration_collector_chunks", `token_hash=eq.${tokenHash}&chunk_index=eq.${chunkIndex}&select=token_hash,chunk_index,ciphertext,iv,auth_tag&limit=1`);
+    if (!existing[0]) {
+      await sbInsertStrict<CollectorChunk>("router_migration_collector_chunks", { token_hash: tokenHash, chunk_index: chunkIndex, ...encrypt(rawChunk) });
+    }
+    if (!isFinal) {
+      res.json({ ok: true, received: chunkIndex });
+      return;
+    }
+    const chunks = await sbSelectStrict<CollectorChunk>("router_migration_collector_chunks", `token_hash=eq.${tokenHash}&order=chunk_index.asc&select=token_hash,chunk_index,ciphertext,iv,auth_tag`);
+    if (chunks.length !== chunkIndex + 1 || chunks.some((chunk, index) => chunk.chunk_index !== index)) {
+      throw new Error("Collector chunks are incomplete or out of order.");
+    }
+    const rawExport = chunks.map(decryptText).join("");
     const pkg = parseRouterOsExport(rawExport);
     const plan = buildMigrationPlan(pkg);
     const findings = findingsFor(pkg, plan);
     const summary = summaryFor(pkg);
+    const claimed = await sbRpc<CollectorToken>("consume_router_migration_collector_token", { p_token_hash: tokenHash });
+    if (!claimed[0]) {
+      res.status(409).json({ ok: false, error: "Collector session was already completed." });
+      return;
+    }
     const secure = encrypt({ ...pkg, raw_export: rawExport });
     const rows = await sbInsertStrict<Job>("router_migration_jobs", {
       admin_id: session.admin_id,
@@ -88,7 +123,7 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     });
     const migrationId = rows[0]?.id;
     if (!migrationId) throw new Error("Collected export could not be saved.");
-    await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${session.admin_id}`, { migration_job_id: migrationId });
+    await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&admin_id=eq.${session.admin_id}`, { migration_job_id: migrationId });
     res.json({ ok: true, migrationId: String(migrationId), status: "exported" });
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Collector upload failed." });

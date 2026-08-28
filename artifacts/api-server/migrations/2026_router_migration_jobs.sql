@@ -53,6 +53,18 @@ alter table router_migration_collector_tokens enable row level security;
 revoke all on table router_migration_collector_tokens from anon, authenticated;
 grant select, insert, update on table router_migration_collector_tokens to service_role;
 
+create table if not exists router_migration_collector_chunks (
+  token_hash text not null references router_migration_collector_tokens(token_hash) on delete cascade,
+  chunk_index integer not null check (chunk_index >= 0 and chunk_index <= 2500),
+  ciphertext text not null,
+  iv text not null,
+  auth_tag text not null,
+  primary key (token_hash, chunk_index)
+);
+alter table router_migration_collector_chunks enable row level security;
+revoke all on table router_migration_collector_chunks from anon, authenticated;
+grant select, insert on table router_migration_collector_chunks to service_role;
+
 create or replace function consume_router_migration_collector_token(p_token_hash text)
 returns table(admin_id bigint, source_label text)
 language plpgsql security definer set search_path = public
