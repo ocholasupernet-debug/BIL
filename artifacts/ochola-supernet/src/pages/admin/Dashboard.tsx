@@ -383,6 +383,11 @@ export default function Dashboard() {
           </div>
         )}
 
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          <span>01</span>
+          Financial pulse
+          <span>Updated from live payment activity</span>
+        </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
           <KpiCard label="Income today" value={txLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
           <KpiCard label="Income this month" value={txLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
@@ -409,6 +414,12 @@ export default function Dashboard() {
           </span>
           <Link href="/admin/settings" className="gateway-link">Manage gateway <ArrowUpRight size={13} /></Link>
         </section>
+
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          <span>02</span>
+          Network health
+          <span>Heartbeat window · 10 seconds</span>
+        </div>
 
         <section className="section-card dashboard-router-panel">
           <div className="panel-heading">
@@ -482,6 +493,11 @@ export default function Dashboard() {
           )}
         </section>
 
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          <span>03</span>
+          Customer intelligence
+          <span>Accounts, access mix, and payment flow</span>
+        </div>
         <div className="dashboard-main-grid">
           <section className="section-card chart-panel">
             <div className={`panel-heading ${chartMinimized ? "panel-heading--quiet" : ""}`}>
@@ -572,6 +588,11 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          <span>04</span>
+          Payment activity
+          <span>Most recent subscriber transactions</span>
+        </div>
         <section className="section-card transaction-panel">
           <div className="panel-heading">
             <div className="panel-title">

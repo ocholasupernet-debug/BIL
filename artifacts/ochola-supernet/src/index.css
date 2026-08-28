@@ -1128,3 +1128,510 @@
 [style*="font-size: 0.79rem"] {
   font-size: 0.8125rem !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   DASHBOARD POLISH — Signal Console
+   The dashboard is intentionally composed like a network operations
+   room: one dominant pulse, then progressively denser detail.
+═══════════════════════════════════════════════════════════════════ */
+.dashboard-page {
+  position: relative;
+  gap: 18px;
+}
+.dashboard-page::before {
+  position: absolute;
+  z-index: -1;
+  top: -24px;
+  right: -24px;
+  width: min(58vw, 660px);
+  height: 240px;
+  pointer-events: none;
+  content: "";
+  opacity: 0.62;
+  background:
+    linear-gradient(90deg, transparent, var(--dashboard-accent-glow)),
+    repeating-linear-gradient(90deg, transparent 0 39px, color-mix(in srgb, var(--dashboard-accent) 7%, transparent) 40px),
+    repeating-linear-gradient(0deg, transparent 0 39px, color-mix(in srgb, var(--dashboard-accent) 7%, transparent) 40px);
+  mask-image: linear-gradient(135deg, transparent 14%, black 80%);
+}
+.dashboard-hero {
+  position: relative;
+  min-height: 104px;
+  padding: 10px 2px 20px;
+  border-bottom-color: color-mix(in srgb, var(--dashboard-accent) 28%, var(--isp-border));
+}
+.dashboard-hero::after {
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 72px;
+  height: 3px;
+  border-radius: 99px;
+  content: "";
+  background: var(--dashboard-accent);
+}
+.dashboard-live-mark {
+  position: relative;
+  border-radius: 9px;
+}
+.dashboard-live-mark::after {
+  position: absolute;
+  inset: -4px;
+  border: 1px solid color-mix(in srgb, var(--dashboard-accent) 24%, transparent);
+  border-radius: 12px;
+  content: "";
+  opacity: 0.7;
+}
+.dashboard-date {
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--isp-inner-card) 86%, var(--dashboard-accent-glow));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.dashboard-section-kicker {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 18px;
+  color: var(--isp-text-muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.dashboard-section-kicker::after {
+  flex: 1;
+  height: 1px;
+  content: "";
+  background: var(--isp-border-subtle);
+}
+.dashboard-section-kicker > span:first-child {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--dashboard-accent);
+  background: var(--dashboard-accent-glow);
+  border: 1px solid var(--dashboard-accent-border);
+  border-radius: 7px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0;
+}
+.dashboard-section-kicker > span:last-child {
+  margin-left: auto;
+  color: var(--isp-text-sub);
+  font-size: 0.63rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.dashboard-kpi-grid {
+  gap: 10px;
+}
+.dashboard-kpi {
+  position: relative;
+  min-height: 92px;
+  padding: 17px 16px;
+  overflow: hidden;
+  border-top-width: 3px;
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--kpi-tone, var(--isp-accent)) 7%, transparent), transparent 54%),
+    var(--isp-card);
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,0.035);
+}
+.dashboard-kpi::after {
+  position: absolute;
+  right: -18px;
+  bottom: -28px;
+  width: 92px;
+  height: 92px;
+  border: 1px solid color-mix(in srgb, var(--kpi-tone, var(--isp-accent)) 15%, transparent);
+  border-radius: 50%;
+  content: "";
+  opacity: 0.7;
+}
+.dashboard-kpi-icon,
+.dashboard-stat-icon,
+.panel-title-icon,
+.gateway-icon,
+.gateway-detail-icon {
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.dashboard-kpi-icon {
+  width: 40px;
+  height: 40px;
+}
+.dashboard-kpi-value {
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+}
+.dashboard-kpi-label,
+.dashboard-stat-label {
+  letter-spacing: 0.01em;
+}
+.dashboard-stat-grid {
+  gap: 8px;
+}
+.dashboard-stat {
+  min-height: 58px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--isp-section) 88%, var(--dashboard-accent-glow));
+}
+.dashboard-stat-icon {
+  width: 31px;
+  height: 31px;
+}
+.dashboard-stat-value {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+}
+.gateway-strip {
+  min-height: 54px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, var(--dashboard-accent-glow), transparent 42%),
+    var(--isp-section);
+  border-color: var(--dashboard-accent-border);
+}
+.gateway-strip .isp-badge {
+  margin-left: auto;
+}
+.gateway-link {
+  margin-left: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+.gateway-link:hover {
+  background: var(--dashboard-accent-glow);
+  border-color: var(--dashboard-accent-border);
+}
+.section-card {
+  border-radius: 14px;
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,0.025);
+}
+.panel-heading {
+  min-height: 58px;
+  padding: 14px 16px;
+}
+.panel-title-icon {
+  width: 32px;
+  height: 32px;
+}
+.panel-title h2 {
+  font-size: 0.93rem;
+  letter-spacing: -0.025em;
+}
+.panel-title p {
+  font-size: 0.75rem;
+}
+.icon-button:focus-visible,
+.router-filter-pill:focus-visible,
+.router-filter-selected button:focus-visible,
+.dashboard-error-retry:focus-visible,
+.dashboard-stat:focus-visible,
+.gateway-link:focus-visible,
+.panel-link:focus-visible {
+  outline: 2px solid var(--dashboard-accent);
+  outline-offset: 3px;
+}
+.router-card-grid {
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.router-card {
+  position: relative;
+  padding: 13px 13px 12px;
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--dashboard-accent) 4%, transparent), transparent 65%),
+    var(--isp-inner-card);
+}
+.router-card::after {
+  position: absolute;
+  top: 14px;
+  right: 13px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  content: "";
+  background: var(--isp-text-sub);
+}
+.router-card--online::after { background: var(--isp-green); box-shadow: 0 0 0 4px var(--isp-green-glow); }
+.router-card--offline::after { background: #c66b5f; }
+.router-host {
+  margin-top: 12px;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--isp-bg) 60%, transparent);
+  font-size: 0.74rem;
+}
+.router-filter-bar {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--isp-section);
+}
+.router-filter-pill {
+  border-radius: 8px;
+}
+.dashboard-main-grid {
+  gap: 16px;
+}
+.chart-panel {
+  min-height: 296px;
+}
+.chart-body {
+  min-height: 238px;
+  padding: 16px 18px 15px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dashboard-accent) 3%, transparent), transparent 40%);
+}
+.customer-chart {
+  height: 213px;
+}
+.gateway-detail {
+  margin: 0 15px 15px;
+  padding: 12px;
+  border-radius: 10px;
+}
+.insight-content {
+  padding: 10px 16px 17px;
+}
+.transaction-panel {
+  margin-top: 1px;
+}
+.transaction-table thead th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.transaction-table tbody td {
+  padding-top: 13px;
+  padding-bottom: 13px;
+}
+
+/* Keep the builder preview structurally faithful to the production cards. */
+.dashboard-builder-preview {
+  position: relative;
+  gap: 10px;
+  min-height: 390px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--dashboard-accent) 15%, transparent), transparent 30%),
+    #0b131f;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.dashboard-preview-hero {
+  min-height: 57px;
+  padding-bottom: 12px;
+}
+.dashboard-preview-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dashboard-preview-eyebrow::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  content: "";
+  background: var(--dashboard-accent);
+  box-shadow: 0 0 0 3px var(--dashboard-accent-glow);
+}
+.dashboard-preview-kpis {
+  gap: 7px;
+}
+.dashboard-preview-kpi {
+  position: relative;
+  min-height: 51px;
+  padding: 9px 7px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--preview-tone) 10%, transparent), transparent 65%), var(--isp-card);
+}
+.dashboard-preview-icon {
+  width: 19px;
+  height: 19px;
+  border: 1px solid color-mix(in srgb, var(--preview-tone) 35%, transparent);
+  border-radius: 6px;
+}
+.dashboard-preview-stats {
+  gap: 6px;
+}
+.dashboard-preview-stats span {
+  min-height: 25px;
+  border-radius: 7px;
+}
+.dashboard-preview-section-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 13px;
+  color: var(--isp-text-muted);
+  font-size: 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dashboard-preview-section-label::after {
+  flex: 1;
+  height: 1px;
+  content: "";
+  background: var(--isp-border);
+}
+.dashboard-preview-section-label i {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--dashboard-accent);
+  background: var(--dashboard-accent-glow);
+  border: 1px solid var(--dashboard-accent-border);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.43rem;
+  font-style: normal;
+  letter-spacing: 0;
+}
+.dashboard-preview-section-label small {
+  margin-left: auto;
+  color: var(--isp-text-sub);
+  font-size: 0.46rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.dashboard-preview-network {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.dashboard-preview-network > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px;
+  overflow: hidden;
+  background: var(--isp-section);
+  border: 1px solid var(--isp-border);
+  border-radius: 7px;
+}
+.dashboard-preview-network i {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--isp-green);
+  box-shadow: 0 0 0 3px var(--isp-green-glow);
+}
+.dashboard-preview-network i.is-offline {
+  background: #c66b5f;
+  box-shadow: none;
+}
+.dashboard-preview-network strong,
+.dashboard-preview-network small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dashboard-preview-network strong {
+  min-width: 0;
+  color: var(--isp-text);
+  font-size: 0.5rem;
+}
+.dashboard-preview-network small {
+  margin-left: auto;
+  color: var(--isp-text-muted);
+  font-size: 0.45rem;
+}
+.dashboard-preview-panels {
+  gap: 8px;
+}
+.dashboard-preview-panel {
+  min-height: 126px;
+  padding: 10px;
+  border-radius: 10px;
+}
+.dashboard-preview-chart {
+  height: 88px;
+}
+.dashboard-preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  color: var(--isp-text-muted);
+  border-top: 1px solid var(--isp-border);
+  font-size: 0.55rem;
+}
+.dashboard-preview-footer strong {
+  color: var(--dashboard-accent);
+  font-size: 0.58rem;
+}
+.dashboard-builder-preview.dashboard-page--focus .dashboard-preview-kpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.dashboard-builder-preview.dashboard-page--focus .dashboard-preview-panels {
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.75fr);
+}
+.dashboard-builder-preview.dashboard-page--compact {
+  min-height: 350px;
+}
+.dashboard-builder-preview.dashboard-page--compact .dashboard-preview-kpi {
+  min-height: 44px;
+}
+
+@media (max-width: 680px) {
+  .dashboard-page {
+    gap: 14px;
+  }
+  .dashboard-page::before {
+    right: -130px;
+    opacity: 0.35;
+  }
+  .dashboard-hero {
+    min-height: 0;
+  }
+  .dashboard-section-kicker > span:last-child {
+    display: none;
+  }
+  .dashboard-kpi {
+    min-height: 84px;
+  }
+  .gateway-strip {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .gateway-strip .isp-badge {
+    margin-left: 0;
+  }
+  .gateway-link {
+    width: 100%;
+    margin-left: 41px;
+    padding-left: 0;
+  }
+  .dashboard-builder-preview {
+    min-height: 0;
+  }
+  .dashboard-builder-preview.dashboard-page--focus .dashboard-preview-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-preview-network {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboard-preview-network > span {
+    padding: 5px 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-page,
+  .dashboard-kpi,
+  .dashboard-stat,
+  .router-card {
+    animation: none;
+    transition: none;
+  }
+}

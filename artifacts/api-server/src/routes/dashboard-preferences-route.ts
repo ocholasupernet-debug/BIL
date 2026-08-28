@@ -47,8 +47,10 @@ async function readPreferences(id: number) {
 
 router.get("/admin/dashboard-preferences", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
   try {
+    res.set("Cache-Control", "no-store");
     res.json({ ok: true, preferences: await readPreferences(adminId(req)) });
   } catch {
+    res.set("Cache-Control", "no-store");
     res.json({ ok: true, preferences: DEFAULT_PREFERENCES });
   }
 });
@@ -75,6 +77,7 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
   }
 
   try {
+    res.set("Cache-Control", "no-store");
     const saved = await sbUpsertStrict(
       "isp_dashboard_preferences",
       "admin_id",
@@ -88,6 +91,7 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
     );
     res.json({ ok: true, preferences: normalizePreferences(saved[0] as DashboardPreferenceRow | undefined) });
   } catch {
+    res.set("Cache-Control", "no-store");
     res.status(503).json({ ok: false, error: "Dashboard appearance could not be saved. Confirm the dashboard preferences migration has been applied." });
   }
 });

@@ -38,7 +38,10 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
 
     setLoading(true);
     try {
-      const response = await fetch("/api/admin/dashboard-preferences", { headers: adminHeaders() });
+      const response = await fetch("/api/admin/dashboard-preferences", {
+        cache: "no-store",
+        headers: { ...adminHeaders(), "Cache-Control": "no-cache" },
+      });
       if (!response.ok) return;
       const data = await response.json() as { preferences?: Partial<DashboardPreferences> };
       if (data.preferences) setPreferences(normalizeDashboardPreferences(data.preferences));

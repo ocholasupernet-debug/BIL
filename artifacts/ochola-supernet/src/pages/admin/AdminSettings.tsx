@@ -15,7 +15,7 @@ import {
   Upload, RefreshCw, AlertTriangle, Terminal, Save, Key,
   LogOut, Monitor, ChevronDown, ChevronUp, Smartphone, Mail, Puzzle,
   Send, MessageCircle, Phone, Palette, LayoutDashboard,
-  MapPin, Clock, Users, Zap, Wallet, Landmark, Banknote,
+  MapPin, Clock, Users, Zap, Wallet, Landmark, Banknote, BarChart3, ReceiptText, TrendingUp,
 } from "lucide-react";
 
 // ─── shared primitives ───────────────────────────────────────────────────────
@@ -158,10 +158,10 @@ function IspProfileTab() {
           <Field label="WhatsApp Number" hint="Used for customer support links"><Input defaultValue={brand.phone || "+254 700 000 000"} /></Field>
           <Field label="Country">
             <Select defaultValue="KE">
-              <option value="KE">Kenya 🇰🇪</option>
-              <option value="UG">Uganda 🇺🇬</option>
-              <option value="TZ">Tanzania 🇹🇿</option>
-              <option value="NG">Nigeria 🇳🇬</option>
+              <option value="KE">Kenya</option>
+              <option value="UG">Uganda</option>
+              <option value="TZ">Tanzania</option>
+              <option value="NG">Nigeria</option>
             </Select>
           </Field>
         </Grid2>
@@ -394,10 +394,10 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
             Complete and save this ISP’s Buy Goods Till Number before sending a test.
           </p>
         )}
-        {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}>⚠ {error}</p>}
+        {error && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}><AlertTriangle size={13} aria-hidden="true" /> {error}</p>}
         {statusMessage && (
           <p style={{ color: status === "paid" ? "#34d399" : status === "failed" || status === "expired" ? "#fbbf24" : C.muted, fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
-            {status === "paid" ? "✓ " : ""}{statusMessage}
+            {status === "paid" && <Check size={13} aria-hidden="true" />}{statusMessage}
           </p>
         )}
         <Row>
@@ -458,8 +458,8 @@ function AdminPaymentGatewayCard() {
       <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
         This setting belongs to your ISP account. Select a different option at any time to switch the active gateway; only your normal ISP Admin sign-in is required.
       </p>
-      {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "10px 0 0" }}>⚠ {error}</p>}
-      {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>✓ Payment gateway saved.</p>}
+      {error && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "10px 0 0" }}><AlertTriangle size={13} aria-hidden="true" /> {error}</p>}
+      {saved && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}><Check size={13} aria-hidden="true" /> Payment gateway saved.</p>}
       <Row>
         <button
           type="button"
@@ -896,7 +896,7 @@ function SecurityTab() {
         {twoFa && (
           <div style={{ background: "rgba(37,99,235,0.07)", border: `1px solid rgba(37,99,235,0.25)`, borderRadius: 10, padding: 16, marginTop: 14, display: "flex", alignItems: "flex-start", gap: 16 }}>
             <div style={{ width: 72, height: 72, background: "rgba(255,255,255,0.05)", border: `2px solid var(--isp-accent-border)`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: "2rem" }}>📱</span>
+              <Smartphone size={28} aria-hidden="true" style={{ color: C.cyan }} />
             </div>
             <div>
               <p style={{ fontSize: "0.8rem", fontWeight: 700, color: C.cyan, margin: "0 0 4px" }}>Scan QR Code</p>
@@ -1233,24 +1233,33 @@ function DashboardBuilderTab() {
             <div className="dashboard-builder-preview-label"><Monitor size={14} /> Live preview</div>
             <div className={`dashboard-builder-preview dashboard-page--${draft.layout} dashboard-shape--${draft.cardShape}`} style={previewStyle}>
               <div className="dashboard-preview-hero">
-                <div><span className="dashboard-preview-eyebrow">● Live operations</span><strong>Good afternoon</strong><small>Network pulse, customer activity, and cashflow in one view.</small></div>
+                <div><span className="dashboard-preview-eyebrow">Live operations</span><strong>Good afternoon</strong><small>Network pulse, customer activity, and cashflow in one view.</small></div>
                 <span className="dashboard-preview-date">28 Aug 2026</span>
               </div>
+              <div className="dashboard-preview-section-label"><i>01</i><span>Financial pulse</span><small>Live payment activity</small></div>
               <div className="dashboard-preview-kpis">
                 {[
-                  ["Customers", "1,248", "dashboard-preview-kpi--accent"],
-                  ["Online now", "386", "dashboard-preview-kpi--green"],
-                  ["Income today", "Ksh 48,200", "dashboard-preview-kpi--amber"],
-                  ["Routers", "12", "dashboard-preview-kpi--plum"],
-                ].map(([label, value, tone]) => (
-                  <div key={label} className={`dashboard-preview-kpi ${tone}`}><span className="dashboard-preview-icon" /><span><strong>{value}</strong><small>{label}</small></span></div>
+                  { label: "Income today", value: "Ksh 48,200", tone: "dashboard-preview-kpi--accent", icon: <Banknote size={10} /> },
+                  { label: "Income this month", value: "Ksh 412,800", tone: "dashboard-preview-kpi--green", icon: <TrendingUp size={10} /> },
+                  { label: "Total transactions", value: "1,248", tone: "dashboard-preview-kpi--amber", icon: <ReceiptText size={10} /> },
+                  { label: "Total revenue", value: "Ksh 1.8M", tone: "dashboard-preview-kpi--plum", icon: <BarChart3 size={10} /> },
+                ].map(({ label, value, tone, icon }) => (
+                  <div key={label} className={`dashboard-preview-kpi ${tone}`}><span className="dashboard-preview-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span></div>
                 ))}
               </div>
               <div className="dashboard-preview-stats">{["Active plans", "Hotspot", "PPPoE", "Routers online"].map(label => <span key={label}><i />{label}</span>)}</div>
+              <div className="dashboard-preview-section-label"><i>02</i><span>Network health</span><small>Heartbeat window</small></div>
+              <div className="dashboard-preview-network">
+                {["Core Router", "Westlands POP", "Ruiru Edge"].map((label, index) => (
+                  <span key={label}><i className={index === 2 ? "is-offline" : ""} /><strong>{label}</strong><small>{index === 2 ? "Offline" : "Online"}</small></span>
+                ))}
+              </div>
+              <div className="dashboard-preview-section-label"><i>03</i><span>Customer intelligence</span><small>Growth & mix</small></div>
               <div className="dashboard-preview-panels">
                 <div className="dashboard-preview-panel dashboard-preview-panel--wide"><span className="dashboard-preview-panel-title">Customer growth</span><div className="dashboard-preview-chart"><i /><i /><i /><i /><i /><i /></div></div>
                 <div className="dashboard-preview-panel"><span className="dashboard-preview-panel-title">Payment gateway</span><div className="dashboard-preview-line"><i /> Active</div><div className="dashboard-preview-line dashboard-preview-line--muted">M-Pesa PayBill</div></div>
               </div>
+              <div className="dashboard-preview-footer"><span>Recent transactions</span><strong>View all activity →</strong></div>
             </div>
           </div>
         </div>
@@ -1398,7 +1407,7 @@ function SystemTab() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
               <p style={{ fontSize: "0.875rem", fontWeight: 700, color: maintenance ? "#ef4444" : C.text, margin: 0 }}>
-                {maintenance ? "⚠️ Maintenance Mode is ACTIVE" : "Maintenance Mode"}
+                {maintenance ? <><AlertTriangle size={14} aria-hidden="true" /> Maintenance Mode is ACTIVE</> : "Maintenance Mode"}
               </p>
               <p style={{ fontSize: "0.72rem", color: C.muted, margin: "3px 0 0" }}>
                 {maintenance ? "All customers see the maintenance page right now." : "Customers see a maintenance page; admin panel remains accessible."}
@@ -1871,7 +1880,7 @@ function PaymentGatewaysTab() {
                 </div>
               )}
 
-              {saveError && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "14px 0 0" }}>⚠ {saveError}</p>}
+              {saveError && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "14px 0 0" }}><AlertTriangle size={13} aria-hidden="true" /> {saveError}</p>}
               <Row>
                 <button
                   onClick={() => saveGateway(activeGw.id)}
@@ -1900,7 +1909,7 @@ const TABS = [
   { id: "profile",       label: "ISP Profile",       icon: Building2    },
   { id: "billing",       label: "Billing & M-Pesa",  icon: CreditCard   },
   { id: "gateways",      label: "Payment Gateways",  icon: Wallet       },
-  { id: "dashboard",     label: "Dashboard Builder", icon: LayoutDashboard },
+  { id: "dashboard",     label: "Dashboard Page Builder", icon: LayoutDashboard },
   { id: "sms",           label: "SMS & Email",        icon: MessageSquare},
   { id: "network",       label: "Network",            icon: Radio        },
   { id: "hotspot",       label: "Hotspot",            icon: Wifi         },
@@ -1918,7 +1927,7 @@ export default function AdminSettings() {
       <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
         {/* Sidebar */}
-        <aside style={{ width: 190, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", position: "sticky", top: 0 }}>
+        <aside style={{ width: 220, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", position: "sticky", top: 0 }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
             <p style={{ fontSize: "0.7rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", margin: 0 }}>Settings</p>
           </div>
