@@ -417,7 +417,7 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
   const id = req.params.id;
 
   const rows = await sbSelect<{
-    id: number; name: string; host: string; bridge_ip: string | null;
+    id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
     router_username: string; router_secret: string | null; status: string;
   }>("isp_routers", `id=eq.${id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status&limit=1`);
 
@@ -480,7 +480,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
   const adminId = req.body?.adminId ?? req.query.adminId ?? "1";
 
   const routers = await sbSelect<{
-    id: number; name: string; host: string; bridge_ip: string | null;
+    id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
     router_username: string; router_secret: string | null; status: string;
   }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status`);
 
@@ -540,20 +540,20 @@ router.get("/routers/:id/detect-bridge", async (req: Request, res: Response): Pr
   const id = req.params.id;
 
   const rows = await sbSelect<{
-    id: number; host: string; bridge_ip: string | null;
+    id: number; host: string; bridge_ip: string | null; vpn_ip: string | null;
     router_username: string; router_secret: string | null;
-  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,router_username,router_secret&limit=1`);
+  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
 
   const row = rows[0];
   if (!row) { res.status(404).json({ ok: false, error: "Router not found" }); return; }
 
   const creds = {
-    host:     row.host?.trim()      || "",
+    host:     row.vpn_ip?.trim()    || row.host?.trim() || "",
     port:     8728,
     username: row.router_username   || "admin",
     password: row.router_secret     || "",
     useSSL:   false,
-    bridgeIp: row.bridge_ip?.trim() || undefined,
+    bridgeIp: row.vpn_ip?.trim()   || row.bridge_ip?.trim() || undefined,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 8_000,
   };
@@ -585,7 +585,7 @@ const failureCount = new Map<number, number>();
 export async function sweepAllRouters(): Promise<void> {
   try {
     const routers = await sbSelect<{
-      id: number; name: string; host: string; bridge_ip: string | null;
+      id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
       router_username: string; router_secret: string | null;
     }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret");
 
@@ -620,7 +620,7 @@ export async function sweepAllRouters(): Promise<void> {
           logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online via API");
         } catch (apiErr) {
           /* API failed — try TCP fallback on common ports before counting as failure */
-          const host = row.host?.trim() || row.bridge_ip?.trim() || "";
+          const host = row.vpn_ip?.trim() || row.host?.trim() || row.bridge_ip?.trim() || "";
           const openPort = await tcpProbe(host);
           if (openPort !== null) {
             /* Host is reachable — reset failures, mark online */

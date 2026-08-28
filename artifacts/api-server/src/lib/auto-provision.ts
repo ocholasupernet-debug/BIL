@@ -44,6 +44,7 @@ interface SbRouter {
   id: number;
   host: string;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
 }
@@ -162,22 +163,22 @@ export async function autoProvision(opts: {
 
   const routers = await sbSelect<SbRouter & { name: string }>(
     "isp_routers",
-    `id=eq.${plan.router_id}&select=id,name,host,bridge_ip,router_username,router_secret&limit=1`
+    `id=eq.${plan.router_id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`
   );
   const router = routers[0];
-  if (!router || (!router.host && !router.bridge_ip)) {
+   if (!router || (!router.host && !router.bridge_ip && !router.vpn_ip)) {
     const msg = `Router ${plan.router_id} not found or has no IP`;
     await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
     return { ok: false, error: msg };
   }
 
   const creds = {
-    host:     router.host?.trim() || "",
+    host:     router.host?.trim() || router.vpn_ip?.trim() || "",
     port:     8728,
     username: router.router_username || "admin",
     password: router.router_secret  || "",
     useSSL:   false,
-    bridgeIp: router.bridge_ip?.trim() || undefined,
+    bridgeIp: router.vpn_ip?.trim() || router.bridge_ip?.trim() || undefined,
   };
 
   /* ── 4. Provision on router ── */

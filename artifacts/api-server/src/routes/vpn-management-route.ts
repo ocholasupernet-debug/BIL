@@ -32,6 +32,7 @@ type RouterRow = {
   name: string;
   host: string;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
   ros_version: string | null;
@@ -97,8 +98,8 @@ function routerCredentials(row: RouterRow, adminId: number): VpnRouter {
   return {
     id: row.id,
     adminId,
-    host: row.host,
-    bridgeIp: row.bridge_ip ?? undefined,
+    host: row.host || row.vpn_ip || "",
+    bridgeIp: row.vpn_ip ?? row.bridge_ip ?? undefined,
     port: 8728,
     username: row.router_username || "admin",
     password: row.router_secret ?? "",
@@ -112,7 +113,7 @@ function routerCredentials(row: RouterRow, adminId: number): VpnRouter {
 async function loadRouter(adminId: number, routerId: number): Promise<{ row: RouterRow; credentials: VpnRouter }> {
   const rows = await sbSelectStrict<RouterRow>(
     "isp_routers",
-    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret,ros_version&limit=1`,
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,ros_version&limit=1`,
   );
   const row = rows[0];
   if (!row) throw new Error("Router not found for this administrator");

@@ -323,14 +323,14 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
 
     /* 2. Load all routers */
     let routers: {
-      id: number; name: string; host: string; bridge_ip: string | null;
+      id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
       router_username: string; router_secret: string | null; status: string;
     }[] = [];
     try {
       routers = await sbSelect<{
-        id: number; name: string; host: string; bridge_ip: string | null;
+        id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
         router_username: string; router_secret: string | null; status: string;
-      }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret,status`);
+      }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status`);
     } catch (dbErr) {
       res.json({
         ok:    false,
@@ -357,12 +357,12 @@ router.post("/vpn/auto-fix-ips", async (req: Request, res: Response): Promise<vo
         }
 
         const newIp = clientMap.get(match)!;
-        const oldIp = row.bridge_ip || row.host;
+        const oldIp = row.vpn_ip || row.bridge_ip || row.host;
 
         /* Update Supabase */
         await sbUpdate("isp_routers", `id=eq.${row.id}`, {
-          bridge_ip:  newIp,
-          host:       newIp,
+          vpn_ip:     newIp,
+          last_connected_host: newIp,
           updated_at: new Date().toISOString(),
         });
 
