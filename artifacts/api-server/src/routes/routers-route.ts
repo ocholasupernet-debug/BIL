@@ -108,10 +108,20 @@ router.patch("/routers/:id", async (req, res): Promise<void> => {
 });
 
 router.delete("/routers/:id", async (req, res): Promise<void> => {
-  const id = req.params.id;
-  const rows = await sbSelect<{ name: string; admin_id: number }>("isp_routers", `id=eq.${id}&select=name,admin_id&limit=1`);
+  const id = parseInt(req.params.id, 10);
+  const adminId = parseInt(String(req.query.adminId ?? req.body?.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (!Number.isInteger(adminId) || adminId < 1) {
+    res.status(400).json({ error: "adminId query param is required" });
+    return;
+  }
+
+  const rows = await sbSelect<{ name: string; admin_id: number }>(
+    "isp_routers",
+    `id=eq.${id}&admin_id=eq.${adminId}&select=name,admin_id&limit=1`,
+  );
   const row = rows[0];
-  if (!row) { res.status(404).json({ error: "Router not found" }); return; }
+  if (!row) { res.status(404).json({ error: "Router not found or not assigned to this administrator" }); return; }
 
   /* ── Best-effort cascade clean-up of child records that may have a
      foreign-key constraint on isp_routers(id). Each delete is wrapped
@@ -143,7 +153,7 @@ router.delete("/routers/:id", async (req, res): Promise<void> => {
   }
 
   /* Confirm the row is actually gone — sbDelete swallows non-2xx responses */
-  const verify = await sbSelect<{ id: number }>("isp_routers", `id=eq.${id}&select=id&limit=1`);
+  const verify = await sbSelect<{ id: number }>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=id&limit=1`);
   if (verify.length > 0) {
     res.status(500).json({
       error: "Router could not be deleted — it may still be referenced by other records. Remove related VPN users, IP pools, or sessions first.",

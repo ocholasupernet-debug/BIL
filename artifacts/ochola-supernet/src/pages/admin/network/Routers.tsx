@@ -784,7 +784,7 @@ export default function Routers() {
     setDeleteState(prev => ({ ...prev, [r.id]: "deleting" }));
     setDeleteError(prev => ({ ...prev, [r.id]: "" }));
     try {
-      const res = await fetch(`/api/routers/${r.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/routers/${r.id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`, { method: "DELETE" });
       if (!res.ok) {
         let msg = `Delete failed (HTTP ${res.status})`;
         try { const body = await res.json(); if (body?.error) msg = body.error; } catch {}
@@ -1157,13 +1157,20 @@ export default function Routers() {
                             />
                             {delSt === "confirm" ? (
                               <>
-                                <Btn label="Yes" onClick={() => deleteRouter(r)} color="#f87171" bg="rgba(248,113,113,0.15)" border="rgba(248,113,113,0.4)" />
+                                <span
+                                  title="This removes the router and related records"
+                                  style={{ color: "#fca5a5", fontSize: "0.65rem", fontWeight: 700, whiteSpace: "nowrap" }}
+                                >
+                                  Delete router?
+                                </span>
+                                <Btn label="Yes, delete" onClick={() => deleteRouter(r)} color="#f87171" bg="rgba(248,113,113,0.15)" border="rgba(248,113,113,0.4)" />
                                 <Btn label="No"  onClick={() => setDeleteState(p => ({ ...p, [r.id]: "idle" }))} color="#94a3b8" bg="rgba(255,255,255,0.05)" border="rgba(255,255,255,0.12)" />
                               </>
                             ) : delSt === "deleting" ? (
                               <Loader2 size={12} style={{ animation: "spin 1s linear infinite", color: "#f87171" }} />
                             ) : (
                               <Btn
+                                label="Delete"
                                 icon={<Trash2 size={11} />}
                                 onClick={() => setDeleteState(p => ({ ...p, [r.id]: "confirm" }))}
                                 color="#f87171" bg="rgba(248,113,113,0.08)" border="rgba(248,113,113,0.25)"
