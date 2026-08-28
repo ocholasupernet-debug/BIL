@@ -33,6 +33,8 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
   });
+  assert.match(script, /\/interface ovpn-client add name=ocholasupernet/);
+  assert.match(script, /name="ocholasupernet" and running=yes/);
   assert.match(script, /OVPN client creation failed/);
   assert.match(script, /OVPN client did not establish a running session/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);

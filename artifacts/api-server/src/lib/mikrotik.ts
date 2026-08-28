@@ -2108,6 +2108,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   } = opts;
 
   const tag = routerId ? `ISP-${routerId}` : "ISP-OVPN";
+  const interfaceName = "ocholasupernet";
 
   return `# ═══════════════════════════════════════════════════════════════
 # OcholaSupernet — MikroTik Router as OpenVPN CLIENT
@@ -2135,12 +2136,13 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 # Make this safe to re-import during recovery or after a failed migration.
 :local ovpnError ""
 :do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
-:do { /interface ovpn-client add name=ovpn-to-vps connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError $error }
+:do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}
+:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError $error }
 :if ([:len $ovpnError] > 0) do={ :error ("${tag}: OVPN client creation failed: " . $ovpnError) }
 
 :delay 10s
 :put "${tag}: waiting for OVPN client to establish..."
-:if ([:len [/interface ovpn-client find where name="ovpn-to-vps" and running=yes]] = 0) do={
+:if ([:len [/interface ovpn-client find where name="${interfaceName}" and running=yes]] = 0) do={
     :error "${tag}: OVPN client did not establish a running session."
 } else={
     :put "${tag}: OVPN client is running."
@@ -2163,10 +2165,10 @@ enable api
 
 # ── Step 5: Verify the interface came up ─────────────────────────────────────
 # Run this in terminal after import — should show "R" (running):
-#   /interface print where name=ovpn-to-vps
-#   /ip address print where interface=ovpn-to-vps
+#   /interface print where name=${interfaceName}
+#   /ip address print where interface=${interfaceName}
 #
-# Expected: inet ${tunnelRouterIp} on ovpn-to-vps
+# Expected: inet ${tunnelRouterIp} on ${interfaceName}
 # Then from VPS:  ping ${tunnelRouterIp}  and  curl http://${tunnelRouterIp}:8728
 
 :log info "${tag}: OVPN client configured → ${vpsPublicIp}:${vpnPort}"
