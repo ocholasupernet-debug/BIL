@@ -40,7 +40,11 @@ export function getAdminRole(): string {
 }
 
 export function getAdminApiToken(): string {
-  try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
+  try {
+    return localStorage.getItem("ochola_api_token")
+      || localStorage.getItem("ochola_superadmin_token")
+      || "";
+  } catch { return ""; }
 }
 
 export function isSuperAdmin(): boolean {
