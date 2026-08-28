@@ -488,21 +488,28 @@ function buildMainhotspotRsc(
     : `:if ($majorVersion = 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => `:if (!$vpnConfigured) do={
     :do {
+        :global ocholaVpnChildError
+        :set ocholaVpnChildError ""
         $pg 1 "vpn-${protocol}" "downloading" ""
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${fileName}"] } on-error={}
         /tool fetch url=$${urlVariable} dst-path="${fileName}" mode=https check-certificate=no
         :delay 2s
         /import "${fileName}"
+        :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="${fileName}"] } on-error={}
         :set vpnConfigured true
         :set vpnProtocol "${protocol}"
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
         $pg 1 "vpn-${protocol}" "applied" ""
     } on-error={
-        :put ("  WARN [vpn-${protocol}] FAILED: " . $error)
-        :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $error . "; ")
-        $pg 1 "vpn-${protocol}" "failed" $error
+        :local vpnError $ocholaVpnChildError
+        :if ([:len $vpnError] = 0) do={
+            :set vpnError "${protocol}: child script import failed. Check failed-${fileName} and /log for the RouterOS error."
+        }
+        :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
+        :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
+        $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
         :do { /file set [find name="${fileName}"] name="failed-${fileName}" } on-error={}
     }

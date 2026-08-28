@@ -2134,16 +2134,22 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
 # Make this safe to re-import during recovery or after a failed migration.
+:global ocholaVpnChildError
+:set ocholaVpnChildError ""
 :local ovpnError ""
 :do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}
-:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError $error }
-:if ([:len $ovpnError] > 0) do={ :error ("${tag}: OVPN client creation failed: " . $ovpnError) }
+:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
+:if ([:len $ovpnError] > 0) do={
+    :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
+    :error $ocholaVpnChildError
+}
 
 :delay 10s
 :put "${tag}: waiting for OVPN client to establish..."
 :if ([:len [/interface ovpn-client find where name="${interfaceName}" and running=yes]] = 0) do={
-    :error "${tag}: OVPN client did not establish a running session."
+    :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session. Check /log for TLS, credential, certificate, or reachability errors."
+    :error $ocholaVpnChildError
 } else={
     :put "${tag}: OVPN client is running."
 }
@@ -2198,15 +2204,17 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
 :do { /interface wireguard peers remove [find where comment="${tag} WireGuard management peer"] } on-error={}
 :do { /ip address remove [find interface="${interfaceName}"] } on-error={}
 :do { /interface wireguard remove [find where name="${interfaceName}"] } on-error={}
-:do { /interface wireguard add name="${interfaceName}" private-key="${clientPrivateKey}" disabled=no comment="${tag} WireGuard management" } on-error={ :error ("${tag}: WireGuard interface creation failed: " . $error) }
-:do { /ip address add address=${tunnelRouterIp}/24 interface="${interfaceName}" comment="${tag} WireGuard management address" } on-error={ :error ("${tag}: WireGuard address creation failed: " . $error) }
-:do { /interface wireguard peers add interface="${interfaceName}" public-key="${serverPublicKey}" endpoint-address="${endpoint}" endpoint-port=${endpointPort} allowed-address=${tunnelVpsIp}/32 persistent-keepalive=25 comment="${tag} WireGuard management peer" } on-error={ :error ("${tag}: WireGuard peer creation failed: " . $error) }
+:global ocholaVpnChildError
+:set ocholaVpnChildError ""
+:do { /interface wireguard add name="${interfaceName}" private-key="${clientPrivateKey}" disabled=no comment="${tag} WireGuard management" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard interface creation failed: RouterOS rejected the interface command." ; :error $ocholaVpnChildError }
+:do { /ip address add address=${tunnelRouterIp}/24 interface="${interfaceName}" comment="${tag} WireGuard management address" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard address creation failed: RouterOS rejected the address command." ; :error $ocholaVpnChildError }
+:do { /interface wireguard peers add interface="${interfaceName}" public-key="${serverPublicKey}" endpoint-address="${endpoint}" endpoint-port=${endpointPort} allowed-address=${tunnelVpsIp}/32 persistent-keepalive=25 comment="${tag} WireGuard management peer" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
 :do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :error ("${tag}: WireGuard API firewall rule failed: " . $error) }
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
 :do { /ip firewall filter remove [find where comment="${tag}-ping-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vpn-tunnel" } on-error={ :error ("${tag}: WireGuard ping firewall rule failed: " . $error) }
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard ping firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
 :delay 5s
-:if ([:len [/interface wireguard find where name="${interfaceName}"]] = 0) do={ :error "${tag}: WireGuard interface was not verified." }
+:if ([:len [/interface wireguard find where name="${interfaceName}"]] = 0) do={ :set ocholaVpnChildError "${tag}: WireGuard interface was not verified."; :error $ocholaVpnChildError }
 :put "${tag}: WireGuard management resources verified."
 :log info "${tag}: WireGuard fallback configured via ${endpoint}:${endpointPort}"
 `;
@@ -2238,14 +2246,16 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
 :do { /ip ipsec policy remove [find where comment="${tag} IPsec management policy"] } on-error={}
 :do { /ip ipsec identity remove [find where comment="${tag} IPsec management identity"] } on-error={}
 :do { /ip ipsec peer remove [find where comment="${tag} IPsec management peer"] } on-error={}
-:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :error ("${tag}: IPsec peer creation failed: " . $error) }
-:do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}" comment="${tag} IPsec management identity" } on-error={ :error ("${tag}: IPsec identity creation failed: " . $error) }
-:do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :error ("${tag}: IPsec policy creation failed: " . $error) }
+:global ocholaVpnChildError
+:set ocholaVpnChildError ""
+:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
+:do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}" comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
+:do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
 :do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :error ("${tag}: IPsec API firewall rule failed: " . $error) }
-:if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] = 0) do={ :error "${tag}: IPsec peer was not verified." }
-:if ([:len [/ip ipsec identity find where comment="${tag} IPsec management identity"]] = 0) do={ :error "${tag}: IPsec identity was not verified." }
-:if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] = 0) do={ :error "${tag}: IPsec policy was not verified." }
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
+:if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec peer was not verified."; :error $ocholaVpnChildError }
+:if ([:len [/ip ipsec identity find where comment="${tag} IPsec management identity"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec identity was not verified."; :error $ocholaVpnChildError }
+:if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec policy was not verified."; :error $ocholaVpnChildError }
 :put "${tag}: IPsec management resources verified; waiting for authenticated heartbeat."
 :log info "${tag}: IPsec fallback configured via ${endpoint}"
 `;

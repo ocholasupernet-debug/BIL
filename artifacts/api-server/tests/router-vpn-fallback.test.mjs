@@ -37,6 +37,9 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   assert.match(script, /name="ocholasupernet" and running=yes/);
   assert.match(script, /OVPN client creation failed/);
   assert.match(script, /OVPN client did not establish a running session/);
+  assert.match(script, /Check \/log for TLS, credential, certificate, or reachability errors/);
+  assert.match(script, /ocholaVpnChildError/);
+  assert.doesNotMatch(script, /on-error=\{ :set ovpnError \$error \}/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
 });
 
@@ -82,6 +85,7 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /:if \(!\$vpnConfigured\) do=\{/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{fileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.match(scriptsRoute, /child script import failed/);
 });
 
 test("recoverable protocol failures do not poison a later successful install", () => {
