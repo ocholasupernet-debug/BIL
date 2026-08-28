@@ -56,6 +56,99 @@ const sectionFor: Record<string, string> = {
   "/system/script/print": "scripts_metadata", "/system/scheduler/print": "schedulers", "/tool/netwatch/print": "netwatch",
 };
 
+const exportSectionFor: Record<string, string> = {
+  "/ip/pool": "ip_pools",
+  "/ppp/profile": "ppp_profiles",
+  "/ip/hotspot/user/profile": "hotspot_profiles",
+  "/ppp/secret": "ppp_secrets",
+  "/ip/hotspot/user": "hotspot_users",
+  "/queue/simple": "queues",
+  "/queue/tree": "queue_trees",
+  "/interface": "interfaces",
+  "/ip/address": "ip_addresses",
+  "/ip/route": "routes",
+  "/ip/firewall/filter": "firewall_filter",
+  "/ip/firewall/nat": "firewall_nat",
+  "/ip/dns": "dns",
+  "/system/identity": "router_info",
+  "/system/resource": "router_resource",
+  "/system/scheduler": "schedulers",
+};
+
+function exportTokens(line: string): string[] {
+  const tokens: string[] = [];
+  let token = "";
+  let quoted = false;
+  let escaped = false;
+  for (const character of line.trim()) {
+    if (escaped) {
+      token += character;
+      escaped = false;
+    } else if (character === "\\" && quoted) {
+      escaped = true;
+    } else if (character === "\"") {
+      quoted = !quoted;
+    } else if (/\s/.test(character) && !quoted) {
+      if (token) {
+        tokens.push(token);
+        token = "";
+      }
+    } else {
+      token += character;
+    }
+  }
+  if (token) tokens.push(token);
+  return tokens;
+}
+
+function parseExportRow(line: string): Record<string, string> | null {
+  const tokens = exportTokens(line).slice(1);
+  const row: Record<string, string> = {};
+  for (const token of tokens) {
+    const startsWithSeparator = token.startsWith("=");
+    const separator = token.indexOf("=", startsWithSeparator ? 1 : 0);
+    if (separator <= (startsWithSeparator ? 1 : 0)) continue;
+    const name = token.slice(startsWithSeparator ? 1 : 0, separator);
+    const value = token.slice(separator + 1);
+    if (name && !/[\r\n\0]/.test(value)) row[name] = value;
+  }
+  return Object.keys(row).length ? row : null;
+}
+
+/**
+ * Parse the safe, portable subset of a RouterOS terminal export. The complete
+ * text is retained inside the encrypted migration package; this structured
+ * subset is only what the existing review/import planner can approve.
+ */
+export function parseRouterOsExport(raw: string): Record<string, unknown> {
+  if (typeof raw !== "string" || !raw.trim()) throw new Error("RouterOS export output is required.");
+  if (raw.length > 8_000_000) throw new Error("RouterOS export output is too large.");
+  const data: Record<string, unknown> = {
+    metadata: { format: "routeros-migration-v1", imported_from: "terminal-export", read_only: true },
+    warnings: ["The complete terminal export is encrypted at rest. Credentials and cryptographic material require manual review."],
+    manual_configuration_required: [],
+  };
+  let section = "";
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("/")) {
+      section = `/${line.slice(1).split(/\s+/).join("/")}`.replace(/\/+$/, "");
+      continue;
+    }
+    if (!/^add(?:\s|$)/i.test(line)) continue;
+    const target = exportSectionFor[section];
+    if (!target) continue;
+    const row = parseExportRow(line);
+    if (row) {
+      const records = (data[target] as Record<string, string>[] | undefined) ?? [];
+      records.push(row);
+      data[target] = records;
+    }
+  }
+  return data;
+}
+
 export async function exportRouterMigration(creds: RouterCredentials, injectedRunner?: RouterCommandRunner) {
   // Keep the source exporter testable without opening a connection. The actual
   // runner is loaded only for real exports and remains the shared connector.

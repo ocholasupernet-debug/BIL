@@ -19,14 +19,13 @@ import {
 import {
   fetchRouters,
   downloadReadOnlyExportScript,
-  analyzeSource,
-  exportSource,
+  saveTerminalExport,
   setTargetRouter,
   runDryRun,
   runImport,
   getReport
 } from "./api";
-import type { RouterSummary, AnalyzeResponse, ExportResponse, DryRunResponse, ReportResponse } from "./types";
+import type { RouterSummary, ExportResponse, DryRunResponse, ReportResponse } from "./types";
 import { useToast } from "@/hooks/use-toast";
 
 const STEPS = [
@@ -42,11 +41,11 @@ const STEPS = [
 export default function NetworkMigration() {
   const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(1);
-  const [sourceRouterId, setSourceRouterId] = useState<number | null>(null);
   const [targetRouterId, setTargetRouterId] = useState<number | null>(null);
   const [migrationId, setMigrationId] = useState<string | null>(null);
+  const [sourceLabel, setSourceLabel] = useState("");
+  const [sourceExportText, setSourceExportText] = useState("");
 
-  const [analyzeData, setAnalyzeData] = useState<AnalyzeResponse | null>(null);
   const [exportData, setExportData] = useState<ExportResponse | null>(null);
   const [dryRunData, setDryRunData] = useState<DryRunResponse | null>(null);
   const [reportData, setReportData] = useState<ReportResponse | null>(null);
@@ -61,23 +60,15 @@ export default function NetworkMigration() {
     retry: 1,
   });
 
-  const analyzeMutation = useMutation({
-    mutationFn: analyzeSource,
-    onSuccess: (data) => {
-      setAnalyzeData(data);
-      setCurrentStep(2);
-    },
-    onError: (err: any) => toast({ title: "Analysis failed", description: err.message, variant: "destructive" })
-  });
-
-  const exportMutation = useMutation({
-    mutationFn: exportSource,
+  const sourceExportMutation = useMutation({
+    mutationFn: saveTerminalExport,
     onSuccess: (data) => {
       setExportData(data);
       setMigrationId(data.id);
-      setCurrentStep(3);
+      setSourceExportText("");
+      setCurrentStep(2);
     },
-    onError: (err: any) => toast({ title: "Export failed", description: err.message, variant: "destructive" })
+    onError: (err: any) => toast({ title: "Router export could not be saved", description: err.message, variant: "destructive" })
   });
 
   const targetMutation = useMutation({
@@ -165,9 +156,9 @@ export default function NetworkMigration() {
 
   const handleNext = () => {
     if (currentStep === 1) {
-      if (sourceRouterId) analyzeMutation.mutate(sourceRouterId);
+      if (sourceLabel.trim() && sourceExportText.trim()) sourceExportMutation.mutate({ sourceLabel: sourceLabel.trim(), exportText: sourceExportText });
     } else if (currentStep === 2) {
-      if (sourceRouterId) exportMutation.mutate(sourceRouterId);
+      setCurrentStep(3);
     } else if (currentStep === 3) {
       setCurrentStep(4);
     } else if (currentStep === 4) {
@@ -234,8 +225,8 @@ export default function NetworkMigration() {
         <div className="flex flex-col border border-[var(--isp-border)] rounded-xl bg-[var(--isp-card)] shadow-[var(--shadow-card)] overflow-hidden min-h-[400px]">
           <div className="p-5 border-b border-[var(--isp-border)] bg-[var(--isp-section)] flex items-center justify-between">
             <h2 className="text-sm font-bold flex items-center gap-2">
-              {currentStep === 1 && <><Server size={18} className="text-[var(--isp-accent)]" /> Step 1: Select Source Router</>}
-              {currentStep === 2 && <><Database size={18} className="text-[var(--isp-accent)]" /> Step 2: Source Analysis & Export</>}
+              {currentStep === 1 && <><Terminal size={18} className="text-[var(--isp-accent)]" /> Step 1: Collect Source Router</>}
+              {currentStep === 2 && <><Database size={18} className="text-[var(--isp-accent)]" /> Step 2: Collected Export</>}
               {currentStep === 3 && <><FileCheck size={18} className="text-[var(--isp-accent)]" /> Step 3: Review Compatibility</>}
               {currentStep === 4 && <><ArrowRight size={18} className="text-[var(--isp-accent)]" /> Step 4: Select Target Router</>}
               {currentStep === 5 && <><Activity size={18} className="text-[var(--isp-accent)]" /> Step 5: Pre-flight Dry Run</>}
@@ -249,56 +240,40 @@ export default function NetworkMigration() {
 
           <div className="p-6 flex-1 bg-[var(--isp-card)]">
             
-            {/* Step 1: Source Router */}
+            {/* Step 1: Collect source export from the active router */}
             {currentStep === 1 && (
               <div className="space-y-6 max-w-2xl fade-in">
+                <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
+                  <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Run the collector on the active MikroTik first</h3>
+                  <ol className="text-xs text-[var(--isp-text-muted)] space-y-2 list-decimal pl-5">
+                    <li>Download the read-only helper and run it in the source router terminal.</li>
+                    <li>Copy all terminal output, including the section headers and <code>add</code> lines.</li>
+                    <li>Paste the output below. The source router does not need to be registered or connected to the web app.</li>
+                  </ol>
+                  <button type="button" className="btn btn-primary mt-4" onClick={downloadReadOnlyScript}>
+                    <FileCheck size={14} /> Download collector script
+                  </button>
+                </div>
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">
-                    Source Router
-                  </label>
-                  <p className="text-xs text-[var(--isp-text-muted)] mb-3">
-                    Select the router whose configuration you wish to backup or migrate. This router must be currently online.
-                  </p>
-                  
-                  {routersError ? (
-                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500 text-sm">
-                      Failed to load routers. Please check API connection.
-                    </div>
-                  ) : routersLoading ? (
-                    <div className="p-4 bg-[var(--isp-inner-card)] rounded-lg text-sm text-[var(--isp-text-muted)] flex items-center gap-2">
-                      <RefreshCw size={14} className="animate-spin" /> Loading routers...
-                    </div>
-                  ) : routers && routers.length === 0 ? (
-                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-600 text-sm">
-                      No routers found. Please add a router to the network before proceeding.
-                    </div>
-                  ) : (
-                    <>
-                      <select
-                        className="isp-input py-3 w-full cursor-pointer"
-                        value={sourceRouterId || ""}
-                        onChange={(e) => setSourceRouterId(Number(e.target.value))}
-                      >
-                        <option value="">-- Choose source router --</option>
-                        {routers?.map(r => (
-                          <option key={r.id} value={r.id} disabled={r.status !== 'online' && r.status !== 'connected'}>
-                            {r.name} ({r.host}) - {r.status}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
-                        <div>
-                          <strong className="block text-xs font-bold text-[var(--isp-text)]">Need a portable .rsc instead?</strong>
-                          <p className="text-xs text-[var(--isp-text-muted)] mt-1 max-w-xl">
-                            Download a command-only helper, run it in the active router terminal, and copy its printed export into a file. It reads users, credentials, profiles, limits, durations, schedules, and related settings without changing the router.
-                          </p>
-                        </div>
-                        <button type="button" className="btn btn-ghost shrink-0" onClick={downloadReadOnlyScript}>
-                          <FileCheck size={14} /> Download .rsc helper
-                        </button>
-                      </div>
-                    </>
-                  )}
+                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router name</label>
+                  <input className="isp-input py-3 w-full" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Paste collected RouterOS output</label>
+                  <textarea
+                    className="isp-input w-full min-h-[220px] font-mono text-xs leading-relaxed"
+                    value={sourceExportText}
+                    onChange={e => setSourceExportText(e.target.value)}
+                    placeholder={"/export show-sensitive terse\n\nPaste the complete output here..."}
+                    spellCheck={false}
+                  />
+                  <div className="flex justify-between gap-3 text-[11px] text-[var(--isp-text-muted)]">
+                    <span>{sourceExportText.length.toLocaleString()} characters pasted</span>
+                    <span>Includes sensitive values; encrypted before storage.</span>
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-600">
+                  The output may contain passwords and other sensitive values. Paste it only into this tenant’s authenticated migration page. It is never returned to the browser after saving.
                 </div>
               </div>
             )}
@@ -307,35 +282,17 @@ export default function NetworkMigration() {
             {currentStep === 2 && (
               <div className="space-y-6 max-w-2xl fade-in">
                 <p className="text-sm text-[var(--isp-text)] leading-relaxed">
-                  The system verified router identity and resources.
+                  The web app received the export collected from the source router.
                   <br/><br/>
-                  <strong className="text-[var(--isp-text)]">READ-ONLY MODE ACTIVE:</strong> No changes will be made to <code>{routers?.find(r => r.id === sourceRouterId)?.name}</code>.
+                   <strong className="text-[var(--isp-text)]">READ-ONLY COLLECTION:</strong> The source router was not contacted or modified. The collected export is stored as <code>{exportData?.sourceLabel || sourceLabel}</code>.
                 </p>
 
-                {analyzeData && (
-                  <div className="p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--isp-text)] mb-3">Identity & Capabilities</h3>
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      {analyzeData.dataPoints.map((dp, i) => (
-                        <div key={i} className="flex justify-between items-center p-3 bg-[var(--isp-card)] rounded-lg border border-[var(--isp-border)]">
-                          <span className="text-xs font-semibold text-[var(--isp-text-muted)] capitalize">{dp.type}</span>
-                          <span className="text-sm font-bold text-[var(--isp-text)]">{dp.count}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="text-xs text-[var(--isp-text-muted)] p-2 bg-[var(--isp-card)] rounded border border-[var(--isp-border)]">
-                      Identity: <span className="font-mono text-[var(--isp-text)]">{analyzeData.identity.name || "Unknown"}</span>
-                      {analyzeData.identity.version && <span> · RouterOS {analyzeData.identity.version}</span>}
-                      {analyzeData.identity.boardName && <span> · {analyzeData.identity.boardName}</span>}
-                    </div>
-                    {!analyzeData.compatible && (
-                      <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-600 text-sm flex gap-2 items-start">
-                        <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                        <span>{analyzeData.details}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--isp-text)] mb-2">Source saved securely</h3>
+                  <p className="text-xs text-[var(--isp-text-muted)]">
+                    <strong className="text-[var(--isp-text)]">{exportData?.sourceLabel || sourceLabel}</strong> is now available as the source for this migration. The original terminal output remains encrypted and is not displayed again.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -345,7 +302,7 @@ export default function NetworkMigration() {
                 <div className="flex items-center gap-3 p-4 bg-[var(--isp-green-glow)] border border-[var(--isp-green)]/30 text-[var(--isp-green)] rounded-xl">
                   <CheckCircle2 size={24} />
                   <div>
-                    <strong className="block text-sm font-bold">Snapshot Exported Successfully</strong>
+                    <strong className="block text-sm font-bold">Source Export Saved Successfully</strong>
                     <span className="text-xs opacity-80">Reference ID: {exportData.id}</span>
                   </div>
                 </div>
@@ -417,9 +374,17 @@ export default function NetworkMigration() {
                     <strong className="text-[var(--isp-accent)] ml-1">Do not select the same router.</strong>
                   </p>
                   
-                  {routers && routers.length < 2 ? (
+                  {routersError ? (
+                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500 text-sm">
+                      Failed to load target routers. Please check the API connection.
+                    </div>
+                  ) : routersLoading ? (
+                    <div className="p-4 bg-[var(--isp-inner-card)] rounded-lg text-sm text-[var(--isp-text-muted)] flex items-center gap-2">
+                      <RefreshCw size={14} className="animate-spin" /> Loading target routers...
+                    </div>
+                  ) : routers && routers.length < 1 ? (
                     <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-600 text-sm">
-                      No additional routers found. You need at least one other router to perform a migration.
+                      No target routers found. Add the replacement router before proceeding.
                     </div>
                   ) : (
                     <select
@@ -428,14 +393,11 @@ export default function NetworkMigration() {
                       onChange={(e) => setTargetRouterId(Number(e.target.value))}
                     >
                       <option value="">-- Choose target router --</option>
-                      {routers?.map(r => {
-                        const isSource = r.id === sourceRouterId;
-                        return (
-                          <option key={r.id} value={r.id} disabled={isSource || (r.status !== 'online' && r.status !== 'connected')}>
-                            {r.name} ({r.host}) {isSource ? "(Source - Unavailable)" : ""}
-                          </option>
-                        )
-                      })}
+                      {routers?.map(r => (
+                        <option key={r.id} value={r.id} disabled={r.status !== 'online' && r.status !== 'connected'}>
+                          {r.name} ({r.host})
+                        </option>
+                      ))}
                     </select>
                   )}
                 </div>
@@ -633,7 +595,7 @@ export default function NetworkMigration() {
               <button 
                 className="btn btn-ghost" 
                 onClick={() => window.location.reload()}
-                disabled={analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
+                disabled={sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
               >
                 Cancel
               </button>
@@ -655,19 +617,19 @@ export default function NetworkMigration() {
                   className={`btn ${currentStep === 6 ? 'btn-danger' : 'btn-primary'}`}
                   onClick={handleNext}
                   disabled={
-                    (currentStep === 1 && !sourceRouterId) ||
-                    (currentStep === 4 && (!targetRouterId || targetRouterId === sourceRouterId)) ||
+                    (currentStep === 1 && (!sourceLabel.trim() || !sourceExportText.trim())) ||
+                    (currentStep === 4 && !targetRouterId) ||
                     (currentStep === 5 && (isDryRunDirty() || dryRunData?.plannedChanges.length === 0 || selectedIds.size === 0)) ||
                     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER") ||
-                    analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
+                    sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
                   }
                 >
-                  {analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
+                  {sourceExportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
                     <><RefreshCw size={14} className="animate-spin" /> Processing...</>
                   ) : (
                     <>
-                      {currentStep === 1 && 'Analyze Router'}
-                      {currentStep === 2 && 'Export Config'}
+                      {currentStep === 1 && 'Save Collected Export'}
+                      {currentStep === 2 && 'Review Collected Data'}
                       {currentStep === 3 && 'Acknowledge & Continue'}
                       {currentStep === 4 && 'Prepare Dry Run'}
                       {currentStep === 5 && 'Continue to Import'}

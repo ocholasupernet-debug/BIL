@@ -16,6 +16,8 @@ export interface AnalyzeResponse {
 export interface ExportResponse {
   id: string;
   status: string;
+  sourceLabel?: string;
+  sourceMode?: string;
   summary: { configs: number; users: number; queues: number; pools: number };
   findings: { warnings: string[]; manual: string[]; unsupported: string[] };
 }

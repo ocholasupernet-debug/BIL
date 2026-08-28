@@ -26,6 +26,18 @@ export async function downloadReadOnlyExportScript() {
   return res.blob();
 }
 
+export async function saveTerminalExport({ sourceLabel, exportText }: { sourceLabel: string; exportText: string }) {
+  const res = await fetch("/api/router-migrations/source-export", {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ sourceLabel, exportText }),
+  });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to save RouterOS export");
+  return data;
+}
+
 export async function analyzeSource(sourceRouterId: number) {
   const res = await fetch("/api/router-migrations/analyze", {
     method: "POST",

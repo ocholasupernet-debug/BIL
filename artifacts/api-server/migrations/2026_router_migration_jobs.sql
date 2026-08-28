@@ -3,8 +3,10 @@
 create table if not exists router_migration_jobs (
   id bigserial primary key,
   admin_id bigint not null references isp_admins(id) on delete cascade,
-  source_router_id bigint not null references isp_routers(id) on delete restrict,
+  source_router_id bigint references isp_routers(id) on delete restrict,
   target_router_id bigint references isp_routers(id) on delete restrict,
+  source_label text,
+  source_mode text not null default 'connected_router' check (source_mode in ('connected_router', 'terminal_script')),
   status text not null default 'exported' check (status in ('exported','target_selected','dry_run','importing','completed','failed')),
   ciphertext text not null,
   iv text not null,
@@ -19,6 +21,14 @@ create table if not exists router_migration_jobs (
   completed_at timestamptz,
   constraint router_migration_jobs_distinct_routers check (target_router_id is null or target_router_id <> source_router_id)
 );
+-- Existing installations used a connected router as the source. Terminal
+-- collection sources are intentionally not rows in isp_routers because they
+-- have no host or router credentials in the web app.
+alter table router_migration_jobs alter column source_router_id drop not null;
+alter table router_migration_jobs add column if not exists source_label text;
+alter table router_migration_jobs add column if not exists source_mode text not null default 'connected_router';
+alter table router_migration_jobs drop constraint if exists router_migration_jobs_source_mode_check;
+alter table router_migration_jobs add constraint router_migration_jobs_source_mode_check check (source_mode in ('connected_router', 'terminal_script'));
 create index if not exists router_migration_jobs_admin_created_idx on router_migration_jobs(admin_id, created_at desc);
 create index if not exists router_migration_jobs_source_idx on router_migration_jobs(source_router_id);
 create index if not exists router_migration_jobs_target_idx on router_migration_jobs(target_router_id);
