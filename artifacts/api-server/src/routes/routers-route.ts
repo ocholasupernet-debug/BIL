@@ -1,7 +1,7 @@
 import * as net from "net";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
-import { pingRouter, detectBridgeInterfaces } from "../lib/mikrotik.js";
+import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
@@ -74,6 +74,226 @@ router.get("/routers", async (req, res): Promise<void> => {
     `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
+});
+
+type InstallRouter = {
+  id: number;
+  admin_id: number;
+  name: string;
+  host: string | null;
+  bridge_ip: string | null;
+  vpn_ip: string | null;
+  router_username: string | null;
+  router_secret: string | null;
+  status: string;
+  last_seen: string | null;
+  model: string | null;
+  ros_version: string | null;
+  last_connected_host: string | null;
+};
+
+function managementVpnIp(row: InstallRouter): string | null {
+  const discovered = vpnIpFor(row.name, readVpnClients());
+  const candidates = [row.vpn_ip, discovered].filter((value): value is string => Boolean(value?.trim()));
+  return candidates.find(value => /^10\.8\.5\.\d+$/.test(value.trim()))?.trim() ?? null;
+}
+
+async function probeInstallRouter(row: InstallRouter): Promise<{
+  router: InstallRouter;
+  vpnIp: string | null;
+  connected: boolean;
+  via: string | null;
+  probe?: import("../lib/mikrotik.js").RouterPingResult;
+  error?: string;
+}> {
+  const vpnIp = managementVpnIp(row);
+  if (!vpnIp) {
+    return {
+      router: row,
+      vpnIp: null,
+      connected: false,
+      via: null,
+      error: "Waiting for the router-management VPN tunnel (10.8.5.x) to connect.",
+    };
+  }
+
+  try {
+    const probe = await pingRouter({
+      host: vpnIp,
+      port: 8728,
+      username: row.router_username || "admin",
+      password: row.router_secret || "",
+      bridgeIp: vpnIp,
+      connectTimeoutMs: 8_000,
+      requestTimeoutMs: 8_000,
+    });
+    return { router: row, vpnIp, connected: probe.connectedHost === vpnIp, via: probe.connectedHost, probe };
+  } catch (error) {
+    return {
+      router: row,
+      vpnIp,
+      connected: false,
+      via: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/* Self-install readiness probe. It intentionally uses only the isolated
+ * management VPN and never falls back to a public or LAN address. */
+router.get("/admin/router/install-status/:id", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.id);
+  const adminId = Number(req.query.adminId);
+  if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
+    return;
+  }
+
+  const rows = await sbSelect<InstallRouter>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status,last_seen,model,ros_version,last_connected_host&limit=1`,
+  );
+  const row = rows[0];
+  if (!row) {
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
+    return;
+  }
+
+  const result = await probeInstallRouter(row);
+  const heartbeatAgeMs = row.last_seen ? Date.now() - new Date(row.last_seen).getTime() : Number.POSITIVE_INFINITY;
+  const heartbeatRecent = heartbeatAgeMs >= 0 && heartbeatAgeMs < 15 * 60 * 1000;
+  const scriptComplete = !["setup", "awaiting_connection"].includes(row.status);
+  const ready = result.connected && !!result.probe?.identity && !!result.probe?.version
+    && scriptComplete && (row.status !== "awaiting_ports" || heartbeatRecent);
+  if (result.connected && result.probe) {
+    await sbUpdate("isp_routers", `id=eq.${routerId}&admin_id=eq.${adminId}`, {
+      host: result.vpnIp,
+      last_connected_host: result.vpnIp,
+      model: result.probe.board || row.model,
+      ros_version: result.probe.version || row.ros_version,
+      updated_at: result.probe.connectedAt,
+    });
+  }
+
+  res.json({
+    ok: true,
+    ready,
+    scriptComplete,
+    connected: result.connected,
+    vpnConnected: !!result.vpnIp,
+    vpnIp: result.vpnIp,
+    via: result.via,
+    heartbeat: { recent: heartbeatRecent, lastSeen: row.last_seen },
+    router: {
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      model: result.probe?.board || row.model || "MikroTik",
+      rosVersion: result.probe?.version || row.ros_version || "",
+      identity: result.probe?.identity || "",
+      uptime: result.probe?.uptime || "",
+    },
+    error: result.error,
+  });
+});
+
+/* Final installation gate. Re-probes through the management VPN before
+ * promoting a setup record into the normal online router list. */
+router.post("/admin/router/install-complete", async (req, res): Promise<void> => {
+  const routerId = Number(req.body?.routerId);
+  const adminId = Number(req.body?.adminId);
+  const bridgeName = typeof req.body?.bridge === "string" ? req.body.bridge.trim() : "";
+  const desiredPorts = Array.isArray(req.body?.ports)
+    ? req.body.ports.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+  if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
+    return;
+  }
+
+  const rows = await sbSelect<InstallRouter>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status,last_seen,model,ros_version,last_connected_host&limit=1`,
+  );
+  const row = rows[0];
+  if (!row) {
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
+    return;
+  }
+  const result = await probeInstallRouter(row);
+  if (!result.connected || !result.probe?.identity || !result.probe.version) {
+    res.status(409).json({
+      ok: false,
+      error: result.error || "The router is not ready through the management VPN yet.",
+      vpnIp: result.vpnIp,
+    });
+    return;
+  }
+
+  if (bridgeName) {
+    try {
+      const layout = await fetchBridgePortLayout({
+        host: result.vpnIp!,
+        port: 8728,
+        username: row.router_username || "admin",
+        password: row.router_secret || "",
+        bridgeIp: result.vpnIp!,
+        connectTimeoutMs: 8_000,
+        requestTimeoutMs: 8_000,
+      });
+      if (!layout.bridges.some(bridge => bridge.name === bridgeName)) {
+        res.status(409).json({ ok: false, error: `Bridge "${bridgeName}" could not be verified on the router.` });
+        return;
+      }
+      const members = new Set(
+        layout.bridgePorts.filter(port => port.bridge === bridgeName).map(port => port.interface),
+      );
+      const missing = desiredPorts.filter((port: string) => !members.has(port));
+      if (missing.length) {
+        res.status(409).json({
+          ok: false,
+          error: `Bridge membership could not be verified for: ${missing.join(", ")}`,
+        });
+        return;
+      }
+    } catch (error) {
+      res.status(409).json({
+        ok: false,
+        error: `The router connected, but bridge membership could not be verified: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+  }
+
+  const updated = await sbUpdate<InstallRouter>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}`,
+    {
+      status: "online",
+      host: result.vpnIp,
+      last_seen: result.probe.connectedAt,
+      last_connected_host: result.vpnIp,
+      model: result.probe.board || row.model,
+      ros_version: result.probe.version || row.ros_version,
+      updated_at: result.probe.connectedAt,
+    },
+  );
+  if (!updated[0]) {
+    res.status(503).json({ ok: false, error: "The router connected, but its installation status could not be saved." });
+    return;
+  }
+  res.json({
+    ok: true,
+    router: {
+      id: routerId,
+      name: row.name,
+      model: result.probe.board || row.model || "MikroTik",
+      rosVersion: result.probe.version,
+      vpnIp: result.vpnIp,
+      identity: result.probe.identity,
+      uptime: result.probe.uptime,
+    },
+  });
 });
 
 router.post("/routers", async (req, res): Promise<void> => {

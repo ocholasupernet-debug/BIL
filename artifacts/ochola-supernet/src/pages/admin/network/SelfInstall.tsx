@@ -2,522 +2,725 @@ import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
-  Check, Copy, Loader2, Settings, ArrowRight, Terminal,
-  ChevronRight, Info, HelpCircle, AlertTriangle, Download,
+  AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, Copy,
+  Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
+  Settings, Shield, Terminal, Wifi, X,
 } from "lucide-react";
 
-/* ─── Types ─────────────────────────────────────────────────────── */
-interface FullRouter extends DbRouter { router_secret: string | null; }
-interface DbAdmin { id: number; name: string; subdomain: string | null; }
+const ADMIN_ID = 1;
+const API = import.meta.env.VITE_API_BASE ?? "";
+const CONFIG_CATEGORIES = [
+  { id: "plans", label: "Plans", detail: "Hotspot and PPPoE service profiles" },
+  { id: "ipPools", label: "IP pools", detail: "Named RouterOS address pools" },
+  { id: "pppoe", label: "PPPoE settings", detail: "PPPoE secrets and profiles" },
+  { id: "users", label: "Users", detail: "Hotspot and PPPoE customer accounts" },
+] as const;
+type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
+type Phase = "idle" | "install" | "ports" | "success";
 
-/* ─── Constants ──────────────────────────────────────────────────── */
-const BASE_DOMAIN = "isplatty.org";
-const STALE_MS    = 12 * 60 * 1000;
-const ONLINE_STATUSES = new Set(["online", "connected", "active"]);
-
-/* ─── Helpers ─────────────────────────────────────────────────────── */
-function slugify(s: string) {
-  return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+interface RouterSummary {
+  id: number;
+  admin_id: number;
+  name: string;
+  host: string | null;
+  bridge_ip: string | null;
+  vpn_ip: string | null;
+  status: string;
+  last_seen: string | null;
+  model: string | null;
+  ros_version: string | null;
 }
 
-/* A router is "installed" if its status is online/connected/active,
-   OR if it has pinged within the stale window. */
-function isInstalled(r: DbRouter) {
-  if (ONLINE_STATUSES.has(r.status ?? "")) return true;
-  if (!r.last_seen) return false;
-  return Date.now() - new Date(r.last_seen).getTime() < STALE_MS;
+interface InstallStatus {
+  ok: boolean;
+  ready: boolean;
+  scriptComplete: boolean;
+  connected: boolean;
+  vpnConnected: boolean;
+  vpnIp: string | null;
+  via: string | null;
+  error?: string;
+  heartbeat: { recent: boolean; lastSeen: string | null };
+  router: {
+    id: number;
+    name: string;
+    status: string;
+    model: string;
+    rosVersion: string;
+    identity: string;
+    uptime: string;
+  };
 }
 
-/* Human-readable label for the router's current status */
-function routerStatusLabel(r: DbRouter): string {
-  const s = (r.status ?? "").toLowerCase();
-  if (s === "online"    || s === "connected") return "✓ online";
-  if (s === "active")                          return "✓ active";
-  if (s === "offline")                         return "offline";
-  if (!r.last_seen)                            return "pending";
-  const ageMin = Math.floor((Date.now() - new Date(r.last_seen).getTime()) / 60_000);
-  return ageMin < 60 ? `seen ${ageMin}m ago` : "inactive";
+interface InstallStep {
+  step: number;
+  name: string;
+  phase: "downloading" | "applied" | "failed";
+  error?: string;
 }
 
-function routerStatusColor(r: DbRouter): string {
-  const s = (r.status ?? "").toLowerCase();
-  if (ONLINE_STATUSES.has(s)) return "#22c55e";
-  if (s === "offline")        return "#f87171";
-  return "#64748b";
+interface InstallProgress {
+  routerId: number;
+  done: boolean;
+  failures: number;
+  steps: InstallStep[];
 }
 
-/* ─── Copy button ─────────────────────────────────────────────────── */
-function CopyBtn({ text }: { text: string }) {
+interface Iface {
+  name: string;
+  type: string;
+  running: boolean;
+  disabled: boolean;
+  macAddress: string;
+  comment: string;
+}
+
+interface Bridge {
+  name: string;
+  running: boolean;
+}
+
+interface BridgePort {
+  bridge: string;
+  interface: string;
+  id: string;
+}
+
+interface PortsPayload {
+  ok: boolean;
+  error?: string;
+  connectedVia?: string;
+  interfaces: Iface[];
+  bridges: Bridge[];
+  bridgePorts: BridgePort[];
+}
+
+interface CopyResult {
+  ok: boolean;
+  sourceRouter?: { id: number; name: string };
+  targetRouter?: { id: number; name: string };
+  categories?: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }>;
+  logs?: string[];
+  error?: string;
+}
+
+async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  const data = await response.json().catch(() => ({})) as T & { error?: string };
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  return data;
+}
+
+function slugify(value: string): string {
+  return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       onClick={() => navigator.clipboard.writeText(text).then(() => {
-        setCopied(true); setTimeout(() => setCopied(false), 2200);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1800);
       })}
       style={{
-        display: "inline-flex", alignItems: "center", gap: "0.35rem",
-        padding: "0.3rem 0.75rem", borderRadius: 5,
-        background: copied ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.08)",
-        border: `1px solid ${copied ? "rgba(34,197,94,0.35)" : "rgba(255,255,255,0.12)"}`,
-        color: copied ? "#4ade80" : "#94a3b8",
-        fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
-        fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0,
+        display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+        padding: "0.32rem 0.65rem", borderRadius: 6,
+        background: copied ? "rgba(34,197,94,.14)" : "rgba(255,255,255,.07)",
+        border: `1px solid ${copied ? "rgba(34,197,94,.35)" : "rgba(255,255,255,.12)"}`,
+        color: copied ? "#4ade80" : "#94a3b8", fontSize: "0.68rem",
+        fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
       }}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
-      {copied ? "Copied!" : "Copy"}
+      {copied ? "Copied" : "Copy"}
     </button>
   );
 }
 
-/* ─── Command block ───────────────────────────────────────────────── */
-function CmdBlock({ step, title, cmd }: { step: number; title: string; cmd: string }) {
+function StatusDot({ active }: { active: boolean }) {
+  return <span style={{
+    width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+    background: active ? "#4ade80" : "#64748b",
+    boxShadow: active ? "0 0 0 4px rgba(74,222,128,.12)" : "none",
+  }} />;
+}
+
+function modelAsset(model: string): { src: string; label: string } {
+  const value = model.toLowerCase();
+  if (/hap[\s-]*(lite|ac\s*lite)|rb?941|hap\s*lite/.test(value)) {
+    return { src: "/images/router-models/hap-lite.svg", label: "MikroTik hAP lite" };
+  }
+  if (/rb951|951|hap\s*ac2/.test(value)) {
+    return { src: "/images/router-models/rb951.svg", label: "MikroTik RB951 family" };
+  }
+  return { src: "/images/router-models/generic-mikrotik.svg", label: "MikroTik router" };
+}
+
+function ifaceKind(iface: Iface): "wlan" | "ether" | "protected" | "other" {
+  const name = iface.name.toLowerCase();
+  const type = iface.type.toLowerCase();
+  if (type === "wlan" || name.startsWith("wlan") || name.startsWith("wifi")) return "wlan";
+  if (name === "ether1" || name.includes("ovpn") || name.includes("vpn") ||
+      type === "bridge" || type === "loopback") return "protected";
+  if (type === "ether" || name.startsWith("ether") || name.startsWith("sfp")) return "ether";
+  return "other";
+}
+
+function bridgeForPort(name: string, memberships: BridgePort[]): string | null {
+  return memberships.find(item => item.interface === name)?.bridge ?? null;
+}
+
+function panelStyle(): React.CSSProperties {
+  return {
+    background: "var(--isp-card)", border: "1px solid var(--isp-border)",
+    borderRadius: 12, overflow: "hidden",
+  };
+}
+
+function primaryButton(disabled = false): React.CSSProperties {
+  return {
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8,
+    padding: "0.68rem 1.35rem", borderRadius: 9, border: "none",
+    background: disabled ? "rgba(20,184,166,.18)" : "linear-gradient(135deg,#14b8a6,#0d9488)",
+    color: disabled ? "#5eead4" : "white", fontWeight: 800, fontSize: "0.86rem",
+    cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit",
+    boxShadow: disabled ? "none" : "0 4px 14px rgba(20,184,166,.28)",
+  };
+}
+
+function RouterRecovery({ error }: { error?: string }) {
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
-        <span style={{
-          width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
-          background: "linear-gradient(135deg,#14b8a6,#0d9488)",
-          color: "white", fontSize: "0.68rem", fontWeight: 800,
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-        }}>{step}</span>
-        <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>{title}</span>
+    <div style={{
+      background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)",
+      borderRadius: 10, padding: "0.9rem 1rem",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#f87171", fontSize: "0.83rem", fontWeight: 800 }}>
+        <AlertTriangle size={15} /> Waiting for the router-management VPN
       </div>
-      <div style={{
-        background: "#0a0f1a", border: "1px solid rgba(255,255,255,0.07)",
-        borderRadius: 8, padding: "0.875rem 1rem",
-        display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem",
+      <p style={{ margin: "0.45rem 0 0", color: "#fca5a5", fontSize: "0.76rem", lineHeight: 1.6 }}>
+        {error || "The router has not connected to the isolated 10.8.5.x management network yet."}
+        {" "}Confirm the router has internet, re-run the downloaded script in Winbox Terminal, and wait for the VPN client to reconnect.
+      </p>
+      <code style={{
+        display: "block", marginTop: "0.65rem", color: "#67e8f9", background: "rgba(0,0,0,.28)",
+        borderRadius: 6, padding: "0.5rem 0.65rem", fontSize: "0.7rem",
       }}>
-        <code style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#7dd3fc", wordBreak: "break-all", lineHeight: 1.7, flex: 1 }}>
-          {cmd}
-        </code>
-        <CopyBtn text={cmd} />
-      </div>
+        /interface ovpn-client enable ocholasupernet
+      </code>
     </div>
   );
 }
 
-/* ═══════════════════════════ PAGE ═══════════════════════════════ */
 export default function SelfInstall() {
   const qc = useQueryClient();
-
-  const params        = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(window.location.search);
   const reconfigureId = params.get("reconfigure") ? Number(params.get("reconfigure")) : null;
-
-  const [phase, setPhase]               = useState<"idle" | "generated">(reconfigureId ? "generated" : "idle");
+  const [phase, setPhase] = useState<Phase>(reconfigureId ? "install" : "idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
-  const [generatedRouter, setGeneratedRouter] = useState<FullRouter | null>(null);
-  const [generating, setGenerating]     = useState(false);
-  const [showHelp, setShowHelp]         = useState(false);
-
-  /* Admin */
-  const { data: adminData } = useQuery<DbAdmin>({
-    queryKey: ["admin_si_sub", ADMIN_ID],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_admins").select("id,name,subdomain").eq("id", ADMIN_ID).single();
-      if (error) throw error;
-      return data as DbAdmin;
-    },
-    staleTime: 60_000,
-  });
-
-  /* Routers */
-  const { data: routers = [], isLoading: routersLoading } = useQuery<FullRouter[]>({
-    queryKey: ["isp_routers_si4", ADMIN_ID],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,last_seen,ros_version,model,router_secret,admin_id,ip_address,router_username,bridge_ip,vpn_ip,created_at,updated_at")
-        .eq("admin_id", ADMIN_ID)
-        .order("created_at", { ascending: true });
-      return (data ?? []) as FullRouter[];
-    },
-    refetchInterval: 8_000,
-  });
-
-  /* Computed values */
-  const adminSubdomain = adminData?.subdomain ?? "";
-  const nameBase       = slugify(adminData?.name ?? "") || adminSubdomain || "router";
-  const scriptHost     = adminSubdomain
-    ? `https://${adminSubdomain}.${BASE_DOMAIN}`
-    : window.location.origin;
-
-  const nextNumber = routers.length + 1;
-  const nextName   = `${nameBase}${nextNumber}`;
-  const nextSlug   = slugify(nextName);
-
-  const activeRouter  = activeRouterId
-    ? (routers.find(r => r.id === activeRouterId) ?? generatedRouter)
-    : null;
-  const savedRouters  = routers.filter((router) =>
-    ["online", "connected", "active"].includes((router.status ?? "").toLowerCase()) && !!router.last_seen
+  const [generating, setGenerating] = useState(false);
+  const [portsLoading, setPortsLoading] = useState(false);
+  const [ports, setPorts] = useState<PortsPayload | null>(null);
+  const [selectedBridge, setSelectedBridge] = useState("");
+  const [selectedPorts, setSelectedPorts] = useState<Set<string>>(new Set());
+  const [portState, setPortState] = useState<Record<string, "pending" | "applied" | "failed">>({});
+  const [portError, setPortError] = useState<string | null>(null);
+  const [completeLoading, setCompleteLoading] = useState(false);
+  const [completeRouter, setCompleteRouter] = useState<InstallStatus["router"] | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [sourceRouterId, setSourceRouterId] = useState<number | null>(null);
+  const [copyCategories, setCopyCategories] = useState<Set<ConfigCategory>>(
+    new Set(CONFIG_CATEGORIES.map(category => category.id)),
   );
-  const displayName   = activeRouter?.name ?? nextName;
-  const displaySlug   = activeRouter ? slugify(activeRouter.name) : nextSlug;
-  const profileFile   = `${displaySlug}.ovpn`;
-  const scriptFile    = `mainhotspot.rsc`;
-  const fetchCmd      = (activeRouterId && activeRouter?.router_secret)
-    ? `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc?rid=${activeRouterId}&token=${encodeURIComponent(activeRouter.router_secret)}&name=${encodeURIComponent(displayName)}" dst-path=mainhotspot.rsc mode=https`
-    : `/tool fetch url="${scriptHost}/api/scripts/mainhotspot.rsc" dst-path=mainhotspot.rsc mode=https`;
-  const scriptUrl = (activeRouterId && activeRouter?.router_secret)
-    ? `${scriptHost}/api/scripts/mainhotspot.rsc?rid=${activeRouterId}&token=${encodeURIComponent(activeRouter.router_secret)}&name=${encodeURIComponent(displayName)}`
-    : `${scriptHost}/api/scripts/mainhotspot.rsc`;
-  const importCmd     = `/import mainhotspot.rsc`;
+  const [copyLoading, setCopyLoading] = useState(false);
+  const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
+  const [copySkipped, setCopySkipped] = useState(false);
 
-  const isReconfigure   = !!reconfigureId;
-  const routerIdForNext = activeRouterId ?? null;
-
-  useEffect(() => {
-    if (reconfigureId && routers.length > 0 && !activeRouterId) {
-      setActiveRouterId(reconfigureId);
-    }
-  }, [reconfigureId, routers.length]);
+  const routersQuery = useQuery<RouterSummary[]>({
+    queryKey: ["self-install-routers", ADMIN_ID],
+    queryFn: async () => jsonRequest<RouterSummary[]>(`/api/routers?adminId=${ADMIN_ID}`),
+    refetchInterval: 6_000,
+  });
+  const routers = routersQuery.data ?? [];
+  const activeRouter = routers.find(router => router.id === activeRouterId) ?? null;
+  const sourceRouters = routers.filter(router => router.id !== activeRouterId && router.status !== "setup");
+  const selectedSource = sourceRouters.find(router => router.id === sourceRouterId) ?? sourceRouters[0] ?? null;
 
   useEffect(() => {
-    if (phase !== "generated" || activeRouterId || !routers.length) return;
-    const match = routers.find(r => slugify(r.name) === nextSlug);
-    if (match) setActiveRouterId(match.id);
-  }, [routers, phase, nextSlug, activeRouterId]);
+    if (sourceRouters.length > 0 && !sourceRouterId) setSourceRouterId(sourceRouters[0].id);
+  }, [sourceRouters.length, sourceRouterId]);
+
+  const statusQuery = useQuery<InstallStatus>({
+    queryKey: ["self-install-status", ADMIN_ID, activeRouterId],
+    queryFn: () => jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${ADMIN_ID}`),
+    enabled: !!activeRouterId && phase === "install",
+    refetchInterval: phase === "install" ? 4_000 : false,
+  });
+  const progressQuery = useQuery<{ ok: boolean; installs: InstallProgress[] }>({
+    queryKey: ["self-install-progress", ADMIN_ID, activeRouterId],
+    queryFn: () => jsonRequest<{ ok: boolean; installs: InstallProgress[] }>(`/api/admin/router/install-progress?adminId=${ADMIN_ID}`),
+    enabled: !!activeRouterId && phase === "install",
+    refetchInterval: phase === "install" ? 4_000 : false,
+  });
+  const progress = progressQuery.data?.installs.find(item => item.routerId === activeRouterId);
+  const status = statusQuery.data;
+  const identityReady = !!status?.ready;
 
   const handleGenerate = async () => {
     setGenerating(true);
-    setPhase("generated");
+    setPageError(null);
     try {
-      const res = await fetch("/api/admin/router/ensure", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ adminId: ADMIN_ID, routerName: nextName }),
+      const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
+        method: "POST",
+        body: JSON.stringify({ adminId: ADMIN_ID, routerName: activeRouter?.name || `router${routers.length + 1}` }),
       });
-      const json = await res.json() as { ok: boolean; router?: FullRouter };
-      if (json.ok && json.router?.id) {
-        setGeneratedRouter(json.router);
-        setActiveRouterId(json.router.id);
-      }
-    } catch { /* auto-create on script fetch */ }
-    finally {
+      if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
+      setActiveRouterId(result.router.id);
+      setPhase("install");
+      qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    } finally {
       setGenerating(false);
-      qc.invalidateQueries({ queryKey: ["isp_routers_si4", ADMIN_ID] });
     }
   };
+
+  const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
+  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}`;
+  const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc mode=https check-certificate=no`;
+
+  const loadPorts = async () => {
+    if (!activeRouterId) return;
+    setPortsLoading(true);
+    setPageError(null);
+    setPortError(null);
+    try {
+      const data = await jsonRequest<PortsPayload>("/api/admin/router/self-install/ports", {
+        method: "POST",
+        body: JSON.stringify({ routerId: activeRouterId, adminId: ADMIN_ID }),
+      });
+      if (!data.ok) throw new Error(data.error || "Could not read the router interfaces.");
+      setPorts(data);
+      const hotspot = data.bridges.find(bridge => /hotspot/i.test(bridge.name));
+      const bridge = hotspot ?? data.bridges[0];
+      if (!bridge) throw new Error("The router has no bridge available. Create a bridge in RouterOS, then retry.");
+      setSelectedBridge(bridge.name);
+      setSelectedPorts(new Set(data.bridgePorts.filter(item => item.bridge === bridge.name).map(item => item.interface)));
+      setPortState({});
+      setPhase("ports");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPortsLoading(false);
+    }
+  };
+
+  const togglePort = async (iface: Iface) => {
+    if (!activeRouterId || !ports || !selectedBridge || ifaceKind(iface) === "protected" || portState[iface.name] === "pending") return;
+    const wasSelected = selectedPorts.has(iface.name);
+    const next = new Set(selectedPorts);
+    if (wasSelected) next.delete(iface.name); else next.add(iface.name);
+    setSelectedPorts(next);
+    setPortState(state => ({ ...state, [iface.name]: "pending" }));
+    setPortError(null);
+    try {
+      const result = await jsonRequest<{ ok: boolean; logs?: string[]; error?: string }>(
+        "/api/admin/router/self-install/bridge-assign",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            routerId: activeRouterId,
+            adminId: ADMIN_ID,
+            bridge: selectedBridge,
+            addPorts: wasSelected ? [] : [iface.name],
+            removePorts: wasSelected ? [iface.name] : [],
+            desiredPorts: [...next].filter(name => name !== "ether1"),
+          }),
+        },
+      );
+      if (!result.ok) throw new Error(result.error || result.logs?.join(" ") || "The router rejected this port change.");
+      setPortState(state => ({ ...state, [iface.name]: "applied" }));
+      setPorts(current => current ? {
+        ...current,
+        bridgePorts: [
+          ...current.bridgePorts.filter(item => !(item.bridge === selectedBridge && item.interface === iface.name)),
+          ...(wasSelected ? [] : [{ bridge: selectedBridge, interface: iface.name, id: `local-${iface.name}` }]),
+        ],
+      } : current);
+    } catch (error) {
+      setSelectedPorts(previous => {
+        const restored = new Set(previous);
+        if (wasSelected) restored.add(iface.name); else restored.delete(iface.name);
+        return restored;
+      });
+      setPortState(state => ({ ...state, [iface.name]: "failed" }));
+      setPortError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const finishInstallation = async () => {
+    if (!activeRouterId || !status?.ready || Object.values(portState).some(value => value === "pending")) return;
+    setCompleteLoading(true);
+    setPageError(null);
+    try {
+      const result = await jsonRequest<{ ok: boolean; router: InstallStatus["router"] }>("/api/admin/router/install-complete", {
+        method: "POST",
+        body: JSON.stringify({
+          routerId: activeRouterId,
+          adminId: ADMIN_ID,
+          bridge: selectedBridge,
+          ports: [...selectedPorts],
+        }),
+      });
+      if (!result.ok) throw new Error("The router did not pass the final VPN verification.");
+      setCompleteRouter(result.router);
+      setPhase("success");
+      qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCompleteLoading(false);
+    }
+  };
+
+  const runCopy = async () => {
+    if (!activeRouterId || !selectedSource || copyCategories.size === 0) return;
+    setCopyLoading(true);
+    setCopyResult(null);
+    setCopySkipped(false);
+    try {
+      const result = await jsonRequest<CopyResult>("/api/admin/router/sync-copy", {
+        method: "POST",
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          sourceRouterId: selectedSource.id,
+          targetRouterId: activeRouterId,
+          categories: [...copyCategories],
+        }),
+      });
+      setCopyResult(result);
+    } catch (error) {
+      setCopyResult({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCopyLoading(false);
+    }
+  };
+
+  const asset = modelAsset(completeRouter?.model || status?.router.model || activeRouter?.model || "");
+  const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
+  const stepLabels = ["Generate profile", "Run installer", "VPN + heartbeat", "Router ports", "Installed"];
+  const currentStep = phase === "idle" ? 0 : phase === "install" ? (identityReady ? 3 : 2) : phase === "ports" ? 4 : 5;
 
   return (
     <AdminLayout>
       <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "1.125rem", maxWidth: 820 }}>
-
-        {/* ── Page title ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 900 }}>
         <div>
-          <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: "var(--isp-text)", margin: "0 0 0.15rem" }}>
-            {isReconfigure ? "Reconfigure Router" : "Self install"}
+          <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 .2rem" }}>
+            {reconfigureId ? "Reconfigure Router" : "Self Install"}
           </h1>
-          <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", margin: 0 }}>
-            {isReconfigure
-              ? "Re-apply the setup script on an existing router."
-              : `Set up a new MikroTik router with VPN, hotspot, and PPPoE`}
+          <p style={{ fontSize: ".8rem", color: "var(--isp-text-muted)", margin: 0 }}>
+            Connect a MikroTik through the management VPN, choose its live ports, and finish setup without leaving this flow.
           </p>
         </div>
-
         <NetworkTabs active="self-install" />
 
-        {/* ── Blue profile banner ── */}
         <div style={{
-          background: "linear-gradient(135deg,#1e40af 0%,#2563eb 60%,#1d4ed8 100%)",
-          borderRadius: 10, padding: "0.875rem 1.25rem",
-          display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap",
+          display: "flex", alignItems: "center", gap: 0, overflowX: "auto",
+          background: "rgba(20,184,166,.05)", border: "1px solid rgba(20,184,166,.18)",
+          borderRadius: 10, padding: ".65rem .8rem",
         }}>
-          <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 800, fontSize: "1rem", color: "white", whiteSpace: "nowrap" }}>
-              Self Install — Profile:
-            </span>
-            {routersLoading && phase === "idle" ? (
-              <Loader2 size={14} style={{ color: "#93c5fd", animation: "spin 1s linear infinite" }} />
-            ) : (
-              <span style={{
-                fontFamily: "monospace", fontWeight: 800, fontSize: "0.9rem",
-                background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.25)",
-                padding: "0.2rem 0.75rem", borderRadius: 5, color: "#e0f2fe", whiteSpace: "nowrap",
-              }}>
-                {phase === "generated" || isReconfigure ? profileFile : `${nextSlug}.ovpn`}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={() => setShowHelp(v => !v)}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: "0.4rem",
-              padding: "0.4rem 1rem", borderRadius: 6,
-              background: showHelp ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.15)",
-              border: "1px solid rgba(255,255,255,0.2)",
-              color: "white", fontWeight: 700, fontSize: "0.8rem",
-              cursor: "pointer", fontFamily: "inherit",
-            }}
-          >
-            <HelpCircle size={13} /> Need Help?
-          </button>
-        </div>
-
-        {/* ── Help panel ── */}
-        {showHelp && (
-          <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 10, padding: "0.875rem 1rem", fontSize: "0.8rem", color: "#fbbf24", lineHeight: 1.75 }}>
-            <strong>Quick Guide:</strong><br />
-            1. Reset your MikroTik router to factory defaults (System → Reset Configuration, keep defaults).<br />
-            2. Plug in the WAN cable and verify internet: open a terminal and run <code style={{ fontFamily: "monospace" }}>ping 8.8.8.8</code>.<br />
-            3. Go to <strong>System → Certificates</strong> and delete any existing certificates.<br />
-            4. Open <strong>Winbox → New Terminal</strong>, paste Step 1, then Step 2 from the commands below.<br />
-            5. Wait ~30 s — the router will reboot and connect automatically.
-          </div>
-        )}
-
-        {/* ═══ IDLE: info box + generate button ═══ */}
-        {phase === "idle" && !isReconfigure && (
-          <>
-            {/* Info box */}
-            <div style={{
-              background: "rgba(59,130,246,0.07)",
-              border: "1px solid rgba(59,130,246,0.22)",
-              borderRadius: 10, padding: "1rem 1.125rem",
-              display: "flex", alignItems: "flex-start", gap: "0.75rem",
-            }}>
-              <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: "0.05rem" }} />
-              <p style={{ margin: 0, fontSize: "0.84rem", color: "var(--isp-text-muted)", lineHeight: 1.75 }}>
-                No configuration profile exists yet. Click the button below to generate the configuration files,
-                which will include VPN, hotspot, PPPoE, and user settings for your MikroTik router.
-                We advise resetting your router, giving it internet, then in a new terminal run{" "}
-                <code style={{ fontFamily: "monospace", color: "#93c5fd", fontSize: "0.82rem" }}>"ping 8.8.8.8"</code>{" "}
-                to confirm internet before generating.{" "}
-                <strong style={{ color: "var(--isp-text)" }}>Important:</strong> go to System → Certificates
-                and delete any certificates there before running the installation script.
-              </p>
-            </div>
-
-            {/* Generate button */}
-            <div>
-              <button
-                onClick={handleGenerate}
-                disabled={generating}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "0.6rem",
-                  padding: "0.75rem 2.25rem", borderRadius: 9,
-                  background: generating
-                    ? "rgba(20,184,166,0.4)"
-                    : "linear-gradient(135deg,#14b8a6,#0d9488)",
-                  border: "none", color: "white",
-                  fontWeight: 700, fontSize: "0.95rem",
-                  cursor: generating ? "not-allowed" : "pointer",
-                  fontFamily: "inherit",
-                  boxShadow: generating ? "none" : "0 4px 18px rgba(20,184,166,0.4)",
-                  transition: "all 0.2s",
-                }}
-              >
-                {generating
-                  ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} />
-                  : <Settings size={16} />
-                }
-                {generating ? "Generating…" : "Generate configuration files"}
-              </button>
-            </div>
-
-            {/* Existing routers list */}
-             {savedRouters.length > 0 && (
-              <div style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflow: "hidden" }}>
-                <div style={{ padding: "0.625rem 1rem", background: "rgba(255,255,255,0.02)", borderBottom: "1px solid var(--isp-border)", fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                   Saved routers ({savedRouters.length})
-                </div>
-                 {savedRouters.map((r, i) => {
-                  const colour = routerStatusColor(r);
-                  const label  = routerStatusLabel(r);
-                  return (
-                    <div key={r.id} style={{
-                      display: "flex", alignItems: "center", gap: "0.625rem",
-                      padding: "0.6rem 1rem",
-                       borderBottom: i < savedRouters.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
-                    }}>
-                      <span style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: colour }} />
-                      <span style={{ fontSize: "0.8rem", color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
-                      <code style={{ fontSize: "0.72rem", color: "#64748b", fontFamily: "monospace" }}>{slugify(r.name)}.rsc</code>
-                      {r.host && (
-                        <code style={{ fontSize: "0.7rem", color: "#475569", fontFamily: "monospace" }}>{r.host}</code>
-                      )}
-                      <span style={{ marginLeft: "auto", fontSize: "0.68rem", color: colour, fontWeight: 600 }}>
-                        {label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ═══ GENERATED / RECONFIGURE ═══ */}
-        {(phase === "generated" || isReconfigure) && (
-          <>
-            {/* Reconfigure banner */}
-            {isReconfigure && activeRouter && (
-              <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 10, padding: "0.75rem 1rem", fontSize: "0.82rem", color: "#fbbf24", lineHeight: 1.6, display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <AlertTriangle size={14} />
-                <span>Reconfiguring <strong>{activeRouter.name}</strong> — re-applying settings without creating a duplicate.</span>
-              </div>
-            )}
-
-            {/* Generated for banner */}
-            {!isReconfigure && (
-              <div style={{ background: "rgba(20,184,166,0.06)", border: "1px solid rgba(20,184,166,0.22)", borderRadius: 10, padding: "0.75rem 1.25rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "0.67rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.15rem" }}>
-                    Configuration generated for
-                  </div>
-                  <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>{displayName}</span>
-                  <code style={{ fontFamily: "monospace", fontSize: "0.73rem", color: "#64748b", marginLeft: "0.5rem" }}>({scriptFile})</code>
-                </div>
-                <button
-                  onClick={() => { setPhase("idle"); setActiveRouterId(null); setGeneratedRouter(null); }}
-                  style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: "0.25rem 0.625rem", cursor: "pointer", fontFamily: "inherit" }}
-                >
-                  ← Back
-                </button>
-              </div>
-            )}
-
-            {/* Personalized script actions */}
-            <div style={{
-              background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)",
-              borderRadius: 10, padding: "0.875rem 1.125rem", display: "flex",
-              alignItems: "center", justifyContent: "space-between", gap: "0.875rem", flexWrap: "wrap",
-            }}>
-              <div style={{ minWidth: 180, flex: 1 }}>
-                <div style={{ color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 700, marginBottom: "0.2rem" }}>
-                  Personalized installer for {adminData?.name ?? "your ISP"}
-                </div>
-                <div style={{ color: "var(--isp-text-muted)", fontSize: "0.74rem", lineHeight: 1.45 }}>
-                  Includes this router’s progress reporting, current ISP identity, and ISPlatty service URLs.
-                </div>
-              </div>
-              <a
-                href={scriptUrl}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "0.45rem",
-                  padding: "0.55rem 0.9rem", borderRadius: 7, background: "#2563eb",
-                  color: "white", fontSize: "0.78rem", fontWeight: 700, textDecoration: "none",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <Download size={14} /> Download .rsc
-              </a>
-            </div>
-
-            {/* Commands card */}
-            <div style={{ background: "var(--isp-card)", border: "1px solid rgba(20,184,166,0.2)", borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "0.875rem 1.25rem", background: "rgba(20,184,166,0.05)", borderBottom: "1px solid rgba(20,184,166,0.12)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Terminal size={14} style={{ color: "#14b8a6" }} />
-                <span style={{ fontWeight: 700, fontSize: "0.84rem", color: "var(--isp-text)" }}>
-                  Paste in Winbox → Terminal
-                </span>
-              </div>
-              <div style={{ padding: "1.375rem 1.5rem", display: "flex", flexDirection: "column", gap: "1.125rem" }}>
-                <CmdBlock step={1} title="Download configuration" cmd={fetchCmd} />
-                <CmdBlock step={2} title="Run configuration"      cmd={importCmd} />
-              </div>
-            </div>
-
-            {/* Next → Ports */}
-            <div style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              gap: "1rem", flexWrap: "wrap",
-              background: "var(--isp-card)", border: "1px solid rgba(20,184,166,0.2)",
-              borderRadius: 12, padding: "1.125rem 1.5rem",
-            }}>
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <div style={{ fontWeight: 700, fontSize: "0.87rem", color: "var(--isp-text)", marginBottom: "0.25rem" }}>
-                  {isReconfigure ? "Reassign Bridge Ports" : "Load Router Ports"}
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", lineHeight: 1.55 }}>
-                  {isReconfigure
-                    ? "After re-running the script, click Next to verify and reassign the bridge ports."
-                    : <>After running the commands above the router connects via OpenVPN. Click{" "}
-                        <strong style={{ color: "var(--isp-text)" }}>Next</strong> to load its physical ports
-                        and assign them to the hotspot bridge.</>
-                  }
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  const id = routerIdForNext ?? (isReconfigure ? reconfigureId : null);
-                  if (id) window.location.href = `/admin/network/bridge-ports?routerId=${id}`;
-                }}
-                disabled={!routerIdForNext && !(isReconfigure && reconfigureId)}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "0.5rem",
-                  padding: "0.65rem 1.875rem", borderRadius: 9,
-                  background: (routerIdForNext || (isReconfigure && reconfigureId))
-                    ? "linear-gradient(135deg,#14b8a6,#0d9488)"
-                    : "rgba(255,255,255,0.07)",
-                  border: "none",
-                  color: (routerIdForNext || (isReconfigure && reconfigureId)) ? "white" : "var(--isp-text-muted)",
-                  fontWeight: 700, fontSize: "0.9rem",
-                  cursor: (routerIdForNext || (isReconfigure && reconfigureId)) ? "pointer" : "not-allowed",
-                  fontFamily: "inherit",
-                  boxShadow: (routerIdForNext || (isReconfigure && reconfigureId)) ? "0 4px 16px rgba(20,184,166,0.35)" : "none",
-                  transition: "all 0.2s", whiteSpace: "nowrap",
-                }}
-              >
-                Next <ArrowRight size={15} />
-              </button>
-            </div>
-
-            {/* Step tracker */}
-            <div style={{ display: "flex", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, overflow: "hidden" }}>
-              {[
-                { label: "Generate config", done: true },
-                { label: "Paste in terminal", done: false },
-                { label: "OVPN connects", done: false },
-                { label: "Next → Ports", done: false },
-              ].map((s, i, arr) => (
-                <div key={i} style={{
-                  flex: 1, minWidth: 80, padding: "0.7rem 0.75rem",
-                  display: "flex", alignItems: "center", gap: "0.4rem",
-                  borderRight: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none",
-                  background: s.done ? "rgba(20,184,166,0.05)" : "transparent",
-                }}>
+          {stepLabels.map((label, index) => {
+            const done = currentStep > index;
+            const active = currentStep === index;
+            return (
+              <React.Fragment key={label}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 120 }}>
                   <span style={{
-                    width: 19, height: 19, borderRadius: "50%", flexShrink: 0,
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "0.62rem", fontWeight: 800,
-                    background: s.done ? "#14b8a6" : "rgba(255,255,255,0.07)",
-                    color: s.done ? "white" : "var(--isp-text-muted)",
-                  }}>
-                    {s.done ? <Check size={10} /> : i + 1}
+                    width: 21, height: 21, borderRadius: "50%", display: "inline-flex",
+                    alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    background: done || active ? "var(--isp-accent)" : "rgba(255,255,255,.08)",
+                    color: done || active ? "white" : "var(--isp-text-muted)", fontSize: ".63rem", fontWeight: 800,
+                  }}>{done ? <Check size={11} /> : index + 1}</span>
+                  <span style={{ color: done || active ? "var(--isp-accent)" : "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: active ? 800 : 500 }}>
+                    {label}
                   </span>
-                  <span style={{ fontSize: "0.71rem", color: s.done ? "#14b8a6" : "var(--isp-text-muted)", fontWeight: s.done ? 700 : 400, lineHeight: 1.3 }}>
-                    {s.label}
-                  </span>
-                  {i < arr.length - 1 && <ChevronRight size={10} style={{ color: "rgba(255,255,255,0.13)", marginLeft: "auto", flexShrink: 0 }} />}
                 </div>
-              ))}
+                {index < stepLabels.length - 1 && <ChevronRight size={12} style={{ color: "rgba(255,255,255,.18)", margin: "0 .35rem", flexShrink: 0 }} />}
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        {pageError && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fca5a5", background: "rgba(248,113,113,.07)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 9, padding: ".75rem 1rem", fontSize: ".78rem" }}>
+            <AlertTriangle size={15} /> {pageError}
+            <button onClick={() => setPageError(null)} style={{ marginLeft: "auto", background: "none", border: 0, color: "#fca5a5", cursor: "pointer" }}><X size={14} /></button>
+          </div>
+        )}
+
+        {phase === "idle" && (
+          <>
+            <div style={{ ...panelStyle(), padding: "1.2rem 1.3rem", display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <strong style={{ color: "var(--isp-text)", fontSize: ".88rem" }}>Create a router-specific installation profile</strong>
+                <p style={{ color: "var(--isp-text-muted)", fontSize: ".78rem", lineHeight: 1.65, margin: ".35rem 0 0" }}>
+                  The profile includes the isolated 10.8.5.x management VPN, hotspot, PPPoE, and the current ISP settings.
+                  After the router reports its identity and heartbeat, this page unlocks the live port step.
+                </p>
+              </div>
+            </div>
+            <button onClick={handleGenerate} disabled={generating} style={{ ...primaryButton(generating), alignSelf: "flex-start" }}>
+              {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Settings size={15} />}
+              {generating ? "Creating profile…" : "Generate configuration files"}
+            </button>
+            {routers.filter(router => router.status !== "setup").length > 0 && (
+              <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontWeight: 700, fontSize: ".8rem", marginBottom: ".6rem" }}>
+                  <Server size={14} style={{ color: "var(--isp-accent)" }} /> Existing routers
+                </div>
+                {routers.filter(router => router.status !== "setup").map(router => (
+                  <div key={router.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: ".5rem 0", borderTop: "1px solid var(--isp-border-subtle)", fontSize: ".76rem" }}>
+                    <StatusDot active={router.status === "online" || router.status === "connected"} />
+                    <span style={{ color: "var(--isp-text)", fontWeight: 700 }}>{router.name}</span>
+                    <span style={{ color: "var(--isp-text-muted)", marginLeft: "auto" }}>{router.model || "MikroTik"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {phase === "install" && activeRouterId && (
+          <>
+            <div style={{ ...panelStyle(), padding: "1rem 1.15rem", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 9, display: "grid", placeItems: "center", background: "rgba(20,184,166,.12)", color: "var(--isp-accent)" }}><Server size={18} /></div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".9rem" }}>{routerName}</div>
+                <div style={{ color: "var(--isp-text-muted)", fontSize: ".73rem", marginTop: 2 }}>Persistent management address: <code style={{ color: "#5eead4" }}>{status?.vpnIp || activeRouter?.vpn_ip || "assigning…"}</code></div>
+              </div>
+              <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
+                <HelpCircle size={13} /> Help
+              </button>
+            </div>
+            {showHelp && (
+              <div style={{ background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)", borderRadius: 9, padding: ".8rem 1rem", color: "#fbbf24", fontSize: ".75rem", lineHeight: 1.65 }}>
+                Reset the MikroTik, give it internet, open Winbox → New Terminal, then run Download configuration followed by Run installer. Leave the terminal open until the final “Setup complete” message appears.
+              </div>
+            )}
+            <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontWeight: 800, fontSize: ".84rem", marginBottom: ".75rem" }}>
+                <Terminal size={14} style={{ color: "var(--isp-accent)" }} /> Run the installer in Winbox Terminal
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: ".65rem" }}>
+                <div>
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>1. Download configuration</div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
+                    <code style={{ color: "#7dd3fc", fontSize: ".7rem", lineHeight: 1.55, wordBreak: "break-all", flex: 1 }}>{fetchCommand}</code>
+                    <CopyButton text={fetchCommand} />
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>2. Run configuration</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
+                    <code style={{ color: "#7dd3fc", fontSize: ".72rem", flex: 1 }}>/import mainhotspot.rsc</code>
+                    <CopyButton text="/import mainhotspot.rsc" />
+                  </div>
+                </div>
+              </div>
+              <a href={scriptUrl} style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: ".8rem", color: "#93c5fd", fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}><Download size={13} /> Download .rsc file</a>
+            </div>
+
+            <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: ".8rem" }}>
+                {statusQuery.isFetching ? <Loader2 size={15} style={{ color: "var(--isp-accent)", animation: "spin 1s linear infinite" }} /> : <Shield size={15} style={{ color: status?.vpnConnected ? "#4ade80" : "#64748b" }} />}
+                <span style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".84rem" }}>Connection verification</span>
+                {status?.vpnConnected && <span style={{ marginLeft: "auto", color: "#4ade80", fontSize: ".7rem", fontWeight: 700 }}>VPN tunnel detected</span>}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                {[
+                  ["Installer finished", !!status?.scriptComplete],
+                  ["Management VPN", !!status?.vpnConnected],
+                  ["Identity verified", !!(status?.connected && status.router.identity)],
+                ].map(([label, done]) => (
+                  <div key={String(label)} style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(255,255,255,.025)", borderRadius: 7, padding: ".6rem .65rem" }}>
+                    {done ? <CheckCircle2 size={14} color="#4ade80" /> : <Loader2 size={14} color="#64748b" style={{ animation: statusQuery.isFetching ? "spin 1s linear infinite" : undefined }} />}
+                    <span style={{ color: done ? "#86efac" : "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700 }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+              {status?.connected && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: ".75rem", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
+                  <span>Identity: <strong style={{ color: "var(--isp-text)" }}>{status.router.identity || "—"}</strong></span>
+                  <span>Model: <strong style={{ color: "var(--isp-text)" }}>{status.router.model || "—"}</strong></span>
+                  <span>RouterOS: <strong style={{ color: "var(--isp-text)" }}>{status.router.rosVersion || "—"}</strong></span>
+                  <span>Heartbeat: <strong style={{ color: status.heartbeat.recent ? "#4ade80" : "#fbbf24" }}>{status.heartbeat.recent ? "recent" : "waiting"}</strong></span>
+                </div>
+              )}
+            </div>
+            {!identityReady && !statusQuery.isLoading && <RouterRecovery error={status?.error || statusQuery.error?.message} />}
+            <button onClick={loadPorts} disabled={!identityReady || portsLoading} style={{ ...primaryButton(!identityReady || portsLoading), alignSelf: "flex-end" }}>
+              {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
+              {portsLoading ? "Loading live ports…" : "Next — view router and ports"}
+            </button>
+            {progress && (
+              <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                Installer progress: {progress.steps.filter(step => step.phase === "applied").length}/7 stages applied
+                {progress.failures > 0 && <span style={{ color: "#f87171" }}>{progress.failures} stage failure(s)</span>}
+              </div>
+            )}
+          </>
+        )}
+
+        {phase === "ports" && activeRouterId && ports && (
+          <>
+            <div style={{ ...panelStyle(), padding: "1rem 1.15rem", display: "flex", gap: 16, alignItems: "center" }}>
+              <div style={{ width: 170, height: 96, display: "grid", placeItems: "center", background: "rgba(255,255,255,.025)", borderRadius: 9, overflow: "hidden" }}>
+                <img src={asset.src} alt={asset.label} style={{ maxWidth: "92%", maxHeight: "92%", objectFit: "contain" }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: ".06em", fontSize: ".65rem", fontWeight: 800 }}>Connected router</div>
+                <h2 style={{ color: "var(--isp-text)", fontSize: "1.05rem", margin: ".18rem 0 .35rem" }}>{status?.router.name || routerName}</h2>
+                <div style={{ color: "var(--isp-accent)", fontSize: ".77rem", fontWeight: 800 }}>{asset.label}</div>
+                <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", marginTop: ".25rem" }}>{status?.router.rosVersion || "RouterOS"} · VPN {status?.vpnIp || activeRouter?.vpn_ip}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#4ade80", fontSize: ".72rem", fontWeight: 800 }}><StatusDot active /> Live</div>
+            </div>
+            <div style={{ background: "rgba(37,99,235,.06)", border: "1px solid rgba(37,99,235,.22)", borderRadius: 9, padding: ".75rem 1rem", color: "#93c5fd", fontSize: ".75rem", lineHeight: 1.55 }}>
+              <Wifi size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+              All live ethernet and WLAN interfaces are shown below. Click a port to apply it to the selected bridge. WAN and management interfaces remain protected.
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+              <span style={{ color: "var(--isp-text-muted)", fontSize: ".75rem", fontWeight: 700 }}>Bridge</span>
+              <select value={selectedBridge} onChange={event => {
+                const bridge = event.target.value;
+                setSelectedBridge(bridge);
+                setSelectedPorts(new Set(ports.bridgePorts.filter(item => item.bridge === bridge).map(item => item.interface)));
+                setPortState({});
+              }} style={{ background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-accent)", border: "1px solid var(--isp-accent-border)", borderRadius: 7, padding: ".42rem .7rem", fontFamily: "monospace", fontSize: ".76rem", fontWeight: 800 }}>
+                {ports.bridges.map(bridge => <option key={bridge.name} value={bridge.name}>{bridge.name}</option>)}
+              </select>
+              <button onClick={loadPorts} disabled={portsLoading} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 7, padding: ".4rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={12} /> Refresh</button>
+            </div>
+            <div style={panelStyle()}>
+              {liveInterfaces.length === 0 ? (
+                <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: ".8rem" }}>No live assignable interfaces were returned.</div>
+              ) : liveInterfaces.map((iface, index) => {
+                const kind = ifaceKind(iface);
+                const selected = selectedPorts.has(iface.name);
+                const currentBridge = bridgeForPort(iface.name, ports.bridgePorts);
+                const state = portState[iface.name];
+                const protectedPort = kind === "protected";
+                return (
+                  <div key={iface.name} onClick={() => void togglePort(iface)} style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: ".72rem 1rem",
+                    borderBottom: index < liveInterfaces.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
+                    background: selected ? "rgba(20,184,166,.07)" : "transparent",
+                    cursor: protectedPort ? "not-allowed" : state === "pending" ? "wait" : "pointer",
+                    opacity: protectedPort ? .55 : 1,
+                  }}>
+                    <div style={{ width: 21, height: 21, borderRadius: 5, display: "grid", placeItems: "center", background: selected ? "var(--isp-accent)" : "rgba(255,255,255,.06)", border: `2px solid ${selected ? "var(--isp-accent)" : "rgba(255,255,255,.18)"}` }}>
+                      {state === "pending" ? <Loader2 size={12} color="white" style={{ animation: "spin 1s linear infinite" }} /> : selected && <Check size={12} color="white" strokeWidth={3} />}
+                    </div>
+                    {kind === "wlan" ? <Wifi size={15} color={iface.running ? "#60a5fa" : "#475569"} /> : kind === "ether" ? <Plug size={15} color={iface.running ? "var(--isp-accent)" : "#475569"} /> : <Shield size={15} color="#64748b" />}
+                    <span style={{ color: "var(--isp-text)", fontFamily: "monospace", fontSize: ".82rem", fontWeight: 800, flex: 1 }}>{iface.name}</span>
+                    <span style={{ color: "var(--isp-text-muted)", fontSize: ".65rem", textTransform: "uppercase" }}>{iface.type || kind}</span>
+                    {currentBridge && <span style={{ color: "#86efac", background: "rgba(34,197,94,.1)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: ".17rem .45rem", fontSize: ".62rem", fontWeight: 700 }}>{currentBridge}</span>}
+                    {protectedPort ? <span style={{ color: "#fbbf24", fontSize: ".62rem", fontWeight: 700 }}>Protected</span> : state === "applied" ? <CheckCircle2 size={14} color="#4ade80" /> : state === "failed" ? <AlertTriangle size={14} color="#f87171" /> : <StatusDot active={iface.running} />}
+                  </div>
+                );
+              })}
+            </div>
+            {portError && <RouterRecovery error={portError} />}
+            <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
+              <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
+              <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending")} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending"))}>
+                {completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={15} />}
+                {completeLoading ? "Verifying installation…" : "Next — finish installation"}
+              </button>
             </div>
           </>
         )}
 
-        {phase === "generated" && (
-          <div style={{ marginTop: "0.8rem", background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.28)", borderRadius: 8, padding: "0.65rem 0.8rem", display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.72rem", color: "#ccfbf1" }}>Permanent router VPN IP</span>
-            <code style={{ color: "#5eead4", fontWeight: 800, fontSize: "0.78rem" }}>{activeRouter?.vpn_ip || "Assigning when the profile is generated…"}</code>
-          </div>
+        {phase === "success" && (
+          <>
+            <div style={{ ...panelStyle(), padding: "1.35rem", background: "linear-gradient(135deg,rgba(20,184,166,.12),rgba(34,197,94,.05))", borderColor: "rgba(34,197,94,.3)" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <CheckCircle2 size={27} color="#4ade80" style={{ flexShrink: 0 }} />
+                <div>
+                  <h2 style={{ color: "#86efac", fontSize: "1.08rem", margin: "0 0 .3rem" }}>Installation successful</h2>
+                  <p style={{ color: "var(--isp-text-muted)", fontSize: ".78rem", margin: 0, lineHeight: 1.6 }}>
+                    <strong style={{ color: "var(--isp-text)" }}>{completeRouter?.name || routerName}</strong> is connected and ready through its management VPN.
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 18, marginTop: "1rem", paddingTop: ".85rem", borderTop: "1px solid rgba(34,197,94,.18)", color: "var(--isp-text-muted)", fontSize: ".72rem" }}>
+                <span>Model <strong style={{ color: "var(--isp-text)" }}>{completeRouter?.model || asset.label}</strong></span>
+                <span>RouterOS <strong style={{ color: "var(--isp-text)" }}>{completeRouter?.rosVersion || "—"}</strong></span>
+                <span>VPN <code style={{ color: "#5eead4" }}>{status?.vpnIp || "—"}</code></span>
+                <span>Identity <strong style={{ color: "var(--isp-text)" }}>{completeRouter?.identity || "verified"}</strong></span>
+              </div>
+            </div>
+
+            {sourceRouters.length > 0 && !copySkipped && (
+              <div style={{ ...panelStyle(), padding: "1.05rem 1.15rem" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 9 }}>
+                  <Network size={16} style={{ color: "var(--isp-accent)", marginTop: 2 }} />
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ color: "var(--isp-text)", fontSize: ".88rem", margin: 0 }}>Copy configuration from another router?</h3>
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: ".74rem", margin: ".3rem 0 .85rem", lineHeight: 1.55 }}>
+                      Choose an existing router and explicitly select what should be copied to {routerName}. Existing router configuration is not changed.
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,.7fr) 1fr", gap: 12 }}>
+                  <select value={selectedSource?.id ?? ""} onChange={event => setSourceRouterId(Number(event.target.value))} style={{ alignSelf: "start", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "inherit", fontSize: ".75rem" }}>
+                    {sourceRouters.map(router => <option key={router.id} value={router.id}>{router.name} · {router.model || "MikroTik"}</option>)}
+                  </select>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
+                    {CONFIG_CATEGORIES.map(category => {
+                      const checked = copyCategories.has(category.id);
+                      return (
+                        <button key={category.id} onClick={() => setCopyCategories(current => {
+                          const next = new Set(current);
+                          if (checked) next.delete(category.id); else next.add(category.id);
+                          return next;
+                        })} style={{ display: "flex", alignItems: "flex-start", gap: 7, textAlign: "left", background: checked ? "rgba(20,184,166,.08)" : "rgba(255,255,255,.025)", border: `1px solid ${checked ? "var(--isp-accent-border)" : "var(--isp-border)"}`, borderRadius: 7, color: "var(--isp-text)", padding: ".55rem .6rem", cursor: "pointer", fontFamily: "inherit" }}>
+                          <span style={{ width: 16, height: 16, borderRadius: 4, display: "grid", placeItems: "center", flexShrink: 0, background: checked ? "var(--isp-accent)" : "transparent", border: `1px solid ${checked ? "var(--isp-accent)" : "rgba(255,255,255,.2)"}` }}>{checked && <Check size={10} color="white" />}</span>
+                          <span><strong style={{ display: "block", fontSize: ".7rem" }}>{category.label}</strong><small style={{ color: "var(--isp-text-muted)", fontSize: ".62rem" }}>{category.detail}</small></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: ".9rem", flexWrap: "wrap" }}>
+                  <button onClick={() => setCopySkipped(true)} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 7, padding: ".55rem .9rem", fontFamily: "inherit", fontSize: ".72rem", fontWeight: 700, cursor: "pointer" }}>Skip</button>
+                  <button onClick={() => void runCopy()} disabled={copyLoading || !selectedSource || copyCategories.size === 0} style={primaryButton(copyLoading || !selectedSource || copyCategories.size === 0)}>
+                    {copyLoading ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={14} />}
+                    {copyLoading ? "Syncing selected configuration…" : "Copy selected configuration"}
+                  </button>
+                </div>
+                {copyResult && (
+                  <div style={{ marginTop: ".9rem", background: copyResult.ok ? "rgba(34,197,94,.06)" : "rgba(248,113,113,.06)", border: `1px solid ${copyResult.ok ? "rgba(34,197,94,.25)" : "rgba(248,113,113,.25)"}`, borderRadius: 8, padding: ".7rem .8rem" }}>
+                    <div style={{ color: copyResult.ok ? "#4ade80" : "#f87171", fontWeight: 800, fontSize: ".75rem" }}>{copyResult.ok ? "Configuration copy complete" : "Configuration copy needs attention"}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: ".4rem", color: "var(--isp-text-muted)", fontFamily: "monospace", fontSize: ".65rem" }}>
+                      {Object.entries(copyResult.categories ?? {}).map(([name, result]) => <span key={name} style={{ color: result.ok ? "#86efac" : "#fca5a5" }}>{result.ok ? "✓" : "✗"} {name}: {result.count} item(s)</span>)}
+                      {copyResult.error && <span>{copyResult.error}</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {sourceRouters.length === 0 && <div style={{ color: "var(--isp-text-muted)", fontSize: ".75rem", padding: ".5rem" }}>No other installed routers are available for configuration copying.</div>}
+            {copySkipped && <div style={{ color: "#94a3b8", fontSize: ".74rem", display: "flex", alignItems: "center", gap: 6 }}><Check size={13} color="#4ade80" /> Skipped. Existing router configuration was not changed.</div>}
+          </>
         )}
-
-        {/* Note */}
-        <div style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.15)", borderRadius: 8, padding: "0.7rem 1rem", fontSize: "0.77rem", color: "#fbbf24", lineHeight: 1.65 }}>
-          <strong>Note:</strong> The MikroTik must have internet access to reach{" "}
-          <code style={{ fontFamily: "monospace", fontSize: "0.75rem" }}>
-            {adminSubdomain ? `${adminSubdomain}.${BASE_DOMAIN}` : window.location.host}
-          </code>{" "}
-          before running Step 1. Re-running the script updates its config — no duplicate is created.
-        </div>
-
       </div>
     </AdminLayout>
   );

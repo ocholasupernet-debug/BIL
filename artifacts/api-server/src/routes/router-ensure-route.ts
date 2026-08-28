@@ -47,6 +47,18 @@ function makeSecret(adminId: number): string {
     .slice(0, 48);
 }
 
+/* Credentials are consumed by server-side RouterOS routes and by the
+ * generated installer only. Never return them to the admin browser. */
+function publicRouter(row: Record<string, unknown>): Record<string, unknown> {
+  const {
+    router_secret: _routerSecret,
+    token: _token,
+    password: _password,
+    ...safe
+  } = row;
+  return safe;
+}
+
 async function allocatePersistentVpnIp(): Promise<string> {
   const used = new Set<string>(readIppEntries().values());
   try {
@@ -111,7 +123,7 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
             console.warn("[router/ensure] persistent VPN IP allocation deferred:", error);
           }
         }
-        res.json({ ok: true, router: existing, created: false });
+        res.json({ ok: true, router: publicRouter(existing), created: false });
         return;
       }
     }
@@ -162,7 +174,7 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
         try { rows = JSON.parse(lastBody) as Record<string, unknown>[]; } catch {}
         if (rows.length > 0) {
           console.log(`[router/ensure] Created router "${name}" for admin ${adminId} (key: ${key === SERVICE_KEY ? "service" : "anon"})`);
-          res.json({ ok: true, router: rows[0], created: true });
+          res.json({ ok: true, router: publicRouter(rows[0]), created: true });
           return;
         }
       }
@@ -176,7 +188,7 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
         if (existRes2.ok) {
           const rows2 = await existRes2.json() as Record<string, unknown>[];
           if (rows2.length > 0) {
-            res.json({ ok: true, router: rows2[0], created: false });
+            res.json({ ok: true, router: publicRouter(rows2[0]), created: false });
             return;
           }
         }

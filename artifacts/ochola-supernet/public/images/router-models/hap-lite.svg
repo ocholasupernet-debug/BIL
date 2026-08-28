@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" role="img" aria-labelledby="title">
+  <title>MikroTik hAP lite router illustration</title>
+  <defs>
+    <linearGradient id="body" x1="0" x2="1" y1="0" y2="1">
+      <stop stop-color="#f8fafc"/><stop offset="1" stop-color="#cbd5e1"/>
+    </linearGradient>
+    <linearGradient id="side" x1="0" x2="1"><stop stop-color="#94a3b8"/><stop offset="1" stop-color="#64748b"/></linearGradient>
+  </defs>
+  <ellipse cx="320" cy="259" rx="220" ry="19" fill="#0f172a" opacity=".22"/>
+  <path d="M115 206 166 72q7-18 26-18h253q18 0 25 17l55 135q6 16-10 22l-44 17H157l-36-17q-13-6-6-22Z" fill="url(#body)" stroke="#94a3b8" stroke-width="5"/>
+  <path d="m125 212 35 17h313l43-17-7 21-38 20H164l-35-20Z" fill="url(#side)" opacity=".8"/>
+  <path d="M183 74h268l29 77H154Z" fill="#e2e8f0" opacity=".85"/>
+  <circle cx="320" cy="126" r="28" fill="#0f172a"/>
+  <path d="M310 126h20M320 116v20" stroke="#38bdf8" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="416" cy="126" r="5" fill="#22c55e"/><circle cx="434" cy="126" r="5" fill="#22c55e"/>
+  <g fill="#334155"><rect x="215" y="185" width="33" height="10" rx="3"/><rect x="260" y="185" width="33" height="10" rx="3"/><rect x="305" y="185" width="33" height="10" rx="3"/><rect x="350" y="185" width="33" height="10" rx="3"/></g>
+  <text x="320" y="234" text-anchor="middle" fill="#e2e8f0" font-family="Arial,sans-serif" font-size="16" font-weight="700" letter-spacing="3">hAP lite</text>
+</svg>

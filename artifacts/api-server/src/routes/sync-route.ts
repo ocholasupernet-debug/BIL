@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
+import { sbSelect } from "../lib/supabase-client.js";
 
 const router: IRouter = Router();
 
@@ -566,6 +567,219 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
     log(`❌ ${msg}`);
     try { conn.close(); } catch { /* ignore */ }
     res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/router/sync-copy
+   Copies explicitly selected account configuration from one router
+   to a newly installed router. Router credentials are looked up here
+   on the server; the browser receives only per-category results.
+   Body: { adminId, sourceRouterId, targetRouterId,
+           categories: ["plans","ipPools","pppoe","users"] }
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
+  const adminId = Number(req.body?.adminId);
+  const sourceRouterId = Number(req.body?.sourceRouterId);
+  const targetRouterId = Number(req.body?.targetRouterId);
+  const requested = Array.isArray(req.body?.categories) ? req.body.categories : [];
+  const validCategories = ["plans", "ipPools", "pppoe", "users"] as const;
+  type CopyCategory = typeof validCategories[number];
+  const categories = validCategories.filter((category) => requested.includes(category)) as CopyCategory[];
+
+  if (!Number.isInteger(adminId) || adminId <= 0 ||
+      !Number.isInteger(sourceRouterId) || sourceRouterId <= 0 ||
+      !Number.isInteger(targetRouterId) || targetRouterId <= 0 ||
+      sourceRouterId === targetRouterId || categories.length === 0) {
+    res.status(400).json({
+      ok: false,
+      error: "adminId, different source and target routers, and at least one configuration category are required",
+    });
+    return;
+  }
+
+  type CopyRouter = {
+    id: number; admin_id: number; name: string; host: string | null;
+    bridge_ip: string | null; vpn_ip: string | null;
+    router_username: string | null; router_secret: string | null;
+  };
+  const routerSelect = "id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret";
+  const [sourceRows, targetRows] = await Promise.all([
+    sbSelect<CopyRouter>("isp_routers", `id=eq.${sourceRouterId}&admin_id=eq.${adminId}&select=${routerSelect}&limit=1`),
+    sbSelect<CopyRouter>("isp_routers", `id=eq.${targetRouterId}&admin_id=eq.${adminId}&select=${routerSelect}&limit=1`),
+  ]);
+  const source = sourceRows[0];
+  const target = targetRows[0];
+  if (!source || !target) {
+    res.status(404).json({ ok: false, error: "The selected routers were not found for this ISP account" });
+    return;
+  }
+
+  const targetHost = target.vpn_ip?.trim() || target.host?.trim() || target.bridge_ip?.trim() || "";
+  const targetBridgeIp = target.vpn_ip?.trim() || target.bridge_ip?.trim() || undefined;
+  if (!targetHost) {
+    res.status(409).json({ ok: false, error: "The new router has not connected through its management VPN yet" });
+    return;
+  }
+
+  const results: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }> = {};
+  const logs: string[] = [];
+  let conn: RouterOSAPI | undefined;
+
+  try {
+    ({ conn } = await connectWithFallback(
+      targetHost,
+      targetBridgeIp,
+      target.router_username || "admin",
+      target.router_secret || "",
+      (message) => logs.push(message),
+    ));
+
+    const plans = categories.includes("plans")
+      ? await sbSelect<Record<string, unknown>>("isp_plans", `admin_id=eq.${adminId}&select=*&order=id.asc`)
+      : [];
+    const pools = categories.includes("ipPools")
+      ? await sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`)
+      : [];
+    const pppoe = categories.includes("pppoe")
+      ? await sbSelect<Record<string, unknown>>("isp_ppp_secrets", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`)
+      : [];
+    const customers = categories.includes("users")
+      ? await sbSelect<Record<string, unknown>>("isp_customers", `admin_id=eq.${adminId}&select=*&order=id.asc`)
+      : [];
+    const planNames = new Map(plans.map(plan => [Number(plan.id), String(plan.name ?? "default")]));
+
+    const runCategory = async (
+      category: CopyCategory,
+      work: () => Promise<{ count: number; logs: string[] }>,
+    ) => {
+      if (!categories.includes(category)) return;
+      try {
+        const outcome = await work();
+        results[category] = { ok: true, ...outcome };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results[category] = { ok: false, count: 0, logs: [`❌ ${message}`], error: message };
+      }
+    };
+
+    await runCategory("plans", async () => {
+      const categoryLogs: string[] = [];
+      let count = 0;
+      for (const plan of plans) {
+        const name = String(plan.name ?? "").trim();
+        if (!name) continue;
+        const profileName = name.replace(/\s+/g, "-").toLowerCase();
+        const down = Number(plan.speed_down ?? 10);
+        const up = Number(plan.speed_up ?? 10);
+        const unit = String(plan.speed_down_unit ?? "Mbps");
+        const rateLimit = toRateLimit(down, up, unit);
+        const type = String(plan.type ?? "hotspot");
+        const path = type === "pppoe" ? "/ppp/profile" : "/ip/hotspot/user/profile";
+        const props: Record<string, string> = { name: profileName, "rate-limit": rateLimit };
+        if (type !== "pppoe") {
+          props["session-timeout"] = toSessionTimeout(
+            Number(plan.validity ?? plan.validity_days ?? 30),
+            String(plan.validity_unit ?? "days"),
+          );
+          props["shared-users"] = String(Number(plan.shared_users ?? 1));
+        }
+        await upsertByFilter(conn!, path, "name", profileName, props);
+        count += 1;
+      }
+      categoryLogs.push(`✓ ${count} plan profile(s) copied from ${source.name}`);
+      return { count, logs: categoryLogs };
+    });
+
+    await runCategory("ipPools", async () => {
+      const categoryLogs: string[] = [];
+      let count = 0;
+      for (const pool of pools) {
+        const name = String(pool.name ?? "").trim();
+        const start = String(pool.range_start ?? "").trim();
+        const end = String(pool.range_end ?? "").trim();
+        if (!name || !start || !end) continue;
+        await upsertByFilter(conn!, "/ip/pool", "name", name, {
+          name, ranges: `${start}-${end}`,
+        });
+        count += 1;
+      }
+      categoryLogs.push(`✓ ${count} IP pool(s) copied from ${source.name}`);
+      return { count, logs: categoryLogs };
+    });
+
+    await runCategory("pppoe", async () => {
+      const categoryLogs: string[] = [];
+      let count = 0;
+      for (const secret of pppoe) {
+        const name = String(secret.username ?? "").trim();
+        if (!name) continue;
+        await upsertByFilter(conn!, "/ppp/secret", "name", name, {
+          name,
+          password: String(secret.password ?? ""),
+          service: String(secret.service ?? "pppoe"),
+          profile: String(secret.profile ?? "default"),
+          ...(secret.ip_address ? { "remote-address": String(secret.ip_address) } : {}),
+          ...(secret.comment ? { comment: String(secret.comment) } : {}),
+        });
+        count += 1;
+      }
+      categoryLogs.push(`✓ ${count} PPPoE setting(s) copied from ${source.name}`);
+      return { count, logs: categoryLogs };
+    });
+
+    await runCategory("users", async () => {
+      const categoryLogs: string[] = [];
+      let count = 0;
+      for (const customer of customers) {
+        const name = String(customer.username ?? customer.pppoe_username ?? "").trim();
+        if (!name) continue;
+        const type = String(customer.type ?? "hotspot");
+        if (type === "pppoe") {
+          await upsertByFilter(conn!, "/ppp/secret", "name", String(customer.pppoe_username ?? name), {
+            name: String(customer.pppoe_username ?? name),
+            password: String(customer.password ?? ""),
+            service: "pppoe",
+            profile: planNames.get(Number(customer.plan_id))?.replace(/\s+/g, "-").toLowerCase() || "default",
+            ...(customer.ip_address ? { "remote-address": String(customer.ip_address) } : {}),
+          });
+        } else if (type === "hotspot") {
+          await upsertByFilter(conn!, "/ip/hotspot/user", "name", name, {
+            name,
+            password: String(customer.password ?? ""),
+            profile: planNames.get(Number(customer.plan_id))?.replace(/\s+/g, "-").toLowerCase() || "default",
+            ...(customer.mac_address ? { "mac-address": String(customer.mac_address) } : {}),
+          });
+        } else {
+          continue;
+        }
+        count += 1;
+      }
+      categoryLogs.push(`✓ ${count} user(s) copied from the ISP account`);
+      return { count, logs: categoryLogs };
+    });
+
+    try { conn.close(); } catch { /* ignore */ }
+    const failed = categories.filter(category => !results[category]?.ok);
+    res.status(failed.length ? 207 : 200).json({
+      ok: failed.length === 0,
+      sourceRouter: { id: source.id, name: source.name },
+      targetRouter: { id: target.id, name: target.name },
+      categories: results,
+      logs: [...logs, ...Object.values(results).flatMap(result => result.logs)],
+      error: failed.length ? `${failed.length} configuration category failed` : undefined,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try { conn?.close(); } catch { /* ignore */ }
+    res.status(503).json({
+      ok: false,
+      error: connErr(targetHost, message),
+      sourceRouter: { id: source.id, name: source.name },
+      targetRouter: { id: target.id, name: target.name },
+      categories: results,
+      logs: [...logs, `❌ ${message}`],
+    });
   }
 });
 

@@ -751,14 +751,16 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const origin = resolveOrigin(host);
   const scriptsBase = `${origin}/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
-     progress callbacks to /api/isp/router/install-progress/<rid>. The token
-     is the router_secret returned by /api/admin/router/ensure and is what
-     the API uses to authenticate the install events. Without rid+token the
-     script runs exactly as before (no callbacks). */
+     progress callbacks. The admin UI may instead send rid+adminId; in that
+     case the server resolves the router secret here so credentials never
+     need to be placed in a browser URL. Without rid+token/adminId the script
+     runs exactly as before (no callbacks). */
   const ridRaw   = ((req.query.rid   ?? "") as string).trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
+  const adminIdRaw = ((req.query.adminId ?? "") as string).trim();
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
+  const adminId = /^\d+$/.test(adminIdRaw) ? adminIdRaw : "";
   const rname  = ((req.query.name  ?? "") as string).trim().slice(0, 80);
   let companyName = "ISPlatty";
   let resolvedRouterName = rname;
@@ -767,32 +769,41 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let installerUrl = "";
   let routerVpnUrl = "";
 
-  interface InstallRouter { admin_id: number; name: string; vpn_ip?: string | null; }
+  interface InstallRouter {
+    admin_id: number; name: string; vpn_ip?: string | null;
+    router_secret?: string | null; token?: string | null;
+  }
   interface InstallAdmin { id: number; name: string; }
   let routerVpnIp = "";
+  let resolvedToken = token;
 
   try {
-    if (rid && token) {
-      /* A valid router secret binds the install script to a specific ISP and
-         unlocks the post-install registration call. */
+    if (rid && (token || adminId)) {
+      /* A valid router secret binds the install script to a specific ISP.
+         For the browser-safe path, adminId is checked against the router
+         owner and the secret is read only on the server. */
+      const ownerFilter = token
+        ? `or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})`
+        : `admin_id=eq.${encodeURIComponent(adminId)}`;
       const routers = await sbGet<InstallRouter>(
-        `isp_routers?id=eq.${rid}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=admin_id,name,vpn_ip&limit=1`,
+        `isp_routers?id=eq.${rid}&${ownerFilter}&select=admin_id,name,vpn_ip,router_secret,token&limit=1`,
       );
       const currentRouter = routers[0];
       if (currentRouter) {
+        resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         resolvedRouterName = currentRouter.name;
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
         updateRouterVpnAssignment(`router-${rid}`, assignedIp);
-        updateVpnCredentials(`router-${rid}`, token);
-        registrationUrl = `${origin}/api/isp/router/register/${token}`;
-        heartbeatUrl = `${origin}/api/isp/router/heartbeat/${token}`;
-        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
-        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
+        updateVpnCredentials(`router-${rid}`, resolvedToken);
+        registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
+        heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
+        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
+        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
-        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
+        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
         /* Pass the assignment into the orchestrator so the generated
            firewall and registration steps advertise the same address. */
         routerVpnIp = assignedIp;
@@ -810,8 +821,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
     /* The script remains usable when the identity lookup is temporarily down. */
   }
 
-  const progressUrl = (rid && token)
-    ? `${origin}/api/isp/router/install-progress/${rid}?token=${encodeURIComponent(token)}`
+  const progressUrl = (rid && resolvedToken)
+    ? `${origin}/api/isp/router/install-progress/${rid}?token=${encodeURIComponent(resolvedToken)}`
     : "";
   res
     .set("Content-Type", "text/plain; charset=utf-8")
