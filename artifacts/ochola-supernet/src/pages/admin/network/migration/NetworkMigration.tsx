@@ -396,13 +396,18 @@ export default function NetworkMigration() {
                   )}
                 </div>
 
-                <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
-                  <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Manual read-only collector</h3>
+                  <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
+                   <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Manual read-only collector (no tunnel)</h3>
                   <ol className="text-xs text-[var(--isp-text-muted)] space-y-2 list-decimal pl-5">
                     <li>Give the source router a name and create a one-time collector session.</li>
                     <li>Paste the displayed command into the active MikroTik terminal.</li>
                     <li>The domain-hosted script reads the router and uploads the export automatically.</li>
                   </ol>
+                   <p className="mt-3 text-xs text-amber-600">
+                     This collector only uploads the export over HTTPS. It does not create an interface or VPN tunnel.
+                     To connect through a temporary tunnel, select a registered source router above and run its separate
+                     <strong> one-hour tunnel command</strong> first.
+                   </p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router name</label>
@@ -416,7 +421,7 @@ export default function NetworkMigration() {
                 {collector && (
                   <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
                     <div>
-                      <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Domain-linked RouterOS command</label>
+                       <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Domain-linked collector command (no tunnel)</label>
                       <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
                       <div className="flex flex-wrap gap-2 mt-3">
                         <button type="button" className="btn btn-ghost" onClick={copyCollectorCommand}><FileCheck size={14} /> Copy command</button>
