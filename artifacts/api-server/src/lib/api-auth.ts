@@ -1,11 +1,13 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { sbSelect } from "./supabase-client.js";
+import { getTenantSubdomainFromRequest } from "./tenant-host.js";
 
 declare global {
   namespace Express {
     interface Request {
       authUser?: ApiTokenPayload;
+    tenantSubdomain?: string | null;
     }
   }
 }
@@ -133,12 +135,13 @@ export function requireAuth(requiredType?: "a" | "c") {
     }
 
     req.authUser = payload;
+    req.tenantSubdomain = getTenantSubdomainFromRequest(req);
     next();
   };
 }
 
 export function requireAdmin() {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const token = extractToken(req);
     const payload = validateToken(token);
 
@@ -165,6 +168,19 @@ export function requireAdmin() {
       req.authUser = { ...payload, uid: String(Number(impersonatedId)) };
     } else {
       req.authUser = payload;
+    }
+
+    const tenantSubdomain = getTenantSubdomainFromRequest(req);
+    req.tenantSubdomain = tenantSubdomain;
+    if (tenantSubdomain && req.authUser.uid !== "superadmin") {
+      const tenantRows = await sbSelect<{ id: number }>(
+        "isp_admins",
+        `id=eq.${encodeURIComponent(req.authUser.uid)}&subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id&limit=1`,
+      );
+      if (!tenantRows[0]) {
+        res.status(403).json({ ok: false, error: "This session does not belong to the requested ISP subdomain." });
+        return;
+      }
     }
     next();
   };

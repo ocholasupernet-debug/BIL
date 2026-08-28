@@ -80,13 +80,19 @@ fi
 pm2 startup | tail -1 | sudo bash || true
 
 # ── 8. nginx setup ────────────────────────────────────────
-echo "[8/8] Configuring nginx for $DOMAIN..."
+echo "[8/8] Installing the wildcard nginx configuration..."
 
-sudo cp "$APP_DIR/deploy/nginx.conf" "/etc/nginx/sites-available/$DOMAIN"
-sudo ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
-sudo rm -f /etc/nginx/sites-enabled/default
-
-sudo nginx -t && sudo systemctl reload nginx
+if [ -r "/etc/letsencrypt/live/${DOMAIN}-wildcard/fullchain.pem" ] &&
+   sudo openssl x509 -in "/etc/letsencrypt/live/${DOMAIN}-wildcard/fullchain.pem" \
+     -noout -ext subjectAltName 2>/dev/null | grep -Fq "DNS:*.${DOMAIN}"
+then
+  sudo cp "$APP_DIR/deploy/nginx.conf" "/etc/nginx/sites-available/$DOMAIN"
+  sudo ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo nginx -t && sudo systemctl reload nginx
+else
+  echo "    Wildcard certificate not found; run configure-nginx.sh with Namecheap DNS credentials."
+fi
 
 # Open ports (SSH must be first to avoid locking yourself out)
 sudo ufw allow 22/tcp  || true

@@ -51,6 +51,11 @@ jobs:
             upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
 
+            if [ -n "${NAMECHEAP_API_KEY:-}" ] && [ -n "${NAMECHEAP_API_USER:-}" ]; then
+              export NAMECHEAP_API_USER NAMECHEAP_API_KEY NAMECHEAP_USERNAME NAMECHEAP_CLIENT_IP CERTBOT_EMAIL
+              sudo -E bash deploy/configure-nginx.sh
+            fi
+
             bash deploy/deploy.sh
             echo "=== Deploy finished at $(date) ==="
         env:
@@ -59,3 +64,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          NAMECHEAP_API_USER: ${{ secrets.NAMECHEAP_API_USER }}
+          NAMECHEAP_API_KEY: ${{ secrets.NAMECHEAP_API_KEY }}
+          NAMECHEAP_USERNAME: ${{ secrets.NAMECHEAP_USERNAME }}
+          NAMECHEAP_CLIENT_IP: 102.203.116.204
+          CERTBOT_EMAIL: admin@isplatty.org

@@ -11,6 +11,7 @@ import {
 } from "../lib/mikrotik.js";
 import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
+import { getTenantSubdomain } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -195,11 +196,7 @@ async function sbGet<T>(path: string): Promise<T[]> {
    "localhost"             →  ""
 ── */
 function parseSubdomain(host: string): string {
-  const hostname = host.split(":")[0]; // strip port
-  // If it's an IP address, there's no subdomain
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return "";
-  const parts = hostname.split(".");
-  return parts.length >= 3 ? parts[0] : "";
+  return getTenantSubdomain(host) ?? "";
 }
 
 /* ── Slug ↔ name helpers ── */

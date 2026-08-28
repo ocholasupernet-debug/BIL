@@ -10,6 +10,7 @@ import {
   type ApiTokenPayload,
 } from "../lib/api-auth.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
+import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -18,10 +19,7 @@ const SA_API_KEY  = process.env.SUPERADMIN_API_KEY  ?? "Latex";
 const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? "";
 
 function getIspSubdomain(req: Request): string {
-  const hostname = req.hostname.toLowerCase().replace(/\.$/, "");
-  const match = hostname.match(/^([a-z0-9-]+)\.isplatty\.org$/);
-  const subdomain = match?.[1] ?? "";
-  return subdomain && subdomain !== "www" && subdomain !== "api" ? subdomain : "";
+  return getTenantSubdomainFromRequest(req) ?? "";
 }
 
 function sendInvalidCredentials(res: Response): void {

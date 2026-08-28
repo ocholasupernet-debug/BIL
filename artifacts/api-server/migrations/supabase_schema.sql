@@ -83,6 +83,12 @@ create table if not exists isp_admins (
 create unique index if not exists isp_admins_subdomain_username_key
   on isp_admins(subdomain, username)
   where username is not null;
+alter table isp_admins
+  add constraint isp_admins_reserved_subdomain_check
+  check (
+    subdomain is null
+    or lower(subdomain) not in ('www', 'api', 'vpn', 'register', 'proxyvpn', 'mail', 'admin')
+  ) not valid;
 create index if not exists isp_admins_subdomain_idx on isp_admins(subdomain);
 create index if not exists isp_admins_username_idx  on isp_admins(username);
 
