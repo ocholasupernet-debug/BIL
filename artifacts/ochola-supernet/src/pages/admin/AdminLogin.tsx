@@ -110,7 +110,7 @@ export default function AdminLogin() {
     background: "var(--isp-input-bg)",
     border: "1.5px solid var(--isp-input-border)",
     borderRadius: 10,
-    fontSize: "0.875rem", color: "var(--isp-text)",
+     fontSize: "0.95rem", color: "var(--isp-text)",
     outline: "none", fontFamily: "inherit",
     transition: "border-color 0.15s, box-shadow 0.15s",
   };
@@ -125,7 +125,7 @@ export default function AdminLogin() {
       minHeight: "100vh",
       background: "var(--isp-bg)",
       display: "flex",
-      fontFamily: "'Inter', system-ui, sans-serif",
+       fontFamily: "'DM Sans', system-ui, sans-serif",
     }}>
       <div style={{
         display: "none",
@@ -162,7 +162,7 @@ export default function AdminLogin() {
             <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#F1F5F9", letterSpacing: "-0.02em" }}>
               ISPlatty
             </div>
-            <div style={{ fontSize: "0.7rem", color: "#475569", fontWeight: 500 }}>
+             <div style={{ fontSize: "0.78rem", color: "#475569", fontWeight: 500 }}>
               ISP Management Platform
             </div>
           </div>
@@ -175,7 +175,7 @@ export default function AdminLogin() {
           }}>
             Manage your ISP with confidence
           </h2>
-          <p style={{ fontSize: "0.9rem", color: "#64748B", lineHeight: 1.7 }}>
+           <p style={{ fontSize: "1rem", color: "#64748B", lineHeight: 1.7 }}>
             Billing, MikroTik automation, hotspot management, and M-Pesa payments — all in one platform.
           </p>
 
@@ -191,13 +191,13 @@ export default function AdminLogin() {
                     <path d="M2 5l2 2 4-4" stroke="#22C55E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </div>
-                <span style={{ fontSize: "0.825rem", color: "#94A3B8" }}>{f}</span>
+                 <span style={{ fontSize: "0.9rem", color: "#94A3B8" }}>{f}</span>
               </div>
             ))}
           </div>
         </div>
 
-        <div style={{ fontSize: "0.72rem", color: "#334155", position: "relative" }}>
+         <div style={{ fontSize: "0.78rem", color: "#334155", position: "relative" }}>
           © 2024 ISPlatty · isplatty.org
         </div>
       </div>
@@ -220,22 +220,22 @@ export default function AdminLogin() {
               <Zap size={18} style={{ color: "white" }} />
             </div>
             <div>
-              <div style={{ fontSize: "0.95rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.02em" }}>
+               <div style={{ fontSize: "1rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.02em" }}>
                 {displayName}
               </div>
-              <div style={{ fontSize: "0.65rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
+               <div style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
                 {displayDomain}
               </div>
             </div>
           </div>
 
           <h1 style={{
-            fontSize: "1.75rem", fontWeight: 800, color: "var(--isp-text)",
+             fontSize: "1.9rem", fontWeight: 800, color: "var(--isp-text)",
             letterSpacing: "-0.03em", marginBottom: 6,
           }}>
             Welcome back
           </h1>
-          <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: 32 }}>
+           <p style={{ fontSize: "1rem", color: "var(--isp-text-muted)", marginBottom: 32 }}>
             Sign in to your admin dashboard
           </p>
 
@@ -246,14 +246,14 @@ export default function AdminLogin() {
               borderRadius: 10, padding: "10px 14px", marginBottom: 20,
             }}>
               <AlertCircle size={15} style={{ color: "#DC2626", flexShrink: 0 }} />
-              <p style={{ fontSize: "0.825rem", color: "#DC2626", margin: 0 }}>{error}</p>
+               <p style={{ fontSize: "0.9rem", color: "#DC2626", margin: 0 }}>{error}</p>
             </div>
           )}
 
           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
             <div>
               <label style={{
-                display: "block", fontSize: "0.78rem", fontWeight: 600,
+                 display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
               }}>
                 Username
@@ -278,7 +278,7 @@ export default function AdminLogin() {
 
             <div>
               <label style={{
-                display: "block", fontSize: "0.78rem", fontWeight: 600,
+                 display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
               }}>
                 Password
@@ -329,7 +329,7 @@ export default function AdminLogin() {
             </button>
           </form>
 
-          <p style={{ marginTop: 28, textAlign: "center", fontSize: "0.825rem", color: "var(--isp-text-sub)" }}>
+           <p style={{ marginTop: 28, textAlign: "center", fontSize: "0.9rem", color: "var(--isp-text-sub)" }}>
             {company ? (
               <>Not the right portal?{" "}
                 <a href="https://isplatty.org" style={{ color: "var(--isp-accent)", fontWeight: 600, textDecoration: "none" }}>
@@ -350,7 +350,7 @@ export default function AdminLogin() {
               width: 7, height: 7, borderRadius: "50%",
               background: "var(--isp-green)",
             }} />
-            <span style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
+             <span style={{ fontSize: "0.8rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
               All systems operational · {displayDomain}
             </span>
           </div>
