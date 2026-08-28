@@ -7,6 +7,12 @@ import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE
 import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
 import { buildDomainRouterExportScript, READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import {
+  buildMigrationTunnelScript,
+  MIGRATION_TUNNEL_TTL_MS,
+  provisionMigrationOpenVpnLease,
+  revokeMigrationOpenVpnLease,
+} from "../lib/migration-tunnel.js";
 
 const router: IRouter = Router();
 const locks = new Set<string>();
@@ -14,6 +20,27 @@ type RouterRow = { id: number; admin_id: number; name: string; host: string; bri
 type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; findings_json?: Record<string, unknown>; status: string };
 type CollectorToken = { token_hash: string; admin_id: number; source_label: string; expires_at: string; used_at?: string | null; migration_job_id?: number | null };
 type CollectorChunk = { token_hash: string; chunk_index: number; ciphertext: string; iv: string; auth_tag: string };
+type TunnelLease = {
+  id: number;
+  admin_id: number;
+  source_router_id: number;
+  migration_job_id?: number | null;
+  technology: "openvpn";
+  username: string;
+  assigned_ip: string;
+  server_endpoint: string;
+  bootstrap_token_hash: string;
+  ciphertext: string;
+  iv: string;
+  auth_tag: string;
+  status: "issued" | "script_issued" | "connected" | "exported" | "revoked" | "expired" | "server_unavailable";
+  created_at: string;
+  expires_at: string;
+  bootstrap_fetched_at?: string | null;
+  verified_at?: string | null;
+  revoked_at?: string | null;
+  audit_json?: Record<string, unknown>;
+};
 
 function admin(req: Request): number { const id = Number(req.authUser?.uid); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid administrator identity."); return id; }
 function positive(value: unknown): number { const id = Number(value); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid numeric identifier."); return id; }
@@ -32,6 +59,7 @@ function decryptText(chunk: CollectorChunk) {
   return Buffer.concat([decipher.update(Buffer.from(chunk.ciphertext, "base64")), decipher.final()]).toString("utf8");
 }
 function collectorHash(token: string) { return createHash("sha256").update(token).digest("hex"); }
+function leaseHash(token: string) { return createHash("sha256").update(token).digest("hex"); }
 function publicOrigin(req: Request) {
   const configured = process.env.PUBLIC_APP_ORIGIN?.trim();
   if (configured) return configured.replace(/\/+$/, "");
@@ -69,6 +97,110 @@ async function ownedRouter(id: number, adminId: number) {
   if (discoveredVpnIp) row.bridge_ip = discoveredVpnIp;
   return row;
 }
+
+function tunnelEndpoint(req: Request): string {
+  const configured = process.env.VPS_HOST?.trim();
+  if (configured) {
+    return configured.replace(/^https?:\/\//i, "").split("/")[0].replace(/:\d+$/, "");
+  }
+  const host = String(req.headers.host ?? "").split(":")[0];
+  if (host === "localhost" || host === "127.0.0.1") return host;
+  return host;
+}
+
+function tunnelInterfaceName(routerId: number, leaseToken: string): string {
+  return `ochola-mig-${routerId}-${leaseToken.slice(0, 8)}`;
+}
+
+function activeTunnelStatuses(): string {
+  return "in.(issued,script_issued,connected,exported)";
+}
+
+async function tunnelFor(
+  sourceRouterId: number,
+  adminId: number,
+  leaseId?: number,
+): Promise<TunnelLease> {
+  const leaseFilter = leaseId ? `&id=eq.${positive(leaseId)}` : "";
+  const rows = await sbSelectStrict<TunnelLease>(
+    "router_migration_tunnel_leases",
+    `admin_id=eq.${adminId}&source_router_id=eq.${positive(sourceRouterId)}&status=${activeTunnelStatuses()}${leaseFilter}&select=*&order=created_at.desc&limit=1`,
+  );
+  const lease = rows[0];
+  if (!lease) throw new Error("Start a one-hour migration tunnel for this source router first.");
+  if (new Date(lease.expires_at).getTime() <= Date.now()) {
+    await expireTunnel(lease);
+    throw new Error("The migration tunnel has expired. Start a new tunnel before exporting.");
+  }
+  return lease;
+}
+
+async function expireTunnel(lease: TunnelLease): Promise<void> {
+  if (lease.status === "revoked" || lease.status === "expired") return;
+  await revokeMigrationOpenVpnLease(lease.username);
+  const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
+  await sbUpdateStrict(
+    "router_migration_tunnel_leases",
+    `id=eq.${lease.id}&admin_id=eq.${lease.admin_id}&status=neq.revoked`,
+    {
+      status: "expired",
+      revoked_at: new Date().toISOString(),
+      audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: "expired", at: new Date().toISOString() }] },
+    },
+  ).catch(() => undefined);
+}
+
+async function expireDueTunnels(): Promise<void> {
+  try {
+    const leases = await sbSelectStrict<TunnelLease>(
+      "router_migration_tunnel_leases",
+      `status=${activeTunnelStatuses()}&expires_at=lt.${encodeURIComponent(new Date().toISOString())}&select=*`,
+    );
+    await Promise.all(leases.map(expireTunnel));
+  } catch {
+    /* The additive lease table may not be deployed yet; existing routes stay usable. */
+  }
+}
+
+const tunnelExpiryTimer = setInterval(() => { void expireDueTunnels(); }, 60_000);
+tunnelExpiryTimer.unref();
+
+async function revokeTunnel(lease: TunnelLease, status: "revoked" | "expired" = "revoked"): Promise<void> {
+  await revokeMigrationOpenVpnLease(lease.username);
+  const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
+  const now = new Date().toISOString();
+  await sbUpdateStrict(
+    "router_migration_tunnel_leases",
+    `id=eq.${lease.id}&admin_id=eq.${lease.admin_id}&status=neq.revoked`,
+    { status, revoked_at: now, audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: status, at: now }] } },
+  );
+}
+
+async function leaseCredentials(row: RouterRow, lease: TunnelLease): Promise<RouterCredentials> {
+  /* Do not let a reachable public/LAN address win before the temporary tunnel.
+     Migration preflight must prove the exact leased management path. */
+  return { ...creds(row), bridgeIp: lease.assigned_ip, host: lease.assigned_ip };
+}
+
+async function requireLeasedApiConnection(row: RouterRow, adminId: number, lease: TunnelLease) {
+  const result = await pingRouter(await leaseCredentials(row, lease));
+  const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
+  await sbUpdateStrict(
+    "router_migration_tunnel_leases",
+    `id=eq.${lease.id}&admin_id=eq.${adminId}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}`,
+    { status: "connected", verified_at: result.connectedAt, audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: "api_verified", at: result.connectedAt, connected_host: result.connectedHost }] } },
+  );
+  await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, {
+    status: "online",
+    last_seen: result.connectedAt,
+    last_connected_host: result.connectedHost,
+    bridge_ip: lease.assigned_ip,
+    model: result.board || undefined,
+    ros_version: result.version || undefined,
+    updated_at: result.connectedAt,
+  });
+  return result;
+}
 async function requireApiConnection(row: RouterRow, adminId: number) {
   try {
     const result = await pingRouter(creds(row));
@@ -88,6 +220,13 @@ async function requireApiConnection(row: RouterRow, adminId: number) {
   }
 }
 async function jobFor(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&admin_id=eq.${adminId}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
+async function sourceForJob(job: Job, adminId: number): Promise<{ row: RouterRow; tunnel: TunnelLease } | null> {
+  if (!job.source_router_id) return null;
+  const row = await ownedRouter(job.source_router_id, adminId);
+  const audit = job.audit_json as Record<string, unknown> | undefined;
+  const tunnel = await tunnelFor(job.source_router_id, adminId, Number(audit?.tunnel_lease_id) || undefined);
+  return { row: { ...row, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip }, tunnel };
+}
 async function guarded(req: Request, fn: (adminId: number) => Promise<void>, res: any) { try { const id = admin(req); const lock = `${id}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`; if (locks.has(lock)) { res.status(409).json({ ok: false, error: "Migration is already in progress." }); return; } locks.add(lock); try { await fn(id); } finally { locks.delete(lock); } } catch (e) { res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." }); } }
 async function observeDevice(row: RouterRow) {
   const [identity, resource, routerboard, license] = await Promise.all([
@@ -165,6 +304,58 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Collector upload failed." });
   }
 });
+
+/* The MikroTik cannot present the administrator's browser session. It fetches
+   this one-time bootstrap only after the admin has created a lease. */
+router.get("/router-migrations/tunnel-bootstrap", async (req, res) => {
+  try {
+    const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+    if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) {
+      res.status(401).send("Invalid or expired migration tunnel session.");
+      return;
+    }
+    const rows = await sbSelectStrict<TunnelLease>(
+      "router_migration_tunnel_leases",
+      `bootstrap_token_hash=eq.${leaseHash(token)}&status=eq.issued&select=*&limit=1`,
+    );
+    const lease = rows[0];
+    if (!lease || new Date(lease.expires_at).getTime() <= Date.now()) {
+      if (lease) await expireTunnel(lease);
+      res.status(401).send("Invalid or expired migration tunnel session.");
+      return;
+    }
+    const encrypted = decrypt(lease as unknown as Job);
+    const password = String(encrypted.password ?? "");
+    if (!password) {
+      res.status(500).send("Migration tunnel credential is unavailable.");
+      return;
+    }
+    const script = buildMigrationTunnelScript({
+      endpoint: lease.server_endpoint,
+      port: 1194,
+      username: lease.username,
+      password,
+      tunnelIp: lease.assigned_ip,
+      interfaceName: tunnelInterfaceName(lease.source_router_id, token),
+      firewallComment: `ochola-migration:${lease.id}`,
+      schedulerName: `ochola-migration-expiry-${lease.id}`,
+    });
+    const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
+    await sbUpdateStrict(
+      "router_migration_tunnel_leases",
+      `id=eq.${lease.id}&status=eq.issued`,
+      {
+        status: "script_issued",
+        bootstrap_fetched_at: new Date().toISOString(),
+        audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: "bootstrap_fetched", at: new Date().toISOString() }] },
+      },
+    ).catch(() => undefined);
+    res.type("text/plain").set("Content-Disposition", 'inline; filename="ochola-migration-tunnel.rsc"').send(script);
+  } catch {
+    res.status(401).send("Invalid or expired migration tunnel session.");
+  }
+});
+
 router.use("/router-migrations", requireAdmin());
 router.get("/router-migrations/read-only-export-script", (req, res) => {
   try {
@@ -174,6 +365,100 @@ router.get("/router-migrations/read-only-export-script", (req, res) => {
     res.status(401).json({ ok: false, error: "Invalid administrator identity." });
   }
 });
+
+router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req, async a => {
+  const sourceRouterId = positive(req.body.sourceRouterId);
+  const source = await ownedRouter(sourceRouterId, a);
+  const endpoint = tunnelEndpoint(req);
+  if (!endpoint) throw new Error("VPS_HOST must be configured before creating a migration tunnel.");
+
+  const bootstrapToken = randomBytes(32).toString("base64url");
+  const username = `ochola-mig-${sourceRouterId}-${bootstrapToken.slice(0, 8)}`;
+  const password = randomBytes(24).toString("base64url");
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + MIGRATION_TUNNEL_TTL_MS).toISOString();
+  const candidates = Array.from({ length: 249 }, (_, index) => 2 + ((sourceRouterId + index) % 249));
+  let lease: TunnelLease | undefined;
+
+  for (const hostPart of candidates) {
+    const assignedIp = `10.8.0.${hostPart}`;
+    const conflict = await sbSelectStrict<{ id: number }>(
+      "router_migration_tunnel_leases",
+      `assigned_ip=eq.${assignedIp}&status=${activeTunnelStatuses()}&select=id&limit=1`,
+    );
+    if (conflict[0]) continue;
+    try {
+      const rows = await sbInsertStrict<TunnelLease>("router_migration_tunnel_leases", {
+        admin_id: a,
+        source_router_id: sourceRouterId,
+        migration_job_id: null,
+        technology: "openvpn",
+        username,
+        assigned_ip: assignedIp,
+        server_endpoint: endpoint,
+        bootstrap_token_hash: leaseHash(bootstrapToken),
+        ...encrypt({ password }),
+        status: "issued",
+        created_at: now.toISOString(),
+        expires_at: expiresAt,
+        audit_json: { source_read_only: true, lifecycle: "issued" },
+      });
+      lease = rows[0];
+      break;
+    } catch {
+      /* A concurrent session may have claimed this address; try the next one. */
+    }
+  }
+  if (!lease) throw new Error("No migration tunnel address is available. Close an existing tunnel and try again.");
+
+  const serverReady = await provisionMigrationOpenVpnLease(username, password, lease.assigned_ip);
+  if (!serverReady) {
+    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${lease.id}&admin_id=eq.${a}`, {
+      status: "server_unavailable",
+      revoked_at: new Date().toISOString(),
+      audit_json: { ...(lease.audit_json ?? {}), events: [{ event: "server_unavailable", at: new Date().toISOString() }] },
+    }).catch(() => undefined);
+    res.status(503).json({
+      ok: false,
+      error: "The VPS OpenVPN auth and client-config paths are not available to the API server. Run the VPS VPN setup first.",
+    });
+    return;
+  }
+
+  const scriptUrl = `${publicOrigin(req)}/api/router-migrations/tunnel-bootstrap?token=${encodeURIComponent(bootstrapToken)}`;
+  const interfaceName = tunnelInterfaceName(sourceRouterId, bootstrapToken);
+  const command = `/tool fetch url="${scriptUrl}" dst-path=ochola-migration-tunnel.rsc mode=https check-certificate=no; /import ochola-migration-tunnel.rsc; /file remove [find name="ochola-migration-tunnel.rsc"]`;
+  res.status(201).json({
+    ok: true,
+    leaseId: String(lease.id),
+    routerId: sourceRouterId,
+    routerName: source.name,
+    technology: lease.technology,
+    tunnelAddress: lease.assigned_ip,
+    serverEndpoint: endpoint,
+    interfaceName,
+    scriptUrl,
+    command,
+    createdAt: lease.created_at,
+    expiresAt: lease.expires_at,
+    status: lease.status,
+  });
+}, res));
+router.get("/router-migrations/tunnel-session/:id", async (req, res) => guarded(req, async a => {
+  const rows = await sbSelectStrict<TunnelLease>(
+    "router_migration_tunnel_leases",
+    `id=eq.${positive(req.params.id)}&admin_id=eq.${a}&select=id,source_router_id,technology,assigned_ip,status,created_at,expires_at,verified_at&limit=1`,
+  );
+  const lease = rows[0];
+  if (!lease) throw new Error("Migration tunnel session not found.");
+  if (new Date(lease.expires_at).getTime() <= Date.now() && ["issued", "script_issued", "connected", "exported"].includes(lease.status)) {
+    await expireTunnel(lease);
+    res.json({ id: String(lease.id), status: "expired", address: lease.assigned_ip, expiresAt: lease.expires_at, verifiedAt: lease.verified_at });
+    return;
+  }
+  res.json({ id: String(lease.id), status: lease.status, address: lease.assigned_ip, expiresAt: lease.expires_at, verifiedAt: lease.verified_at });
+}, res));
+
 router.post("/router-migrations/collector-session", async (req, res) => guarded(req, async a => {
   const sourceLabel = typeof req.body.sourceLabel === "string" ? req.body.sourceLabel.trim().slice(0, 120) : "";
   if (!sourceLabel) throw new Error("Give this source router a name.");
@@ -202,27 +487,79 @@ router.get("/router-migrations/collector-session/status", async (req, res) => gu
   const audit = job?.audit_json ?? {};
   res.json({ status: job?.status ?? "processing", migrationId: String(session.migration_job_id), sourceLabel: session.source_label, sourceMode: "domain_collector", summary: audit.summary ?? {}, findings: job?.findings_json ?? {} });
 }, res));
+router.get("/router-migrations/:id/tunnel", async (req, res) => guarded(req, async a => {
+  const job = await jobFor(positive(req.params.id), a);
+  if (!job.source_router_id) throw new Error("This migration has no registered source router tunnel.");
+  const tunnel = await tunnelFor(job.source_router_id, a, Number((job.audit_json as Record<string, unknown> | undefined)?.tunnel_lease_id) || undefined);
+  res.json({
+    id: String(tunnel.id),
+    technology: tunnel.technology,
+    address: tunnel.assigned_ip,
+    expiresAt: tunnel.expires_at,
+    status: tunnel.status,
+    verifiedAt: tunnel.verified_at,
+  });
+}, res));
+router.post("/router-migrations/:id/tunnel/revoke", async (req, res) => guarded(req, async a => {
+  const job = await jobFor(positive(req.params.id), a);
+  if (!job.source_router_id) throw new Error("This migration has no registered source router tunnel.");
+  const tunnel = await tunnelFor(job.source_router_id, a, Number((job.audit_json as Record<string, unknown> | undefined)?.tunnel_lease_id) || undefined);
+  await revokeTunnel(tunnel);
+  res.json({ ok: true, status: "revoked", address: tunnel.assigned_ip });
+}, res));
 router.get("/router-migrations/routers", async (req, res) => guarded(req, async a => {
   const rows = await sbSelectStrict<RouterRow>("isp_routers", `admin_id=eq.${a}&select=id,name,host,status,ros_version&order=name.asc`);
   res.json({ routers: rows });
 }, res));
 router.post("/router-migrations/analyze", async (req, res) => guarded(req, async a => {
-  const source = await ownedRouter(positive(req.body.sourceRouterId), a);
+  const sourceRouterId = positive(req.body.sourceRouterId);
+  const source = await ownedRouter(sourceRouterId, a);
+  const tunnel = await tunnelFor(sourceRouterId, a, req.body.tunnelId ? positive(req.body.tunnelId) : undefined);
   for (const command of ["/system/identity/print", "/system/resource/print", "/system/routerboard/print", "/system/license/print"]) assertSourceCommand(command);
-  await requireApiConnection(source, a);
-  const observed = await observeDevice(source);
-  res.json({ compatible: true, details: "Read-only compatibility analysis completed.", dataPoints: [{ type: "router", count: 1 }], readOnly: true, identity: { name: observed.identity, version: observed.version, boardName: observed.boardName } });
+  await requireLeasedApiConnection(source, a, tunnel);
+  const observed = await observeDevice({ ...source, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip });
+  res.json({
+    compatible: true,
+    details: `Read-only compatibility analysis completed through the ${tunnel.assigned_ip} migration tunnel.`,
+    dataPoints: [{ type: "router", count: 1 }],
+    readOnly: true,
+    tunnel: { id: String(tunnel.id), address: tunnel.assigned_ip, expiresAt: tunnel.expires_at, technology: tunnel.technology },
+    identity: { name: observed.identity, version: observed.version, boardName: observed.boardName },
+  });
 }, res));
 router.post("/router-migrations/export", async (req, res) => guarded(req, async a => {
-  const source = await ownedRouter(positive(req.body.sourceRouterId), a);
-  await requireApiConnection(source, a);
-  const pkg = await exportRouterMigration(creds(source)); const secure = encrypt(pkg); const plan = buildMigrationPlan(pkg);
+  const sourceRouterId = positive(req.body.sourceRouterId);
+  const source = await ownedRouter(sourceRouterId, a);
+  const tunnel = await tunnelFor(sourceRouterId, a, req.body.tunnelId ? positive(req.body.tunnelId) : undefined);
+  await requireLeasedApiConnection(source, a, tunnel);
+  const pkg = await exportRouterMigration(await leaseCredentials(source, tunnel)); const secure = encrypt(pkg); const plan = buildMigrationPlan(pkg);
   const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
-  const rows = await sbInsertStrict<Job>("router_migration_jobs", { admin_id: a, source_router_id: source.id, status: "exported", ...secure, findings_json: { warnings: pkg.warnings, manual, unsupported }, audit_json: { exported_at: new Date().toISOString(), source_read_only: true } });
+  const rows = await sbInsertStrict<Job>("router_migration_jobs", {
+    admin_id: a,
+    source_router_id: source.id,
+    status: "exported",
+    ...secure,
+    findings_json: { warnings: pkg.warnings, manual, unsupported },
+    audit_json: { exported_at: new Date().toISOString(), source_read_only: true, tunnel_lease_id: tunnel.id, tunnel_address: tunnel.assigned_ip, tunnel_technology: tunnel.technology },
+  });
+  if (rows[0]?.id) {
+    const events = Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : [];
+    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${tunnel.id}&admin_id=eq.${a}`, {
+      migration_job_id: rows[0].id,
+      status: "exported",
+      audit_json: { ...(tunnel.audit_json ?? {}), events: [...events, { event: "exported", at: new Date().toISOString(), migration_job_id: rows[0].id }] },
+    });
+  }
   const pools = Array.isArray(pkg.ip_pools) ? pkg.ip_pools.length : 0, users = (Array.isArray(pkg.ppp_secrets) ? pkg.ppp_secrets.length : 0) + (Array.isArray(pkg.hotspot_users) ? pkg.hotspot_users.length : 0);
   const configs = Object.values(pkg).reduce<number>((sum, value) => sum + (Array.isArray(value) ? value.length : 0), 0);
-  res.status(201).json({ id: String(rows[0]?.id), status: "exported", summary: { configs, users, queues: Array.isArray(pkg.queues) ? pkg.queues.length : 0, pools }, findings: { warnings: pkg.warnings, manual, unsupported } });
+  res.status(201).json({
+    id: String(rows[0]?.id),
+    status: "exported",
+    tunnel: { address: tunnel.assigned_ip, expiresAt: tunnel.expires_at, technology: tunnel.technology },
+    summary: { configs, users, queues: Array.isArray(pkg.queues) ? pkg.queues.length : 0, pools },
+    findings: { warnings: pkg.warnings, manual, unsupported },
+  });
 }, res));
 router.post("/router-migrations/source-export", async (req, res) => guarded(req, async a => {
   const sourceLabel = typeof req.body.sourceLabel === "string" ? req.body.sourceLabel.trim().slice(0, 120) : "";
@@ -250,7 +587,7 @@ router.post("/router-migrations/source-export", async (req, res) => guarded(req,
 }, res));
 router.get("/router-migrations/:id", async (req, res) => guarded(req, async a => { const j = await jobFor(positive(req.params.id), a); res.json({ id: String(j.id), status: j.status, sourceRouterId: j.source_router_id, targetRouterId: j.target_router_id }); }, res));
 router.post("/router-migrations/:id/target", async (req, res) => guarded(req, async a => {
-  const job = await jobFor(positive(req.params.id), a), source = job.source_router_id ? await ownedRouter(job.source_router_id, a) : null, target = await ownedRouter(positive(req.body.targetRouterId), a);
+  const job = await jobFor(positive(req.params.id), a), sourceInfo = await sourceForJob(job, a), source = sourceInfo?.row ?? null, target = await ownedRouter(positive(req.body.targetRouterId), a);
   if (job.status !== "exported" && job.status !== "target_selected" && job.status !== "dry_run") throw new Error("Migration is not eligible for target selection.");
   const t = await observeDevice(target);
   let s: Awaited<ReturnType<typeof observeDevice>> | undefined;
@@ -258,7 +595,7 @@ router.post("/router-migrations/:id/target", async (req, res) => guarded(req, as
     s = await observeDevice(source);
     assertDistinctTargets({ ...source, identity: s.identity, serial: s.fingerprint }, { ...target, identity: t.identity, serial: t.fingerprint });
   }
-  const audit = { ...(job.audit_json ?? {}), source_identity: s?.identity ?? job.source_label, source_fingerprint: s?.fingerprint, target_identity: t.identity, target_fingerprint: t.fingerprint, source_host: source?.host, target_host: target.host, source_mode: job.source_mode ?? "connected_router" };
+   const audit = { ...(job.audit_json ?? {}), source_identity: s?.identity ?? job.source_label, source_fingerprint: s?.fingerprint, target_identity: t.identity, target_fingerprint: t.fingerprint, source_host: source?.host, target_host: target.host, source_mode: job.source_mode ?? "connected_router", ...(sourceInfo ? { tunnel_address: sourceInfo.tunnel.assigned_ip, tunnel_expires_at: sourceInfo.tunnel.expires_at } : {}) };
   await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}&admin_id=eq.${a}`, { target_router_id: target.id, status: "target_selected", audit_json: audit });
   res.json({ ok: true, targetRouterId: target.id });
 }, res));
@@ -280,7 +617,7 @@ router.post("/router-migrations/:id/dry-run", async (req, res) => guarded(req, a
 }, res));
 router.post("/router-migrations/:id/import", async (req, res) => guarded(req, async a => {
   if (req.body.confirmation !== "MODIFY TARGET ROUTER") throw new Error("Exact confirmation text MODIFY TARGET ROUTER is required.");
-  const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (job.status !== "dry_run") throw new Error("A verified dry run is required before import."); const target = await ownedRouter(job.target_router_id, a); const source = job.source_router_id ? await ownedRouter(job.source_router_id, a) : null; const plan = await planJob(job);
+   const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (job.status !== "dry_run") throw new Error("A verified dry run is required before import."); const target = await ownedRouter(job.target_router_id, a); const sourceInfo = await sourceForJob(job, a); const source = sourceInfo?.row ?? null; const plan = await planJob(job);
   const approved: string[] = Array.isArray(req.body.approvedItemIds) ? req.body.approvedItemIds.filter((x: unknown): x is string => typeof x === "string") : [];
   const dryRunApproved: string[] = Array.isArray((job.stages_json as Record<string, unknown> | undefined)?.approved) ? (job.stages_json as { approved: unknown[] }).approved.filter((x: unknown): x is string => typeof x === "string") : [];
   if (!approved.length || approved.length !== dryRunApproved.length || approved.some(id => !dryRunApproved.includes(id))) throw new Error("Approved items changed after dry run; run the dry run again.");
@@ -326,8 +663,9 @@ router.post("/router-migrations/:id/import", async (req, res) => guarded(req, as
     finalized = true;
     res.json({ success: !report.stopped, importedItems: report.applied.length, failedItems: report.failures.length, recovery, status: report.stopped ? "failed" : "completed" });
   } finally {
-    if (finalized) {
+     if (finalized) {
       await sbRpc("release_router_migration_target_lease", { p_job_id: job.id, p_admin_id: a, p_target_router_id: target.id, p_lease_token: leaseToken }).catch(() => undefined);
+       if (sourceInfo) await revokeTunnel(sourceInfo.tunnel).catch(() => undefined);
     }
   }
 }, res));

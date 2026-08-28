@@ -20,12 +20,16 @@ import {
   fetchRouters,
   createCollectorSession,
   getCollectorSessionStatus,
+  createMigrationTunnel,
+  getMigrationTunnelStatus,
+  analyzeSource,
+  exportSource,
   setTargetRouter,
   runDryRun,
   runImport,
   getReport
 } from "./api";
-import type { RouterSummary, CollectorSession, ExportResponse, DryRunResponse, ReportResponse } from "./types";
+import type { RouterSummary, CollectorSession, MigrationTunnelSession, ExportResponse, DryRunResponse, ReportResponse } from "./types";
 import { useToast } from "@/hooks/use-toast";
 
 const STEPS = [
@@ -44,6 +48,9 @@ export default function NetworkMigration() {
   const [targetRouterId, setTargetRouterId] = useState<number | null>(null);
   const [migrationId, setMigrationId] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
+  const [sourceRouterId, setSourceRouterId] = useState<number | null>(null);
+  const [tunnel, setTunnel] = useState<MigrationTunnelSession | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [collector, setCollector] = useState<CollectorSession | null>(null);
 
   const [exportData, setExportData] = useState<ExportResponse | null>(null);
@@ -59,6 +66,25 @@ export default function NetworkMigration() {
     queryFn: fetchRouters,
     retry: 1,
   });
+
+  const { data: tunnelStatus } = useQuery({
+    queryKey: ["migration-tunnel-status", tunnel?.leaseId],
+    queryFn: () => getMigrationTunnelStatus(tunnel!.leaseId),
+    enabled: Boolean(tunnel?.leaseId),
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!tunnel) return;
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [tunnel?.leaseId]);
+
+  useEffect(() => {
+    if (!tunnelStatus || !tunnel) return;
+    setTunnel(current => current ? { ...current, status: tunnelStatus.status, expiresAt: tunnelStatus.expiresAt } : current);
+  }, [tunnelStatus]);
 
   const collectorMutation = useMutation({
     mutationFn: createCollectorSession,
@@ -85,6 +111,34 @@ export default function NetworkMigration() {
       }
     },
     onError: (err: any) => toast({ title: "Collection status unavailable", description: err.message, variant: "destructive" })
+  });
+
+  const tunnelMutation = useMutation({
+    mutationFn: createMigrationTunnel,
+    onSuccess: (data) => {
+      setTunnel(data);
+      toast({ title: "One-hour migration tunnel created", description: `Run the RouterOS command for ${data.tunnelAddress}, then verify the API connection.` });
+    },
+    onError: (err: any) => toast({ title: "Migration tunnel could not be created", description: err.message, variant: "destructive" }),
+  });
+
+  const exportMutation = useMutation({
+    mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => exportSource(routerId, tunnelId),
+    onSuccess: (data) => {
+      setMigrationId(data.id);
+      setExportData(data);
+      setCurrentStep(3);
+      toast({ title: "Source export saved", description: `Read-only export completed through ${data.tunnel?.address ?? "the temporary tunnel"}.` });
+    },
+    onError: (err: any) => toast({ title: "Source export failed", description: err.message, variant: "destructive" }),
+  });
+
+  const analyzeMutation = useMutation({
+    mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => analyzeSource(routerId, tunnelId),
+    onSuccess: (_data, variables) => {
+      exportMutation.mutate(variables);
+    },
+    onError: (err: any) => toast({ title: "Tunnel verification failed", description: err.message, variant: "destructive" }),
   });
 
   useEffect(() => {
@@ -174,9 +228,23 @@ export default function NetworkMigration() {
     }
   };
 
+  const copyTunnelCommand = async () => {
+    if (!tunnel) return;
+    try {
+      await navigator.clipboard.writeText(tunnel.command);
+      toast({ title: "Command copied", description: "Paste it into the selected source MikroTik terminal." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select and copy the tunnel command manually.", variant: "destructive" });
+    }
+  };
+
   const handleNext = () => {
     if (currentStep === 1) {
       if (collector?.migrationId) setCurrentStep(2);
+      else if (sourceRouterId) {
+        if (!tunnel) tunnelMutation.mutate(sourceRouterId);
+        else if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
+      }
     } else if (currentStep === 2) {
       setCurrentStep(3);
     } else if (currentStep === 3) {
@@ -191,6 +259,9 @@ export default function NetworkMigration() {
       }
     }
   };
+
+  const tunnelSecondsRemaining = tunnel ? Math.max(0, Math.floor((new Date(tunnel.expiresAt).getTime() - clock) / 1000)) : 0;
+  const tunnelCountdown = `${Math.floor(tunnelSecondsRemaining / 3600)}h ${String(Math.floor((tunnelSecondsRemaining % 3600) / 60)).padStart(2, "0")}m ${String(tunnelSecondsRemaining % 60).padStart(2, "0")}s`;
 
   return (
     <AdminLayout>
@@ -263,8 +334,70 @@ export default function NetworkMigration() {
             {/* Step 1: Collect source export from the active router */}
             {currentStep === 1 && (
               <div className="space-y-6 max-w-2xl fade-in">
+                <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-accent)]/40 bg-[var(--isp-accent)]/5">
+                  <div>
+                    <h3 className="text-sm font-bold text-[var(--isp-text)]">Registered source router tunnel</h3>
+                    <p className="text-xs text-[var(--isp-text-muted)] mt-1">
+                      Recommended for routers already registered in OcholaSupernet. A temporary OpenVPN management tunnel is created for one hour and is removed automatically.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router</label>
+                    <select
+                      className="isp-input py-3 w-full cursor-pointer"
+                      value={sourceRouterId ?? ""}
+                      onChange={e => {
+                        setSourceRouterId(e.target.value ? Number(e.target.value) : null);
+                        setTunnel(null);
+                        setMigrationId(null);
+                        setExportData(null);
+                      }}
+                    >
+                      <option value="">-- Choose registered source router --</option>
+                      {routers?.map(r => (
+                        <option key={r.id} value={r.id}>{r.name} · {r.status}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {sourceRouterId && tunnel && (
+                    <div className="space-y-3 rounded-lg border border-[var(--isp-border)] bg-[var(--isp-inner-card)] p-3">
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <span className="block text-[var(--isp-text-muted)]">Tunnel address</span>
+                          <strong className="text-[var(--isp-text)]">{tunnel.tunnelAddress}</strong>
+                        </div>
+                        <div>
+                          <span className="block text-[var(--isp-text-muted)]">Status</span>
+                          <strong className="text-[var(--isp-text)] capitalize">{tunnel.status.replace("_", " ")}</strong>
+                        </div>
+                        <div>
+                          <span className="block text-[var(--isp-text-muted)]">Time remaining</span>
+                          <strong className={tunnelSecondsRemaining > 0 ? "text-[var(--isp-green)]" : "text-red-600"}>{tunnelCountdown}</strong>
+                        </div>
+                        <div>
+                          <span className="block text-[var(--isp-text-muted)]">Expires</span>
+                          <strong className="text-[var(--isp-text)]">{new Date(tunnel.expiresAt).toLocaleTimeString()}</strong>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-[var(--isp-text-muted)]">Paste this command into the selected MikroTik terminal:</span>
+                        <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{tunnel.command}</pre>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" className="btn btn-ghost" onClick={copyTunnelCommand}><FileCheck size={14} /> Copy tunnel command</button>
+                      </div>
+                      <p className="text-[11px] text-amber-600">
+                        After importing the script, continue to verify the RouterOS API and run the read-only export. The router removes this migration client after one hour.
+                      </p>
+                    </div>
+                  )}
+                  {sourceRouterId && !tunnel && (
+                    <p className="text-xs text-[var(--isp-text-muted)]">Use the Continue button below to reserve the one-hour tunnel and receive the RouterOS command.</p>
+                  )}
+                </div>
+
                 <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
-                  <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Run the collector on the active MikroTik first</h3>
+                  <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">Manual read-only collector</h3>
                   <ol className="text-xs text-[var(--isp-text-muted)] space-y-2 list-decimal pl-5">
                     <li>Give the source router a name and create a one-time collector session.</li>
                     <li>Paste the displayed command into the active MikroTik terminal.</li>
@@ -628,7 +761,7 @@ export default function NetworkMigration() {
               <button 
                 className="btn btn-ghost" 
                 onClick={() => window.location.reload()}
-                disabled={collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
+                disabled={collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
               >
                 Cancel
               </button>
@@ -650,18 +783,20 @@ export default function NetworkMigration() {
                   className={`btn ${currentStep === 6 ? 'btn-danger' : 'btn-primary'}`}
                   onClick={handleNext}
                   disabled={
-                    (currentStep === 1 && !collector?.migrationId) ||
+                    (currentStep === 1 && !collector?.migrationId && !migrationId && !sourceRouterId) ||
                     (currentStep === 4 && !targetRouterId) ||
                     (currentStep === 5 && (isDryRunDirty() || dryRunData?.plannedChanges.length === 0 || selectedIds.size === 0)) ||
                     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER") ||
-                    collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
+                    collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
                   }
                 >
-                  {collectorMutation.isPending || collectorStatusMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
+                  {collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
                     <><RefreshCw size={14} className="animate-spin" /> Processing...</>
                   ) : (
                     <>
-                      {currentStep === 1 && 'Continue to Collected Export'}
+                      {currentStep === 1 && !collector?.migrationId && !tunnel && 'Start one-hour tunnel'}
+                      {currentStep === 1 && !collector?.migrationId && tunnel && !migrationId && 'Verify tunnel & export'}
+                      {currentStep === 1 && migrationId && 'Continue to Collected Export'}
                       {currentStep === 2 && 'Review Collected Data'}
                       {currentStep === 3 && 'Acknowledge & Continue'}
                       {currentStep === 4 && 'Prepare Dry Run'}

@@ -20,6 +20,22 @@ export interface ExportResponse {
   sourceMode?: string;
   summary: { configs: number; users: number; queues: number; pools: number };
   findings: { warnings: string[]; manual: string[]; unsupported: string[] };
+  tunnel?: { address: string; expiresAt: string; technology: string };
+}
+
+export interface MigrationTunnelSession {
+  leaseId: string;
+  routerId: number;
+  routerName: string;
+  technology: "openvpn";
+  tunnelAddress: string;
+  serverEndpoint: string;
+  interfaceName: string;
+  scriptUrl: string;
+  command: string;
+  createdAt: string;
+  expiresAt: string;
+  status: "issued" | "script_issued" | "connected" | "exported" | "expired" | "revoked" | "server_unavailable";
 }
 
 export interface CollectorSession {

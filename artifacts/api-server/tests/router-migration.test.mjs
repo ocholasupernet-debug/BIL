@@ -5,10 +5,11 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 const outdir = "tests/.migration-build";
-await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
+await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts", "src/lib/migration-tunnel.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
 const exporter = await import(path.resolve(outdir, "router-migration-exporter.cjs"));
 const importer = await import(path.resolve(outdir, "router-migration-importer.cjs"));
 const exportScript = await import(path.resolve(outdir, "router-migration-export-script.cjs"));
+const tunnelScript = await import(path.resolve(outdir, "migration-tunnel.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 test("source allowlist excludes files and mutations", () => {
@@ -33,6 +34,24 @@ test("domain collector uses HTTP POST data chunks instead of unsupported HTTP fi
   assert.doesNotMatch(script, /\$safeUploadUrl/);
   assert.doesNotMatch(script, /upload=yes/);
   assert.doesNotMatch(script, /http-header-field="Content-Type: application\/octet-stream"/);
+});
+test("temporary tunnel script is address-bound and self-removing", () => {
+  const script = tunnelScript.buildMigrationTunnelScript({
+    endpoint: "vpn.example.test",
+    port: 1194,
+    username: "ochola-mig-1-abcd",
+    password: "one-time-secret",
+    tunnelIp: "10.8.0.42",
+    interfaceName: "ochola-mig-1-abcd",
+    firewallComment: "ochola-migration:42",
+    schedulerName: "ochola-migration-expiry-42",
+  });
+  assert.match(script, /Expected router tunnel address: 10\.8\.0\.42/);
+  assert.match(script, /connect-to="vpn\.example\.test"/);
+  assert.match(script, /interval=1h/);
+  assert.match(script, /\/interface ovpn-client remove/);
+  assert.match(script, /\/ip firewall filter remove/);
+  assert.doesNotMatch(script, /\/ip route add/);
 });
 test("terminal export parser keeps sensitive values server-side and maps portable sections", () => {
   const pkg = exporter.parseRouterOsExport(`

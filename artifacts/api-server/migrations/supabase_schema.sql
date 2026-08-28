@@ -194,6 +194,40 @@ end $$;
 revoke all on function consume_router_migration_collector_token(text) from public;
 grant execute on function consume_router_migration_collector_token(text) to service_role;
 
+-- Short-lived, source-router management tunnels used only during migration.
+-- The credential payload is encrypted by the API; the raw password never
+-- reaches the database or an audit record.
+create table if not exists router_migration_tunnel_leases (
+  id bigserial primary key,
+  admin_id bigint not null references isp_admins(id) on delete cascade,
+  source_router_id bigint not null references isp_routers(id) on delete cascade,
+  migration_job_id bigint references router_migration_jobs(id) on delete set null,
+  technology text not null check (technology = 'openvpn'),
+  username text not null unique,
+  assigned_ip inet not null unique,
+  server_endpoint text not null,
+  bootstrap_token_hash text not null unique,
+  ciphertext text not null,
+  iv text not null,
+  auth_tag text not null,
+  status text not null default 'issued' check (status in ('issued','script_issued','connected','exported','revoked','expired','server_unavailable')),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  bootstrap_fetched_at timestamptz,
+  verified_at timestamptz,
+  revoked_at timestamptz,
+  audit_json jsonb not null default '{}'::jsonb
+);
+create unique index if not exists router_migration_tunnel_active_source_idx
+  on router_migration_tunnel_leases(admin_id, source_router_id)
+  where status in ('issued','script_issued','connected','exported');
+create index if not exists router_migration_tunnel_expiry_idx
+  on router_migration_tunnel_leases(status, expires_at);
+alter table router_migration_tunnel_leases enable row level security;
+revoke all on table router_migration_tunnel_leases from anon, authenticated;
+grant select, insert, update on table router_migration_tunnel_leases to service_role;
+grant usage, select on sequence router_migration_tunnel_leases_id_seq to service_role;
+
 -- One expiring, database-enforced import lease per target router prevents
 -- separate API processes from interleaving migration writes.
 create table if not exists router_migration_target_leases (

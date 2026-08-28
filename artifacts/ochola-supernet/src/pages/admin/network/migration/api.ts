@@ -50,6 +50,26 @@ export async function createCollectorSession(sourceLabel: string) {
   return data;
 }
 
+export async function createMigrationTunnel(sourceRouterId: number) {
+  const res = await fetch("/api/router-migrations/tunnel-session", {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ sourceRouterId }),
+  });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to create migration tunnel");
+  return data;
+}
+
+export async function getMigrationTunnelStatus(leaseId: string) {
+  const res = await fetch(`/api/router-migrations/tunnel-session/${encodeURIComponent(leaseId)}`, { headers: getHeaders() });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to check migration tunnel");
+  return data;
+}
+
 export async function getCollectorSessionStatus(token: string) {
   const res = await fetch(`/api/router-migrations/collector-session/status?token=${encodeURIComponent(token)}`, { headers: getHeaders() });
   const data = await res.json();
@@ -58,11 +78,11 @@ export async function getCollectorSessionStatus(token: string) {
   return data;
 }
 
-export async function analyzeSource(sourceRouterId: number) {
+export async function analyzeSource(sourceRouterId: number, tunnelId: string) {
   const res = await fetch("/api/router-migrations/analyze", {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify({ sourceRouterId }),
+    body: JSON.stringify({ sourceRouterId, tunnelId }),
   });
   const data = await res.json();
   if (res.status === 401) throw new Error("Unauthorized");
@@ -70,11 +90,11 @@ export async function analyzeSource(sourceRouterId: number) {
   return data;
 }
 
-export async function exportSource(sourceRouterId: number) {
+export async function exportSource(sourceRouterId: number, tunnelId: string) {
   const res = await fetch("/api/router-migrations/export", {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify({ sourceRouterId }),
+    body: JSON.stringify({ sourceRouterId, tunnelId }),
   });
   const data = await res.json();
   if (res.status === 401) throw new Error("Unauthorized");
