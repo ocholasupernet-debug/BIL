@@ -11,6 +11,8 @@ import {
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
 import { clearAdminAuth, getAdminName } from "@/lib/supabase";
+import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
+import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 
 interface NavChild {
   name: string;
@@ -21,27 +23,31 @@ interface NavItem {
   name: string;
   href?: string;
   icon: React.ElementType;
+  visibilityKey?: string;
   badge?: string;
   children?: NavChild[];
 }
 
 interface NavSection {
   label: string;
+  visibilityKey: string;
   items: NavItem[];
 }
 
 const navSections: NavSection[] = [
   {
     label: "Overview",
+    visibilityKey: "overview",
     items: [
       { name: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
     ],
   },
   {
     label: "Customers",
+    visibilityKey: "customers",
     items: [
       {
-        name: "Customers", icon: Users,
+        name: "Customers", icon: Users, visibilityKey: "customers.customers",
         children: [
           { name: "All Customers", href: "/admin/customers" },
           { name: "Active",        href: "/admin/customers?status=active" },
@@ -50,7 +56,7 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Activation", icon: CheckSquare, badge: "New",
+        name: "Activation", icon: CheckSquare, badge: "New", visibilityKey: "customers.activation",
         children: [
           { name: "Pending",       href: "/admin/activation" },
           { name: "Approved",      href: "/admin/activation?status=approved" },
@@ -58,7 +64,7 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Hotspot Vouchers", icon: Ticket,
+        name: "Hotspot Vouchers", icon: Ticket, visibilityKey: "customers.vouchers",
         children: [
           { name: "All Vouchers",  href: "/admin/vouchers" },
           { name: "Generate",      href: "/admin/vouchers?action=generate" },
@@ -66,7 +72,7 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Hotspot Binding", icon: Wifi,
+        name: "Hotspot Binding", icon: Wifi, visibilityKey: "customers.hotspot-binding",
         children: [
           { name: "Bindings",      href: "/admin/hotspot-binding" },
           { name: "Sessions",      href: "/admin/hotspot-binding?tab=sessions" },
@@ -76,9 +82,10 @@ const navSections: NavSection[] = [
   },
   {
     label: "Billing",
+    visibilityKey: "billing",
     items: [
       {
-        name: "Packages / Plans", icon: Package,
+        name: "Packages / Plans", icon: Package, visibilityKey: "billing.plans",
         children: [
           { name: "Hotspot Plans", href: "/admin/plans?type=hotspot" },
           { name: "PPPoE Plans",   href: "/admin/plans?type=pppoe" },
@@ -89,7 +96,7 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Transactions", icon: CreditCard,
+        name: "Transactions", icon: CreditCard, visibilityKey: "billing.transactions",
         children: [
           { name: "All",             href: "/admin/transactions" },
           { name: "M-Pesa",          href: "/admin/transactions?method=mpesa" },
@@ -103,6 +110,7 @@ const navSections: NavSection[] = [
   },
   {
     label: "Network",
+    visibilityKey: "network",
     items: [
       {
         name: "Network", icon: Network,
@@ -121,21 +129,21 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Access Points", icon: MonitorSmartphone, badge: "New",
+        name: "Access Points", icon: MonitorSmartphone, badge: "New", visibilityKey: "network.access-points",
         children: [
           { name: "All APs",  href: "/admin/access-points" },
           { name: "Add New",  href: "/admin/access-points?action=add" },
         ],
       },
       {
-        name: "PPPoE Settings", icon: Sliders,
+        name: "PPPoE Settings", icon: Sliders, visibilityKey: "network.pppoe-settings",
         children: [
           { name: "General",   href: "/admin/pppoe-settings" },
           { name: "Profiles",  href: "/admin/pppoe-settings?tab=profiles" },
         ],
       },
       {
-        name: "Hotspot Settings", icon: Wifi,
+        name: "Hotspot Settings", icon: Wifi, visibilityKey: "network.hotspot-settings",
         children: [
           { name: "General",    href: "/admin/hotspot-settings" },
           { name: "Login Page", href: "/admin/hotspot-settings?tab=login" },
@@ -145,9 +153,10 @@ const navSections: NavSection[] = [
   },
   {
     label: "Tools",
+    visibilityKey: "tools",
     items: [
       {
-        name: "VPN & Remote Access", icon: Shield, badge: "New",
+        name: "VPN & Remote Access", icon: Shield, badge: "New", visibilityKey: "tools.vpn",
         children: [
           { name: "VPN Dashboard", href: "/admin/vpn" },
           { name: "Remote Access", href: "/admin/vpn/remote-access" },
@@ -157,37 +166,38 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Bulk Actions", icon: Layers,
+        name: "Bulk Actions", icon: Layers, visibilityKey: "tools.bulk",
         children: [
           { name: "Renew Expired", href: "/admin/bulk" },
           { name: "Send SMS",      href: "/admin/bulk?action=sms" },
         ],
       },
       {
-        name: "UISP", icon: Activity,
+        name: "UISP", icon: Activity, visibilityKey: "tools.uisp",
         children: [
           { name: "Devices", href: "/admin/uisp" },
           { name: "Sites",   href: "/admin/uisp?tab=sites" },
         ],
       },
       {
-        name: "Bonga Points", icon: Star,
+        name: "Bonga Points", icon: Star, visibilityKey: "tools.bonga",
         children: [
           { name: "Dashboard", href: "/admin/bonga" },
           { name: "Redeem",    href: "/admin/bonga?tab=redeem" },
         ],
       },
-      { name: "Webhooks",    href: "/admin/webhooks",      icon: Webhook },
-      { name: "TR069 ACS",   href: "/admin/acs",           icon: Radio },
-      { name: "Page Builder",href: "/admin/page-builder",  icon: FileCode2 },
+      { name: "Webhooks",    href: "/admin/webhooks",      icon: Webhook, visibilityKey: "tools.webhooks" },
+      { name: "TR069 ACS",   href: "/admin/acs",           icon: Radio, visibilityKey: "tools.acs" },
+      { name: "Page Builder",href: "/admin/page-builder",  icon: FileCode2, visibilityKey: "tools.page-builder" },
     ],
   },
   {
     label: "Admin",
+    visibilityKey: "admin",
     items: [
-      { name: "Support Tickets", href: "/admin/support", icon: MessageSquare },
+      { name: "Support Tickets", href: "/admin/support", icon: MessageSquare, visibilityKey: "admin.support" },
       {
-        name: "Notifications", icon: Bell,
+        name: "Notifications", icon: Bell, visibilityKey: "admin.notifications",
         children: [
           { name: "All",              href: "/admin/notifications" },
           { name: "Expiry Alerts",    href: "/admin/notifications?type=expiry" },
@@ -195,22 +205,22 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Logs", icon: BookOpen,
+        name: "Logs", icon: BookOpen, visibilityKey: "admin.logs",
         children: [
           { name: "Auth Logs",   href: "/admin/logs" },
           { name: "System Logs", href: "/admin/logs?type=system" },
         ],
       },
       {
-        name: "Extras", icon: Settings,
+        name: "Extras", icon: Settings, visibilityKey: "admin.extras",
         children: [
           { name: "SMS Gateway",  href: "/admin/extras/sms" },
           { name: "Email Config", href: "/admin/extras/email" },
         ],
       },
-      { name: "FreeRADIUS", href: "/admin/radius",   icon: Shield },
-      { name: "Settings",   href: "/admin/settings", icon: Settings },
-      { name: "Static Pages",href: "/admin/pages",   icon: Globe },
+      { name: "FreeRADIUS", href: "/admin/radius",   icon: Shield, visibilityKey: "admin.radius" },
+      { name: "Settings",   href: "/admin/settings", icon: Settings, visibilityKey: "admin.settings" },
+      { name: "Static Pages",href: "/admin/pages",   icon: Globe, visibilityKey: "admin.pages" },
     ],
   },
 ];
@@ -221,10 +231,31 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expanded, setExpanded]       = useState<string[]>(["Network", "Customers"]);
+  const [notice, setNotice] = useState("");
   const { toggle, isDark }            = useTheme();
   const brand                         = useBrand();
   const adminName                     = getAdminName();
   const queryClient                   = useQueryClient();
+  const { isVisible }                 = useAdminPageVisibility();
+  const currentFeatureKey             = getAdminFeatureKeyForPath(location);
+  const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
+
+  const visibleNavSections = navSections
+    .filter(section => isVisible(section.visibilityKey))
+    .map(section => ({
+      ...section,
+      items: section.items
+        .filter(item => !item.visibilityKey || isVisible(item.visibilityKey))
+        .map(item => ({
+          ...item,
+          children: item.children?.filter(child => {
+            const childFeatureKey = getAdminFeatureKeyForPath(child.href);
+            return !childFeatureKey || isVisible(childFeatureKey);
+          }),
+        }))
+        .filter(item => !item.children || item.children.length > 0),
+    }))
+    .filter(section => section.items.length > 0);
 
   const handleLogout = () => {
     clearAdminAuth();
@@ -246,6 +277,17 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
+  useEffect(() => {
+    const disabled = new URLSearchParams(location.split("?")[1] ?? "").get("disabled");
+    setNotice(disabled ? "That admin page is currently disabled by the Super Admin." : "");
+  }, [location]);
+
+  useEffect(() => {
+    if (!pageIsVisible) {
+      setLocation(`/admin/dashboard?disabled=${encodeURIComponent(currentFeatureKey ?? "page")}`);
+    }
+  }, [currentFeatureKey, pageIsVisible, setLocation]);
+
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
 
@@ -258,6 +300,17 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   };
 
   const isChildActive = (href: string) => location.startsWith(href.split("?")[0]);
+
+  if (!pageIsVisible) {
+    return (
+      <div className="admin-shell" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 32 }}>
+        <div style={{ maxWidth: 480, textAlign: "center", color: "var(--isp-text)" }}>
+          <h1 style={{ fontSize: "1.35rem", marginBottom: 8 }}>Page unavailable</h1>
+          <p style={{ color: "var(--isp-text-muted)" }}>This page has been disabled by the Super Admin. Redirecting to your Dashboard…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-shell">
@@ -284,7 +337,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="sidebar-nav">
-          {navSections.map((section) => (
+          {visibleNavSections.map((section) => (
             <div key={section.label} className="nav-section">
               <div className="nav-section-label">{section.label}</div>
 
@@ -425,6 +478,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
 
         {/* Page content */}
         <main className="admin-content">
+          {notice && (
+            <div role="status" style={{ marginBottom: 18, border: "1px solid rgba(245,158,11,0.35)", background: "rgba(245,158,11,0.1)", color: "#fbbf24", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontWeight: 600 }}>
+              {notice}
+            </div>
+          )}
           {children}
         </main>
       </div>

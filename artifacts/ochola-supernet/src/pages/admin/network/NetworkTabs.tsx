@@ -1,5 +1,6 @@
 import React from "react";
 import { Link } from "wouter";
+import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import {
   Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files, RefreshCw
 } from "lucide-react";
@@ -19,9 +20,12 @@ const TABS = [
 ];
 
 export function NetworkTabs({ active }: { active: string }) {
+  const { isVisible } = useAdminPageVisibility();
+  const visibleTabs = TABS.filter(tab => isVisible(`network.${tab.id}`));
+
   return (
     <div style={{ display: "flex", gap: "0.375rem", overflowX: "auto", paddingBottom: "0.25rem", flexShrink: 0 }}>
-      {TABS.map((t) => {
+      {visibleTabs.map((t) => {
         const isActive = active === t.id;
         return (
           <Link key={t.id} href={t.href}>

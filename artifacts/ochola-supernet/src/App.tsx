@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { BrandProvider } from "@/context/BrandContext";
+import { AdminPageVisibilityProvider, useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getHostSubdomain } from "@/lib/subdomain";
 
 import LandingPage from "./pages/LandingPage";
@@ -97,11 +98,16 @@ function StubPage({ title }: { title: string }) {
 
 function LegacySelfInstallRedirect() {
   const [, setLocation] = useLocation();
+  const { isVisible } = useAdminPageVisibility();
 
   useEffect(() => {
+    if (!isVisible("network.self-install")) {
+      setLocation("/admin/dashboard?disabled=network.self-install");
+      return;
+    }
     const query = window.location.search;
     setLocation(`/admin/network/self-install${query}`);
-  }, [setLocation]);
+  }, [isVisible, setLocation]);
 
   return null;
 }
@@ -207,12 +213,14 @@ function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <BrandProvider>
-          <TooltipProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-              <Router />
-            </WouterRouter>
-            <Toaster />
-          </TooltipProvider>
+          <AdminPageVisibilityProvider>
+            <TooltipProvider>
+              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                <Router />
+              </WouterRouter>
+              <Toaster />
+            </TooltipProvider>
+          </AdminPageVisibilityProvider>
         </BrandProvider>
       </QueryClientProvider>
     </ThemeProvider>

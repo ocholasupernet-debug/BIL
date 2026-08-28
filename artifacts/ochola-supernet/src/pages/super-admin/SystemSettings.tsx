@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { Settings, Save, CheckCircle2, Globe, Mail, Server, Shield, Sliders } from "lucide-react";
+import { Settings, Save, CheckCircle2, Globe, Mail, Server, Shield, Sliders, Eye, Loader2, AlertCircle } from "lucide-react";
+import { ADMIN_PAGE_VISIBILITY_CATALOG } from "@/lib/admin-page-visibility";
 
 const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
@@ -65,8 +66,65 @@ export default function SuperAdminSystemSettings() {
     darkModeDefault: true,
   });
   const [saved, setSaved] = useState(false);
+  const [pageVisibility, setPageVisibility] = useState<Record<string, boolean>>({});
+  const [visibilityLoading, setVisibilityLoading] = useState(true);
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const [visibilitySaved, setVisibilitySaved] = useState(false);
+  const [visibilityError, setVisibilityError] = useState("");
   const set = (k: keyof typeof cfg, v: string | boolean) => { setCfg(f => ({ ...f, [k]: v })); setSaved(false); };
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+
+  const superAdminHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem("ochola_superadmin_token") || "";
+    return token ? { "x-sa-token": token } : {};
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadVisibility = async () => {
+      try {
+        const response = await fetch("/api/super-admin/admin-page-visibility", {
+          headers: superAdminHeaders(),
+        });
+        const data = await response.json() as { visibility?: Record<string, boolean>; error?: string };
+        if (!response.ok) throw new Error(data.error || "Visibility settings could not be loaded.");
+        if (!cancelled && data.visibility) setPageVisibility(data.visibility);
+      } catch (error) {
+        if (!cancelled) setVisibilityError(error instanceof Error ? error.message : "Visibility settings could not be loaded.");
+      } finally {
+        if (!cancelled) setVisibilityLoading(false);
+      }
+    };
+    void loadVisibility();
+    return () => { cancelled = true; };
+  }, []);
+
+  const setPageEnabled = (key: string, enabled: boolean) => {
+    if (key === "overview.dashboard" || key === "overview") return;
+    setPageVisibility(current => ({ ...current, [key]: enabled }));
+    setVisibilitySaved(false);
+  };
+
+  const savePageVisibility = async () => {
+    setVisibilitySaving(true);
+    setVisibilityError("");
+    try {
+      const response = await fetch("/api/super-admin/admin-page-visibility", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...superAdminHeaders() },
+        body: JSON.stringify({ visibility: pageVisibility }),
+      });
+      const data = await response.json() as { visibility?: Record<string, boolean>; error?: string };
+      if (!response.ok) throw new Error(data.error || "Visibility settings could not be saved.");
+      if (data.visibility) setPageVisibility(data.visibility);
+      setVisibilitySaved(true);
+      setTimeout(() => setVisibilitySaved(false), 3000);
+    } catch (error) {
+      setVisibilityError(error instanceof Error ? error.message : "Visibility settings could not be saved.");
+    } finally {
+      setVisibilitySaving(false);
+    }
+  };
 
   return (
     <SuperAdminLayout>
@@ -158,6 +216,84 @@ export default function SuperAdminSystemSettings() {
           <Toggle on={cfg.smsNotifications} onChange={v => set("smsNotifications", v)} label="SMS Notifications Enabled" />
           <Toggle on={cfg.autoSuspend} onChange={v => set("autoSuspend", v)} label="Auto-Suspend overdue ISP accounts" />
           <Toggle on={cfg.darkModeDefault} onChange={v => set("darkModeDefault", v)} label="Dark Mode as Default Theme" />
+        </Card>
+
+        <Card title="ISP Admin Page Visibility" icon={Eye}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 14 }}>
+            <div>
+              <p style={{ color: C.sub, fontSize: "0.82rem", margin: 0, lineHeight: 1.5 }}>
+                Choose which modules and pages appear in every ISP Admin Panel. Disabling a module also blocks its pages.
+              </p>
+              <p style={{ color: C.muted, fontSize: "0.72rem", margin: "5px 0 0" }}>
+                The Dashboard always remains available as the safe fallback.
+              </p>
+            </div>
+            <button
+              onClick={() => void savePageVisibility()}
+              disabled={visibilityLoading || visibilitySaving}
+              style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0, background: visibilitySaved ? "#065f46" : C.accent, border: "none", borderRadius: 9, padding: "9px 14px", color: "white", fontWeight: 700, fontSize: "0.76rem", cursor: visibilityLoading || visibilitySaving ? "wait" : "pointer", opacity: visibilityLoading || visibilitySaving ? 0.7 : 1 }}
+            >
+              {visibilitySaving ? <Loader2 size={14} className="animate-spin" /> : visibilitySaved ? <CheckCircle2 size={14} /> : <Save size={14} />}
+              {visibilitySaving ? "Saving…" : visibilitySaved ? "Saved!" : "Save Visibility"}
+            </button>
+          </div>
+
+          {visibilityError && (
+            <div role="alert" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "10px 12px", borderRadius: 8, color: "#fca5a5", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", fontSize: "0.76rem" }}>
+              <AlertCircle size={14} /> {visibilityError}
+            </div>
+          )}
+
+          {visibilityLoading ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: "0.8rem", padding: "16px 0" }}>
+              <Loader2 size={15} className="animate-spin" /> Loading page visibility…
+            </div>
+          ) : (
+            <div>
+              {ADMIN_PAGE_VISIBILITY_CATALOG.map(section => {
+                const sectionEnabled = section.key === "overview" || pageVisibility[section.key] !== false;
+                return (
+                  <div key={section.key} style={{ border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, marginBottom: 10, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "11px 13px", background: "rgba(255,255,255,0.03)" }}>
+                      <div>
+                        <div style={{ color: "white", fontSize: "0.82rem", fontWeight: 700 }}>{section.label}</div>
+                        <div style={{ color: C.muted, fontSize: "0.7rem", marginTop: 2 }}>{section.description}</div>
+                      </div>
+                      <button
+                        aria-label={`${sectionEnabled ? "Disable" : "Enable"} ${section.label}`}
+                        disabled={section.key === "overview"}
+                        onClick={() => setPageEnabled(section.key, !sectionEnabled)}
+                        style={{ width: 42, height: 22, borderRadius: 11, background: sectionEnabled ? C.accent : "rgba(255,255,255,0.1)", border: "none", cursor: section.key === "overview" ? "not-allowed" : "pointer", position: "relative", padding: 0, opacity: section.key === "overview" ? 0.65 : 1 }}
+                      >
+                        <span style={{ position: "absolute", top: 3, left: sectionEnabled ? 22 : 3, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
+                      </button>
+                    </div>
+                    <div style={{ padding: "0 13px", opacity: sectionEnabled ? 1 : 0.48 }}>
+                      {section.pages.map(page => {
+                        const enabled = page.key === "overview.dashboard" || pageVisibility[page.key] !== false;
+                        return (
+                          <div key={page.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 0", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                            <div>
+                              <div style={{ color: C.sub, fontSize: "0.78rem", fontWeight: 600 }}>{page.label}</div>
+                              <div style={{ color: C.muted, fontSize: "0.68rem", marginTop: 2 }}>{page.description}</div>
+                            </div>
+                            <button
+                              aria-label={`${enabled ? "Disable" : "Enable"} ${page.label}`}
+                              disabled={!sectionEnabled || page.key === "overview.dashboard"}
+                              onClick={() => setPageEnabled(page.key, !enabled)}
+                              style={{ width: 38, height: 20, borderRadius: 10, background: enabled ? C.accent : "rgba(255,255,255,0.1)", border: "none", cursor: !sectionEnabled || page.key === "overview.dashboard" ? "not-allowed" : "pointer", position: "relative", padding: 0 }}
+                            >
+                              <span style={{ position: "absolute", top: 3, left: enabled ? 20 : 3, width: 14, height: 14, borderRadius: "50%", background: "white", transition: "left 0.2s" }} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
       </div>
     </SuperAdminLayout>

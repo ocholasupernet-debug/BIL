@@ -74,6 +74,11 @@ export function isActiveSuperAdminToken(token: string): boolean {
   return true;
 }
 
+/** Return the configured Super Admin identity for an already validated token. */
+export function activeSuperAdminName(token: string): string | null {
+  return isActiveSuperAdminToken(token) ? SA_USERNAME : null;
+}
+
 /* ── POST /api/super-admin/login ─────────────────────────────────── */
 router.post("/super-admin/login", (req: Request, res: Response): void => {
   const { username, api_key, password } = req.body as {
