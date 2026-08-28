@@ -485,6 +485,18 @@ function buildMainhotspotRsc(
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
+#
+# INSTALL BUNDLE — downloaded in this order:
+#   1. router-vpn.rsc   -> vpnsetup.rsc       (router-specific, required)
+#   2. hotspotsetup.rsc -> hotspotsetup.rsc  (required)
+#   3. pppoesetup.rsc   -> pppoesetup.rsc     (required)
+#   4. users.rsc        -> users.rsc          (required)
+#   5. syncusers.rsc    -> syncusers.rsc      (required)
+#   6. heartbeat.rsc    -> heartbeat.rsc      (required)
+#   7. syncfull.rsc     -> syncfull.rsc       (required)
+#   8. logpush.rsc and seclogpush.rsc are optional diagnostics.
+# Hotspot portal files are downloaded by the per-router configuration script
+# into the selected flash/hotspot or disk1/hotspot directory.
 
 ${pgDef}
 
@@ -518,6 +530,7 @@ ${vpnScriptSelection}
 :do {
     $pg 1 "vpn" "downloading" ""
     :put "[1/7] Downloading VPN configuration..."
+    :do { /file remove [find name=vpnsetup.rsc] } on-error={}
     /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying VPN configuration..."
@@ -529,13 +542,15 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [vpnsetup.rsc] FAILED: " . $error)
     $pg 1 "vpn" "failed" $error
-    :do { /file remove vpnsetup.rsc } on-error={}
+    :do { /file remove [find name=failed-vpnsetup.rsc] } on-error={}
+    :do { /file set [find name=vpnsetup.rsc] name=failed-vpnsetup.rsc } on-error={}
 }
 
 # --- Hotspot configuration ----------------------------------------------------
 :do {
     $pg 2 "hotspot" "downloading" ""
     :put "[2/7] Downloading hotspot configuration..."
+    :do { /file remove [find name=hotspotsetup.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying hotspot configuration..."
@@ -547,13 +562,15 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
     $pg 2 "hotspot" "failed" $error
-    :do { /file remove hotspotsetup.rsc } on-error={}
+    :do { /file remove [find name=failed-hotspotsetup.rsc] } on-error={}
+    :do { /file set [find name=hotspotsetup.rsc] name=failed-hotspotsetup.rsc } on-error={}
 }
 
 # --- PPPoE configuration ------------------------------------------------------
 :do {
     $pg 3 "pppoe" "downloading" ""
     :put "[3/7] Downloading PPPoE configuration..."
+    :do { /file remove [find name=pppoesetup.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying PPPoE configuration..."
@@ -565,13 +582,15 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
     $pg 3 "pppoe" "failed" $error
-    :do { /file remove pppoesetup.rsc } on-error={}
+    :do { /file remove [find name=failed-pppoesetup.rsc] } on-error={}
+    :do { /file set [find name=pppoesetup.rsc] name=failed-pppoesetup.rsc } on-error={}
 }
 
 # --- Users configuration ------------------------------------------------------
 :do {
     $pg 4 "users" "downloading" ""
     :put "[4/7] Downloading users configuration..."
+    :do { /file remove [find name=users.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying users configuration..."
@@ -583,13 +602,15 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [users.rsc] FAILED: " . $error)
     $pg 4 "users" "failed" $error
-    :do { /file remove users.rsc } on-error={}
+    :do { /file remove [find name=failed-users.rsc] } on-error={}
+    :do { /file set [find name=users.rsc] name=failed-users.rsc } on-error={}
 }
 
 # --- Sync-users firewalls -----------------------------------------------------
 :do {
     $pg 5 "syncusers" "downloading" ""
     :put "[5/7] Downloading sync-users firewalls..."
+    :do { /file remove [find name=syncusers.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying sync-users firewalls..."
@@ -601,13 +622,15 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [syncusers.rsc] FAILED: " . $error)
     $pg 5 "syncusers" "failed" $error
-    :do { /file remove syncusers.rsc } on-error={}
+    :do { /file remove [find name=failed-syncusers.rsc] } on-error={}
+    :do { /file set [find name=syncusers.rsc] name=failed-syncusers.rsc } on-error={}
 }
 
 # --- Heartbeat firewalls ------------------------------------------------------
 :do {
     $pg 6 "heartbeat" "downloading" ""
     :put "[6/7] Downloading heartbeat firewalls..."
+    :do { /file remove [find name=heartbeat.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying heartbeat firewalls..."
@@ -619,7 +642,8 @@ ${vpnScriptSelection}
     :set failures ($failures + 1)
     :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
     $pg 6 "heartbeat" "failed" $error
-    :do { /file remove heartbeat.rsc } on-error={}
+    :do { /file remove [find name=failed-heartbeat.rsc] } on-error={}
+    :do { /file set [find name=heartbeat.rsc] name=failed-heartbeat.rsc } on-error={}
 }
 
 # --- Router-specific heartbeat endpoint ---------------------------------------
@@ -640,6 +664,7 @@ ${safeHeartbeatUrl ? `:do {
 :do {
     $pg 7 "syncfull" "downloading" ""
     :put "[7/7] Downloading sync-full script..."
+    :do { /file remove [find name=syncfull.rsc] } on-error={}
     /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https check-certificate=no
     :delay 2s
     :put "      Applying sync-full script..."
@@ -651,7 +676,8 @@ ${safeHeartbeatUrl ? `:do {
     :set failures ($failures + 1)
     :put ("  WARN [syncfull.rsc] FAILED: " . $error)
     $pg 7 "syncfull" "failed" $error
-    :do { /file remove syncfull.rsc } on-error={}
+    :do { /file remove [find name=failed-syncfull.rsc] } on-error={}
+    :do { /file set [find name=syncfull.rsc] name=failed-syncfull.rsc } on-error={}
 }
 
 # --- Preserve the personalized installer on daily updates ---------------------
@@ -1714,7 +1740,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       status: string;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,router_secret,last_seen,status`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,vpn_ip,router_secret,last_seen,status`
     );
 
     /* ── Helper to decide if a router record is "pending" (not yet installed) ── */

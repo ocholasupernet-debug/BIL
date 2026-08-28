@@ -70,6 +70,7 @@ const HOTSPOT_FILE_NAMES = new Set([
   "error.html",
   "redirect.html",
   "md5.js",
+  "favicon.ico",
   "favicon.png",
 ]);
 
