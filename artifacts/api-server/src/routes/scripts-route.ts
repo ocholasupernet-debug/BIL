@@ -763,8 +763,15 @@ ${safeInstallerUrl ? `:do {
 ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :local reportedIp "${safeRouterVpnIp}"
 :if ($reportedIp = "") do={
-    :foreach a in=[/ip address find where interface="ocholasupernet"] do={
-        :set reportedIp [/ip address get $a address]
+    :if ($reportedIp = "") do={
+        :foreach a in=[/ip address find where interface="coreispbilling"] do={
+            :set reportedIp [/ip address get $a address]
+        }
+    }
+    :if ($reportedIp = "") do={
+        :foreach a in=[/ip address find where interface="ocholasupernet"] do={
+            :set reportedIp [/ip address get $a address]
+        }
     }
 }
 :if ($reportedIp != "") do={
@@ -2159,6 +2166,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === OVPN TLS Certificates ===`,
       `:put "[7/8] Importing VPN certificates and setting up tunnel..."`,
       `# 1) Remove old OVPN interface FIRST so it releases any cert reference`,
+      safeRm(`/interface ovpn-client remove [find name=coreispbilling]`),
       safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
       `# 2) Remove any stale cert entries so re-import lands under the right name`,
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
@@ -2182,7 +2190,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=${Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=coreispbilling connect-to="${adminSubdomain}.isplatty.org" port=${Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
@@ -2192,7 +2200,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# is always refreshed to match what is stored in the backend / VPS auth file.`,
       safeRm(`/user remove [find name="${routerSlug}"]`),
        safeRos(`/user add name="${routerSlug}" password="${routerSecret}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
-      `:put "      VPN tunnel 'ocholasupernet' added  OK"`,
+       `:put "      VPN tunnel 'coreispbilling' added  OK"`,
       ``,
       `# === Default User Profile ===`,
       safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),
@@ -2228,7 +2236,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put " Setup complete! ${companyName} — ${routerName}"`,
       `:put (" RouterOS : v" . $rosVer . " | Storage: " . $storage)`,
       `:put " Hotspot  : '${bridgeIface}' (${bridgeIp})"`,
-      `:put " VPN      : ocholasupernet -> ${adminSubdomain}.isplatty.org"`,
+       `:put " VPN      : coreispbilling -> ${adminSubdomain}.isplatty.org"`,
       `:put " Pool     : ${poolStart} - ${poolEnd}"`,
       `:put " Check the admin dashboard for green indicator."`,
       `:put " If any WARN lines appeared above, check /log for details."`,

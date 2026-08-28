@@ -187,7 +187,7 @@ router.post("/admin/router/self-install/bridge-assign", async (req, res): Promis
   const creds = resolved.creds;
   const add = Array.isArray(addPorts) ? addPorts : [];
   const remove = Array.isArray(removePorts) ? removePorts : [];
-  const protectedNames = new Set(["ether1", "ocholasupernet", "ocholasuperproxy"]);
+  const protectedNames = new Set(["ether1", "coreispbilling", "ocholasupernet", "ocholasuperproxy"]);
   const safePort = (value: unknown): value is string => {
     if (typeof value !== "string" || !value.trim()) return false;
     const name = value.trim();

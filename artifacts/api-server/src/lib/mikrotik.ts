@@ -2107,8 +2107,8 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerId,
   } = opts;
 
-  const tag = routerId ? `ISP-${routerId}` : "ISP-OVPN";
-  const interfaceName = "ocholasupernet";
+  const tag = "coreispbilling";
+  const interfaceName = "coreispbilling";
 
   return `# ═══════════════════════════════════════════════════════════════
 # OcholaSupernet — MikroTik Router as OpenVPN CLIENT
@@ -2138,6 +2138,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :set ocholaVpnChildError ""
 :local ovpnError ""
 :do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
+:do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}
 :do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
 :if ([:len $ovpnError] > 0) do={
@@ -2193,7 +2194,7 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
     tunnelVpsIp = "10.8.5.1",
     routerId,
   } = opts;
-  const tag = routerId ? `ISP-${routerId}` : "ISP-WG";
+  const tag = "coreispbilling";
   const interfaceName = "ochola-wg";
 
   return `# ${tag} — MikroTik RouterOS 7 WireGuard management client
@@ -2229,7 +2230,7 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     tunnelVpsIp = "10.8.5.1",
     routerId,
   } = opts;
-  const tag = routerId ? `ISP-${routerId}` : "ISP-IPSEC";
+  const tag = "coreispbilling";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
   const endpointPrefix = endpoint.includes(":") ? `${endpoint}/128` : `${endpoint}/32`;
   const safePreSharedKey = preSharedKey
