@@ -26,7 +26,7 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "../NetworkTabs";
 import { useToast } from "@/hooks/use-toast";
-import { isImpersonating, isSuperAdmin } from "@/lib/supabase";
+import { getSelectedTenantId, isSuperAdmin } from "@/lib/supabase";
 import {
   analyzeSource,
   createCollectorSession,
@@ -138,7 +138,7 @@ export default function NetworkMigration() {
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const [copied, setCopied] = useState("");
-  const needsTenantContext = isSuperAdmin() && !isImpersonating();
+  const needsTenantContext = isSuperAdmin() && !getSelectedTenantId();
 
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["migration-routers", needsTenantContext ? "no-tenant" : "tenant"],

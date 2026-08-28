@@ -1,20 +1,12 @@
-import { getAdminApiToken } from "@/lib/supabase";
+import { getAdminApiToken, getSelectedTenantId, isSuperAdmin } from "@/lib/supabase";
 
 function getHeaders() {
   const token = getAdminApiToken();
-  const impersonatedAdminId = (() => {
-    try {
-      return localStorage.getItem("ochola_impersonating") === "true"
-        ? localStorage.getItem("ochola_admin_id") || ""
-        : "";
-    } catch {
-      return "";
-    }
-  })();
+  const selectedTenantId = isSuperAdmin() ? getSelectedTenantId() : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(impersonatedAdminId ? { "X-Impersonated-Admin-Id": impersonatedAdminId } : {}),
+    ...(selectedTenantId ? { "X-Impersonated-Admin-Id": String(selectedTenantId) } : {}),
   };
 }
 

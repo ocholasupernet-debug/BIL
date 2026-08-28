@@ -47,6 +47,15 @@ export function getAdminApiToken(): string {
   } catch { return ""; }
 }
 
+export function getSelectedTenantId(): number | null {
+  try {
+    const raw = localStorage.getItem("ochola_admin_id") || "";
+    if (!/^[1-9]\d*$/.test(raw)) return null;
+    const id = Number(raw);
+    return Number.isSafeInteger(id) ? id : null;
+  } catch { return null; }
+}
+
 export function isSuperAdmin(): boolean {
   return getAdminRole() === "superadmin";
 }
