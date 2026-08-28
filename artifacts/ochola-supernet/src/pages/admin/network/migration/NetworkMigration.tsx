@@ -87,16 +87,19 @@ export default function NetworkMigration() {
   }, [tunnelStatus]);
 
   const collectorMutation = useMutation({
-    mutationFn: () => createCollectorSession(sourceLabel.trim(), sourceRouterId && tunnel ? {
-      sourceRouterId,
-      tunnelId: tunnel.leaseId,
-    } : undefined),
+    mutationFn: (binding?: { sourceLabel?: string; sourceRouterId: number; tunnelId: string }) => createCollectorSession(
+      binding?.sourceLabel ?? sourceLabel.trim(),
+      binding ? { sourceRouterId: binding.sourceRouterId, tunnelId: binding.tunnelId } : (sourceRouterId && tunnel ? {
+        sourceRouterId,
+        tunnelId: tunnel.leaseId,
+      } : undefined),
+    ),
     onSuccess: (data) => {
       setCollector(data);
       if (data.tunnel) {
         toast({
           title: "Tunnel-enabled collector created",
-          description: `The script will add the temporary interface and connection-only firewall rules for ${data.tunnel.address}.`,
+          description: `Two scripts are ready: connect the router through VPN first, then run the export script.`,
         });
       }
     },
@@ -126,7 +129,15 @@ export default function NetworkMigration() {
     mutationFn: createMigrationTunnel,
     onSuccess: (data) => {
       setTunnel(data);
-      toast({ title: "One-hour migration tunnel created", description: `Run the RouterOS command for ${data.tunnelAddress}, then verify the API connection.` });
+      toast({ title: "One-hour migration tunnel created", description: "Two migration scripts are being prepared below: connect first, then export." });
+      if (!collector) {
+        const registeredRouterName = routers?.find(router => router.id === data.routerId)?.name;
+        collectorMutation.mutate({
+          sourceLabel: sourceLabel.trim() || registeredRouterName || `Router ${data.routerId}`,
+          sourceRouterId: data.routerId,
+          tunnelId: data.leaseId,
+        });
+      }
     },
     onError: (err: any) => toast({ title: "Migration tunnel could not be created", description: err.message, variant: "destructive" }),
   });
@@ -446,7 +457,7 @@ export default function NetworkMigration() {
                   <input className="isp-input py-3 w-full" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
                 </div>
                 {!collector && (
-                  <button type="button" className="btn btn-primary" onClick={() => collectorMutation.mutate()} disabled={!sourceLabel.trim() || collectorMutation.isPending}>
+                  <button type="button" className="btn btn-primary" onClick={() => collectorMutation.mutate(undefined)} disabled={!sourceLabel.trim() || collectorMutation.isPending}>
                     {collectorMutation.isPending ? <><RefreshCw size={14} className="animate-spin" /> Creating session...</> : <><Terminal size={14} /> {sourceRouterId && tunnel ? "Create tunnel-enabled collector" : "Create domain collector"}</>}
                   </button>
                 )}
