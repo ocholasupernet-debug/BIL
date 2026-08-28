@@ -24,8 +24,8 @@ export function Logo({ size = "md", iconOnly = false }: LogoProps) {
           flexShrink: 0,
           display: "grid",
           placeItems: "center",
-          background: "linear-gradient(145deg, #4f8cff 0%, #2563eb 48%, #6d4aff 100%)",
-          boxShadow: "0 8px 20px rgba(37, 99, 235, 0.28), inset 0 1px 0 rgba(255,255,255,0.3)",
+           background: "linear-gradient(145deg, #e78a55 0%, #d96835 52%, #b95024 100%)",
+           boxShadow: "0 8px 20px rgba(185, 80, 36, 0.24), inset 0 1px 0 rgba(255,255,255,0.28)",
         }}
       >
         <svg width={s.icon} height={s.icon} viewBox="0 0 24 24" fill="none">

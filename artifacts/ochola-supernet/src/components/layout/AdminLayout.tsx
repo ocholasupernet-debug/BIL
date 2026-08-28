@@ -275,7 +275,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <div className="sidebar-brand-sub">Admin Panel</div>
             </div>
           </div>
-          <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Collapse sidebar">
+          <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Collapse sidebar" aria-label="Collapse sidebar">
             <Menu size={14} />
           </button>
         </div>
@@ -359,7 +359,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               Online
             </div>
           </div>
-          <button className="sidebar-logout-btn" onClick={handleLogout} title="Sign out">
+          <button className="sidebar-logout-btn" onClick={handleLogout} title="Sign out" aria-label="Sign out">
             <LogOut size={13} />
           </button>
         </div>
@@ -371,7 +371,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         {/* Header */}
         <header className={`admin-header ${isDark ? "admin-header--dark" : "admin-header--light"}`}>
 
-          <button className="header-btn" onClick={() => setSidebarOpen(o => !o)} title="Toggle sidebar">
+          <button className="header-btn" onClick={() => setSidebarOpen(o => !o)} title="Toggle sidebar" aria-label="Toggle sidebar">
             <Menu size={16} />
           </button>
 
@@ -397,11 +397,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <span className="live-label">LIVE</span>
             </div>
 
-            <button className="header-btn" onClick={toggle} title={isDark ? "Switch to light" : "Switch to dark"}>
+            <button className="header-btn" onClick={toggle} title={isDark ? "Switch to light" : "Switch to dark"} aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}>
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
 
-            <button className="header-btn" title="Notifications">
+            <button className="header-btn" title="Notifications" aria-label="Open notifications">
               <Bell size={15} />
             </button>
 
@@ -414,7 +414,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               </span>
             </div>
 
-            <button className="header-logout-btn" onClick={handleLogout} title="Sign out">
+            <button className="header-logout-btn" onClick={handleLogout} title="Sign out" aria-label="Sign out">
               <LogOut size={14} />
               <span>Logout</span>
             </button>
@@ -435,7 +435,7 @@ const adminLayoutStyles = `
   min-height: 100vh;
   display: flex;
   background: var(--isp-bg);
-  font-family: 'Inter', sans-serif;
+  font-family: 'DM Sans', system-ui, sans-serif;
 }
 
 /* ── SIDEBAR ─────────────────────────────────────────── */
@@ -444,12 +444,12 @@ const adminLayoutStyles = `
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background: #0F172A;
+  background: var(--isp-sidebar);
   overflow: hidden;
   transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
   position: relative;
   z-index: 20;
-  box-shadow: 1px 0 0 rgba(255,255,255,0.05);
+  box-shadow: 1px 0 0 rgba(185,210,201,0.08);
 }
 
 .sidebar-logo {
@@ -471,18 +471,18 @@ const adminLayoutStyles = `
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: var(--isp-accent);
+  background: var(--isp-sidebar-strip);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(37,99,235,0.4);
+  box-shadow: 0 5px 13px rgba(217,105,53,0.28);
 }
 
 .sidebar-brand-name {
   font-size: 0.875rem;
   font-weight: 700;
-  color: #F1F5F9;
+  color: #eef4ef;
   letter-spacing: -0.01em;
   line-height: 1.15;
   white-space: nowrap;
@@ -490,7 +490,7 @@ const adminLayoutStyles = `
 
 .sidebar-brand-sub {
   font-size: 0.625rem;
-  color: #475569;
+  color: #7c9690;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -546,7 +546,7 @@ const adminLayoutStyles = `
   border-radius: 7px;
   font-size: 0.8125rem;
   font-weight: 400;
-  color: #6E84A3;
+  color: #a8bdb6;
   background: transparent;
   cursor: pointer;
   transition: background 0.13s ease, color 0.13s ease;
@@ -560,10 +560,10 @@ const adminLayoutStyles = `
   color: #CBD5E1;
 }
 .nav-row--active {
-  background: rgba(37,99,235,0.15);
-  color: #93C5FD !important;
+  background: rgba(217,105,53,0.16);
+  color: #f0a176 !important;
   font-weight: 600;
-  border-left-color: #3B82F6;
+  border-left-color: var(--isp-accent);
 }
 
 .nav-icon {
@@ -583,8 +583,8 @@ const adminLayoutStyles = `
   color: #94A3B8;
 }
 .nav-icon--active {
-  background: rgba(59,130,246,0.2) !important;
-  color: #60A5FA !important;
+  background: rgba(217,105,53,0.22) !important;
+  color: #f0a176 !important;
 }
 
 .nav-label {
@@ -638,9 +638,9 @@ const adminLayoutStyles = `
   background: rgba(255,255,255,0.04);
 }
 .nav-child-row--active {
-  color: #93C5FD !important;
+  color: #f0a176 !important;
   font-weight: 600;
-  background: rgba(37,99,235,0.12);
+  background: rgba(217,105,53,0.13);
 }
 
 .nav-child-dot {
@@ -652,7 +652,7 @@ const adminLayoutStyles = `
   transition: background 0.12s;
 }
 .nav-child-row:hover .nav-child-dot { background: #64748B; }
-.nav-child-row--active .nav-child-dot { background: #60A5FA !important; }
+.nav-child-row--active .nav-child-dot { background: #f0a176 !important; }
 
 /* ── SIDEBAR USER STRIP ──────────────────────────────── */
 .sidebar-user {
@@ -668,7 +668,7 @@ const adminLayoutStyles = `
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: var(--isp-accent);
+  background: var(--isp-sidebar-strip);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -750,9 +750,9 @@ const adminLayoutStyles = `
   z-index: 30;
 }
 .admin-header--light {
-  background: #FFFFFF;
-  border-bottom: 1px solid #E8EDF4;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  background: var(--isp-header);
+  border-bottom: 1px solid var(--isp-border);
+  box-shadow: var(--shadow-sm);
 }
 .admin-header--dark {
   background: var(--isp-header);
@@ -877,7 +877,7 @@ const adminLayoutStyles = `
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: var(--isp-accent);
+  background: var(--isp-sidebar-strip);
   display: flex;
   align-items: center;
   justify-content: center;
