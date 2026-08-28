@@ -116,7 +116,7 @@ export function getDeployableSource(
   }
 
   const content = name === "mainhotspot.rsc"
-    ? buildMainhotspotRsc(`${origin}/scripts`)
+    ? buildMainhotspotRsc(`${origin}/api/scripts`)
     : (() => {
         const entry = STATIC_SUBSCRIPTS[name];
         return typeof entry === "function" ? entry(origin) : entry;
@@ -749,7 +749,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const host = (req.headers.host ?? "") as string;
   const origin = resolveOrigin(host);
-  const scriptsBase = `${origin}/scripts`;
+  const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
      progress callbacks. The admin UI may instead send rid+adminId; in that
      case the server resolves the router secret here so credentials never
@@ -798,12 +798,12 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
-        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
-        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
         /* Pass the assignment into the orchestrator so the generated
            firewall and registration steps advertise the same address. */
         routerVpnIp = assignedIp;
@@ -1560,7 +1560,7 @@ function buildSyncfullRsc(origin: string): string {
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\\"${origin}/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
+    on-event="/tool fetch url=\\"${origin}/api/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
     comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
