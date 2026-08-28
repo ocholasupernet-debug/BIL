@@ -57,26 +57,15 @@ test("temporary tunnel script is address-bound and self-removing", () => {
   assert.match(script, /dst-port=8728 src-address=10\.8\.0\.1 in-interface="ochola-mig-1-abcd"/);
   assert.doesNotMatch(script, /\/ip route add/);
 });
-test("domain collector can add only a connection-scoped tunnel", () => {
+test("collector export script stays separate from the connection script", () => {
   const script = exportScript.buildDomainRouterExportScript(
     "https://isplatty.org/api/router-migrations/collector-upload?token=test",
-    {
-      endpoint: "vpn.example.test",
-      port: 1194,
-      username: "ochola-mig-1-abcd",
-      password: "one-time-secret",
-      tunnelIp: "10.8.0.42",
-      interfaceName: "ochola-mig-1-abcd",
-      firewallComment: "ochola-migration:42",
-      schedulerName: "ochola-migration-expiry-42",
-    },
   );
-  assert.match(script, /temporary migration tunnel interface was not created/);
-  assert.match(script, /in-interface="ochola-mig-1-abcd"/);
+  assert.match(script, /Run the separate migration-tunnel script first/);
   assert.match(script, /\/export show-sensitive terse file=\$exportFile/);
-  assert.match(script, /interval=1h/);
+  assert.doesNotMatch(script, /\/interface ovpn-client add/);
+  assert.doesNotMatch(script, /\/ip firewall filter add/);
   assert.doesNotMatch(script, /\/ip route add/);
-  assert.doesNotMatch(script, /add-default-route=yes/);
 });
 test("terminal export parser keeps sensitive values server-side and maps portable sections", () => {
   const pkg = exporter.parseRouterOsExport(`

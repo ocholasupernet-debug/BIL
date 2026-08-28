@@ -43,6 +43,8 @@ export interface CollectorSession {
   token: string;
   scriptUrl: string;
   command: string;
+  tunnelScriptUrl?: string;
+  tunnelCommand?: string;
   expiresAt: string;
   status: "waiting" | "processing" | "expired" | "exported" | "target_selected" | "dry_run" | "completed" | "failed";
   migrationId?: string;

@@ -231,9 +231,19 @@ export default function NetworkMigration() {
     if (!collector) return;
     try {
       await navigator.clipboard.writeText(collector.command);
-      toast({ title: "Command copied", description: "Paste it into the active MikroTik terminal." });
+      toast({ title: "Export command copied", description: "Run it after the temporary VPN tunnel is connected." });
     } catch {
       toast({ title: "Copy failed", description: "Select and copy the command manually.", variant: "destructive" });
+    }
+  };
+
+  const copyCollectorTunnelCommand = async () => {
+    if (!collector?.tunnelCommand) return;
+    try {
+      await navigator.clipboard.writeText(collector.tunnelCommand);
+      toast({ title: "Tunnel command copied", description: "Run it first in the active MikroTik terminal." });
+    } catch {
+      toast({ title: "Copy failed", description: "Select and copy the tunnel command manually.", variant: "destructive" });
     }
   };
 
@@ -414,14 +424,15 @@ export default function NetworkMigration() {
                     <li>Paste the displayed command into the active MikroTik terminal.</li>
                      <li>
                        {sourceRouterId && tunnel
-                         ? "The script adds the temporary OVPN interface and tunnel-bound API firewall rules, then reads and uploads the export."
+                         ? "Run the tunnel script first. After the VPN is connected, run the separate export script to read and upload the configuration."
                          : "The domain-hosted script reads the router and uploads the export automatically."}
                      </li>
                   </ol>
                    {sourceRouterId && tunnel ? (
                      <p className="mt-3 text-xs text-amber-600">
-                       Only the temporary tunnel interface, its one-hour cleanup scheduler, and the two connection-only
-                       firewall rules are added. No default route, LAN route, or migration configuration is changed.
+                       The first script adds only the temporary tunnel interface, its one-hour cleanup scheduler, and the
+                       two connection-only firewall rules. The second script is export-only. No default route, LAN route,
+                       or migration configuration is changed.
                      </p>
                    ) : (
                      <p className="mt-3 text-xs text-amber-600">
@@ -443,20 +454,36 @@ export default function NetworkMigration() {
                   <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
                     <div>
                         <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">
-                          {collector.tunnel ? "Tunnel-enabled RouterOS collector command" : "Domain-linked collector command (no tunnel)"}
+                          {collector.tunnel ? "Two-step RouterOS collector" : "Domain-linked collector command (no tunnel)"}
                         </label>
-                      <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
                         {collector.tunnel && (
-                          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                            <div>
-                              <span className="block text-[var(--isp-text-muted)]">Temporary tunnel address</span>
-                              <strong className="text-[var(--isp-text)]">{collector.tunnel.address}</strong>
+                          <>
+                            <div className="mt-3">
+                              <span className="text-xs font-semibold text-[var(--isp-text)]">1. Connect the router to the web through VPN</span>
+                              <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.tunnelCommand}</pre>
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                <button type="button" className="btn btn-ghost" onClick={copyCollectorTunnelCommand}><FileCheck size={14} /> Copy tunnel command</button>
+                                {collector.tunnelScriptUrl && <a className="btn btn-ghost" href={collector.tunnelScriptUrl} target="_blank" rel="noreferrer"><FileCheck size={14} /> View tunnel script</a>}
+                              </div>
                             </div>
-                            <div>
-                              <span className="block text-[var(--isp-text-muted)]">Tunnel status</span>
-                              <strong className="text-[var(--isp-text)] capitalize">{collector.tunnel.status.replace("_", " ")}</strong>
+                            <div className="mt-4 border-t border-[var(--isp-border)] pt-3">
+                              <span className="text-xs font-semibold text-[var(--isp-text)]">2. Enable the read-only export</span>
+                              <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
                             </div>
-                          </div>
+                            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <span className="block text-[var(--isp-text-muted)]">Temporary tunnel address</span>
+                                <strong className="text-[var(--isp-text)]">{collector.tunnel.address}</strong>
+                              </div>
+                              <div>
+                                <span className="block text-[var(--isp-text-muted)]">Tunnel status</span>
+                                <strong className="text-[var(--isp-text)] capitalize">{collector.tunnel.status.replace("_", " ")}</strong>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                        {!collector.tunnel && (
+                          <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
                         )}
                       <div className="flex flex-wrap gap-2 mt-3">
                         <button type="button" className="btn btn-ghost" onClick={copyCollectorCommand}><FileCheck size={14} /> Copy command</button>

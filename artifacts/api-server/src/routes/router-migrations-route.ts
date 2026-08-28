@@ -319,7 +319,7 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
         `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
       );
       tunnel = leases[0];
-      if (!tunnel || !["issued", "script_issued", "connected", "exported"].includes(tunnel.status)) {
+      if (!tunnel || !["script_issued", "connected", "exported"].includes(tunnel.status)) {
         throw new Error("The migration tunnel is no longer available.");
       }
       if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
@@ -436,8 +436,59 @@ router.get("/router-migrations/tunnel-bootstrap", async (req, res) => {
 });
 
 /* A collector session may be bound to the same registered-router lease. This
-   endpoint keeps tunnel secrets server-side while returning one combined RSC:
-   connection-only tunnel setup first, read-only export second. */
+   endpoint returns only the connection script; the export script is served
+   separately so the operator explicitly runs the two stages in order. */
+router.get("/router-migrations/collector-tunnel-script", async (req, res) => {
+  try {
+    const token = collectorToken(req);
+    const tokenHash = collectorHash(token);
+    const sessions = await sbSelectStrict<CollectorToken>(
+      "router_migration_collector_tokens",
+      `token_hash=eq.${tokenHash}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`,
+    );
+    const session = sessions[0];
+    if (!session || session.used_at || session.migration_job_id || new Date(session.expires_at).getTime() <= Date.now()) {
+      res.status(401).send("# Invalid or expired migration tunnel session.");
+      return;
+    }
+    if (!session.tunnel_lease_id) {
+      res.status(409).send("# This collector session has no migration tunnel.");
+      return;
+    }
+    const leases = await sbSelectStrict<TunnelLease>(
+      "router_migration_tunnel_leases",
+      `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+    );
+    const tunnel = leases[0];
+    if (!tunnel || !["issued", "script_issued", "connected", "exported"].includes(tunnel.status)) {
+      res.status(409).send("# The migration tunnel is no longer available. Start a new tunnel session.");
+      return;
+    }
+    if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
+      await expireTunnel(tunnel);
+      res.status(409).send("# The migration tunnel has expired. Start a new tunnel session.");
+      return;
+    }
+
+    const script = buildMigrationTunnelScript(tunnelScriptOptions(tunnel));
+    if (tunnel.status === "issued") {
+      const events = Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : [];
+      await sbUpdateStrict(
+        "router_migration_tunnel_leases",
+        `id=eq.${tunnel.id}&admin_id=eq.${session.admin_id}&status=eq.issued`,
+        {
+          status: "script_issued",
+          bootstrap_fetched_at: new Date().toISOString(),
+          audit_json: { ...(tunnel.audit_json ?? {}), events: [...events, { event: "collector_tunnel_script_issued", at: new Date().toISOString() }] },
+        },
+      ).catch(() => undefined);
+    }
+    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-tunnel.rsc"').send(script);
+  } catch {
+    res.status(401).send("# Invalid or expired migration tunnel session.");
+  }
+});
+
 router.get("/router-migrations/collector-script", async (req, res) => {
   try {
     const token = collectorToken(req);
@@ -451,16 +502,14 @@ router.get("/router-migrations/collector-script", async (req, res) => {
       res.status(401).send("# Invalid or expired migration collector session.");
       return;
     }
-
-    let tunnel: TunnelLease | undefined;
     if (session.tunnel_lease_id) {
       const leases = await sbSelectStrict<TunnelLease>(
         "router_migration_tunnel_leases",
         `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
       );
-      tunnel = leases[0];
-      if (!tunnel || !["issued", "script_issued", "connected", "exported"].includes(tunnel.status)) {
-        res.status(409).send("# The migration tunnel is no longer available. Start a new tunnel session.");
+      const tunnel = leases[0];
+      if (!tunnel || !["script_issued", "connected", "exported"].includes(tunnel.status)) {
+        res.status(409).send("# Run the migration tunnel script first or start a new tunnel session.");
         return;
       }
       if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
@@ -469,23 +518,9 @@ router.get("/router-migrations/collector-script", async (req, res) => {
         return;
       }
     }
-
-    const origin = publicOrigin(req);
-    const uploadUrl = `${origin}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
-    const script = buildDomainRouterExportScript(uploadUrl, tunnel ? tunnelScriptOptions(tunnel) : undefined);
-    if (tunnel && tunnel.status === "issued") {
-      const events = Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : [];
-      await sbUpdateStrict(
-        "router_migration_tunnel_leases",
-        `id=eq.${tunnel.id}&admin_id=eq.${session.admin_id}&status=eq.issued`,
-        {
-          status: "script_issued",
-          bootstrap_fetched_at: new Date().toISOString(),
-          audit_json: { ...(tunnel.audit_json ?? {}), events: [...events, { event: "collector_script_issued", at: new Date().toISOString() }] },
-        },
-      ).catch(() => undefined);
-    }
-    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-collector.rsc"').send(script);
+    const uploadUrl = `${publicOrigin(req)}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
+    const script = buildDomainRouterExportScript(uploadUrl);
+    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-export.rsc"').send(script);
   } catch {
     res.status(401).send("# Invalid or expired migration collector session.");
   }
@@ -615,7 +650,13 @@ router.post("/router-migrations/collector-session", async (req, res) => guarded(
     tunnel_lease_id: tunnel?.id ?? null,
   });
   const scriptUrl = `${publicOrigin(req)}/api/router-migrations/collector-script?token=${encodeURIComponent(token)}`;
-  const command = `/tool fetch url="${scriptUrl}" dst-path="ochola-router-migration-collector.rsc" mode=https check-certificate=no; /import ochola-router-migration-collector.rsc; /file remove [find name="ochola-router-migration-collector.rsc"]`;
+  const command = `/tool fetch url="${scriptUrl}" dst-path="ochola-router-migration-export.rsc" mode=https check-certificate=no; /import ochola-router-migration-export.rsc; /file remove [find name="ochola-router-migration-export.rsc"]`;
+  const tunnelScriptUrl = tunnel
+    ? `${publicOrigin(req)}/api/router-migrations/collector-tunnel-script?token=${encodeURIComponent(token)}`
+    : undefined;
+  const tunnelCommand = tunnel
+    ? `/tool fetch url="${tunnelScriptUrl}" dst-path="ochola-router-migration-tunnel.rsc" mode=https check-certificate=no; /import ochola-router-migration-tunnel.rsc; /file remove [find name="ochola-router-migration-tunnel.rsc"]`
+    : undefined;
   res.status(201).json({
     sourceLabel,
     token,
@@ -623,6 +664,7 @@ router.post("/router-migrations/collector-session", async (req, res) => guarded(
     command,
     expiresAt,
     status: "waiting",
+    ...(tunnelScriptUrl && tunnelCommand ? { tunnelScriptUrl, tunnelCommand } : {}),
     ...(tunnel ? {
       tunnel: {
         leaseId: String(tunnel.id),
