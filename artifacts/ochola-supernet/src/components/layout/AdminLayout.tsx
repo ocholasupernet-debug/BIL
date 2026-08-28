@@ -110,6 +110,7 @@ const navSections: NavSection[] = [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Add Router",     href: "/admin/network/add-router" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
+          { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "PPPoE",          href: "/admin/network/pppoe" },
           { name: "PPP",            href: "/admin/network/ppp" },
           { name: "Wireless",       href: "/admin/network/wireless" },

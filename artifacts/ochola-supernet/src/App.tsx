@@ -18,6 +18,7 @@ import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
+import NetworkMigration from "./pages/admin/network/migration/NetworkMigration";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
@@ -119,6 +120,7 @@ function Router() {
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
       <Route path="/admin/network/add-router"     component={NetworkSelfInstall}   />
+      <Route path="/admin/network/migration"      component={NetworkMigration}     />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
       <Route path="/admin/network/ppp"            component={NetworkPPP}           />

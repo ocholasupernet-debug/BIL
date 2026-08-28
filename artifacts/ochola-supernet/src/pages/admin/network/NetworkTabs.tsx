@@ -1,20 +1,21 @@
 import React from "react";
 import { Link } from "wouter";
 import {
-  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files,
+  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files, RefreshCw
 } from "lucide-react";
 
 const TABS = [
   { id: "routers",           label: "Routers",         href: "/admin/network/routers",           icon: Server    },
   { id: "add-router",        label: "Add Router",      href: "/admin/network/add-router",        icon: PlusCircle},
   { id: "replace-router",    label: "Replace Router",  href: "/admin/network/replace-router",    icon: RotateCcw },
+  { id: "migration",         label: "Migration",       href: "/admin/network/migration",         icon: RefreshCw },
   { id: "pppoe",             label: "PPPoE",           href: "/admin/network/pppoe",             icon: Shield    },
-  { id: "ppp",               label: "PPP",          href: "/admin/network/ppp",               icon: Users     },
-  { id: "wireless",          label: "Wireless",     href: "/admin/network/wireless",          icon: Wifi      },
-  { id: "queues",            label: "Queues",       href: "/admin/network/queues",            icon: Activity  },
-  { id: "ip-pools",          label: "IP Pools",     href: "/admin/network/ip-pools",          icon: Database  },
-  { id: "router-api-config", label: "API Config",   href: "/admin/network/router-api-config", icon: Settings2 },
-  { id: "files",              label: "Files",        href: "/admin/network/files",              icon: Files    },
+  { id: "ppp",               label: "PPP",             href: "/admin/network/ppp",               icon: Users     },
+  { id: "wireless",          label: "Wireless",        href: "/admin/network/wireless",          icon: Wifi      },
+  { id: "queues",            label: "Queues",          href: "/admin/network/queues",            icon: Activity  },
+  { id: "ip-pools",          label: "IP Pools",        href: "/admin/network/ip-pools",          icon: Database  },
+  { id: "router-api-config", label: "API Config",      href: "/admin/network/router-api-config", icon: Settings2 },
+  { id: "files",             label: "Files",           href: "/admin/network/files",             icon: Files     },
 ];
 
 export function NetworkTabs({ active }: { active: string }) {

@@ -1,0 +1,76 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { build } from "esbuild";
+import { readFile, rm } from "node:fs/promises";
+import path from "node:path";
+
+const outdir = "tests/.migration-build";
+await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
+const exporter = await import(path.resolve(outdir, "router-migration-exporter.cjs"));
+const importer = await import(path.resolve(outdir, "router-migration-importer.cjs"));
+await rm(outdir, { recursive: true, force: true });
+
+test("source allowlist excludes files and mutations", () => {
+  assert.ok(exporter.SOURCE_PRINT_COMMANDS.every(x => x.endsWith("/print") && !x.startsWith("/file")));
+  assert.doesNotThrow(() => exporter.assertSourceCommand("/system/routerboard/print"));
+  assert.doesNotThrow(() => exporter.assertSourceCommand("/system/license/print"));
+  assert.throws(() => exporter.assertSourceCommand("/file/print"));
+  assert.throws(() => exporter.assertSourceCommand("/ip/address/add"));
+});
+test("export redacts secret fields and never reads files", async () => {
+  const seen = [];
+  const pkg = await exporter.exportRouterMigration({ host: "x", port: 8728, username: "u", password: "p" }, async c => {
+    seen.push(c[0]); return [{ name: "a", password: "leak", private_key: "key" }];
+  });
+  assert.equal(pkg.interfaces[0].password, exporter.MANUAL);
+  assert.equal(pkg.interfaces[0].private_key, exporter.MANUAL);
+  assert.ok(!seen.some(x => x.startsWith("/file")));
+});
+test("dry run sends zero writes", async () => {
+  const plan = importer.buildMigrationPlan({ ip_pools: [{ name: "p", ranges: "10.0.0.2-10.0.0.3" }] });
+  let calls = 0;
+  const r = await importer.executeMigrationPlan(plan, async () => { calls++; return []; }, ["ip_pools:0"], true);
+  assert.equal(calls, 0); assert.equal(r.commands.length, 1);
+});
+test("source and target overlap is rejected", () => {
+  assert.throws(() => importer.assertDistinctTargets({ id: 1, host: "a" }, { id: 2, host: "a" }));
+});
+test("only approved explicitly mapped entities are written", async () => {
+  const plan = importer.buildMigrationPlan({ ip_pools: [{ name: "p", ranges: "a" }], queues: [{ name: "no" }] });
+  const calls = [];
+  await importer.executeMigrationPlan(plan, async c => { calls.push(c); return []; }, [], false);
+  assert.equal(calls.filter(c => c[0].endsWith("/add")).length, 0);
+  assert.equal(plan.unsupported[0].category, "queues");
+});
+test("import stops at first critical failure", async () => {
+  const plan = importer.buildMigrationPlan({ ip_pools: [{ name: "p", ranges: "a" }], ppp_profiles: [{ name: "q" }] });
+  const result = await importer.executeMigrationPlan(plan, async c => {
+    if (c[0] === "/ip/pool/add") throw new Error("nope"); return [];
+  }, ["ip_pools:0", "ppp_profiles:0"], false);
+  assert.equal(result.stopped, true); assert.equal(result.applied.length, 0);
+});
+test("target state is redacted and persisted before the first write", async () => {
+  const plan = importer.buildMigrationPlan({ ip_pools: [{ name: "p", ranges: "10.0.0.2-10.0.0.3" }] });
+  const events = [];
+  await importer.executeMigrationPlan(
+    plan,
+    async c => {
+      events.push(c[0].endsWith("/print") ? "read" : "write");
+      return c[0].endsWith("/print") ? [{ name: "existing", password: "must-not-persist" }] : [];
+    },
+    ["ip_pools:0"],
+    false,
+    async state => {
+      events.push("persist");
+      assert.equal(state.ip_pools[0].password, exporter.MANUAL);
+    },
+  );
+  assert.deepEqual(events.slice(0, 3), ["read", "persist", "write"]);
+});
+test("database schema enforces one expiring lease per target router", async () => {
+  const sql = await readFile("migrations/2026_router_migration_jobs.sql", "utf8");
+  assert.match(sql, /target_router_id bigint primary key/);
+  assert.match(sql, /on conflict \(target_router_id\) do nothing/);
+  assert.match(sql, /expires_at <= now\(\)/);
+  assert.match(sql, /renew_router_migration_target_lease/);
+});

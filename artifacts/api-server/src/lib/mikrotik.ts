@@ -348,6 +348,19 @@ async function withConn<T>(
   }
 }
 
+/** Run a caller-supplied RouterOS command through the existing connection path.
+ * This deliberately exports no connection object, so callers cannot retain or
+ * accidentally reuse an authenticated connection. */
+export async function runRouterCommand(
+  creds: RouterCredentials,
+  command: string[]
+): Promise<Record<string, string>[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    return withTimeout(conn.write(command), ms) as Promise<Record<string, string>[]>;
+  });
+}
+
 /**
  * Probes all candidate hosts (primary + VPN) in parallel without attempting
  * a full RouterOS API connection. Useful for pre-flight diagnostics.

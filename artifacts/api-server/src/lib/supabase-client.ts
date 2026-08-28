@@ -84,6 +84,19 @@ export async function sbInsert<T>(
   return res.json() as Promise<T[]>;
 }
 
+/** INSERT which never turns a persistence failure into a false success. */
+export async function sbInsertStrict<T>(
+  table: string,
+  payload: Record<string, unknown> | Record<string, unknown>[],
+): Promise<T[]> {
+  if (!supabaseConfigured) throw new Error("Supabase is not configured for secure storage.");
+  const res = await fetch(url(table), {
+    method: "POST", headers: headers({ Prefer: "return=representation" }), body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Supabase rejected the migration write (HTTP ${res.status}).`);
+  return res.json() as Promise<T[]>;
+}
+
 /** INSERT or UPDATE rows using a unique conflict column. */
 export async function sbUpsert<T>(
   table: string,
@@ -155,6 +168,17 @@ export async function sbUpdate<T>(
     body: JSON.stringify(payload),
   });
   if (!res.ok) return [];
+  return res.json() as Promise<T[]>;
+}
+
+export async function sbUpdateStrict<T>(
+  table: string, filterQuery: string, payload: Record<string, unknown>,
+): Promise<T[]> {
+  if (!supabaseConfigured) throw new Error("Supabase is not configured for secure storage.");
+  const res = await fetch(url(table, filterQuery), {
+    method: "PATCH", headers: headers({ Prefer: "return=representation" }), body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Supabase rejected the migration write (HTTP ${res.status}).`);
   return res.json() as Promise<T[]>;
 }
 

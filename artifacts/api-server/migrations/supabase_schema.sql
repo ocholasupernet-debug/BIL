@@ -126,6 +126,37 @@ create table if not exists isp_routers (
 create index if not exists isp_routers_admin_id_idx on isp_routers(admin_id);
 create index if not exists isp_routers_status_idx   on isp_routers(status);
 
+-- Encrypted RouterOS migration packages (service role only).
+create table if not exists router_migration_jobs (
+  id bigserial primary key,
+  admin_id bigint not null references isp_admins(id) on delete cascade,
+  source_router_id bigint not null references isp_routers(id) on delete restrict,
+  target_router_id bigint references isp_routers(id) on delete restrict,
+  status text not null default 'exported',
+  ciphertext text not null, iv text not null, auth_tag text not null,
+  findings_json jsonb not null default '{}'::jsonb, plan_json jsonb not null default '{}'::jsonb,
+  stages_json jsonb not null default '{}'::jsonb, verification_json jsonb not null default '{}'::jsonb,
+  audit_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(), completed_at timestamptz,
+  constraint router_migration_jobs_distinct_routers check (target_router_id is null or target_router_id <> source_router_id)
+);
+create index if not exists router_migration_jobs_admin_created_idx on router_migration_jobs(admin_id, created_at desc);
+alter table router_migration_jobs enable row level security;
+revoke all on table router_migration_jobs from anon, authenticated;
+grant select, insert, update on table router_migration_jobs to service_role;
+grant usage, select on sequence router_migration_jobs_id_seq to service_role;
+
+-- One expiring, database-enforced import lease per target router prevents
+-- separate API processes from interleaving migration writes.
+create table if not exists router_migration_target_leases (
+  target_router_id bigint primary key references isp_routers(id) on delete cascade,
+  admin_id bigint not null references isp_admins(id) on delete cascade,
+  migration_job_id bigint not null references router_migration_jobs(id) on delete cascade,
+  lease_token text not null,
+  acquired_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
 -- Payment / billing transactions
 create table if not exists isp_transactions (
   id              bigserial primary key,
