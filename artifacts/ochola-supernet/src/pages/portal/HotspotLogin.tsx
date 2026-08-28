@@ -247,7 +247,10 @@ export default function HotspotLogin() {
         .hp-root {
           min-height: 100vh;
           font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-          background: var(--isp-bg);
+           /* The portal uses a dark glass layout even when the admin app is
+              in its light theme. Keep its contrast self-contained so plan
+              names and prices do not render white-on-white. */
+           background: #02090f;
           color: #fff;
           overflow-x: hidden;
           position: relative;
@@ -259,7 +262,7 @@ export default function HotspotLogin() {
           position: sticky; top: 0; z-index: 50;
           display: flex; align-items: center; justify-content: space-between;
           padding: 0 20px; height: 60px;
-          background: var(--isp-card);
+           background: rgba(3,11,20,0.94);
           backdrop-filter: blur(24px);
           border-bottom: 1px solid rgba(255,255,255,0.05);
         }
