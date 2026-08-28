@@ -2104,18 +2104,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
 # Make this safe to re-import during recovery or after a failed migration.
 :do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
-/interface ovpn-client
-add name=ovpn-to-vps \\
-    connect-to=${vpsPublicIp} \\
-    port=${vpnPort} \\
-    mode=ip \\
-    user=${vpnUsername} \\
-    password=${vpnPassword} \\
-    auth=sha1 \\
-    cipher=aes128 \\
-    add-default-route=no \\
-    disabled=no \\
-    comment="${tag} — VPS tunnel"
+:do { /interface ovpn-client add name=ovpn-to-vps connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :put "${tag}: OVPN client creation failed; check RouterOS version and /log" }
 
 :delay 5s
 :put "${tag}: waiting for OVPN client to establish..."
