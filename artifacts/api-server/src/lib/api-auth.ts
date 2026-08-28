@@ -126,7 +126,8 @@ export function requireAuth(requiredType?: "a" | "c") {
       return;
     }
 
-    if (requiredType && payload.type !== requiredType) {
+    const isSignedInUser = payload.type === "a" || payload.type === "c";
+    if ((requiredType && payload.type !== requiredType) || (!requiredType && !isSignedInUser)) {
       res.status(403).json({ ok: false, error: "Insufficient permissions" });
       return;
     }

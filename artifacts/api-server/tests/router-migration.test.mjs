@@ -140,16 +140,15 @@ test("database schema enforces one expiring lease per target router", async () =
   assert.match(sql, /renew_router_migration_target_lease/);
   assert.match(sql, /tunnel_lease_id bigint references router_migration_tunnel_leases/);
 });
-test("collector tunnel association requires an owned router and lease", async () => {
+test("authenticated migration access is not tenant-scoped", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
-  assert.match(route, /ownedRouter\(sourceRouterId, a\)/);
-  assert.match(route, /tunnel = await tunnelFor\(sourceRouterId, a, tunnelId\)/);
-  assert.match(route, /id=eq\.\$\{positive\(session\.tunnel_lease_id\)\}&admin_id=eq\.\$\{session\.admin_id\}/);
+  assert.match(route, /router\.use\("\/router-migrations", requireAuth\(\)\)/);
+  assert.doesNotMatch(route, /router\.use\("\/router-migrations", requireAdmin\(\)\)/);
+  assert.match(route, /isp_routers", `id=eq\.\$\{id\}&select=/);
+  assert.match(route, /router_migration_jobs", `id=eq\.\$\{id\}&select=/);
 });
-test("superadmin impersonation supplies the tenant scope for migration APIs", async () => {
-  const auth = await readFile("src/lib/api-auth.ts", "utf8");
+test("migration browser API uses the signed-in session without tenant headers", async () => {
   const api = await readFile("../ochola-supernet/src/pages/admin/network/migration/api.ts", "utf8");
-  assert.match(auth, /x-impersonated-admin-id/);
-  assert.match(auth, /payload\.uid === "superadmin"/);
-  assert.match(api, /X-Impersonated-Admin-Id/);
+  assert.match(api, /Authorization: `Bearer \$\{token\}`/);
+  assert.doesNotMatch(api, /X-Impersonated-Admin-Id/);
 });

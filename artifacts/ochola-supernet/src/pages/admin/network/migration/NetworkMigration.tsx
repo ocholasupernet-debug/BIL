@@ -1,5 +1,4 @@
 import React, { useEffect, useState, type ReactNode } from "react";
-import { Link } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -26,7 +25,6 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "../NetworkTabs";
 import { useToast } from "@/hooks/use-toast";
-import { getSelectedTenantId, isSuperAdmin } from "@/lib/supabase";
 import {
   analyzeSource,
   createCollectorSession,
@@ -96,20 +94,7 @@ function CardHead({
   );
 }
 
-function Boundary({ tenant = false }: { tenant?: boolean }) {
-  if (tenant) {
-    return (
-      <div className="migration-tenant-warning">
-        <AlertTriangle size={17} />
-        <div>
-          <strong>Choose an ISP account first</strong>
-          <p>Migration data belongs to one ISP account. Select the account that owns the source router before continuing.</p>
-          <Link className="migration-tenant-link" href="/super-admin/impersonate">Open Super Admin → Impersonate Admin</Link>
-        </div>
-      </div>
-    );
-  }
-
+function Boundary() {
   return (
     <div className="migration-boundary">
       <ShieldAlert size={17} />
@@ -138,12 +123,9 @@ export default function NetworkMigration() {
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const [copied, setCopied] = useState("");
-  const needsTenantContext = isSuperAdmin() && !getSelectedTenantId();
-
   const routersQuery = useQuery<RouterSummary[]>({
-    queryKey: ["migration-routers", needsTenantContext ? "no-tenant" : "tenant"],
+    queryKey: ["migration-routers"],
     queryFn: fetchRouters,
-    enabled: !needsTenantContext,
     retry: 1,
   });
   const routers = routersQuery.data;
@@ -365,7 +347,6 @@ export default function NetworkMigration() {
   };
 
   const primaryDisabled =
-    needsTenantContext ||
     isBusy ||
     (currentStep === 1 && !collector?.migrationId && !migrationId && !sourceRouterId) ||
     (currentStep === 4 && !targetRouterId) ||
@@ -388,21 +369,21 @@ export default function NetworkMigration() {
               <div className="migration-form-block">
                 <label className="migration-form-label" htmlFor="source-router">Registered source router</label>
                 {routersLoading ? (
-                  <div className="migration-loading"><RefreshCw size={14} className="animate-spin" /> Loading routers for this ISP account…</div>
+                  <div className="migration-loading"><RefreshCw size={14} className="animate-spin" /> Loading registered routers…</div>
                 ) : (
                   <select
                     id="source-router"
                     className="migration-select"
                     value={sourceRouterId ?? ""}
                     onChange={event => resetSource(event.target.value)}
-                    disabled={needsTenantContext || !routers?.length || isBusy}
+                    disabled={!routers?.length || isBusy}
                   >
                     <option value="">Choose a registered source router</option>
                     {routers?.map(router => <option key={router.id} value={router.id}>{router.name} · {router.status}</option>)}
                   </select>
                 )}
                 {routersError && <p className="migration-inline-error">{routersError instanceof Error ? routersError.message : "Registered routers could not be loaded."}</p>}
-                {!routersLoading && !routersError && routers?.length === 0 && <p className="migration-inline-empty">No registered routers are available for this ISP account.</p>}
+                {!routersLoading && !routersError && routers?.length === 0 && <p className="migration-inline-empty">No registered routers are available.</p>}
                 {sourceRouter && (
                   <div className="migration-router-meta">
                     <span><Router size={12} /><strong>{sourceRouter.name}</strong></span>
@@ -417,7 +398,7 @@ export default function NetworkMigration() {
                 <div className="migration-tunnel revoked" style={{ marginTop: 12 }}>
                   <div className="migration-tunnel-title"><AlertTriangle size={14} /> No migration tunnel issued for this source</div>
                   <p className="migration-tunnel-copy">Issue a new one-hour connection-scoped tunnel before running the collector.</p>
-                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={() => tunnelMutation.mutate(sourceRouterId)} disabled={isBusy || needsTenantContext}>
+                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={() => tunnelMutation.mutate(sourceRouterId)} disabled={isBusy}>
                     <ShieldCheck size={13} /> Issue one-hour tunnel
                   </button>
                 </div>
@@ -506,7 +487,7 @@ export default function NetworkMigration() {
                   <label className="migration-form-label" htmlFor="source-label">Source router name</label>
                   <input id="source-label" className="migration-input" value={sourceLabel} onChange={event => setSourceLabel(event.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
                   <p className="migration-help">The hosted command reads the router and uploads an encrypted export. No interface, route, firewall rule, or router file is created.</p>
-                  <button className="migration-button ghost" style={{ marginTop: 11 }} onClick={() => collectorMutation.mutate(undefined)} disabled={!sourceLabel.trim() || isBusy || needsTenantContext}><Terminal size={13} /> Create manual collector</button>
+                   <button className="migration-button ghost" style={{ marginTop: 11 }} onClick={() => collectorMutation.mutate(undefined)} disabled={!sourceLabel.trim() || isBusy}><Terminal size={13} /> Create manual collector</button>
                 </>
               ) : sourceRouterId ? (
                 <p className="migration-help">A registered source is selected above, so use its bounded two-script handoff instead of the manual collector.</p>
@@ -674,8 +655,7 @@ export default function NetworkMigration() {
           })}
         </div>
 
-        {needsTenantContext && <Boundary tenant />}
-        {!needsTenantContext && <Boundary />}
+        <Boundary />
 
         <div className="migration-workspace">
           <div>{renderStage()}</div>

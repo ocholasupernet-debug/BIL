@@ -1,6 +1,6 @@
 import express, { Router, type IRouter, type Request } from "express";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import { requireAdmin } from "../lib/api-auth.js";
+import { requireAuth } from "../lib/api-auth.js";
 import { pingRouter, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
@@ -92,9 +92,9 @@ function collectorToken(req: Request): string {
   if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) throw new Error("Invalid or expired collector session.");
   return token;
 }
-async function ownedRouter(id: number, adminId: number) {
+async function ownedRouter(id: number, _adminId?: number) {
   positive(id);
-  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`);
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`);
   const row = rows[0];
   if (!row) throw new Error("Router not found.");
   const clients = readVpnClients();
@@ -129,13 +129,13 @@ function activeTunnelStatuses(): string {
 
 async function tunnelFor(
   sourceRouterId: number,
-  adminId: number,
+  _adminId?: number,
   leaseId?: number,
 ): Promise<TunnelLease> {
   const leaseFilter = leaseId ? `&id=eq.${positive(leaseId)}` : "";
   const rows = await sbSelectStrict<TunnelLease>(
     "router_migration_tunnel_leases",
-    `admin_id=eq.${adminId}&source_router_id=eq.${positive(sourceRouterId)}&status=${activeTunnelStatuses()}${leaseFilter}&select=*&order=created_at.desc&limit=1`,
+    `source_router_id=eq.${positive(sourceRouterId)}&status=${activeTunnelStatuses()}${leaseFilter}&select=*&order=created_at.desc&limit=1`,
   );
   const lease = rows[0];
   if (!lease) throw new Error("Start a one-hour migration tunnel for this source router first.");
@@ -152,7 +152,7 @@ async function expireTunnel(lease: TunnelLease): Promise<void> {
   const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
   await sbUpdateStrict(
     "router_migration_tunnel_leases",
-    `id=eq.${lease.id}&admin_id=eq.${lease.admin_id}&status=neq.revoked`,
+    `id=eq.${lease.id}&status=neq.revoked`,
     {
       status: "expired",
       revoked_at: new Date().toISOString(),
@@ -183,7 +183,7 @@ async function expireDueCollectors(): Promise<void> {
       if (!session.tunnel_lease_id) return;
       const leases = await sbSelectStrict<TunnelLease>(
         "router_migration_tunnel_leases",
-        `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+        `id=eq.${positive(session.tunnel_lease_id)}&select=*&limit=1`,
       );
       if (leases[0]) await expireTunnel(leases[0]);
     }));
@@ -204,7 +204,7 @@ async function revokeTunnel(lease: TunnelLease, status: "revoked" | "expired" = 
   const now = new Date().toISOString();
   await sbUpdateStrict(
     "router_migration_tunnel_leases",
-    `id=eq.${lease.id}&admin_id=eq.${lease.admin_id}&status=neq.revoked`,
+    `id=eq.${lease.id}&status=neq.revoked`,
     { status, revoked_at: now, audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: status, at: now }] } },
   );
 }
@@ -236,10 +236,10 @@ async function requireLeasedApiConnection(row: RouterRow, adminId: number, lease
   const events = Array.isArray(lease.audit_json?.events) ? lease.audit_json.events : [];
   await sbUpdateStrict(
     "router_migration_tunnel_leases",
-    `id=eq.${lease.id}&admin_id=eq.${adminId}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}`,
+    `id=eq.${lease.id}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}`,
     { status: "connected", verified_at: result.connectedAt, audit_json: { ...(lease.audit_json ?? {}), events: [...events, { event: "api_verified", at: result.connectedAt, connected_host: result.connectedHost }] } },
   );
-  await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, {
+  await sbUpdateStrict("isp_routers", `id=eq.${row.id}`, {
     status: "online",
     last_seen: result.connectedAt,
     last_connected_host: result.connectedHost,
@@ -253,7 +253,7 @@ async function requireLeasedApiConnection(row: RouterRow, adminId: number, lease
 async function requireApiConnection(row: RouterRow, adminId: number) {
   try {
     const result = await pingRouter(creds(row));
-    await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, {
+    await sbUpdateStrict("isp_routers", `id=eq.${row.id}`, {
       status: "online",
       last_seen: result.connectedAt,
       last_connected_host: result.connectedHost,
@@ -268,7 +268,7 @@ async function requireApiConnection(row: RouterRow, adminId: number) {
     throw new Error(`Router "${row.name}" is not connected through the RouterOS API. Open Routers, run Re-check, and resolve the VPN/API error before migration or export. ${detail}`);
   }
 }
-async function jobFor(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&admin_id=eq.${adminId}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
+async function jobFor(id: number, _adminId?: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
 async function sourceForJob(job: Job, adminId: number): Promise<{ row: RouterRow; tunnel: TunnelLease } | null> {
   if (!job.source_router_id) return null;
   const row = await ownedRouter(job.source_router_id, adminId);
@@ -276,7 +276,26 @@ async function sourceForJob(job: Job, adminId: number): Promise<{ row: RouterRow
   const tunnel = await tunnelFor(job.source_router_id, adminId, Number(audit?.tunnel_lease_id) || undefined);
   return { row: { ...row, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip }, tunnel };
 }
-async function guarded(req: Request, fn: (adminId: number) => Promise<void>, res: any) { try { const id = admin(req); const lock = `${id}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`; if (locks.has(lock)) { res.status(409).json({ ok: false, error: "Migration is already in progress." }); return; } locks.add(lock); try { await fn(id); } finally { locks.delete(lock); } } catch (e) { res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." }); } }
+async function migrationStorageAdminId(): Promise<number> {
+  const rows = await sbSelectStrict<{ id: number }>("isp_admins", "select=id&order=id.asc&limit=1");
+  if (!rows[0]?.id) throw new Error("No ISP administrator is configured for migration storage.");
+  return rows[0].id;
+}
+async function guarded(req: Request, fn: (storageAdminId: number) => Promise<void>, res: any) {
+  try {
+    const storageAdminId = await migrationStorageAdminId();
+    const actor = `${req.authUser?.type ?? "unknown"}:${req.authUser?.uid ?? "unknown"}`;
+    const lock = `${actor}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`;
+    if (locks.has(lock)) {
+      res.status(409).json({ ok: false, error: "Migration is already in progress." });
+      return;
+    }
+    locks.add(lock);
+    try { await fn(storageAdminId); } finally { locks.delete(lock); }
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." });
+  }
+}
 async function observeDevice(row: RouterRow) {
   const [identity, resource, routerboard, license] = await Promise.all([
     runRouterCommand(creds(row), ["/system/identity/print"]),
@@ -316,7 +335,7 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     if (session.tunnel_lease_id) {
       const leases = await sbSelectStrict<TunnelLease>(
         "router_migration_tunnel_leases",
-        `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
+        `id=eq.${positive(session.tunnel_lease_id)}&select=*&limit=1`,
       );
       tunnel = leases[0];
       if (!tunnel || !["script_issued", "connected", "exported"].includes(tunnel.status)) {
@@ -374,11 +393,11 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
     });
     const migrationId = rows[0]?.id;
     if (!migrationId) throw new Error("Collected export could not be saved.");
-    await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${tokenHash}&admin_id=eq.${session.admin_id}`, { migration_job_id: migrationId });
+    await sbUpdateStrict("router_migration_collector_tokens", `token_hash=eq.${tokenHash}`, { migration_job_id: migrationId });
     if (tunnel) {
       await sbUpdateStrict(
         "router_migration_tunnel_leases",
-        `id=eq.${tunnel.id}&admin_id=eq.${session.admin_id}`,
+        `id=eq.${tunnel.id}`,
         {
           migration_job_id: migrationId,
           status: "exported",
@@ -526,14 +545,9 @@ router.get("/router-migrations/collector-script", async (req, res) => {
   }
 });
 
-router.use("/router-migrations", requireAdmin());
-router.get("/router-migrations/read-only-export-script", (req, res) => {
-  try {
-    admin(req);
-    res.type("text/plain").set("Content-Disposition", 'attachment; filename="ocholasupernet-read-only-export.rsc"').send(READ_ONLY_ROUTER_EXPORT_SCRIPT);
-  } catch {
-    res.status(401).json({ ok: false, error: "Invalid administrator identity." });
-  }
+router.use("/router-migrations", requireAuth());
+router.get("/router-migrations/read-only-export-script", (_req, res) => {
+  res.type("text/plain").set("Content-Disposition", 'attachment; filename="ocholasupernet-read-only-export.rsc"').send(READ_ONLY_ROUTER_EXPORT_SCRIPT);
 });
 
 router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req, async a => {
@@ -559,7 +573,7 @@ router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req
     if (conflict[0]) continue;
     try {
       const rows = await sbInsertStrict<TunnelLease>("router_migration_tunnel_leases", {
-        admin_id: a,
+        admin_id: source.admin_id,
         source_router_id: sourceRouterId,
         migration_job_id: null,
         technology: "openvpn",
@@ -583,7 +597,7 @@ router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req
 
   const serverReady = await provisionMigrationOpenVpnLease(username, password, lease.assigned_ip);
   if (!serverReady) {
-    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${lease.id}&admin_id=eq.${a}`, {
+    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${lease.id}`, {
       status: "server_unavailable",
       revoked_at: new Date().toISOString(),
       audit_json: { ...(lease.audit_json ?? {}), events: [{ event: "server_unavailable", at: new Date().toISOString() }] },
@@ -617,7 +631,7 @@ router.post("/router-migrations/tunnel-session", async (req, res) => guarded(req
 router.get("/router-migrations/tunnel-session/:id", async (req, res) => guarded(req, async a => {
   const rows = await sbSelectStrict<TunnelLease>(
     "router_migration_tunnel_leases",
-    `id=eq.${positive(req.params.id)}&admin_id=eq.${a}&select=id,source_router_id,technology,assigned_ip,status,created_at,expires_at,verified_at&limit=1`,
+    `id=eq.${positive(req.params.id)}&select=id,source_router_id,technology,assigned_ip,status,created_at,expires_at,verified_at&limit=1`,
   );
   const lease = rows[0];
   if (!lease) throw new Error("Migration tunnel session not found.");
@@ -644,7 +658,7 @@ router.post("/router-migrations/collector-session", async (req, res) => guarded(
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   await sbInsertStrict<CollectorToken>("router_migration_collector_tokens", {
     token_hash: collectorHash(token),
-    admin_id: a,
+    admin_id: tunnel?.admin_id ?? a,
     source_label: sourceLabel,
     expires_at: expiresAt,
     tunnel_lease_id: tunnel?.id ?? null,
@@ -679,7 +693,7 @@ router.post("/router-migrations/collector-session", async (req, res) => guarded(
 }, res));
 router.get("/router-migrations/collector-session/status", async (req, res) => guarded(req, async a => {
   const token = collectorToken(req);
-  const rows = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&admin_id=eq.${a}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`);
+  const rows = await sbSelectStrict<CollectorToken>("router_migration_collector_tokens", `token_hash=eq.${collectorHash(token)}&select=token_hash,admin_id,source_label,expires_at,used_at,migration_job_id,tunnel_lease_id&limit=1`);
   const session = rows[0];
   if (!session) throw new Error("Collector session not found.");
   const expired = new Date(session.expires_at).getTime() <= Date.now();
@@ -687,7 +701,7 @@ router.get("/router-migrations/collector-session/status", async (req, res) => gu
   if (session.tunnel_lease_id) {
     const leases = await sbSelectStrict<TunnelLease>(
       "router_migration_tunnel_leases",
-      `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${a}&select=id,source_router_id,technology,assigned_ip,status,expires_at,verified_at&limit=1`,
+        `id=eq.${positive(session.tunnel_lease_id)}&select=id,source_router_id,technology,assigned_ip,status,expires_at,verified_at&limit=1`,
     );
     tunnel = leases[0];
   }
@@ -700,7 +714,7 @@ router.get("/router-migrations/collector-session/status", async (req, res) => gu
     });
     return;
   }
-  const jobs = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${session.migration_job_id}&admin_id=eq.${a}&select=id,status,source_label,source_mode,findings_json,audit_json&limit=1`);
+  const jobs = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${session.migration_job_id}&select=id,status,source_label,source_mode,findings_json,audit_json&limit=1`);
   const job = jobs[0];
   const audit = job?.audit_json ?? {};
   res.json({
@@ -734,7 +748,7 @@ router.post("/router-migrations/:id/tunnel/revoke", async (req, res) => guarded(
   res.json({ ok: true, status: "revoked", address: tunnel.assigned_ip });
 }, res));
 router.get("/router-migrations/routers", async (req, res) => guarded(req, async a => {
-  const rows = await sbSelectStrict<RouterRow>("isp_routers", `admin_id=eq.${a}&select=id,name,host,status,ros_version&order=name.asc`);
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", "select=id,name,host,status,ros_version&order=name.asc");
   res.json({ routers: rows });
 }, res));
 router.post("/router-migrations/analyze", async (req, res) => guarded(req, async a => {
@@ -762,7 +776,7 @@ router.post("/router-migrations/export", async (req, res) => guarded(req, async 
   const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const rows = await sbInsertStrict<Job>("router_migration_jobs", {
-    admin_id: a,
+    admin_id: source.admin_id,
     source_router_id: source.id,
     status: "exported",
     ...secure,
@@ -771,7 +785,7 @@ router.post("/router-migrations/export", async (req, res) => guarded(req, async 
   });
   if (rows[0]?.id) {
     const events = Array.isArray(tunnel.audit_json?.events) ? tunnel.audit_json.events : [];
-    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${tunnel.id}&admin_id=eq.${a}`, {
+    await sbUpdateStrict("router_migration_tunnel_leases", `id=eq.${tunnel.id}`, {
       migration_job_id: rows[0].id,
       status: "exported",
       audit_json: { ...(tunnel.audit_json ?? {}), events: [...events, { event: "exported", at: new Date().toISOString(), migration_job_id: rows[0].id }] },
@@ -822,12 +836,12 @@ router.post("/router-migrations/:id/target", async (req, res) => guarded(req, as
     assertDistinctTargets({ ...source, identity: s.identity, serial: s.fingerprint }, { ...target, identity: t.identity, serial: t.fingerprint });
   }
    const audit = { ...(job.audit_json ?? {}), source_identity: s?.identity ?? job.source_label, source_fingerprint: s?.fingerprint, target_identity: t.identity, target_fingerprint: t.fingerprint, source_host: source?.host, target_host: target.host, source_mode: job.source_mode ?? "connected_router", ...(sourceInfo ? { tunnel_address: sourceInfo.tunnel.assigned_ip, tunnel_expires_at: sourceInfo.tunnel.expires_at } : {}) };
-  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}&admin_id=eq.${a}`, { target_router_id: target.id, status: "target_selected", audit_json: audit });
+  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}`, { target_router_id: target.id, status: "target_selected", audit_json: audit });
   res.json({ ok: true, targetRouterId: target.id });
 }, res));
 async function planJob(job: Job) { return buildMigrationPlan(decrypt(job)); }
-async function reconcileBilling(adminId: number, pkg: Record<string, unknown>) {
-  const customers = await sbSelectStrict<{ username?: string; pppoe_username?: string }>("isp_customers", `admin_id=eq.${adminId}&select=username,pppoe_username`);
+async function reconcileBilling(pkg: Record<string, unknown>) {
+  const customers = await sbSelectStrict<{ username?: string; pppoe_username?: string }>("isp_customers", "select=username,pppoe_username");
   const known = new Set(customers.flatMap(x => [x.username, x.pppoe_username]).filter(Boolean));
   const users = [...(Array.isArray(pkg.ppp_secrets) ? pkg.ppp_secrets : []), ...(Array.isArray(pkg.hotspot_users) ? pkg.hotspot_users : [])] as Record<string, unknown>[];
   let matched = 0, missing = 0;
@@ -837,8 +851,8 @@ async function reconcileBilling(adminId: number, pkg: Record<string, unknown>) {
 router.post("/router-migrations/:id/dry-run", async (req, res) => guarded(req, async a => {
   const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (!["target_selected", "dry_run"].includes(job.status)) throw new Error("Migration is not eligible for dry run.");
   const pkg = decrypt(job), plan = buildMigrationPlan(pkg), approved = Array.isArray(req.body.approvedItemIds) ? req.body.approvedItemIds.filter((x: unknown) => typeof x === "string") : [];
-  const reconciliation = await reconcileBilling(a, pkg);
-  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}&admin_id=eq.${a}`, { plan_json: plan, stages_json: { dry_run: true, approved, reconciliation }, status: "dry_run" });
+  const reconciliation = await reconcileBilling(pkg);
+  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}`, { plan_json: plan, stages_json: { dry_run: true, approved, reconciliation }, status: "dry_run" });
   res.json({ success: true, warnings: plan.warnings, conflicts: [], plannedChanges: plan.items.map(x => ({ id: x.id, category: x.category, label: `${x.category}: ${String(x.source.name ?? x.id)}` })), skipped: [...plan.unsupported.map(x => `${x.category}: ${x.reason}`), `Billing reconciliation: ${reconciliation.matched} matched, ${reconciliation.missing} missing; no billing writes.`], approvedItemIds: approved });
 }, res));
 router.post("/router-migrations/:id/import", async (req, res) => guarded(req, async a => {
@@ -857,15 +871,15 @@ router.post("/router-migrations/:id/import", async (req, res) => guarded(req, as
   const locked = job.audit_json as Record<string, unknown> | undefined;
    if (locked?.target_fingerprint !== t.fingerprint || locked?.target_host !== target.host || (source && (locked?.source_fingerprint !== s?.fingerprint || locked?.source_host !== source.host))) throw new Error("Source or target device changed since target selection.");
   const leaseToken = randomBytes(32).toString("hex");
-  const lease = await sbRpc<{ acquired: boolean }>("acquire_router_migration_target_lease", { p_job_id: job.id, p_admin_id: a, p_target_router_id: target.id, p_lease_token: leaseToken });
+   const lease = await sbRpc<{ acquired: boolean }>("acquire_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken });
   if (!lease[0]?.acquired) throw new Error("Another migration is already importing to this target router.");
   let finalized = false;
   try {
-    const claimed = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&admin_id=eq.${a}&status=eq.dry_run`, { status: "importing", audit_json: { ...locked, pre_state_capture: "configuration state capture begins before writes" } });
+    const claimed = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&status=eq.dry_run`, { status: "importing", audit_json: { ...locked, pre_state_capture: "configuration state capture begins before writes" } });
     if (claimed.length !== 1) throw new Error("Migration was already claimed or is no longer eligible for import.");
     const snapshotCapturedAt = new Date().toISOString();
     const leasedTargetRunner = async (command: string[]) => {
-      const renewed = await sbRpc<{ renewed: boolean }>("renew_router_migration_target_lease", { p_job_id: job.id, p_admin_id: a, p_target_router_id: target.id, p_lease_token: leaseToken });
+      const renewed = await sbRpc<{ renewed: boolean }>("renew_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken });
       if (!renewed[0]?.renewed) throw new Error("Target migration lease expired; no further router commands were issued.");
       return runRouterCommand(creds(target), command);
     };
@@ -877,20 +891,20 @@ router.post("/router-migrations/:id/import", async (req, res) => guarded(req, as
       async preState => {
         const persisted = await sbUpdateStrict<Job>(
           "router_migration_jobs",
-          `id=eq.${job.id}&admin_id=eq.${a}&status=eq.importing`,
+          `id=eq.${job.id}&status=eq.importing`,
           { stages_json: { approved, recovery_capture: preState, snapshot_captured_at: snapshotCapturedAt } },
         );
         if (persisted.length !== 1) throw new Error("Recovery capture persistence failed.");
       },
     );
     const recovery = report.stopped ? "Stop target writes and restore the reviewed configuration state manually." : "No recovery required.";
-    const finished = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&admin_id=eq.${a}&status=eq.importing`, { plan_json: plan, stages_json: { ...report, snapshotCapturedAt }, verification_json: report.verification ?? {}, audit_json: { ...locked, applied: report.applied, failures: report.failures, recovery }, status: report.stopped ? "failed" : "completed", completed_at: new Date().toISOString() });
+    const finished = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&status=eq.importing`, { plan_json: plan, stages_json: { ...report, snapshotCapturedAt }, verification_json: report.verification ?? {}, audit_json: { ...locked, applied: report.applied, failures: report.failures, recovery }, status: report.stopped ? "failed" : "completed", completed_at: new Date().toISOString() });
     if (finished.length !== 1) throw new Error("Migration result could not be persisted; the target lease remains active.");
     finalized = true;
     res.json({ success: !report.stopped, importedItems: report.applied.length, failedItems: report.failures.length, recovery, status: report.stopped ? "failed" : "completed" });
   } finally {
      if (finalized) {
-      await sbRpc("release_router_migration_target_lease", { p_job_id: job.id, p_admin_id: a, p_target_router_id: target.id, p_lease_token: leaseToken }).catch(() => undefined);
+      await sbRpc("release_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken }).catch(() => undefined);
        if (sourceInfo) await revokeTunnel(sourceInfo.tunnel).catch(() => undefined);
     }
   }

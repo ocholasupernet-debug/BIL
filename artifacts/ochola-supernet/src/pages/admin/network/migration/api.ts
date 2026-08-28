@@ -1,12 +1,10 @@
-import { getAdminApiToken, getSelectedTenantId, isSuperAdmin } from "@/lib/supabase";
+import { getAdminApiToken } from "@/lib/supabase";
 
 function getHeaders() {
   const token = getAdminApiToken();
-  const selectedTenantId = isSuperAdmin() ? getSelectedTenantId() : null;
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(selectedTenantId ? { "X-Impersonated-Admin-Id": String(selectedTenantId) } : {}),
   };
 }
 
