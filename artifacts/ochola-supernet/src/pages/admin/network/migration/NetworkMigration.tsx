@@ -1,47 +1,125 @@
-import React, { useState, useEffect } from "react";
-import { AdminLayout } from "@/components/layout/AdminLayout";
-import { NetworkTabs } from "../NetworkTabs";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import React, { useEffect, useState, type ReactNode } from "react";
+import { Link } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  Activity,
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
+  Check,
   CheckCircle2,
-  ChevronRight,
+  Clipboard,
+  CloudDownload,
   Database,
-  FileCheck,
+  FileCheck2,
+  FileClock,
+  KeyRound,
   RefreshCw,
+  Router,
   Server,
   ShieldAlert,
+  ShieldCheck,
   Terminal,
-  Activity,
-  Check
+  Wifi,
+  X,
 } from "lucide-react";
-import {
-  fetchRouters,
-  createCollectorSession,
-  getCollectorSessionStatus,
-  createMigrationTunnel,
-  getMigrationTunnelStatus,
-  analyzeSource,
-  exportSource,
-  setTargetRouter,
-  runDryRun,
-  runImport,
-  getReport
-} from "./api";
-import type { RouterSummary, CollectorSession, MigrationTunnelSession, ExportResponse, DryRunResponse, ReportResponse } from "./types";
+import { AdminLayout } from "@/components/layout/AdminLayout";
+import { NetworkTabs } from "../NetworkTabs";
 import { useToast } from "@/hooks/use-toast";
 import { isImpersonating, isSuperAdmin } from "@/lib/supabase";
+import {
+  analyzeSource,
+  createCollectorSession,
+  createMigrationTunnel,
+  exportSource,
+  fetchRouters,
+  getCollectorSessionStatus,
+  getMigrationTunnelStatus,
+  getReport,
+  runDryRun,
+  runImport,
+  setTargetRouter,
+} from "./api";
+import type {
+  CollectorSession,
+  DryRunResponse,
+  ExportResponse,
+  MigrationTunnelSession,
+  ReportResponse,
+  RouterSummary,
+} from "./types";
+import "./NetworkMigration.css";
 
 const STEPS = [
-  { id: 1, label: "Source" },
-  { id: 2, label: "Export" },
-  { id: 3, label: "Review" },
-  { id: 4, label: "Target" },
-  { id: 5, label: "Dry Run" },
-  { id: 6, label: "Import" },
-  { id: 7, label: "Report" },
+  { id: 1, label: "Source", icon: Terminal },
+  { id: 2, label: "Export", icon: Database },
+  { id: 3, label: "Review", icon: FileCheck2 },
+  { id: 4, label: "Target", icon: ArrowRight },
+  { id: 5, label: "Dry run", icon: Activity },
+  { id: 6, label: "Import", icon: KeyRound },
+  { id: 7, label: "Report", icon: CheckCircle2 },
 ];
+
+function Pill({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "warn" | "neutral" }) {
+  return (
+    <span className={`migration-pill ${tone === "warn" ? "warn" : tone === "neutral" ? "neutral" : ""}`}>
+      {tone === "good" && <span className="migration-live-dot" />}
+      {children}
+    </span>
+  );
+}
+
+function CardHead({
+  icon: Icon,
+  title,
+  description,
+  status,
+  iconTone,
+}: {
+  icon: typeof Terminal;
+  title: string;
+  description: string;
+  status?: ReactNode;
+  iconTone?: "green";
+}) {
+  return (
+    <div className="migration-card-head">
+      <div className="migration-card-title">
+        <span className={`migration-card-icon ${iconTone === "green" ? "green" : ""}`}><Icon size={15} /></span>
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+      </div>
+      {status}
+    </div>
+  );
+}
+
+function Boundary({ tenant = false }: { tenant?: boolean }) {
+  if (tenant) {
+    return (
+      <div className="migration-tenant-warning">
+        <AlertTriangle size={17} />
+        <div>
+          <strong>Choose an ISP account first</strong>
+          <p>Migration data belongs to one ISP account. Select the account that owns the source router before continuing.</p>
+          <Link className="migration-tenant-link" href="/super-admin/impersonate">Open Super Admin → Impersonate Admin</Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="migration-boundary">
+      <ShieldAlert size={17} />
+      <div>
+        <strong>Strict read-only guarantee</strong>
+        <p>The source router is never modified. The temporary tunnel expires automatically. Target selection performs identity checks only; dry run performs zero RouterOS calls.</p>
+      </div>
+    </div>
+  );
+}
 
 export default function NetworkMigration() {
   const { toast } = useToast();
@@ -51,25 +129,30 @@ export default function NetworkMigration() {
   const [sourceLabel, setSourceLabel] = useState("");
   const [sourceRouterId, setSourceRouterId] = useState<number | null>(null);
   const [tunnel, setTunnel] = useState<MigrationTunnelSession | null>(null);
-  const [clock, setClock] = useState(() => Date.now());
   const [collector, setCollector] = useState<CollectorSession | null>(null);
-
   const [exportData, setExportData] = useState<ExportResponse | null>(null);
   const [dryRunData, setDryRunData] = useState<DryRunResponse | null>(null);
   const [reportData, setReportData] = useState<ReportResponse | null>(null);
   const [confirmationText, setConfirmationText] = useState("");
-
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  const [copied, setCopied] = useState("");
   const needsTenantContext = isSuperAdmin() && !isImpersonating();
 
-  const { data: routers, isLoading: routersLoading, error: routersError } = useQuery<RouterSummary[]>({
-    queryKey: ["migration-routers"],
+  const routersQuery = useQuery<RouterSummary[]>({
+    queryKey: ["migration-routers", needsTenantContext ? "no-tenant" : "tenant"],
     queryFn: fetchRouters,
+    enabled: !needsTenantContext,
     retry: 1,
   });
+  const routers = routersQuery.data;
+  const routersLoading = routersQuery.isLoading;
+  const routersError = routersQuery.error;
+  const sourceRouter = routers?.find(router => router.id === sourceRouterId);
+  const targetRouter = routers?.find(router => router.id === targetRouterId);
 
-  const { data: tunnelStatus } = useQuery({
+  const tunnelStatusQuery = useQuery({
     queryKey: ["migration-tunnel-status", tunnel?.leaseId],
     queryFn: () => getMigrationTunnelStatus(tunnel!.leaseId),
     enabled: Boolean(tunnel?.leaseId),
@@ -79,14 +162,18 @@ export default function NetworkMigration() {
 
   useEffect(() => {
     if (!tunnel) return;
-    const interval = window.setInterval(() => setClock(Date.now()), 1000);
-    return () => window.clearInterval(interval);
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, [tunnel?.leaseId]);
 
   useEffect(() => {
-    if (!tunnelStatus || !tunnel) return;
-    setTunnel(current => current ? { ...current, status: tunnelStatus.status, expiresAt: tunnelStatus.expiresAt } : current);
-  }, [tunnelStatus]);
+    if (!tunnelStatusQuery.data || !tunnel) return;
+    setTunnel(current => current ? {
+      ...current,
+      status: tunnelStatusQuery.data.status,
+      expiresAt: tunnelStatusQuery.data.expiresAt,
+    } : current);
+  }, [tunnelStatusQuery.data]);
 
   const collectorMutation = useMutation({
     mutationFn: (binding?: { sourceLabel?: string; sourceRouterId: number; tunnelId: string }) => createCollectorSession(
@@ -96,21 +183,19 @@ export default function NetworkMigration() {
         tunnelId: tunnel.leaseId,
       } : undefined),
     ),
-    onSuccess: (data) => {
+    onSuccess: data => {
       setCollector(data);
-      if (data.tunnel) {
-        toast({
-          title: "Tunnel-enabled collector created",
-          description: `Two scripts are ready: connect the router through VPN first, then run the export script.`,
-        });
-      }
+      toast({
+        title: data.tunnel ? "Two-script collector ready" : "Read-only collector ready",
+        description: data.tunnel ? "Connect the router first, then run the export script." : "Run the hosted export command on the intended source router.",
+      });
     },
-    onError: (err: any) => toast({ title: "Collector could not be created", description: err.message, variant: "destructive" })
+    onError: (error: any) => toast({ title: "Collector could not be created", description: error.message, variant: "destructive" }),
   });
 
   const collectorStatusMutation = useMutation({
     mutationFn: getCollectorSessionStatus,
-    onSuccess: (data) => {
+    onSuccess: data => {
       setCollector(current => current ? { ...current, ...data } : current);
       if (data.migrationId && data.summary && data.findings) {
         setMigrationId(data.migrationId);
@@ -124,76 +209,79 @@ export default function NetworkMigration() {
         });
       }
     },
-    onError: (err: any) => toast({ title: "Collection status unavailable", description: err.message, variant: "destructive" })
+    onError: (error: any) => toast({ title: "Collection status unavailable", description: error.message, variant: "destructive" }),
   });
 
   const tunnelMutation = useMutation({
     mutationFn: createMigrationTunnel,
-    onSuccess: (data) => {
+    onSuccess: data => {
       setTunnel(data);
-      toast({ title: "One-hour migration tunnel created", description: "Two migration scripts are being prepared below: connect first, then export." });
+      toast({ title: "One-hour migration tunnel issued", description: "Run the connection script, then the separate read-only export script." });
       if (!collector) {
-        const registeredRouterName = routers?.find(router => router.id === data.routerId)?.name;
         collectorMutation.mutate({
-          sourceLabel: sourceLabel.trim() || registeredRouterName || `Router ${data.routerId}`,
+          sourceLabel: sourceLabel.trim() || sourceRouter?.name || `Router ${data.routerId}`,
           sourceRouterId: data.routerId,
           tunnelId: data.leaseId,
         });
       }
     },
-    onError: (err: any) => toast({ title: "Migration tunnel could not be created", description: err.message, variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Migration tunnel could not be created", description: error.message, variant: "destructive" }),
   });
 
   const exportMutation = useMutation({
     mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => exportSource(routerId, tunnelId),
-    onSuccess: (data) => {
+    onSuccess: data => {
       setMigrationId(data.id);
       setExportData(data);
-      setCurrentStep(3);
+      setCurrentStep(2);
       toast({ title: "Source export saved", description: `Read-only export completed through ${data.tunnel?.address ?? "the temporary tunnel"}.` });
     },
-    onError: (err: any) => toast({ title: "Source export failed", description: err.message, variant: "destructive" }),
+    onError: (error: any) => toast({ title: "Source export failed", description: error.message, variant: "destructive" }),
   });
 
   const analyzeMutation = useMutation({
     mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => analyzeSource(routerId, tunnelId),
-    onSuccess: (_data, variables) => {
-      exportMutation.mutate(variables);
-    },
-    onError: (err: any) => toast({ title: "Tunnel verification failed", description: err.message, variant: "destructive" }),
+    onSuccess: (_data, variables) => exportMutation.mutate(variables),
+    onError: (error: any) => toast({ title: "Tunnel verification failed", description: error.message, variant: "destructive" }),
   });
 
   useEffect(() => {
     if (!collector?.token || collector.migrationId) return;
     const poll = () => collectorStatusMutation.mutate(collector.token);
     poll();
-    const interval = window.setInterval(poll, 3000);
-    return () => window.clearInterval(interval);
+    const timer = window.setInterval(poll, 3000);
+    return () => window.clearInterval(timer);
   }, [collector?.token, collector?.migrationId]);
-
-  const targetMutation = useMutation({
-    mutationFn: ({ id, targetId }: { id: string, targetId: number }) => setTargetRouter(id, targetId),
-    onSuccess: () => {
-      setCurrentStep(5);
-      if (migrationId) {
-        dryRunMutation.mutate({ id: migrationId });
-      }
-    },
-    onError: (err: any) => toast({ title: "Target selection failed", description: err.message, variant: "destructive" })
-  });
 
   const dryRunMutation = useMutation({
     mutationFn: runDryRun,
     onSuccess: (data, variables) => {
       setDryRunData(data);
-      if (!variables.approvedItemIds) {
+      if (variables.approvedItemIds) setLastDryRunIds(new Set(variables.approvedItemIds));
+      else {
         setSelectedIds(new Set());
         setLastDryRunIds(new Set());
-      } else {
-        setLastDryRunIds(new Set(variables.approvedItemIds));
       }
     },
-    onError: (err: any) => toast({ title: "Dry run failed", description: err.message, variant: "destructive" })
+    onError: (error: any) => toast({ title: "Dry run failed", description: error.message, variant: "destructive" }),
+  });
+
+  const targetMutation = useMutation({
+    mutationFn: ({ id, targetId }: { id: string; targetId: number }) => setTargetRouter(id, targetId),
+    onSuccess: () => {
+      setCurrentStep(5);
+      if (migrationId) dryRunMutation.mutate({ id: migrationId });
+    },
+    onError: (error: any) => toast({ title: "Target selection failed", description: error.message, variant: "destructive" }),
+  });
+
+  const reportMutation = useMutation({
+    mutationFn: getReport,
+    onSuccess: data => {
+      setReportData(data);
+      setCurrentStep(7);
+    },
+    onError: (error: any) => toast({ title: "Report fetch failed", description: error.message, variant: "destructive" }),
   });
 
   const importMutation = useMutation({
@@ -201,32 +289,38 @@ export default function NetworkMigration() {
     onSuccess: () => {
       if (migrationId) reportMutation.mutate(migrationId);
     },
-    onError: (err: any) => toast({ title: "Import failed", description: err.message, variant: "destructive" })
+    onError: (error: any) => toast({ title: "Import failed", description: error.message, variant: "destructive" }),
   });
 
-  const reportMutation = useMutation({
-    mutationFn: getReport,
-    onSuccess: (data) => {
-      setReportData(data);
-      setCurrentStep(7);
-    },
-    onError: (err: any) => toast({ title: "Report fetch failed", description: err.message, variant: "destructive" })
-  });
-
-  const handleCheckbox = (id: string, checked: boolean) => {
-    const next = new Set(selectedIds);
-    if (checked) next.add(id);
-    else next.delete(id);
-    setSelectedIds(next);
-  };
+  const isBusy = collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending ||
+    analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending ||
+    dryRunMutation.isPending || importMutation.isPending || reportMutation.isPending;
+  const tunnelSecondsRemaining = tunnel
+    ? Math.max(0, Math.floor((new Date(tunnel.expiresAt).getTime() - clock) / 1000))
+    : 0;
+  const tunnelCountdown = `${Math.floor(tunnelSecondsRemaining / 3600)}h ${String(Math.floor((tunnelSecondsRemaining % 3600) / 60)).padStart(2, "0")}m ${String(tunnelSecondsRemaining % 60).padStart(2, "0")}s`;
 
   const isDryRunDirty = () => {
     if (!lastDryRunIds) return false;
     if (lastDryRunIds.size !== selectedIds.size) return true;
-    for (let id of selectedIds) {
-      if (!lastDryRunIds.has(id)) return true;
-    }
+    for (const id of selectedIds) if (!lastDryRunIds.has(id)) return true;
     return false;
+  };
+
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setCopied(label);
+    toast({ title: `${label} copied`, description: "Keep one-time commands private and use them only on the intended router." });
+    window.setTimeout(() => setCopied(""), 1800);
   };
 
   const downloadRecoveryPackage = () => {
@@ -240,685 +334,403 @@ export default function NetworkMigration() {
     URL.revokeObjectURL(url);
   };
 
-  const copyCollectorCommand = async () => {
-    if (!collector) return;
-    try {
-      await navigator.clipboard.writeText(collector.command);
-      toast({ title: "Export command copied", description: "Run it after the temporary VPN tunnel is connected." });
-    } catch {
-      toast({ title: "Copy failed", description: "Select and copy the command manually.", variant: "destructive" });
-    }
-  };
-
-  const copyCollectorTunnelCommand = async () => {
-    if (!collector?.tunnelCommand) return;
-    try {
-      await navigator.clipboard.writeText(collector.tunnelCommand);
-      toast({ title: "Tunnel command copied", description: "Run it first in the active MikroTik terminal." });
-    } catch {
-      toast({ title: "Copy failed", description: "Select and copy the tunnel command manually.", variant: "destructive" });
-    }
-  };
-
-  const copyTunnelCommand = async () => {
-    if (!tunnel) return;
-    try {
-      await navigator.clipboard.writeText(tunnel.command);
-      toast({ title: "Command copied", description: "Paste it into the selected source MikroTik terminal." });
-    } catch {
-      toast({ title: "Copy failed", description: "Select and copy the tunnel command manually.", variant: "destructive" });
-    }
+  const resetSource = (value: string) => {
+    setSourceRouterId(value ? Number(value) : null);
+    setTunnel(null);
+    setCollector(null);
+    setMigrationId(null);
+    setExportData(null);
+    setDryRunData(null);
+    setReportData(null);
+    setTargetRouterId(null);
+    setCurrentStep(1);
   };
 
   const handleNext = () => {
     if (currentStep === 1) {
-      if (collector?.migrationId) setCurrentStep(2);
+      if (collector?.migrationId || migrationId) setCurrentStep(2);
       else if (sourceRouterId) {
         if (!tunnel) tunnelMutation.mutate(sourceRouterId);
-        else if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
+        else if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) {
+          analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
+        }
       }
-    } else if (currentStep === 2) {
-      setCurrentStep(3);
-    } else if (currentStep === 3) {
-      setCurrentStep(4);
-    } else if (currentStep === 4) {
-      if (migrationId && targetRouterId) targetMutation.mutate({ id: migrationId, targetId: targetRouterId });
-    } else if (currentStep === 5) {
-      setCurrentStep(6);
-    } else if (currentStep === 6) {
-      if (migrationId && confirmationText === "MODIFY TARGET ROUTER") {
-        importMutation.mutate({ id: migrationId, confirmation: confirmationText, approvedItemIds: Array.from(selectedIds) });
-      }
+    } else if (currentStep === 2) setCurrentStep(3);
+    else if (currentStep === 3) setCurrentStep(4);
+    else if (currentStep === 4 && migrationId && targetRouterId) targetMutation.mutate({ id: migrationId, targetId: targetRouterId });
+    else if (currentStep === 5 && dryRunData && !isDryRunDirty() && selectedIds.size > 0) setCurrentStep(6);
+    else if (currentStep === 6 && migrationId && confirmationText === "MODIFY TARGET ROUTER") {
+      importMutation.mutate({ id: migrationId, confirmation: confirmationText, approvedItemIds: Array.from(selectedIds) });
     }
   };
 
-  const tunnelSecondsRemaining = tunnel ? Math.max(0, Math.floor((new Date(tunnel.expiresAt).getTime() - clock) / 1000)) : 0;
-  const tunnelCountdown = `${Math.floor(tunnelSecondsRemaining / 3600)}h ${String(Math.floor((tunnelSecondsRemaining % 3600) / 60)).padStart(2, "0")}m ${String(tunnelSecondsRemaining % 60).padStart(2, "0")}s`;
+  const primaryDisabled =
+    needsTenantContext ||
+    isBusy ||
+    (currentStep === 1 && !collector?.migrationId && !migrationId && !sourceRouterId) ||
+    (currentStep === 4 && !targetRouterId) ||
+    (currentStep === 5 && (!dryRunData || isDryRunDirty() || dryRunData.plannedChanges.length === 0 || selectedIds.size === 0)) ||
+    (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER");
+
+  const renderStage = () => {
+    if (currentStep === 1) {
+      const tunnelCommand = collector?.tunnelCommand || tunnel?.command;
+      return (
+        <div className="migration-stack">
+          <section className="migration-card">
+            <CardHead
+              icon={Terminal}
+              title="Collect source router"
+              description="Issue a bounded path, then run the two read-only scripts in order."
+              status={tunnel ? <Pill>{tunnel.status === "connected" ? "Tunnel connected" : tunnel.status.replace("_", " ")}</Pill> : <Pill tone="neutral">Not started</Pill>}
+            />
+            <div className="migration-card-body">
+              <div className="migration-form-block">
+                <label className="migration-form-label" htmlFor="source-router">Registered source router</label>
+                {routersLoading ? (
+                  <div className="migration-loading"><RefreshCw size={14} className="animate-spin" /> Loading routers for this ISP account…</div>
+                ) : (
+                  <select
+                    id="source-router"
+                    className="migration-select"
+                    value={sourceRouterId ?? ""}
+                    onChange={event => resetSource(event.target.value)}
+                    disabled={needsTenantContext || !routers?.length || isBusy}
+                  >
+                    <option value="">Choose a registered source router</option>
+                    {routers?.map(router => <option key={router.id} value={router.id}>{router.name} · {router.status}</option>)}
+                  </select>
+                )}
+                {routersError && <p className="migration-inline-error">{routersError instanceof Error ? routersError.message : "Registered routers could not be loaded."}</p>}
+                {!routersLoading && !routersError && routers?.length === 0 && <p className="migration-inline-empty">No registered routers are available for this ISP account.</p>}
+                {sourceRouter && (
+                  <div className="migration-router-meta">
+                    <span><Router size={12} /><strong>{sourceRouter.name}</strong></span>
+                    <span><Server size={12} /><code>{sourceRouter.host}</code></span>
+                    <span><Wifi size={12} />{sourceRouter.status}</span>
+                    <span><Activity size={12} />Source access is read-only</span>
+                  </div>
+                )}
+              </div>
+
+              {sourceRouterId && !tunnel && (
+                <div className="migration-tunnel revoked" style={{ marginTop: 12 }}>
+                  <div className="migration-tunnel-title"><AlertTriangle size={14} /> No migration tunnel issued for this source</div>
+                  <p className="migration-tunnel-copy">Issue a new one-hour connection-scoped tunnel before running the collector.</p>
+                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={() => tunnelMutation.mutate(sourceRouterId)} disabled={isBusy || needsTenantContext}>
+                    <ShieldCheck size={13} /> Issue one-hour tunnel
+                  </button>
+                </div>
+              )}
+
+              {tunnel && (
+                <>
+                  <div className="migration-section-heading">
+                    <h3>Temporary management tunnel</h3>
+                    <span>Auto-revokes after 60 minutes</span>
+                  </div>
+                  <div className={`migration-tunnel ${tunnel.status === "revoked" || tunnel.status === "expired" ? "revoked" : ""}`}>
+                    <div className="migration-tunnel-top">
+                      <div>
+                        <div className="migration-tunnel-title">
+                          {tunnel.status === "connected" ? <ShieldCheck size={14} /> : <FileClock size={14} />}
+                          {tunnel.status === "connected" ? "Connection-scoped tunnel is active" : "Tunnel script issued — waiting for router"}
+                        </div>
+                        <p className="migration-tunnel-copy">Only the selected source router can reach the migration service. No default route or LAN route is added.</p>
+                      </div>
+                      <span className="migration-mono" style={{ color: tunnelSecondsRemaining > 0 ? "var(--isp-green)" : "#ba4c47", fontSize: 10 }}>{tunnelCountdown}</span>
+                    </div>
+                    <div className="migration-tunnel-grid">
+                      <div><div className="migration-detail-label">Tunnel address</div><div className="migration-detail-value">{tunnel.tunnelAddress}</div></div>
+                      <div><div className="migration-detail-label">Interface</div><div className="migration-detail-value">{tunnel.interfaceName}</div></div>
+                      <div><div className="migration-detail-label">Endpoint</div><div className="migration-detail-value">{tunnel.serverEndpoint}</div></div>
+                      <div><div className="migration-detail-label">Expires</div><div className="migration-detail-value green">{new Date(tunnel.expiresAt).toLocaleTimeString()}</div></div>
+                    </div>
+                  </div>
+
+                  <div className="migration-section-heading">
+                    <h3>Two-script handoff</h3>
+                    <span>Run in this order</span>
+                  </div>
+                  {tunnelCommand && collector?.command ? (
+                    <div className="migration-script-stack">
+                      <div className="migration-script">
+                        <div className="migration-script-head">
+                          <div className="migration-script-label"><span>1</span>Connect the router to the web through VPN</div>
+                          <button className="migration-copy-button" onClick={() => copyText(tunnelCommand, "Tunnel command")}><Clipboard size={11} />{copied === "Tunnel command" ? "Copied" : "Copy"}</button>
+                        </div>
+                        <pre>{tunnelCommand}</pre>
+                        <div className="migration-script-note"><ShieldAlert size={11} />Adds only the temporary interface, cleanup scheduler, and two connection-only firewall rules.</div>
+                      </div>
+                      <div className="migration-script">
+                        <div className="migration-script-head">
+                          <div className="migration-script-label"><span>2</span>Enable the read-only export</div>
+                          <button className="migration-copy-button" onClick={() => copyText(collector.command, "Export command")}><Clipboard size={11} />{copied === "Export command" ? "Copied" : "Copy"}</button>
+                        </div>
+                        <pre>{collector.command}</pre>
+                        <div className="migration-script-note"><CheckCircle2 size={11} />Reads and uploads configuration only. The source router is never modified by the export.</div>
+                      </div>
+                      <div className="migration-action-group">
+                        <button className="migration-button ghost" onClick={() => copyText(`${tunnelCommand}\n\n${collector.command}`, "Both scripts")}><Clipboard size={12} /> Copy both scripts</button>
+                        {collector.tunnelScriptUrl && <a className="migration-button ghost" href={collector.tunnelScriptUrl} target="_blank" rel="noreferrer"><FileCheck2 size={12} /> View tunnel script</a>}
+                        <a className="migration-button ghost" href={collector.scriptUrl} target="_blank" rel="noreferrer"><FileCheck2 size={12} /> View export script</a>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the two one-time scripts…</div>
+                  )}
+                </>
+              )}
+
+              {collector && (
+                <div className="migration-action-bar">
+                  <div>
+                    <strong style={{ display: "block", fontSize: ".68rem" }}>
+                      {collector.migrationId ? "Export received and saved" : collector.status === "waiting" ? "Waiting for the MikroTik…" : "Processing router export…"}
+                    </strong>
+                    <span className="migration-footer-note">Session expires {new Date(collector.expiresAt).toLocaleTimeString()}</span>
+                  </div>
+                  {!collector.migrationId && <button className="migration-button ghost" onClick={() => collectorStatusMutation.mutate(collector.token)} disabled={isBusy}><RefreshCw size={12} className={collectorStatusMutation.isPending ? "animate-spin" : ""} /> Check collection</button>}
+                </div>
+              )}
+
+              <p className="migration-help"><ShieldAlert size={12} style={{ verticalAlign: "middle", marginRight: 4, color: "var(--isp-accent)" }} />One-time commands can contain sensitive values. Use them only on the intended router and wait for the web app to confirm collection.</p>
+            </div>
+          </section>
+
+          <section className="migration-card migration-manual-card">
+            <CardHead icon={CloudDownload} title="Manual read-only collector" description="Use this separate path when the source router is not registered. It does not create a VPN tunnel." status={<Pill tone="neutral">HTTPS only</Pill>} />
+            <div className="migration-card-body">
+              {!collector && !sourceRouterId ? (
+                <>
+                  <label className="migration-form-label" htmlFor="source-label">Source router name</label>
+                  <input id="source-label" className="migration-input" value={sourceLabel} onChange={event => setSourceLabel(event.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
+                  <p className="migration-help">The hosted command reads the router and uploads an encrypted export. No interface, route, firewall rule, or router file is created.</p>
+                  <button className="migration-button ghost" style={{ marginTop: 11 }} onClick={() => collectorMutation.mutate(undefined)} disabled={!sourceLabel.trim() || isBusy || needsTenantContext}><Terminal size={13} /> Create manual collector</button>
+                </>
+              ) : sourceRouterId ? (
+                <p className="migration-help">A registered source is selected above, so use its bounded two-script handoff instead of the manual collector.</p>
+              ) : (
+                <p className="migration-help">Manual collector created above. Run its hosted command, then monitor the collection status.</p>
+              )}
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (currentStep === 2) {
+      return (
+        <section className="migration-card">
+          <CardHead icon={Database} title="Collected export" description={`Read-only configuration received from ${exportData?.sourceLabel || sourceRouter?.name || sourceLabel}.`} status={<Pill>Saved securely</Pill>} />
+          <div className="migration-stage-body">
+            {exportData ? (
+              <>
+                <div className="migration-report-hero"><CheckCircle2 size={20} /><div><strong>Source export received and sealed</strong><span>Reference {exportData.id}. The original terminal output remains encrypted and is not displayed again.</span></div></div>
+                <div className="migration-metric-grid">
+                  <div className="migration-metric"><strong>{exportData.summary.configs}</strong><span>Config items</span></div>
+                  <div className="migration-metric"><strong>{exportData.summary.users}</strong><span>Users</span></div>
+                  <div className="migration-metric"><strong>{exportData.summary.queues}</strong><span>Queues</span></div>
+                  <div className="migration-metric"><strong>{exportData.summary.pools}</strong><span>IP pools</span></div>
+                </div>
+              </>
+            ) : <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Waiting for the sealed export package…</div>}
+          </div>
+        </section>
+      );
+    }
+
+    if (currentStep === 3) {
+      return (
+        <section className="migration-card">
+          <CardHead icon={FileCheck2} title="Review compatibility" description="Resolve what can move cleanly before choosing a target." status={<Pill tone="warn">Review required</Pill>} />
+          <div className="migration-stage-body">
+            {exportData && (
+              <>
+                <div className="migration-report-hero"><CheckCircle2 size={20} /><div><strong>Source export saved successfully</strong><span>Reference {exportData.id} · source access remained read-only.</span></div></div>
+                <div className="migration-finding-list">
+                  {exportData.findings.unsupported.map((finding, index) => <div className="migration-finding danger" key={`unsupported-${index}`}><AlertTriangle size={13} />{finding}</div>)}
+                  {exportData.findings.manual.map((finding, index) => <div className="migration-finding warn" key={`manual-${index}`}><AlertTriangle size={13} />{finding}</div>)}
+                  {exportData.findings.warnings.map((finding, index) => <div className="migration-finding warn" key={`warning-${index}`}><AlertTriangle size={13} />{finding}</div>)}
+                  {!exportData.findings.unsupported.length && !exportData.findings.manual.length && !exportData.findings.warnings.length && <div className="migration-finding good"><CheckCircle2 size={13} />No compatibility warnings were reported for this export.</div>}
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+      );
+    }
+
+    if (currentStep === 4) {
+      return (
+        <section className="migration-card">
+          <CardHead icon={ArrowRight} title="Select target router" description="Identity check only. No target configuration changes happen at this stage." status={<Pill tone="neutral">Read-only contact</Pill>} />
+          <div className="migration-stage-body">
+            <div className="migration-boundary"><ShieldCheck size={16} /><div><strong>Safe boundary</strong><p>The target is contacted only to verify identity, RouterOS version, and available interfaces.</p></div></div>
+            <div className="migration-target-list">
+              {routers?.map(router => {
+                const isSource = router.id === sourceRouterId;
+                const offline = !["online", "connected"].includes(router.status.toLowerCase());
+                return (
+                  <label key={router.id} className={`migration-target-option ${targetRouterId === router.id ? "selected" : ""} ${isSource || offline ? "disabled" : ""}`}>
+                    <input type="radio" name="target-router" checked={targetRouterId === router.id} onChange={() => setTargetRouterId(router.id)} disabled={isSource || offline} />
+                    <div className="migration-target-copy"><strong>{router.name}</strong><span>{router.host} · {router.status}{isSource ? " · selected source" : offline ? " · must be online" : ""}</span></div>
+                    <Pill tone={offline ? "warn" : "neutral"}>{isSource ? "Source" : router.status}</Pill>
+                  </label>
+                );
+              })}
+            </div>
+            {!routersLoading && (!routers || routers.length < 2) && <p className="migration-inline-empty">Add an online replacement router before continuing.</p>}
+          </div>
+        </section>
+      );
+    }
+
+    if (currentStep === 5) {
+      return (
+        <section className="migration-card">
+          <CardHead icon={Activity} title="Pre-flight dry run" description="Plan changes locally before any RouterOS import call." status={<Pill>Zero RouterOS calls</Pill>} />
+          <div className="migration-stage-body">
+            <div className="migration-boundary" style={{ borderColor: "rgba(22,140,120,.25)", background: "var(--isp-green-glow)" }}><ShieldCheck size={16} style={{ color: "var(--isp-green)" }} /><div><strong>Dry run is non-destructive</strong><p>Choose compatible items to approve. Nothing is written to {targetRouter?.name || "the target router"} until final confirmation.</p></div></div>
+            {dryRunData ? (
+              <>
+                <div className="migration-finding-list"><div className={`migration-finding ${dryRunData.success ? "good" : "danger"}`}>{dryRunData.success ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}{dryRunData.success ? "Dry run simulation completed." : "Dry run identified blockers."}</div></div>
+                <table className="migration-dryrun-table"><thead><tr><th></th><th>Planned change</th><th>Scope</th></tr></thead><tbody>
+                  {dryRunData.plannedChanges.map(item => <tr key={item.id}><td><input type="checkbox" checked={selectedIds.has(item.id)} onChange={event => { const next = new Set(selectedIds); event.target.checked ? next.add(item.id) : next.delete(item.id); setSelectedIds(next); }} /></td><td><strong>{item.category}</strong><br /><span style={{ color: "var(--isp-text-muted)" }}>{item.label}</span></td><td style={{ color: "var(--isp-text-muted)" }}>Approved item</td></tr>)}
+                </tbody></table>
+                {dryRunData.skipped.length > 0 && <div className="migration-finding warn"><AlertTriangle size={13} />Skipped: {dryRunData.skipped.join("; ")}</div>}
+                {dryRunData.conflicts.length > 0 && <div className="migration-finding warn"><AlertTriangle size={13} />Conflicts: {dryRunData.conflicts.join("; ")}</div>}
+                <div className="migration-action-bar"><span className="migration-footer-note"><strong style={{ color: "var(--isp-text)" }}>{selectedIds.size}</strong> of {dryRunData.plannedChanges.length} groups approved</span>{isDryRunDirty() && <button className="migration-button ghost" onClick={() => migrationId && dryRunMutation.mutate({ id: migrationId, approvedItemIds: Array.from(selectedIds) })} disabled={isBusy}><RefreshCw size={12} /> Verify approvals</button>}</div>
+              </>
+            ) : <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the non-destructive simulation…</div>}
+          </div>
+        </section>
+      );
+    }
+
+    if (currentStep === 6) {
+      return (
+        <section className="migration-card">
+          <CardHead icon={KeyRound} title="Confirmation and import" description={`This is the final write boundary for ${targetRouter?.name || "the target router"}.`} status={<Pill tone="warn">Write action</Pill>} />
+          <div className="migration-stage-body">
+            <div className="migration-confirm-panel"><p><strong>Target router will be modified.</strong> The pre-change state will be captured for recovery before approved groups are applied.</p><p>Type <strong className="migration-mono" style={{ color: "var(--isp-text)" }}>MODIFY TARGET ROUTER</strong> to authorize this import.</p><input className="migration-confirm-input" aria-label="Import confirmation" value={confirmationText} onChange={event => setConfirmationText(event.target.value.toUpperCase())} placeholder="MODIFY TARGET ROUTER" autoComplete="off" /></div>
+            <div className="migration-boundary"><ShieldAlert size={16} /><div><strong>Irreversible from this page</strong><p>Network interruptions may require direct intervention. Verify target connectivity and the dry-run selections before continuing.</p></div></div>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="migration-card">
+        <CardHead icon={CheckCircle2} iconTone="green" title="Migration report" description="Import results and recovery information are ready." status={<Pill>{reportData?.success ? "Completed" : "Completed with errors"}</Pill>} />
+        <div className="migration-stage-body">
+          {reportData && (
+            <>
+              <div className={`migration-report-hero ${reportData.success ? "" : "danger"}`}><CheckCircle2 size={20} /><div><strong>{reportData.success ? "Migration completed successfully" : "Migration completed with errors"}</strong><span>{reportData.importedItems} items imported · {reportData.failedItems} failed · status {reportData.status}</span></div></div>
+              <div className="migration-metric-grid"><div className="migration-metric"><strong>{reportData.importedItems}</strong><span>Imported</span></div><div className="migration-metric"><strong>{reportData.failedItems}</strong><span>Failed</span></div><div className="migration-metric"><strong>{reportData.recoveryPackage?.appliedItemIds.length || 0}</strong><span>Captured items</span></div><div className="migration-metric"><strong>{reportData.recoveryPackage ? "Ready" : "—"}</strong><span>Recovery</span></div></div>
+              <div className="migration-log">{reportData.logs.join("\n")}</div>
+              {reportData.recoveryPackage && <div className="migration-action-bar"><span className="migration-footer-note">Recovery package <strong className="migration-mono" style={{ color: "var(--isp-text)" }}>{reportData.recoveryPackage.migrationId}</strong> captured before the first write.</span><button className="migration-button ghost" onClick={downloadRecoveryPackage}><CloudDownload size={12} /> Download recovery JSON</button></div>}
+            </>
+          )}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <AdminLayout>
-      <div className="flex flex-col gap-5 max-w-[1000px] w-full mx-auto pb-12 fade-in">
-        <div className="page-header">
-          <h1>Migration & Disaster Recovery</h1>
-          <p>Safely transfer configurations between MikroTik routers in high-stakes scenarios.</p>
+      <div className="network-migration">
+        <div className="migration-page-header">
+          <div>
+            <div className="migration-eyebrow"><RefreshCw size={12} /> Network operations / controlled change</div>
+            <h1 className="migration-page-title">Migration &amp; Disaster Recovery</h1>
+            <p className="migration-page-subtitle">Move configuration between MikroTik routers with a read-only source, a bounded tunnel, and an explicit write boundary.</p>
+          </div>
+          <div className="migration-record">MIGRATION <strong>{migrationId || "NEW SESSION"}</strong></div>
         </div>
 
         <NetworkTabs active="migration" />
 
-        {/* Status indicator */}
-        <div className="flex items-center justify-between px-6 py-4 rounded-xl shadow-sm border border-[var(--isp-border)] bg-[var(--isp-card)]">
-          {STEPS.map((step, idx) => {
+        <div className="migration-context">
+          <div className="migration-node"><div className="migration-node-label">Source / read-only</div><div className="migration-node-name">{sourceRouter?.name || sourceLabel || "Select a source router"}</div><div className="migration-node-meta">{sourceRouter ? <><span>{sourceRouter.host} · {sourceRouter.status}</span></> : "No source contacted yet"}</div></div>
+          <div className="migration-context-arrow"><ArrowRight size={13} /></div>
+          <div className="migration-node"><div className="migration-node-label">Target / pending</div><div className="migration-node-name">{targetRouter?.name || "Select after review"}</div><div className="migration-node-meta">{targetRouter ? `${targetRouter.host} · ${targetRouter.status}` : "No target contacted yet"}</div></div>
+          <div className="migration-context-state"><ShieldCheck size={12} />{currentStep < 6 ? "No target writes" : "Write boundary"}</div>
+        </div>
+
+        <div className="migration-stepper" aria-label="Migration progress">
+          {STEPS.map((step, index) => {
+            const done = step.id < currentStep;
             const active = step.id === currentStep;
-            const completed = step.id < currentStep;
+            const Icon = step.icon;
             return (
               <React.Fragment key={step.id}>
-                <div className="flex items-center gap-2">
-                  <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-colors ${
-                    active ? 'bg-[var(--isp-accent)] text-white shadow-[0_0_0_4px_var(--isp-accent-glow)]' :
-                    completed ? 'bg-[var(--isp-green)] text-white' :
-                    'bg-[var(--isp-inner-card)] text-[var(--isp-text-sub)] border border-[var(--isp-border)]'
-                  }`}>
-                    {completed ? <Check size={14} /> : step.id}
-                  </div>
-                  <span className={`text-xs font-bold uppercase tracking-wider hidden sm:block ${
-                    active || completed ? 'text-[var(--isp-text)]' : 'text-[var(--isp-text-muted)]'
-                  }`}>
-                    {step.label}
-                  </span>
-                </div>
-                {idx < STEPS.length - 1 && (
-                  <div className={`flex-1 h-[2px] rounded-full mx-2 ${
-                    completed ? 'bg-[var(--isp-green)]' : 'bg-[var(--isp-border)]'
-                  }`} />
-                )}
+                <button className={`migration-step ${done ? "done" : ""} ${active ? "active" : ""}`} onClick={() => step.id <= currentStep && setCurrentStep(step.id)} disabled={step.id > currentStep} aria-current={active ? "step" : undefined}>
+                  <span className="migration-step-number">{done ? <Check size={12} /> : <Icon size={12} />}</span><span className="migration-step-name">{step.label}</span>
+                </button>
+                {index < STEPS.length - 1 && <span className={`migration-step-connector ${done ? "done" : ""}`} />}
               </React.Fragment>
             );
           })}
         </div>
 
-        {/* Global Warning */}
-        <div className="flex items-center gap-3 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)] text-[var(--isp-text)] text-sm">
-          <ShieldAlert className="text-[var(--isp-accent)]" size={20} />
-          <div>
-            <strong className="block text-[var(--isp-text)] uppercase tracking-wider text-xs font-bold mb-1">Strict Read-Only Guarantee</strong>
-            <span className="text-[var(--isp-text-muted)]">Source router configurations will <b>never</b> be modified. Target selection contacts the target for identity checking. Dry run performs zero RouterOS calls.</span>
-          </div>
+        {needsTenantContext && <Boundary tenant />}
+        {!needsTenantContext && <Boundary />}
+
+        <div className="migration-workspace">
+          <div>{renderStage()}</div>
+          <aside className="migration-aside">
+            <section className="migration-card">
+              <CardHead icon={FileCheck2} title="Operator runbook" description="Keep the handoff in this order." />
+              <div className="migration-list">
+                <div className="migration-list-item"><span className="migration-list-number">01</span><div><strong>Connect first</strong><p>Run the tunnel script on the selected source and wait for connected status.</p></div></div>
+                <div className="migration-list-item"><span className="migration-list-number">02</span><div><strong>Export second</strong><p>Run the separate export script. It reads configuration and uploads the sealed package.</p></div></div>
+                <div className="migration-list-item"><span className="migration-list-number">03</span><div><strong>Review before writing</strong><p>Choose a target, approve the dry run, then confirm the final import phrase.</p></div></div>
+              </div>
+            </section>
+            <section className="migration-card">
+              <CardHead icon={ShieldCheck} iconTone="green" title="Audit guardrails" description="Boundaries enforced by the workflow." />
+              <div className="migration-guardrails">
+                <div className="migration-guardrail"><CheckCircle2 size={12} />Source access is read-only.</div>
+                <div className="migration-guardrail"><CheckCircle2 size={12} />Tunnel lease: 60 minutes maximum.</div>
+                <div className="migration-guardrail"><CheckCircle2 size={12} />Target writes require exact phrase.</div>
+                <div className="migration-guardrail"><CheckCircle2 size={12} />Recovery state captured before import.</div>
+              </div>
+            </section>
+            <section className="migration-card">
+              <CardHead icon={Activity} title="Session telemetry" description="Live record for this migration." />
+              <div className="migration-session">
+                <div className="migration-session-line"><span>Session status</span><strong style={{ color: tunnel ? "var(--isp-green)" : "var(--isp-text-muted)" }}>{tunnel ? tunnel.status.toUpperCase() : "NOT STARTED"}</strong></div>
+                <div className="migration-session-line"><span>Collector</span><strong>{collector ? collector.status.toUpperCase() : "—"}</strong></div>
+                <div className="migration-session-line"><span>Last stage</span><strong>{currentStep} / 7</strong></div>
+              </div>
+            </section>
+          </aside>
         </div>
 
-        {needsTenantContext && (
-          <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 text-sm">
-            <AlertTriangle size={20} className="shrink-0 mt-0.5" />
-            <div>
-              <strong className="block uppercase tracking-wider text-xs font-bold mb-1">Choose an ISP account first</strong>
-              <span className="text-xs">
-                Migration data belongs to one ISP account. Open <strong>Super Admin → Impersonate Admin</strong>, choose the ISP account that owns the source router, and then return here.
-              </span>
+        {currentStep < 7 && (
+          <div className="migration-footer">
+            <span className="migration-footer-note">{currentStep === 1 ? "Nothing has been written to a router." : `Stage ${currentStep} of 7 · review each boundary before continuing.`}</span>
+            <div className="migration-footer-actions">
+              {currentStep > 1 ? <button className="migration-button ghost" onClick={() => setCurrentStep(step => step - 1)} disabled={isBusy}><ArrowLeft size={13} /> Back</button> : <button className="migration-button ghost" onClick={() => window.location.reload()} disabled={isBusy}><X size={13} /> Cancel</button>}
+              <button className={`migration-button ${currentStep === 6 ? "danger" : "primary"}`} onClick={handleNext} disabled={primaryDisabled}>
+                {isBusy ? <><RefreshCw size={13} className="animate-spin" /> Processing…</> : <>
+                  {currentStep === 1 && !tunnel && "Issue one-hour tunnel"}
+                  {currentStep === 1 && tunnel && !migrationId && "Verify tunnel & export"}
+                  {currentStep === 1 && migrationId && "Continue to export"}
+                  {currentStep === 2 && "Review collected data"}
+                  {currentStep === 3 && "Choose target"}
+                  {currentStep === 4 && "Prepare dry run"}
+                  {currentStep === 5 && "Continue to import"}
+                  {currentStep === 6 && "Execute import"}
+                  {currentStep !== 6 && <ArrowRight size={13} />}
+                </>}
+              </button>
             </div>
           </div>
         )}
-
-        <div className="flex flex-col border border-[var(--isp-border)] rounded-xl bg-[var(--isp-card)] shadow-[var(--shadow-card)] overflow-hidden min-h-[400px]">
-          <div className="p-5 border-b border-[var(--isp-border)] bg-[var(--isp-section)] flex items-center justify-between">
-            <h2 className="text-sm font-bold flex items-center gap-2">
-              {currentStep === 1 && <><Terminal size={18} className="text-[var(--isp-accent)]" /> Step 1: Collect Source Router</>}
-              {currentStep === 2 && <><Database size={18} className="text-[var(--isp-accent)]" /> Step 2: Collected Export</>}
-              {currentStep === 3 && <><FileCheck size={18} className="text-[var(--isp-accent)]" /> Step 3: Review Compatibility</>}
-              {currentStep === 4 && <><ArrowRight size={18} className="text-[var(--isp-accent)]" /> Step 4: Select Target Router</>}
-              {currentStep === 5 && <><Activity size={18} className="text-[var(--isp-accent)]" /> Step 5: Pre-flight Dry Run</>}
-              {currentStep === 6 && <><Terminal size={18} className="text-[var(--isp-accent)]" /> Step 6: Confirmation & Import</>}
-              {currentStep === 7 && <><CheckCircle2 size={18} className="text-[var(--isp-green)]" /> Step 7: Migration Report</>}
-            </h2>
-            <div className="text-xs font-bold text-[var(--isp-text-muted)] bg-[var(--isp-inner-card)] px-3 py-1 rounded-md border border-[var(--isp-border)]">
-              {currentStep} / 7
-            </div>
-          </div>
-
-          <div className="p-6 flex-1 bg-[var(--isp-card)]">
-            
-            {/* Step 1: Collect source export from the active router */}
-            {currentStep === 1 && (
-              <div className="space-y-6 max-w-2xl fade-in">
-                <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-accent)]/40 bg-[var(--isp-accent)]/5">
-                  <div>
-                    <h3 className="text-sm font-bold text-[var(--isp-text)]">Registered source router tunnel</h3>
-                    <p className="text-xs text-[var(--isp-text-muted)] mt-1">
-                      Recommended for routers already registered in OcholaSupernet. A temporary OpenVPN management tunnel is created for one hour and is removed automatically.
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router</label>
-                    <select
-                      className="isp-input py-3 w-full cursor-pointer"
-                      value={sourceRouterId ?? ""}
-                      onChange={e => {
-                        setSourceRouterId(e.target.value ? Number(e.target.value) : null);
-                        setTunnel(null);
-                        setMigrationId(null);
-                        setExportData(null);
-                      }}
-                    >
-                      <option value="">-- Choose registered source router --</option>
-                      {routers?.map(r => (
-                        <option key={r.id} value={r.id}>{r.name} · {r.status}</option>
-                      ))}
-                    </select>
-                    {routersError && (
-                      <p className="text-xs text-red-600">
-                        {routersError instanceof Error ? routersError.message : "Registered routers could not be loaded."}
-                      </p>
-                    )}
-                    {!routersLoading && !routersError && routers?.length === 0 && (
-                      <p className="text-xs text-[var(--isp-text-muted)]">
-                        No registered routers are available for this ISP account.
-                      </p>
-                    )}
-                  </div>
-                  {sourceRouterId && tunnel && (
-                    <div className="space-y-3 rounded-lg border border-[var(--isp-border)] bg-[var(--isp-inner-card)] p-3">
-                      <div className="grid grid-cols-2 gap-3 text-xs">
-                        <div>
-                          <span className="block text-[var(--isp-text-muted)]">Tunnel address</span>
-                          <strong className="text-[var(--isp-text)]">{tunnel.tunnelAddress}</strong>
-                        </div>
-                        <div>
-                          <span className="block text-[var(--isp-text-muted)]">Status</span>
-                          <strong className="text-[var(--isp-text)] capitalize">{tunnel.status.replace("_", " ")}</strong>
-                        </div>
-                        <div>
-                          <span className="block text-[var(--isp-text-muted)]">Time remaining</span>
-                          <strong className={tunnelSecondsRemaining > 0 ? "text-[var(--isp-green)]" : "text-red-600"}>{tunnelCountdown}</strong>
-                        </div>
-                        <div>
-                          <span className="block text-[var(--isp-text-muted)]">Expires</span>
-                          <strong className="text-[var(--isp-text)]">{new Date(tunnel.expiresAt).toLocaleTimeString()}</strong>
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-[11px] text-[var(--isp-text-muted)]">Paste this command into the selected MikroTik terminal:</span>
-                        <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{tunnel.command}</pre>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" className="btn btn-ghost" onClick={copyTunnelCommand}><FileCheck size={14} /> Copy tunnel command</button>
-                      </div>
-                      <p className="text-[11px] text-amber-600">
-                        After importing the script, continue to verify the RouterOS API and run the read-only export. The router removes this migration client after one hour.
-                      </p>
-                    </div>
-                  )}
-                  {sourceRouterId && !tunnel && (
-                    <p className="text-xs text-[var(--isp-text-muted)]">Use the Continue button below to reserve the one-hour tunnel and receive the RouterOS command.</p>
-                  )}
-                </div>
-
-                  <div className="p-4 rounded-xl border border-[var(--isp-accent)]/30 bg-[var(--isp-accent)]/5">
-                   <h3 className="text-sm font-bold text-[var(--isp-text)] mb-2">
-                     {sourceRouterId && tunnel ? "Tunnel-enabled migration collector" : "Manual read-only collector (no tunnel)"}
-                   </h3>
-                  <ol className="text-xs text-[var(--isp-text-muted)] space-y-2 list-decimal pl-5">
-                    <li>Give the source router a name and create a one-time collector session.</li>
-                    <li>Paste the displayed command into the active MikroTik terminal.</li>
-                     <li>
-                       {sourceRouterId && tunnel
-                         ? "Run the tunnel script first. After the VPN is connected, run the separate export script to read and upload the configuration."
-                         : "The domain-hosted script reads the router and uploads the export automatically."}
-                     </li>
-                  </ol>
-                   {sourceRouterId && tunnel ? (
-                     <p className="mt-3 text-xs text-amber-600">
-                       The first script adds only the temporary tunnel interface, its one-hour cleanup scheduler, and the
-                       two connection-only firewall rules. The second script is export-only. No default route, LAN route,
-                       or migration configuration is changed.
-                     </p>
-                   ) : (
-                     <p className="mt-3 text-xs text-amber-600">
-                       This collector only uploads the export over HTTPS. To add a temporary tunnel, select a registered
-                       source router above and create its one-hour tunnel first.
-                     </p>
-                   )}
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">Source router name</label>
-                  <input className="isp-input py-3 w-full" value={sourceLabel} onChange={e => setSourceLabel(e.target.value)} placeholder="e.g. Main Office MikroTik" maxLength={120} />
-                </div>
-                {!collector && (
-                  <button type="button" className="btn btn-primary" onClick={() => collectorMutation.mutate(undefined)} disabled={!sourceLabel.trim() || collectorMutation.isPending}>
-                    {collectorMutation.isPending ? <><RefreshCw size={14} className="animate-spin" /> Creating session...</> : <><Terminal size={14} /> {sourceRouterId && tunnel ? "Create tunnel-enabled collector" : "Create domain collector"}</>}
-                  </button>
-                )}
-                {collector && (
-                  <div className="space-y-4 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
-                    <div>
-                        <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">
-                          {collector.tunnel ? "Two-step RouterOS collector" : "Domain-linked collector command (no tunnel)"}
-                        </label>
-                        {collector.tunnel && (
-                          <>
-                            <div className="mt-3">
-                              <span className="text-xs font-semibold text-[var(--isp-text)]">1. Connect the router to the web through VPN</span>
-                              <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.tunnelCommand}</pre>
-                              <div className="flex flex-wrap gap-2 mt-2">
-                                <button type="button" className="btn btn-ghost" onClick={copyCollectorTunnelCommand}><FileCheck size={14} /> Copy tunnel command</button>
-                                {collector.tunnelScriptUrl && <a className="btn btn-ghost" href={collector.tunnelScriptUrl} target="_blank" rel="noreferrer"><FileCheck size={14} /> View tunnel script</a>}
-                              </div>
-                            </div>
-                            <div className="mt-4 border-t border-[var(--isp-border)] pt-3">
-                              <span className="text-xs font-semibold text-[var(--isp-text)]">2. Enable the read-only export</span>
-                              <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
-                            </div>
-                            <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                              <div>
-                                <span className="block text-[var(--isp-text-muted)]">Temporary tunnel address</span>
-                                <strong className="text-[var(--isp-text)]">{collector.tunnel.address}</strong>
-                              </div>
-                              <div>
-                                <span className="block text-[var(--isp-text-muted)]">Tunnel status</span>
-                                <strong className="text-[var(--isp-text)] capitalize">{collector.tunnel.status.replace("_", " ")}</strong>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                        {!collector.tunnel && (
-                          <pre className="mt-2 whitespace-pre-wrap break-all rounded-lg bg-[#0a0a0a] p-3 text-[11px] leading-relaxed text-gray-300">{collector.command}</pre>
-                        )}
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        <button type="button" className="btn btn-ghost" onClick={copyCollectorCommand}><FileCheck size={14} /> Copy command</button>
-                        <a className="btn btn-ghost" href={collector.scriptUrl} target="_blank" rel="noreferrer"><FileCheck size={14} /> View hosted script</a>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 border-t border-[var(--isp-border)] pt-3">
-                      <div>
-                        <strong className="block text-xs text-[var(--isp-text)]">
-                          {collector.status === "waiting" ? "Waiting for the MikroTik..." : collector.migrationId ? "Export received and saved" : "Processing router export..."}
-                        </strong>
-                        <span className="text-[11px] text-[var(--isp-text-muted)]">Session expires {new Date(collector.expiresAt).toLocaleTimeString()}</span>
-                      </div>
-                      {!collector.migrationId && (
-                        <button type="button" className="btn btn-ghost shrink-0" onClick={() => collectorStatusMutation.mutate(collector.token)} disabled={collectorStatusMutation.isPending}>
-                          <RefreshCw size={14} className={collectorStatusMutation.isPending ? "animate-spin" : ""} /> Check collection
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-                <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-600">
-                  The collector includes passwords and other sensitive values. Use it only on the intended source router, keep the one-time URL private, and wait for the web app to confirm collection.
-                </div>
-              </div>
-            )}
-
-            {/* Step 2: Export */}
-            {currentStep === 2 && (
-              <div className="space-y-6 max-w-2xl fade-in">
-                <p className="text-sm text-[var(--isp-text)] leading-relaxed">
-                  The web app received the export collected from the source router.
-                  <br/><br/>
-                   <strong className="text-[var(--isp-text)]">READ-ONLY COLLECTION:</strong> The source router was not contacted or modified. The collected export is stored as <code>{exportData?.sourceLabel || sourceLabel}</code>.
-                </p>
-
-                <div className="p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--isp-text)] mb-2">Source saved securely</h3>
-                  <p className="text-xs text-[var(--isp-text-muted)]">
-                    <strong className="text-[var(--isp-text)]">{exportData?.sourceLabel || sourceLabel}</strong> is now available as the source for this migration. The original terminal output remains encrypted and is not displayed again.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Step 3: Review */}
-            {currentStep === 3 && exportData && (
-              <div className="space-y-6 max-w-2xl fade-in">
-                <div className="flex items-center gap-3 p-4 bg-[var(--isp-green-glow)] border border-[var(--isp-green)]/30 text-[var(--isp-green)] rounded-xl">
-                  <CheckCircle2 size={24} />
-                  <div>
-                    <strong className="block text-sm font-bold">Source Export Saved Successfully</strong>
-                    <span className="text-xs opacity-80">Reference ID: {exportData.id}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl text-center">
-                    <div className="text-2xl font-black text-[var(--isp-text)]">{exportData.summary.users}</div>
-                    <div className="text-[10px] font-bold uppercase text-[var(--isp-text-muted)] tracking-wider mt-1">Users</div>
-                  </div>
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl text-center">
-                    <div className="text-2xl font-black text-[var(--isp-text)]">{exportData.summary.queues}</div>
-                    <div className="text-[10px] font-bold uppercase text-[var(--isp-text-muted)] tracking-wider mt-1">Queues</div>
-                  </div>
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl text-center">
-                    <div className="text-2xl font-black text-[var(--isp-text)]">{exportData.summary.pools}</div>
-                    <div className="text-[10px] font-bold uppercase text-[var(--isp-text-muted)] tracking-wider mt-1">IP Pools</div>
-                  </div>
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl text-center">
-                    <div className="text-2xl font-black text-[var(--isp-text)]">{exportData.summary.configs}</div>
-                    <div className="text-[10px] font-bold uppercase text-[var(--isp-text-muted)] tracking-wider mt-1">Configs</div>
-                  </div>
-                </div>
-
-                {(exportData.findings.manual.length > 0 || exportData.findings.unsupported.length > 0 || exportData.findings.warnings.length > 0) && (
-                  <div className="space-y-3">
-                    <h3 className="text-sm font-bold text-[var(--isp-text)]">Configuration Review</h3>
-                    {exportData.findings.unsupported.length > 0 && (
-                      <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
-                        <strong className="text-xs text-red-500 uppercase">Unsupported Features</strong>
-                        <ul className="list-disc pl-5 text-xs text-red-400 mt-1">
-                          {exportData.findings.unsupported.map((u, i) => <li key={i}>{u}</li>)}
-                        </ul>
-                      </div>
-                    )}
-                    {exportData.findings.manual.length > 0 && (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                        <strong className="text-xs text-amber-500 uppercase">Requires Manual Setup</strong>
-                        <ul className="list-disc pl-5 text-xs text-amber-500/80 mt-1">
-                          {exportData.findings.manual.map((m, i) => <li key={i}>{m}</li>)}
-                        </ul>
-                      </div>
-                    )}
-                    {exportData.findings.warnings.length > 0 && (
-                      <div className="p-3 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl">
-                        <strong className="text-xs text-[var(--isp-text-muted)] uppercase">General Warnings</strong>
-                        <ul className="list-disc pl-5 text-xs text-[var(--isp-text)] mt-1">
-                          {exportData.findings.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <p className="text-xs text-[var(--isp-text-muted)]">
-                  The data has been safely vaulted in the controller. Proceed to target selection.
-                </p>
-              </div>
-            )}
-
-            {/* Step 4: Target Selection */}
-            {currentStep === 4 && (
-              <div className="space-y-6 max-w-2xl fade-in">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-[var(--isp-text-muted)] uppercase tracking-wide">
-                    Target / Replacement Router
-                  </label>
-                  <p className="text-xs text-[var(--isp-text-muted)] mb-3">
-                    Select the destination for this configuration. 
-                    <strong className="text-[var(--isp-accent)] ml-1">Do not select the same router.</strong>
-                  </p>
-                  
-                  {routersError ? (
-                    <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-500 text-sm">
-                      Failed to load target routers. Please check the API connection.
-                    </div>
-                  ) : routersLoading ? (
-                    <div className="p-4 bg-[var(--isp-inner-card)] rounded-lg text-sm text-[var(--isp-text-muted)] flex items-center gap-2">
-                      <RefreshCw size={14} className="animate-spin" /> Loading target routers...
-                    </div>
-                  ) : routers && routers.length < 1 ? (
-                    <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-600 text-sm">
-                      No target routers found. Add the replacement router before proceeding.
-                    </div>
-                  ) : (
-                    <select
-                      className="isp-input py-3 w-full cursor-pointer"
-                      value={targetRouterId || ""}
-                      onChange={(e) => setTargetRouterId(Number(e.target.value))}
-                    >
-                      <option value="">-- Choose target router --</option>
-                      {routers?.map(r => (
-                        <option key={r.id} value={r.id} disabled={r.status !== 'online' && r.status !== 'connected'}>
-                          {r.name} ({r.host})
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Step 5: Dry Run */}
-            {currentStep === 5 && (
-              <div className="space-y-6 max-w-3xl fade-in">
-                <p className="text-sm text-[var(--isp-text)] mb-4">
-                  Select which items you intend to import. The controller will simulate the import process against the target router API without committing changes. Dry run performs zero RouterOS calls.
-                </p>
-
-                {dryRunData && (
-                  <div className="space-y-4">
-                    <div className={`p-4 rounded-xl border ${dryRunData.success ? 'bg-[var(--isp-green-glow)] border-[var(--isp-green)]/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                      <div className="flex items-center gap-2">
-                        {dryRunData.success ? <CheckCircle2 className="text-[var(--isp-green)]" /> : <AlertTriangle className="text-red-500" />}
-                        <strong className={`text-sm font-bold ${dryRunData.success ? 'text-[var(--isp-green)]' : 'text-red-500'}`}>
-                          {dryRunData.success ? 'Dry run simulation completed.' : 'Dry run identified blockers.'}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4">
-                      <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl">
-                        <h4 className="text-xs font-bold text-[var(--isp-text)] uppercase tracking-wider mb-3">Planned Changes ({dryRunData.plannedChanges.length})</h4>
-                        {dryRunData.plannedChanges.length === 0 ? (
-                          <p className="text-xs text-[var(--isp-text-muted)] italic">No supported items found. This migration is report-only. Import is blocked.</p>
-                        ) : (
-                          <div className="space-y-2 h-64 overflow-y-auto custom-scrollbar pr-2">
-                            {dryRunData.plannedChanges.map(item => (
-                              <label key={item.id} className="flex items-start gap-3 p-2 hover:bg-[var(--isp-hover)] rounded border border-transparent hover:border-[var(--isp-border)] cursor-pointer">
-                                <input 
-                                  type="checkbox" 
-                                  className="mt-1 w-4 h-4 rounded border-[var(--isp-border)] text-[var(--isp-accent)] focus:ring-[var(--isp-accent)]"
-                                  checked={selectedIds.has(item.id)}
-                                  onChange={(e) => handleCheckbox(item.id, e.target.checked)}
-                                />
-                                <div className="flex flex-col">
-                                  <span className="text-xs font-bold text-[var(--isp-text)]">{item.category}</span>
-                                  <span className="text-xs text-[var(--isp-text-muted)]">{item.label}</span>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      
-                      {dryRunData.skipped.length > 0 && (
-                        <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl">
-                          <h4 className="text-xs font-bold text-[var(--isp-text)] uppercase tracking-wider mb-3">Skipped Items</h4>
-                          <ul className="text-xs text-[var(--isp-text-muted)] space-y-1.5 list-disc pl-4 h-24 overflow-y-auto custom-scrollbar">
-                            {dryRunData.skipped.map((s,i) => <li key={i}>{s}</li>)}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-
-                    {(dryRunData.warnings.length > 0 || dryRunData.conflicts.length > 0) && (
-                      <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                        <h4 className="text-xs font-bold text-amber-600 uppercase tracking-wider mb-2 flex items-center gap-2">
-                          <AlertTriangle size={14} /> Warnings & Conflicts
-                        </h4>
-                        <ul className="text-xs text-amber-600/80 space-y-1.5 list-disc pl-4 max-h-32 overflow-y-auto custom-scrollbar">
-                          {dryRunData.conflicts.map((c,i) => <li key={i}><strong className="text-amber-600">Conflict:</strong> {c}</li>)}
-                          {dryRunData.warnings.map((w,i) => <li key={i}>{w}</li>)}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Step 6: Import Confirmation */}
-            {currentStep === 6 && (
-              <div className="space-y-6 max-w-xl mx-auto text-center fade-in py-8">
-                <ShieldAlert size={48} className="mx-auto text-[var(--isp-accent)] mb-4" />
-                <h3 className="text-lg font-black text-[var(--isp-text)]">Final Authorization Required</h3>
-                <div className="text-sm text-[var(--isp-text-muted)] leading-relaxed max-w-md mx-auto space-y-3">
-                  <p>
-                    You are about to irreversibly apply the snapshot to the target router 
-                    (<strong>{routers?.find(r => r.id === targetRouterId)?.name}</strong>).
-                  </p>
-                  <div className="p-3 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded text-left">
-                    <strong className="block text-xs uppercase text-[var(--isp-text)] mb-1">State Capture & Rollback</strong>
-                    <span className="text-xs">
-                      A read-only configuration state capture will be taken before import. This is not a RouterOS backup file; recovery is manual and network interruptions may require direct intervention. Verify connectivity before proceeding.
-                    </span>
-                  </div>
-                  <p>
-                    To proceed, type <strong className="text-[var(--isp-text)] select-all bg-[var(--isp-border)] px-1.5 py-0.5 rounded">MODIFY TARGET ROUTER</strong> in the box below.
-                  </p>
-                </div>
-
-                <div className="max-w-xs mx-auto mt-6">
-                  <input
-                    type="text"
-                    className="isp-input text-center font-mono font-bold tracking-wider py-3 uppercase"
-                    placeholder="MODIFY TARGET ROUTER"
-                    value={confirmationText}
-                    onChange={e => setConfirmationText(e.target.value)}
-                    autoComplete="off"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Step 7: Report */}
-            {currentStep === 7 && reportData && (
-              <div className="space-y-6 max-w-3xl fade-in">
-                <div className={`flex items-center justify-between p-5 rounded-xl border ${reportData.success ? 'bg-[var(--isp-green-glow)] border-[var(--isp-green)]/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${reportData.success ? 'bg-[var(--isp-green)] text-white' : 'bg-red-500 text-white'}`}>
-                      {reportData.success ? <CheckCircle2 size={24} /> : <AlertTriangle size={24} />}
-                    </div>
-                    <div>
-                      <h3 className={`text-base font-black ${reportData.success ? 'text-[var(--isp-green)]' : 'text-red-500'}`}>
-                        {reportData.success ? 'Migration Successful' : 'Migration Completed with Errors'}
-                      </h3>
-                      <p className="text-xs opacity-80 font-medium">Status: {reportData.status}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-2xl font-black text-[var(--isp-text)]">{reportData.importedItems}</div>
-                    <div className="text-[10px] font-bold uppercase text-[var(--isp-text-muted)] tracking-wider">Items Imported</div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl">
-                    <h4 className="text-xs font-bold text-[var(--isp-text)] uppercase tracking-wider mb-2">Recovery Info</h4>
-                    <p className="text-xs text-[var(--isp-text-muted)]">{reportData.recovery}</p>
-                  </div>
-                  <div className="p-4 bg-[var(--isp-inner-card)] border border-[var(--isp-border)] rounded-xl">
-                    <h4 className="text-xs font-bold text-[var(--isp-text)] uppercase tracking-wider mb-2">Verification</h4>
-                    <pre className="text-xs text-[var(--isp-text-muted)] whitespace-pre-wrap break-words">{JSON.stringify(reportData.verification, null, 2)}</pre>
-                  </div>
-                </div>
-
-                {reportData.recoveryPackage && (
-                  <div className="p-4 bg-red-500/5 border border-red-500/30 rounded-xl space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                      <div>
-                        <h4 className="text-xs font-bold text-red-500 uppercase tracking-wider">Redacted Recovery Package</h4>
-                        <p className="text-xs text-[var(--isp-text-muted)] mt-1">{reportData.recoveryPackage.note}</p>
-                      </div>
-                      <button className="btn btn-ghost shrink-0" onClick={downloadRecoveryPackage}>
-                        <FileCheck size={14} /> Download Recovery JSON
-                      </button>
-                    </div>
-                    <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                      <div><dt className="text-[var(--isp-text-muted)]">Captured</dt><dd className="font-medium text-[var(--isp-text)]">{reportData.recoveryPackage.capturedAt || "Before first write"}</dd></div>
-                      <div><dt className="text-[var(--isp-text-muted)]">Applied items</dt><dd className="font-medium text-[var(--isp-text)]">{reportData.recoveryPackage.appliedItemIds.length}</dd></div>
-                      <div><dt className="text-[var(--isp-text-muted)]">Failed stage</dt><dd className="font-medium text-red-500">{reportData.recoveryPackage.failedStage}</dd></div>
-                    </dl>
-                    <details className="text-xs">
-                      <summary className="cursor-pointer font-semibold text-[var(--isp-text)]">Review captured pre-change state</summary>
-                      <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-[#0a0a0a] p-3 text-gray-300 whitespace-pre-wrap break-words">{JSON.stringify(reportData.recoveryPackage.preChangeState, null, 2)}</pre>
-                    </details>
-                  </div>
-                )}
-
-                <div className="p-4 bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl font-mono text-xs text-gray-300">
-                  <div className="flex items-center justify-between mb-3 border-b border-[#222] pb-2">
-                    <span className="font-bold text-gray-400">Execution Log</span>
-                    <span className="text-[10px] text-gray-500">Read-only view</span>
-                  </div>
-                  <div className="h-64 overflow-y-auto custom-scrollbar space-y-1.5 pr-2">
-                    {reportData.logs.map((log, i) => (
-                      <div key={i} className="flex gap-3">
-                        <span className="text-gray-600 shrink-0">[{String(i+1).padStart(4, '0')}]</span>
-                        <span className={log.toLowerCase().includes('error') || log.toLowerCase().includes('failed') ? 'text-red-400' : 'text-gray-300'}>
-                          {log}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <div className="flex justify-end pt-4">
-                  <button className="btn btn-ghost" onClick={() => window.location.reload()}>
-                    <RefreshCw size={14} /> Start New Migration
-                  </button>
-                </div>
-              </div>
-            )}
-
-          </div>
-
-          {/* Footer Actions */}
-          {currentStep < 7 && (
-            <div className="p-5 border-t border-[var(--isp-border)] bg-[var(--isp-section)] flex justify-between items-center">
-              <button 
-                className="btn btn-ghost" 
-                onClick={() => window.location.reload()}
-                disabled={collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending}
-              >
-                Cancel
-              </button>
-              
-              <div className="flex items-center gap-3">
-                {currentStep === 5 && isDryRunDirty() && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => {
-                      if (migrationId) dryRunMutation.mutate({ id: migrationId, approvedItemIds: Array.from(selectedIds) });
-                    }}
-                    disabled={dryRunMutation.isPending}
-                  >
-                    {dryRunMutation.isPending ? "Updating..." : "Verify Approvals"}
-                  </button>
-                )}
-
-                <button 
-                  className={`btn ${currentStep === 6 ? 'btn-danger' : 'btn-primary'}`}
-                  onClick={handleNext}
-                  disabled={
-                    (currentStep === 1 && !collector?.migrationId && !migrationId && !sourceRouterId) ||
-                    (currentStep === 4 && !targetRouterId) ||
-                    (currentStep === 5 && (isDryRunDirty() || dryRunData?.plannedChanges.length === 0 || selectedIds.size === 0)) ||
-                    (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER") ||
-                    collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending
-                  }
-                >
-                  {collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending || analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending || dryRunMutation.isPending || importMutation.isPending ? (
-                    <><RefreshCw size={14} className="animate-spin" /> Processing...</>
-                  ) : (
-                    <>
-                      {currentStep === 1 && !collector?.migrationId && !tunnel && 'Start one-hour tunnel'}
-                      {currentStep === 1 && !collector?.migrationId && tunnel && !migrationId && 'Verify tunnel & export'}
-                      {currentStep === 1 && migrationId && 'Continue to Collected Export'}
-                      {currentStep === 2 && 'Review Collected Data'}
-                      {currentStep === 3 && 'Acknowledge & Continue'}
-                      {currentStep === 4 && 'Prepare Dry Run'}
-                      {currentStep === 5 && 'Continue to Import'}
-                      {currentStep === 6 && 'EXECUTE IMPORT'}
-                      {currentStep !== 6 && <ChevronRight size={16} />}
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {copied && <div className="migration-toast" role="status">{copied} copied to clipboard</div>}
       </div>
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(150,150,150,0.2); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(150,150,150,0.4); }
-      `}</style>
     </AdminLayout>
   );
 }
