@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy,
+  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy, ChevronDown,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -539,6 +539,7 @@ export default function Routers() {
   const [rebootState, setRebootState]   = useState<Record<number, "idle" | "rebooting" | "ok" | "error">>({});
   const [rebootMsg, setRebootMsg]       = useState<Record<number, string>>({});
   const [deleteState, setDeleteState]   = useState<Record<number, "idle" | "confirm" | "deleting">>({});
+  const [routerMenuId, setRouterMenuId] = useState<number | null>(null);
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
   const [installHistoryModal, setInstallHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
@@ -985,7 +986,69 @@ export default function Routers() {
 
                         {/* ROUTER NAME */}
                         <td style={{ padding: "0.65rem 0.75rem" }}>
-                          <span style={{ color: "var(--isp-text)", fontWeight: 600 }}>{r.name}</span>
+                          <div style={{ position: "relative", display: "inline-block" }}>
+                            <button
+                              type="button"
+                              aria-haspopup="menu"
+                              aria-expanded={routerMenuId === r.id}
+                              onClick={() => setRouterMenuId(current => current === r.id ? null : r.id)}
+                              style={{
+                                display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                                padding: "0.2rem 0.35rem", margin: "-0.2rem -0.35rem",
+                                border: "1px solid transparent", borderRadius: 6,
+                                background: routerMenuId === r.id ? "rgba(96,165,250,0.1)" : "transparent",
+                                color: "var(--isp-text)", fontWeight: 600, fontSize: "inherit",
+                                cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                              }}
+                            >
+                              {r.name}
+                              <ChevronDown size={12} style={{ color: "var(--isp-text-sub)" }} />
+                            </button>
+                            {routerMenuId === r.id && (
+                              <div
+                                role="menu"
+                                aria-label={`Actions for ${r.name}`}
+                                style={{
+                                  position: "absolute", zIndex: 20, top: "calc(100% + 0.35rem)", left: 0,
+                                  minWidth: 165, padding: "0.3rem",
+                                  borderRadius: 8, background: "var(--isp-section)",
+                                  border: "1px solid var(--isp-border)",
+                                  boxShadow: "0 12px 30px rgba(0,0,0,0.28)",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setRouterMenuId(null); openEdit(r); }}
+                                  style={{
+                                    display: "block", width: "100%", padding: "0.5rem 0.6rem",
+                                    border: 0, borderRadius: 5, background: "transparent",
+                                    color: "var(--isp-text-muted)", fontSize: "0.75rem",
+                                    fontWeight: 600, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                                  }}
+                                >
+                                  Edit router
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setRouterMenuId(null);
+                                    setDeleteError(prev => ({ ...prev, [r.id]: "" }));
+                                    setDeleteState(prev => ({ ...prev, [r.id]: "confirm" }));
+                                  }}
+                                  style={{
+                                    display: "block", width: "100%", padding: "0.5rem 0.6rem",
+                                    border: 0, borderRadius: 5, background: "transparent",
+                                    color: "#f87171", fontSize: "0.75rem",
+                                    fontWeight: 700, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                                  }}
+                                >
+                                  Delete router
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </td>
 
                         {/* IP ADDRESS */}
