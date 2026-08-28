@@ -16,6 +16,7 @@ import { logger } from "../lib/logger.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { addHotspotIpBinding, type RouterCredentials } from "../lib/mikrotik.js";
 
 const router: IRouter = Router();
 
@@ -906,6 +907,137 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
     status: tx.status,
     failureReason: tx.status === "failed" ? tx.notes ?? undefined : undefined,
   });
+});
+
+/**
+ * Bind a verified paid device to the HotSpot router. The checkout ID is the
+ * capability: the browser cannot choose a different plan, ISP, or MAC after
+ * the signed intent has been recorded.
+ */
+router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
+  const checkoutId = String(req.body?.checkout_id ?? "").trim();
+  const adminId = Number(req.body?.adminId);
+  const mac = readMacAddress(req.body?.mac_address);
+
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || !mac.value) {
+    res.status(400).json({ ok: false, error: "A paid checkout, ISP context, and a valid device MAC address are required." });
+    return;
+  }
+
+  const transactions = await sbSelect<{
+    id: number;
+    admin_id: number;
+    plan_id: number | null;
+    payment_phone: string | null;
+    mac_address: string | null;
+    status: string;
+  }>(
+    "isp_transactions",
+    `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,plan_id,payment_phone,mac_address,status&limit=1`,
+  );
+  const transaction = transactions[0];
+
+  if (!transaction) {
+    res.status(409).json({ ok: false, error: "Payment is not confirmed yet. Keep this page open while we verify it." });
+    return;
+  }
+  if (normaliseMacAddress(transaction.mac_address) !== mac.value) {
+    res.status(400).json({ ok: false, error: "This device MAC address does not match the paid checkout." });
+    return;
+  }
+  if (!await isActiveIspAdmin(adminId)) {
+    res.status(404).json({ ok: false, error: "This ISP account is not active." });
+    return;
+  }
+  if (!transaction.plan_id) {
+    res.status(409).json({ ok: false, error: "The paid checkout has no hotspot plan attached." });
+    return;
+  }
+
+  const plans = await sbSelect<{
+    id: number;
+    name: string;
+    type: string;
+    router_id: number | null;
+  }>(
+    "isp_plans",
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id&limit=1`,
+  );
+  const plan = plans[0];
+  if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot") {
+    res.status(409).json({ ok: false, error: "The paid plan is not configured as a hotspot plan." });
+    return;
+  }
+  if (!plan.router_id) {
+    res.status(503).json({ ok: false, error: "The hotspot plan is not assigned to a MikroTik router yet." });
+    return;
+  }
+
+  const planRow = await sbSelect<{
+    validity: number | null;
+    validity_unit: string | null;
+    validity_days: number | null;
+  }>(
+    "isp_plans",
+    `id=eq.${plan.id}&admin_id=eq.${adminId}&select=validity,validity_unit,validity_days&limit=1`,
+  );
+  const planValidity = planRow[0];
+  const validityUnit = String(planValidity?.validity_unit ?? "days").toLowerCase();
+  const configuredValidity = Number(planValidity?.validity_days ?? planValidity?.validity ?? 0);
+  const validityValue = validityUnit === "hours" && configuredValidity === 0
+    ? Number(planValidity?.validity ?? 1)
+    : configuredValidity;
+  const expiresInSeconds = validityUnit === "hours"
+    ? validityValue * 60 * 60
+    : validityValue * 24 * 60 * 60;
+  if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+    res.status(409).json({ ok: false, error: "The hotspot plan has no valid access duration configured." });
+    return;
+  }
+
+  const routers = await sbSelect<{
+    id: number;
+    name: string;
+    host: string;
+    bridge_ip: string | null;
+    vpn_ip: string | null;
+    router_username: string | null;
+    router_secret: string | null;
+  }>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  );
+  const routerRow = routers[0];
+  if (!routerRow || (!routerRow.host && !routerRow.bridge_ip && !routerRow.vpn_ip)) {
+    res.status(503).json({ ok: false, error: "The hotspot router is not reachable from the ISP server." });
+    return;
+  }
+
+  const credentials: RouterCredentials = {
+    host: routerRow.host || routerRow.vpn_ip || routerRow.bridge_ip || "",
+    bridgeIp: routerRow.vpn_ip || routerRow.bridge_ip || undefined,
+    port: 8728,
+    username: routerRow.router_username || "admin",
+    password: routerRow.router_secret || "",
+    useSSL: false,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+
+  try {
+    await addHotspotIpBinding(credentials, {
+      macAddress: mac.value,
+      comment: `OcholaSupernet paid ${checkoutId}`,
+      expiresInSeconds,
+    });
+    await sbUpdate("isp_transactions", `id=eq.${transaction.id}`, {
+      notes: `M-Pesa payment verified; MAC hotspot access granted on ${routerRow.name}.`,
+    });
+    res.json({ ok: true, access: "mac-bypassed", router: routerRow.name, mac_address: mac.value });
+  } catch (error) {
+    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac: mac.value }, "[mpesa/hotspot-mac-access] binding failed");
+    res.status(503).json({ ok: false, error: "Payment is confirmed, but the hotspot router could not be updated. Please retry connection." });
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════

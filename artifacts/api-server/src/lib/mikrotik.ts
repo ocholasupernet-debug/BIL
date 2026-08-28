@@ -796,6 +796,110 @@ export async function connectHotspotUser(
   });
 }
 
+/**
+ * Allow a paid hotspot device through the captive portal without exposing
+ * RouterOS credentials to the browser. RouterOS keeps this binding until it
+ * is changed or removed by an administrator.
+ */
+export async function addHotspotIpBinding(
+  creds: RouterCredentials,
+  opts: { macAddress: string; ipAddress?: string; comment: string; expiresInSeconds: number },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const existing = (await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms,
+    )) as Record<string, string>[];
+    const paidBinding = existing.find((row) => row.comment === opts.comment);
+    /* An administrator's existing bypass remains untouched. It already grants
+       access and must not be removed by a later paid-device expiry. */
+    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive hotspot access duration is required.");
+    }
+
+    const clockRows = (await withTimeout(
+      conn.write(["/system/clock/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = `ochola-paid-${opts.comment.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+    const expiryScript = `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; /system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      `=on-event=${expiryScript}`,
+      `=comment=OcholaSupernet paid access expiry`,
+    );
+
+    await withTimeout(conn.write(schedulerCommand), ms);
+    try {
+      const id = paidBinding?.[".id"];
+      const params: string[] = id
+        ? ["/ip/hotspot/ip-binding/set", `=.id=${id}`]
+        : ["/ip/hotspot/ip-binding/add", `=mac-address=${opts.macAddress}`];
+      params.push("=type=bypassed", `=comment=${opts.comment}`);
+      if (opts.ipAddress) params.push(`=address=${opts.ipAddress}`);
+      await withTimeout(conn.write(params), ms);
+    } catch (error) {
+      const schedulerId = schedulers[0]?.[".id"];
+      if (schedulerId) {
+        const previous = schedulers[0];
+        const restore = ["/system/scheduler/set", `=.id=${schedulerId}`];
+        for (const field of ["start-date", "start-time", "interval", "on-event", "comment"]) {
+          if (previous[field]) restore.push(`=${field}=${previous[field]}`);
+        }
+        await withTimeout(conn.write(restore), ms).catch(() => undefined);
+      } else {
+        await withTimeout(conn.write(["/system/scheduler/print", `?name=${schedulerName}`]), ms)
+          .then((rows) => {
+            const id = (rows as Record<string, string>[])[0]?.[".id"];
+            return id ? conn.write(["/system/scheduler/remove", `=.id=${id}`]) : undefined;
+          })
+          .catch(() => undefined);
+      }
+      throw error;
+    }
+  });
+}
+
+function parseRouterClock(dateValue: string | undefined, timeValue: string | undefined): Date | null {
+  if (!dateValue || !timeValue) return null;
+  const slashDate = /^([a-z]{3})\/(\d{1,2})\/(\d{4})$/i.exec(dateValue.trim());
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue.trim());
+  const dateParts = slashDate
+    ? { year: Number(slashDate[3]), month: MONTH_NAMES.indexOf(slashDate[1].toLowerCase()), day: Number(slashDate[2]) }
+    : isoDate
+      ? { year: Number(isoDate[1]), month: Number(isoDate[2]) - 1, day: Number(isoDate[3]) }
+      : null;
+  const timeParts = /^(\d{1,2}):(\d{2}):(\d{2})$/.exec(timeValue.trim());
+  if (!dateParts || !timeParts || dateParts.month < 0 || dateParts.day < 1) return null;
+  return new Date(Date.UTC(dateParts.year, dateParts.month, dateParts.day, Number(timeParts[1]), Number(timeParts[2]), Number(timeParts[3])));
+}
+
+function formatRouterDate(value: Date): string {
+  return `${MONTH_NAMES[value.getUTCMonth()]}/${String(value.getUTCDate()).padStart(2, "0")}/${value.getUTCFullYear()}`;
+}
+
+function formatRouterTime(value: Date): string {
+  return [value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+}
+
+const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
 export async function isHotspotUserOnline(
   creds: RouterCredentials,
   username: string,
