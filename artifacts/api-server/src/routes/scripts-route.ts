@@ -936,8 +936,10 @@ function buildVlanpppoeRsc(origin: string): string {
   return `# vlanpppoe.rsc
 :log info "PPPoE VLAN: init (vlan-id=200, base=hotspot-bridge)";
 
-:log info "PPPoE VLAN: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
-/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
+:log info "PPPoE VLAN: fetching login.html from ${origin}/hotspot/login.html";
+:do { /file add name=pppoe type=directory } on-error={};
+:do { /file make-dir pppoe } on-error={};
+/tool fetch url="${origin}/hotspot/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
 
 # === PPPoE (VLAN) — hotspot-bridge, VLAN ID 200, interface pppoe-vlan ===
 
@@ -1166,8 +1168,10 @@ function buildNormalpppoeRsc(origin: string): string {
   return `# normalpppoe.rsc
 :log info "PPPoE NORMAL: init";
 
-:log info "PPPoE NORMAL: fetching login.html from ${origin}/pppoe/pppoefiles/login.html";
-/tool fetch url="${origin}/pppoe/pppoefiles/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
+:log info "PPPoE NORMAL: fetching login.html from ${origin}/hotspot/login.html";
+:do { /file add name=pppoe type=directory } on-error={};
+:do { /file make-dir pppoe } on-error={};
+/tool fetch url="${origin}/hotspot/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
 
 :if ([:len [/interface bridge find where name="pppoe_bridge"]] = 0) do={ /interface bridge add name=pppoe_bridge protocol-mode=rstp comment="PPPoE bridge" }
 :if ([:len [/ip address find where interface="pppoe_bridge" and address="192.168.178.1/24"]] = 0) do={ /ip address add address=192.168.178.1/24 interface=pppoe_bridge comment="PPPoE gateway" }
@@ -1360,25 +1364,11 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 
 # Hotspot profile
 :do { /ip hotspot profile remove [find name=default-hs] } on-error={}
-:do {
-  /ip hotspot profile add \\
-    name=default-hs \\
-    hotspot-address=192.168.88.1 \\
-    dns-name=wifi.local \\
-    login-by=http-chap,http-pap \\
-    html-directory=($storage . "/hotspot")
-} on-error={ :put "  WARN: hotspot profile add failed" }
+:do { /ip hotspot profile add name=default-hs hotspot-address=192.168.88.1 dns-name=wifi.local login-by=http-chap,http-pap html-directory=($storage . "/hotspot") } on-error={ :put "  WARN: hotspot profile add failed" }
 
 # Hotspot service
 :do { /ip hotspot remove [find interface="hotspot-bridge"] } on-error={}
-:do {
-  /ip hotspot add \\
-    name=hotspot1 \\
-    interface="hotspot-bridge" \\
-    profile=default-hs \\
-    address-pool=hspool \\
-    idle-timeout=none
-} on-error={ :put "  WARN: hotspot service add failed" }
+:do { /ip hotspot add name=hotspot1 interface="hotspot-bridge" profile=default-hs address-pool=hspool idle-timeout=none } on-error={ :put "  WARN: hotspot service add failed" }
 
 :put "  [hotspot] Hotspot service started on hotspot-bridge (192.168.88.1)  OK"
 `;
@@ -1390,34 +1380,20 @@ const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
 
 :put "  [pppoe] Setting up PPPoE server..."
 
-# PPP profile (shared between PPPoE and future L2TP use)
-:do { /ppp profile remove [find name=isp-profile] } on-error={}
-:do {
-  /ppp profile add \\
-    name=isp-profile \\
-    local-address=192.168.99.1 \\
-    remote-address=pppoe-pool \\
-    dns-server=8.8.8.8,8.8.4.4 \\
-    use-compression=no \\
-    use-encryption=yes
-} on-error={ :put "  WARN: PPP profile add failed" }
-
 # PPPoE IP pool
 :do { /ip pool remove [find name=pppoe-pool] } on-error={}
 :do { /ip pool add name=pppoe-pool ranges=192.168.99.2-192.168.99.254 } on-error={}
 
-# PPPoE server on ether1 (WAN interface)
-# The specific interface will be overridden by the per-router script.
+# PPP profile (shared between PPPoE and future L2TP use)
+:do { /ppp profile remove [find name=isp-profile] } on-error={}
+:do { /ppp profile add name=isp-profile local-address=192.168.99.1 remote-address=pppoe-pool dns-server=8.8.8.8,8.8.4.4 use-compression=no use-encryption=yes } on-error={ :put "  WARN: PPP profile add failed" }
+
+# PPPoE server on the LAN hotspot bridge.
+# PPPoE subscribers connect through the same bridge created by hotspotsetup.rsc;
+# binding this server to ether1 would expose it on the WAN side instead.
 :do { /interface pppoe-server server remove [find service-name=isp-pppoe] } on-error={}
-:do {
-  /interface pppoe-server server add \\
-    service-name=isp-pppoe \\
-    interface=ether1 \\
-    default-profile=isp-profile \\
-    authentication=pap,chap,mschap1,mschap2 \\
-    max-sessions=0 \\
-    disabled=no
-} on-error={ :put "  WARN: PPPoE server add failed" }
+:do { /interface pppoe-server server add service-name=isp-pppoe interface=hotspot-bridge default-profile=isp-profile disabled=no } on-error={ :put "  WARN: PPPoE server add failed" }
+:do { /interface pppoe-server server set [find service-name=isp-pppoe] authentication=pap,chap,mschap1,mschap2 max-sessions=0 } on-error={ :put "  WARN: PPPoE server options could not be applied" }
 
 :put "  [pppoe] PPPoE server configured  OK"
 `;
@@ -1430,35 +1406,17 @@ const USERS_RSC = `# users.rsc – Default hotspot user and group setup
 :put "  [users] Configuring default hotspot users..."
 
 # Default profile tweaks
-:do {
-  /ip hotspot user profile set [find name=default] \\
-    shared-users=1 \\
-    keepalive-timeout=2m \\
-    idle-timeout=none
-} on-error={}
+:do { /ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none } on-error={}
 
 # Remove stale defaults first
 :do { /ip hotspot user remove [find name=admin] } on-error={}
 :do { /ip hotspot user remove [find name=trial] } on-error={}
 
 # Admin bypass user (MAC or password – per-router script may adjust)
-:do {
-  /ip hotspot user add \\
-    name=admin \\
-    password=admin \\
-    profile=default \\
-    comment="ISP admin bypass"
-} on-error={ :put "  WARN: admin user add failed" }
+:do { /ip hotspot user add name=admin password=admin profile=default comment="ISP admin bypass" } on-error={ :put "  WARN: admin user add failed" }
 
 # 1-hour trial guest
-:do {
-  /ip hotspot user add \\
-    name=trial \\
-    password=trial123 \\
-    profile=default \\
-    limit-uptime=1h \\
-    comment="Trial guest"
-} on-error={ :put "  WARN: trial user add failed" }
+:do { /ip hotspot user add name=trial password=trial123 profile=default limit-uptime=1h comment="Trial guest" } on-error={ :put "  WARN: trial user add failed" }
 
 :put "  [users] Default users set up  OK"
 `;
@@ -1476,26 +1434,7 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 } on-error={}
 
 # place-before=0 puts the rule at the top; fall back to plain add if chain is empty
-:do {
-  /ip firewall filter add \\
-    chain=input \\
-    protocol=tcp \\
-    dst-port=8728 \\
-     src-address=10.8.5.0/24 \\
-    action=accept \\
-    comment="SafeNet - allow API sync" \\
-    place-before=0
-} on-error={
-  :do {
-    /ip firewall filter add \\
-      chain=input \\
-      protocol=tcp \\
-      dst-port=8728 \\
-       src-address=10.8.5.0/24 \\
-      action=accept \\
-      comment="SafeNet - allow API sync"
-  } on-error={ :put "  WARN: API sync firewall rule failed" }
-}
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="SafeNet - allow API sync" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="SafeNet - allow API sync" } on-error={ :put "  WARN: API sync firewall rule failed" } }
 
 # Enable the RouterOS API service
 :do { /ip service set api disabled=no } on-error={ :put "  WARN: could not enable API service" }
