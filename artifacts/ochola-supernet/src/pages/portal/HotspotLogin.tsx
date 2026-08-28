@@ -5,7 +5,6 @@ import {
   ArrowRight, CreditCard,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
-import { ADMIN_ID } from "@/lib/supabase";
 import { getCurrencySymbol } from "@/lib/utils";
 
 interface Plan {
@@ -15,6 +14,7 @@ interface Plan {
   description: string | null; plan_type?: string; type?: string;
 }
 type Tab = "plans" | "login" | "voucher";
+const DEFAULT_PORTAL_ADMIN_ID = 5;
 
 function formatValidity(plan: Plan): string {
   const days = plan.validity_days ?? plan.validity ?? 0;
@@ -77,8 +77,9 @@ export default function HotspotLogin() {
     try {
       const params = new URLSearchParams(window.location.search);
       const qId = params.get("adminId") ?? params.get("ispId");
-      return qId ? parseInt(qId) : ADMIN_ID;
-    } catch { return ADMIN_ID; }
+      const parsedId = qId ? parseInt(qId, 10) : NaN;
+      return Number.isFinite(parsedId) && parsedId > 0 ? parsedId : DEFAULT_PORTAL_ADMIN_ID;
+    } catch { return DEFAULT_PORTAL_ADMIN_ID; }
   })();
 
   const [plans, setPlans] = useState<Plan[]>([]);
