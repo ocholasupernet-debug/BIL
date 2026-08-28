@@ -7,6 +7,7 @@ import {
   Key, Eye, EyeOff, Download, RefreshCw, AlertTriangle,
 } from "lucide-react";
 import { Link } from "wouter";
+import { downloadVpnFile, vpnFetch } from "./api";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
@@ -62,7 +63,7 @@ export default function CreateVpn() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`${API}/api/vpn/users`, {
+      const r = await vpnFetch("/api/vpn/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -127,14 +128,12 @@ export default function CreateVpn() {
           </div>
 
           <div className="flex gap-3 justify-center flex-wrap">
-            <a
-              href={`${API}/api/vpn/users/${created.id}/ovpn`}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => void downloadVpnFile(`/api/vpn/users/${created.id}/ovpn`, `${created.username}.ovpn`)}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors"
             >
               <Download size={14} /> Download .ovpn
-            </a>
+            </button>
             <button
               onClick={() => { setCreated(null); setStep(1); setUsername(""); setPassword("ocholasupernet"); setNotes(""); setValidity("never"); setVpnType("main"); }}
               className="flex items-center gap-2 border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold px-5 py-2.5 rounded-lg text-sm transition-colors"

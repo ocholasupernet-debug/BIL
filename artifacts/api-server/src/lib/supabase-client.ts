@@ -195,3 +195,17 @@ export async function sbDelete<T>(
   if (!res.ok) return [];
   return res.json() as Promise<T[]>;
 }
+
+/** DELETE rows and surface persistence failures to provisioning callers. */
+export async function sbDeleteStrict<T>(
+  table: string,
+  filterQuery: string,
+): Promise<T[]> {
+  if (!supabaseConfigured) throw new Error("Supabase is not configured for secure storage.");
+  const res = await fetch(url(table, filterQuery), {
+    method: "DELETE",
+    headers: headers({ Prefer: "return=representation" }),
+  });
+  if (!res.ok) throw new Error(`Supabase rejected the VPN persistence change (HTTP ${res.status}).`);
+  return res.json() as Promise<T[]>;
+}

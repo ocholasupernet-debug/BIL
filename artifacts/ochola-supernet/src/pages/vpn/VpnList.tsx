@@ -8,6 +8,7 @@ import {
   User, AlertTriangle, Network,
 } from "lucide-react";
 import { Link } from "wouter";
+import { downloadVpnFile, vpnFetch } from "./api";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
@@ -55,7 +56,7 @@ export default function VpnList() {
   const { data: users = [], isLoading, refetch } = useQuery<VpnUser[]>({
     queryKey: ["vpn-users-list", adminId],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/vpn/users?adminId=${adminId}`);
+      const r = await vpnFetch(`/api/vpn/users?adminId=${adminId}`);
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -63,7 +64,7 @@ export default function VpnList() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const r = await fetch(`${API}/api/vpn/users`, {
+      const r = await vpnFetch("/api/vpn/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId, username: data.username, password: data.password, notes: data.notes, vpnType: data.vpnType }),
@@ -81,7 +82,7 @@ export default function VpnList() {
 
   const toggleMutation = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`${API}/api/vpn/users/${id}/toggle`, { method: "PATCH" });
+      const r = await vpnFetch(`/api/vpn/users/${id}/toggle`, { method: "PATCH" });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -93,7 +94,7 @@ export default function VpnList() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`${API}/api/vpn/users/${id}`, { method: "DELETE" });
+      const r = await vpnFetch(`/api/vpn/users/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await r.text());
     },
     onSuccess: () => {
@@ -103,7 +104,7 @@ export default function VpnList() {
   });
 
   function downloadOvpn(id: number, username: string) {
-    window.open(`${API}/api/vpn/users/${id}/ovpn`, "_blank");
+    void downloadVpnFile(`/api/vpn/users/${id}/ovpn`, `${username}.ovpn`);
   }
 
   const filtered = users.filter(v => {

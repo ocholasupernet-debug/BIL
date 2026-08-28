@@ -6,6 +6,7 @@ import {
   MonitorPlay, Wifi, Send, Users, ArrowRight,
   RefreshCw, Server, AlertTriangle, Globe,
 } from "lucide-react";
+import { vpnFetch } from "./api";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
@@ -68,7 +69,7 @@ export default function VpnDashboard() {
   const { data: users = [], isLoading: usersLoading } = useQuery<VpnUser[]>({
     queryKey: ["vpn-users-dash", adminId],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/vpn/users?adminId=${adminId}`);
+      const r = await vpnFetch(`/api/vpn/users?adminId=${adminId}`);
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -77,7 +78,7 @@ export default function VpnDashboard() {
   const { data: ipMap, isLoading: ipLoading } = useQuery<IpMapResult>({
     queryKey: ["vpn-ip-map"],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/vpn/ip-map`);
+      const r = await vpnFetch("/api/vpn/ip-map");
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -87,7 +88,7 @@ export default function VpnDashboard() {
   const { data: vpnStatus } = useQuery<{ ca_cert_available: boolean; server_port: number; proto: string }>({
     queryKey: ["vpn-status"],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/vpn/status`);
+      const r = await vpnFetch("/api/vpn/status");
       return r.json();
     },
   });

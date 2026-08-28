@@ -6,6 +6,7 @@ import {
   RefreshCw, Circle, AlertTriangle, Plus, Trash2, Download,
   User, Lock, FileText, ShieldCheck, ChevronDown, ChevronUp,
 } from "lucide-react";
+import { downloadVpnFile, vpnFetch } from "./api";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
@@ -136,7 +137,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
   const { data: users = [], isLoading, refetch } = useQuery<VpnUser[]>({
     queryKey: ["vpn-users", adminId],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/vpn/users?adminId=${adminId}`);
+      const r = await vpnFetch(`/api/vpn/users?adminId=${adminId}`);
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
@@ -144,7 +145,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const r = await fetch(`${API}/api/vpn/users`, {
+      const r = await vpnFetch("/api/vpn/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId, ...data }),
@@ -162,7 +163,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`${API}/api/vpn/users/${id}`, { method: "DELETE" });
+      const r = await vpnFetch(`/api/vpn/users/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error(await r.text());
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["vpn-users"] }),
@@ -174,7 +175,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
     for (const r of routers) {
       const username = slugify(r.name);
       try {
-        await fetch(`${API}/api/vpn/users`, {
+        await vpnFetch("/api/vpn/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ adminId, username, password: DEFAULT_PASSWORD, notes: `Auto — ${r.name}` }),
@@ -186,7 +187,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
   }
 
   function downloadOvpn(user: VpnUser) {
-    window.open(`${API}/api/vpn/users/${user.id}/ovpn`, "_blank");
+    void downloadVpnFile(`/api/vpn/users/${user.id}/ovpn`, `${user.username}.ovpn`);
   }
 
   function pickRouter(name: string) {
@@ -361,7 +362,7 @@ export default function RemoteAccess() {
   const { data: routers = [], isLoading, refetch } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_remote", adminId],
     queryFn: async () => {
-      const r = await fetch(`${API}/api/routers?adminId=${adminId}`);
+      const r = await vpnFetch(`/api/routers?adminId=${adminId}`);
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },

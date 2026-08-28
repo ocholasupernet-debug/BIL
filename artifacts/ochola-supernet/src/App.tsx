@@ -60,6 +60,7 @@ import VpnList from "./pages/vpn/VpnList";
 import VpnCreate from "./pages/vpn/CreateVpn";
 import VpnTutorials from "./pages/vpn/VideoTutorials";
 import VpnSettings from "./pages/vpn/Settings";
+import VpnManagement from "./pages/vpn/VpnManagement";
 import AdminSettings from "./pages/admin/AdminSettings";
 import AdminInvoices from "./pages/admin/Invoices";
 import AdminCustomerBalance from "./pages/admin/CustomerBalance";
@@ -146,7 +147,8 @@ function Router() {
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN — inside admin panel */}
-      <Route path="/admin/vpn" component={VpnDashboard} />
+      <Route path="/admin/vpn" component={VpnManagement} />
+      <Route path="/admin/vpn/overview" component={VpnDashboard} />
       <Route path="/admin/vpn/remote-access" component={VpnRemoteAccess} />
       <Route path="/admin/vpn/list" component={VpnList} />
       <Route path="/admin/vpn/create" component={VpnCreate} />

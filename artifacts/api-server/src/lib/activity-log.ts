@@ -1,6 +1,6 @@
 import { sbInsert } from "./supabase-client.js";
 
-export type ActivityType = "router" | "plan" | "customer" | "provision" | "system";
+export type ActivityType = "router" | "plan" | "customer" | "provision" | "vpn" | "system";
 
 export interface ActivityLogEntry {
   adminId: number;

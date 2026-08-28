@@ -4,8 +4,18 @@ import { execSync } from "child_process";
 import { sbSelect, sbUpdate } from "../lib/supabase-client";
 import { pingRouter } from "../lib/mikrotik";
 import { logger } from "../lib/logger";
+import { requireAdmin } from "../lib/api-auth.js";
+import { createHash } from "crypto";
 
 const router: IRouter = Router();
+
+/* Legacy OpenVPN endpoints remain available for existing screens, but every
+   administrator operation is now authenticated. Certificate bootstrap URLs
+   below intentionally keep their separate per-router secret protection. */
+router.use("/vpn/status", requireAdmin());
+router.use("/vpn/ip-map", requireAdmin());
+router.use("/vpn/auto-fix-ips", requireAdmin());
+router.use("/vpn/users", requireAdmin());
 
 /* Read env per-call so changes after startup are picked up */
 function sbUrl(): string {
@@ -426,7 +436,8 @@ const AUTH_SCRIPT_CONTENT = `#!/bin/bash
 CREDS_FILE="$1"
 USERNAME=$(sed -n '1p' "\${CREDS_FILE}")
 PASSWORD=$(sed -n '2p' "\${CREDS_FILE}")
-if grep -qF "\${USERNAME}:\${PASSWORD}" /etc/openvpn/users.db 2>/dev/null; then
+HASH=$(printf '%s' "\${USERNAME}:\${PASSWORD}" | sha256sum | awk '{print $1}')
+if grep -qF "\${USERNAME}:\${HASH}" /etc/openvpn/users.db 2>/dev/null; then
   exit 0
 fi
 exit 1
@@ -448,7 +459,8 @@ function syncUserToDb(username: string, password: string): void {
     ensureAuthInfra();
     const content = existsSync(USERS_DB) ? readFileSync(USERS_DB, "utf-8") : "";
     const lines = content.split("\n").filter(l => l.trim() && !l.startsWith(`${username}:`));
-    lines.push(`${username}:${password}`);
+    const hash = createHash("sha256").update(`${username}:${password}`, "utf8").digest("hex");
+    lines.push(`${username}:${hash}`);
     writeFileSync(USERS_DB, lines.join("\n") + "\n", { mode: 0o600 });
   } catch { /* dev env */ }
 }
@@ -585,7 +597,8 @@ function writeIppEntry(username: string, ip: string): void {
 
 /* ── GET /api/vpn/users ── list VPN users for an admin */
 router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
-  const adminId = req.query.adminId ?? "1";
+  const adminId = req.authUser?.uid ?? "";
+  if (!/^\d+$/.test(String(adminId))) { res.status(403).json({ error: "Tenant administrator required" }); return; }
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
@@ -603,8 +616,10 @@ router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
 
 /* ── POST /api/vpn/users ── create a VPN user */
 router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => {
-  const { adminId = 1, username, password, notes, expiresAt, vpnType = "main" } = req.body;
+  const adminId = req.authUser?.uid ?? "";
+  const { username, password, notes, expiresAt, vpnType = "main" } = req.body;
   if (!username || !password) { res.status(400).json({ error: "username and password required" }); return; }
+  if (!/^\d+$/.test(String(adminId))) { res.status(403).json({ error: "Tenant administrator required" }); return; }
 
   const type: "main" | "proxy" = vpnType === "proxy" ? "proxy" : "main";
   const url = sbUrl(); const key = sbKey();
@@ -620,7 +635,9 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
       body: JSON.stringify({
         admin_id:    Number(adminId),
         username:    username.trim(),
-        password:    password.trim(),
+         /* Legacy users are synchronized to a salted-by-username SHA-256
+            verifier on disk; do not duplicate the plaintext in Supabase. */
+         password:    null,
         notes:       notes?.trim() || null,
         is_active:   true,
         expires_at:  expiresAt || null,
@@ -638,7 +655,7 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
     if (type === "proxy") {
       try {
         const routersR = await fetch(
-          `${url}/rest/v1/isp_routers?admin_id=eq.${adminId}&select=id,name`,
+         `${url}/rest/v1/isp_routers?admin_id=eq.${adminId}&select=id,name`,
           { headers: { apikey: key, Authorization: `Bearer ${key}` } }
         );
         if (routersR.ok) {
@@ -672,18 +689,19 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
 /* ── PATCH /api/vpn/users/:id/toggle ── flip is_active */
 router.patch("/vpn/users/:id/toggle", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  const adminId = req.authUser?.uid ?? "";
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
-    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=is_active`, {
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}&select=is_active`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     const rows = await gr.json() as { is_active: boolean }[];
     if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
 
     const newState = !rows[0].is_active;
-    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}`, {
       method: "PATCH",
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
       body: JSON.stringify({ is_active: newState }),
@@ -698,18 +716,19 @@ router.patch("/vpn/users/:id/toggle", async (req: Request, res: Response): Promi
 /* ── POST /api/vpn/users/:id/regenerate ── new password */
 router.post("/vpn/users/:id/regenerate", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  const adminId = req.authUser?.uid ?? "";
   const newPassword: string = req.body?.password ?? Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
-    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}&select=username`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     const rows = await gr.json() as { username: string }[];
     if (!rows.length) { res.status(404).json({ error: "User not found" }); return; }
 
-    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+    const ur = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}`, {
       method: "PATCH",
       headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=representation" },
       body: JSON.stringify({ password: newPassword }),
@@ -717,7 +736,7 @@ router.post("/vpn/users/:id/regenerate", async (req: Request, res: Response): Pr
     if (!ur.ok) throw new Error(await ur.text());
 
     syncUserToDb(rows[0].username, newPassword);
-    res.json({ ok: true, password: newPassword });
+    res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -726,18 +745,19 @@ router.post("/vpn/users/:id/regenerate", async (req: Request, res: Response): Pr
 /* ── DELETE /api/vpn/users/:id ── delete a VPN user */
 router.delete("/vpn/users/:id", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  const adminId = req.authUser?.uid ?? "";
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
     /* Fetch username first so we can remove from users.db */
-    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username`, {
+    const gr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}&select=username`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     const rows = await gr.json() as { username: string }[];
     if (rows.length) removeUserFromDb(rows[0].username);
 
-    const dr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}`, {
+    const dr = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}`, {
       method: "DELETE",
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
@@ -751,11 +771,12 @@ router.delete("/vpn/users/:id", async (req: Request, res: Response): Promise<voi
 /* ── GET /api/vpn/users/:id/ovpn ── download .ovpn config */
 router.get("/vpn/users/:id/ovpn", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
+  const adminId = req.authUser?.uid ?? "";
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 
   try {
-    const r = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&select=username,vpn_type`, {
+    const r = await fetch(`${url}/rest/v1/isp_vpn_users?id=eq.${id}&admin_id=eq.${adminId}&select=username,vpn_type`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     const rows = await r.json() as { username: string; vpn_type: string | null }[];
