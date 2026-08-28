@@ -23,18 +23,14 @@ function useTicker(interval = 10_000) {
 
 /* ── helpers ── */
 async function fetchRouters(): Promise<DbRouter[]> {
-  /* A router only counts as "added" once it is fully configured, meaning:
-       1. Bridge ports have been assigned (status promoted out of "setup")
-       2. The router has reported back via heartbeat at least once
-       3. Its current status is one of the two "real" states: online | connected
-     Anything else — auto-created stubs, half-configured devices, unknown
-     statuses — is hidden completely. No pending state, no placeholder row. */
+  /* Show every router saved for this administrator, including routers that
+     are still being configured or are currently offline. Their status and
+     last-seen values remain visible in the table so an admin can recover,
+     edit, or remove any router they have added. */
   const { data, error } = await supabase
     .from("isp_routers")
     .select("*")
     .eq("admin_id", ADMIN_ID)
-    .in("status", ["online", "connected"])
-    .not("last_seen", "is", null)
     .order("id", { ascending: false });
   if (error) throw error;
   return data ?? [];
