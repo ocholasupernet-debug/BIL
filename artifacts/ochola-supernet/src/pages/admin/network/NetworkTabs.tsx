@@ -1,7 +1,7 @@
 import React from "react";
 import { Link } from "wouter";
 import {
-  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw,
+  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files,
 } from "lucide-react";
 
 const TABS = [
@@ -14,6 +14,7 @@ const TABS = [
   { id: "queues",            label: "Queues",       href: "/admin/network/queues",            icon: Activity  },
   { id: "ip-pools",          label: "IP Pools",     href: "/admin/network/ip-pools",          icon: Database  },
   { id: "router-api-config", label: "API Config",   href: "/admin/network/router-api-config", icon: Settings2 },
+  { id: "files",              label: "Files",        href: "/admin/network/files",              icon: Files    },
 ];
 
 export function NetworkTabs({ active }: { active: string }) {

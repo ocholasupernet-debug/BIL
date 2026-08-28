@@ -405,6 +405,47 @@ export async function pingRouter(creds: RouterCredentials): Promise<RouterPingRe
   });
 }
 
+/* ═══ Router files ══════════════════════════════════════════════════════════
+ * Lists RouterOS files without reading their contents. This is used by the
+ * admin Files page to verify that hotspot assets and imported .rsc scripts
+ * have reached the selected router.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+export interface RouterFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  creationTime: string;
+}
+
+export interface RouterFilesResult {
+  files: RouterFile[];
+  connectedHost: string;
+}
+
+export async function fetchRouterFiles(creds: RouterCredentials): Promise<RouterFilesResult> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size,creation-time",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+
+    const files = (Array.isArray(rows) ? rows : []).map((row) => ({
+      id: row[".id"] ?? row.name ?? "",
+      name: row.name ?? "",
+      type: row.type ?? "file",
+      size: parseBytes(row.size),
+      creationTime: row["creation-time"] ?? "",
+    })).filter((file) => file.name.length > 0);
+
+    return { files, connectedHost };
+  });
+}
+
 /* ─── Data types ─────────────────────────────────────────────────────────── */
 
 export interface ActiveHotspotUser {

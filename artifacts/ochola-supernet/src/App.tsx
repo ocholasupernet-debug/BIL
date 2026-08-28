@@ -22,6 +22,7 @@ import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
 import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
+import NetworkFiles from "./pages/admin/network/Files";
 import Webhooks from "./pages/admin/Webhooks";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
@@ -122,6 +123,7 @@ function Router() {
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
       <Route path="/admin/network/ppp"            component={NetworkPPP}           />
       <Route path="/admin/network/router-api-config" component={RouterAPIConfig}  />
+      <Route path="/admin/network/files"          component={NetworkFiles}       />
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />

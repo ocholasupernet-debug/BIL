@@ -21,6 +21,7 @@ import {
   generateVpnSetupScript,
   generateOvpnClientConfig,
   generateRouterAsClientScript,
+  fetchRouterFiles,
   getEnvCredentials,
   isPrivateIp,
   type RouterCredentials,
@@ -94,11 +95,11 @@ function isLanOnlyIp(ip: string): boolean {
 }
 
 /* ─── Load credentials by Supabase isp_routers.id ───────────────────────── */
-async function getRouterCreds(id: number): Promise<{ creds: RouterCredentials; row: SbRouter } | null> {
+async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: RouterCredentials; row: SbRouter } | null> {
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !row.bridge_ip?.trim())) return null;
@@ -252,6 +253,39 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
     ...result,
     warnings: [...warnings, ...result.warnings],
   });
+});
+
+/* ─── GET /api/router/:id/files ─────────────────────────────────────────── */
+/**
+ * Returns the file metadata currently stored on a selected MikroTik router.
+ * The admin id is required so a router id cannot be used to inspect another
+ * administrator's router.
+ */
+router.get("/router/:id/files", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId query param is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  try {
+    const result = await fetchRouterFiles(found.creds);
+    res.json({
+      routerId: id,
+      routerName: found.row.name,
+      files: result.files,
+      count: result.files.length,
+      connectedHost: result.connectedHost,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
 });
 
 /* ─── GET /api/router/:id/probe ─────────────────────────────────────────── */
