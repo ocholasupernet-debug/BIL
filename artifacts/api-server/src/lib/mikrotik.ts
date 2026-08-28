@@ -1998,6 +1998,8 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 # ═══════════════════════════════════════════════════════════════
 
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
+# Make this safe to re-import during recovery or after a failed migration.
+:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 /interface ovpn-client
 add name=ovpn-to-vps \\
     connect-to=${vpsPublicIp} \\
@@ -2011,15 +2013,25 @@ add name=ovpn-to-vps \\
     disabled=no \\
     comment="${tag} — VPS tunnel"
 
+:delay 5s
+:put "${tag}: waiting for OVPN client to establish..."
+:if ([:len [/interface ovpn-client find where name="ovpn-to-vps" and running=yes]] = 0) do={
+    :put "${tag}: OVPN client is not running yet; check /log and retry the API check."
+} else={
+    :put "${tag}: OVPN client is running."
+}
+
 # ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
 # The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
 /ip firewall filter
+remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input \\
     src-address=${tunnelVpsIp}/32 \\
     protocol=tcp dst-port=8728,8729 \\
     comment="${tag}-api-from-vps-tunnel"
 
 # ── Step 3: Allow ping from VPS (connectivity check) ─────────────────────────
+remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input \\
     src-address=${tunnelVpsIp}/32 \\
     protocol=icmp \\

@@ -4,6 +4,7 @@ import path from "path";
 import { ensureClientCert } from "./vpn-route.js";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
+import { generateRouterAsClientScript } from "../lib/mikrotik.js";
 
 const router: IRouter = Router();
 
@@ -222,6 +223,13 @@ function ros(cmd: string): string {
   return cmd.replace(/\s{2,}/g, " ").trim();
 }
 
+function rosString(value: string): string {
+  return value
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
 /* ── Safe ros: wraps a command in on-error so one failure can't abort
    the whole script. Prints a WARN line instead so the user sees it. ── */
 function safeRos(cmd: string, label: string): string {
@@ -234,13 +242,14 @@ function safeRos(cmd: string, label: string): string {
    Level 2: without verify-server-certificate  (older ROS 6 that lacks the param)
    RouterOS cipher enum uses "aes256" — never "aes256-cbc" (that's OpenSSL format).
    Each level only runs if the one above failed. ── */
-function ovpnAdd(slug: string, baseFields: string): string {
+function ovpnAdd(slug: string, baseFields: string, password: string): string {
+  const safePassword = rosString(password);
   /* Attempt 1: cert + password, verify-server-certificate=no (ROS 7) */
-  const a1 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet" certificate=${slug} verify-server-certificate=no`);
+  const a1 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="${safePassword}" certificate=${slug} verify-server-certificate=no`);
   /* Attempt 2: cert + password, no verify-server-certificate (ROS 6) */
-  const a2 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet" certificate=${slug}`);
+  const a2 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="${safePassword}" certificate=${slug}`);
   /* Attempt 3: password-only fallback — works even if cert import failed */
-  const a3 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="ocholasupernet"`);
+  const a3 = ros(`/interface ovpn-client add ${baseFields} user="${slug}" password="${safePassword}"`);
   return [
     `:do { ${a1} } on-error={`,
     ` :do { ${a2} } on-error={`,
@@ -332,6 +341,26 @@ function resolveOrigin(host: string): string {
   return `${proto}://${host}`;
 }
 
+function routerVpnEndpointHost(origin: string): string {
+  const configured = (process.env.VPS_HOST || "").trim();
+  if (configured) {
+    return configured
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0]
+      .replace(/:\d+$/, "")
+      .trim();
+  }
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function defaultRouterTunnelIp(routerId: number): string {
+  return `10.8.0.${2 + ((routerId - 1) % 240)}`;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    mainhotspot.rsc — dynamic entry-point orchestrator.
    Sub-script URLs use the requesting ISP's own subdomain so each
@@ -345,6 +374,7 @@ function buildMainhotspotRsc(
   registrationUrl: string = "",
   heartbeatUrl: string = "",
   installerUrl: string = "",
+  routerVpnUrl: string = "",
 ): string {
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
@@ -364,6 +394,14 @@ function buildMainhotspotRsc(
   const safeRegistrationUrl = rscEscape(registrationUrl);
   const safeHeartbeatUrl = rscEscape(heartbeatUrl);
   const safeInstallerUrl = rscEscape(installerUrl);
+  const safeRouterVpnUrl = rscEscape(routerVpnUrl);
+  const vpnScriptSelection = routerVpnUrl
+    ? `:set vpnUrl "${safeRouterVpnUrl}"`
+    : `:if ($majorVersion = 7) do={
+    :set vpnUrl "${scriptsBase}/vpn7.rsc"
+} else={
+    :set vpnUrl "${scriptsBase}/vpn6.rsc"
+}`;
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
@@ -409,11 +447,7 @@ ${pgDef}
 
 # --- VPN configuration --------------------------------------------------------
 :local vpnUrl
-:if ($majorVersion = 7) do={
-    :set vpnUrl "${scriptsBase}/vpn7.rsc"
-} else={
-    :set vpnUrl "${scriptsBase}/vpn6.rsc"
-}
+${vpnScriptSelection}
 :do {
     $pg 1 "vpn" "downloading" ""
     :put "[1/7] Downloading VPN configuration..."
@@ -662,6 +696,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let registrationUrl = "";
   let heartbeatUrl = "";
   let installerUrl = "";
+  let routerVpnUrl = "";
 
   interface InstallRouter { admin_id: number; name: string; }
   interface InstallAdmin { id: number; name: string; }
@@ -679,6 +714,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         registrationUrl = `${origin}/api/isp/router/register/${token}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${token}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
+        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
@@ -712,7 +748,66 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       registrationUrl,
       heartbeatUrl,
       installerUrl,
+      routerVpnUrl,
     ));
+});
+
+/* ── Per-router VPN bootstrap used by mainhotspot.rsc ───────────────────────
+   The read-only migration collector must never change router state. The
+   install script therefore fetches this authenticated, router-specific
+   bootstrap first. Its token is already bound to the router and is used as
+   the unique VPN password, so no placeholder credential is embedded. */
+router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
+  const ridRaw = String(req.query.rid ?? "").trim();
+  const token = String(req.query.token ?? "").trim();
+  const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
+
+  if (!routerId || !/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
+    res.status(401).type("text/plain").send("# Invalid or expired router VPN bootstrap session.");
+    return;
+  }
+
+  try {
+    interface RouterVpnIdentity {
+      id: number;
+      name: string;
+    }
+    const rows = await sbGet<RouterVpnIdentity>(
+      `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,name&limit=1`,
+    );
+    if (!rows[0]) {
+      res.status(401).type("text/plain").send("# Router VPN bootstrap is not authorized.");
+      return;
+    }
+
+    const host = (req.headers.host ?? "") as string;
+    const vpsHost = routerVpnEndpointHost(resolveOrigin(host));
+    if (!vpsHost) {
+      res.status(503).type("text/plain").send("# VPS OpenVPN endpoint is not configured. Set VPS_HOST.");
+      return;
+    }
+
+    const vpnPort = Number.parseInt(String(process.env.VPS_OPENVPN_PORT ?? "1194"), 10) || 1194;
+    const tunnelRouterIp = defaultRouterTunnelIp(routerId);
+    const script = generateRouterAsClientScript({
+      vpsPublicIp: vpsHost,
+      vpnPort,
+      vpnUsername: `router-${routerId}`,
+      vpnPassword: token,
+      tunnelRouterIp,
+      tunnelVpsIp: "10.8.0.1",
+      routerId,
+    });
+
+    res
+      .set("Content-Type", "text/plain; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="router-vpn-${routerId}.rsc"`)
+      .set("Cache-Control", "no-store")
+      .send(script);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).type("text/plain").send(`# Error generating router VPN bootstrap: ${message}`);
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1097,66 +1192,25 @@ router.get("/scripts/normalpppoe.rsc", (req, res): void => {
 
 /* ── VPN setup – RouterOS 7 ── */
 function buildVpn7Rsc(origin: string): string {
-  const vpnHost = origin.replace(/^https?:\/\//, "");
+  void origin;
   return `# vpn7.rsc – OpenVPN client setup for RouterOS 7
-# Called by mainhotspot.rsc when majorVersion = 7
-# The per-router .rsc (served from the ISP subdomain) re-imports
-# certificates and recreates the tunnel with router-specific names.
-# This script installs the interface template so the tunnel can
-# be brought up immediately with password-only fallback auth.
-
-:put "  [vpn7] Configuring OpenVPN client (ROS 7)..."
-
-# Remove any existing VPN client with this name
-:do { /interface ovpn-client remove [find name=ocholasupernet] } on-error={}
-
-# Add the tunnel – cert auth will be layered on by the per-router script.
-# cipher=aes256 / auth=sha1 matches the server push directives.
-:do {
-  /interface ovpn-client add \\
-    name=ocholasupernet \\
-    connect-to="${vpnHost}" \\
-    port=1194 \\
-    mode=ip \\
-    user=router \\
-    password=ocholasupernet \\
-    cipher=aes256 \\
-    auth=sha1 \\
-    add-default-route=no \\
-    verify-server-certificate=no \\
-    disabled=no
-} on-error={ :put "  WARN: vpn7 tunnel add failed – will retry in per-router script" }
-
-:put "  [vpn7] Done."
+# Direct downloads are intentionally not configured with shared credentials.
+# mainhotspot.rsc must be downloaded with rid and token so it can fetch the
+# authenticated, router-specific /scripts/router-vpn.rsc bootstrap.
+:put "  [vpn7] Router identity is required before VPN setup."
+:error "Download mainhotspot.rsc with the router's rid and token."
 `;
 }
 
 /* ── VPN setup – RouterOS 6 ── */
 function buildVpn6Rsc(origin: string): string {
-  const vpnHost = origin.replace(/^https?:\/\//, "");
+  void origin;
   return `# vpn6.rsc – OpenVPN client setup for RouterOS 6
-# Called by mainhotspot.rsc when majorVersion = 6
-# Syntax differences from ROS 7: no verify-server-certificate param.
-
-:put "  [vpn6] Configuring OpenVPN client (ROS 6)..."
-
-:do { /interface ovpn-client remove [find name=ocholasupernet] } on-error={}
-
-:do {
-  /interface ovpn-client add \\
-    name=ocholasupernet \\
-    connect-to="${vpnHost}" \\
-    port=1194 \\
-    mode=ip \\
-    user=router \\
-    password=ocholasupernet \\
-    cipher=aes256 \\
-    auth=sha1 \\
-    add-default-route=no \\
-    disabled=no
-} on-error={ :put "  WARN: vpn6 tunnel add failed – will retry in per-router script" }
-
-:put "  [vpn6] Done."
+# Direct downloads are intentionally not configured with shared credentials.
+# mainhotspot.rsc must be downloaded with rid and token so it can fetch the
+# authenticated, router-specific /scripts/router-vpn.rsc bootstrap.
+:put "  [vpn6] Router identity is required before VPN setup."
+:error "Download mainhotspot.rsc with the router's rid and token."
 `;
 }
 
@@ -1711,7 +1765,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     let routerSecret = router_row.router_secret;
     /* Treat missing, too-short, or obvious placeholder secrets as invalid
        and auto-generate a proper 40-char alphanumeric token. */
-    const WEAK = !routerSecret || routerSecret.length < 20 || /^(admin|password|secret|test|default)$/i.test(routerSecret);
+    const WEAK = !routerSecret
+      || routerSecret.length < 20
+      || !/^[A-Za-z0-9_-]+$/.test(routerSecret)
+      || /^(admin|password|secret|test|default)$/i.test(routerSecret);
     if (WEAK) {
       const raw = `${adminId}:${router_row.id}:ocholanet:${Date.now()}`;
       routerSecret = Buffer.from(raw).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
@@ -1937,16 +1994,16 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-      ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`),
+       ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
       `# credentials used for the OVPN client, so the admin can WinBox / SSH /`,
-      `# webfig into the router using:  user="${routerSlug}"  password="ocholasupernet"`,
+       `# webfig into the router using the router-bound install credential.`,
       `# Idempotent: existing user with this name is removed first so the password`,
       `# is always refreshed to match what is stored in the backend / VPS auth file.`,
       safeRm(`/user remove [find name="${routerSlug}"]`),
-      safeRos(`/user add name="${routerSlug}" password="ocholasupernet" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
+       safeRos(`/user add name="${routerSlug}" password="${routerSecret}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
       `:put "      VPN tunnel 'ocholasupernet' added  OK"`,
       ``,
       `# === Default User Profile ===`,

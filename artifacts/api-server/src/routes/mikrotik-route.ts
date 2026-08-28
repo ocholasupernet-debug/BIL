@@ -81,6 +81,25 @@ function requestOrigin(req: import("express").Request): string {
   return `${protocol}://${publicHost}`;
 }
 
+function vpnEndpointHost(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .replace(/:\d+$/, "")
+    .trim();
+}
+
+function defaultTunnelRouterIp(routerId: number): string {
+  /* Keep each router's default address distinct inside the VPS tunnel pool. */
+  return `10.8.0.${2 + ((routerId - 1) % 240)}`;
+}
+
+function managedVpnPassword(row: SbRouter): string {
+  const value = String(row.router_secret ?? row.token ?? "").trim();
+  return /^[A-Za-z0-9_-]{20,128}$/.test(value) ? value : "";
+}
+
 function contentTypeForFile(fileName: string): string {
   const extension = fileName.split(".").pop()?.toLowerCase();
   const contentTypes: Record<string, string> = {
@@ -130,6 +149,7 @@ interface SbRouter {
   bridge_ip: string | null;
   router_username: string;
   router_secret: string | null;
+  token?: string | null;
   status: string;
 }
 
@@ -185,7 +205,7 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,router_username,router_secret,token,status&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !row.bridge_ip?.trim())) return null;
@@ -600,11 +620,11 @@ router.get("/probe", async (req, res): Promise<void> => {
  * Import on the router: /import router-as-client<id>.rsc
  *
  * Query params:
- *   vpsIp           — VPS public IP (required — the OVPN server endpoint)
+ *   vpsIp           — VPS public IP (defaults to VPS_HOST)
  *   vpnPort         — OVPN server port (default 1194)
- *   vpnUsername     — VPN user (default "admin")
- *   vpnPassword     — VPN password (default "ochola")
- *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel (default "10.8.0.2")
+ *   vpnUsername     — VPN user (default "router-<id>")
+ *   vpnPassword     — VPN password (defaults to the router's install secret)
+ *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.0.1")
  */
 router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
@@ -614,23 +634,34 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
-  const vpsIp = String(req.query.vpsIp ?? "").trim();
+  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
   if (!vpsIp) {
     res.status(400).json({
-      error:   "vpsIp is required",
-      detail:  "Pass the public IP of your VPS (the OpenVPN server), e.g. ?vpsIp=102.212.246.73",
+      error:   "VPS OpenVPN endpoint is not configured",
+      detail:  "Set VPS_HOST or pass the public IP of the VPS with ?vpsIp=102.212.246.73",
       example: `/api/router/${id}/router-as-client?vpsIp=102.212.246.73`,
     });
     return;
   }
 
+  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
+  const vpnPassword = managedVpnPassword(found.row);
+  if (!vpnPassword) {
+    res.status(409).json({
+      error: "Router install secret is not available",
+      detail: "Run the router registration/setup flow first so the VPN client can use a unique credential.",
+    });
+    return;
+  }
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
+
   const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
     vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
-    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
-    vpnPassword:    String(req.query.vpnPassword   ?? "ochola"),
-    tunnelRouterIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+    vpnUsername,
+    vpnPassword,
+    tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? "10.8.0.1"),
   });
 
@@ -654,11 +685,11 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
  * Run on VPS: sudo bash vps-ovpn-setup<id>.sh
  *
  * Query params:
- *   vpsIp           — VPS public IP (informational, default "YOUR_VPS_IP")
+ *   vpsIp           — VPS public IP (default VPS_HOST)
  *   vpnPort         — OVPN port (default 1194)
- *   vpnUsername     — router VPN user (default "admin")
- *   vpnPassword     — router VPN password (default "ochola")
- *   tunnelRouterIp  — static IP to assign to router (default "10.8.0.2")
+ *   vpnUsername     — router VPN user (default "router-<id>")
+ *   vpnPassword     — router VPN password (defaults to the router's install secret)
+ *   tunnelRouterIp  — static IP to assign to router
  */
 router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
@@ -667,16 +698,34 @@ router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
-  const vpsIp = String(req.query.vpsIp ?? "YOUR_VPS_IP").trim();
+  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  if (!vpsIp) {
+    res.status(400).json({
+      error: "VPS OpenVPN endpoint is not configured",
+      detail: "Set VPS_HOST or pass the public IP of the VPS with ?vpsIp=102.212.246.73",
+    });
+    return;
+  }
+
+  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
+  const vpnPassword = managedVpnPassword(found.row);
+  if (!vpnPassword) {
+    res.status(409).json({
+      error: "Router install secret is not available",
+      detail: "Run the router registration/setup flow first so the VPS and router scripts share a unique credential.",
+    });
+    return;
+  }
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateVpsOvpnSetupScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
     vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
-    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
-    vpnPassword:    String(req.query.vpnPassword   ?? "ochola"),
+    vpnUsername,
+    vpnPassword,
     tunnelBase:     String(req.query.tunnelBase     ?? "10.8.0"),
-    routerTunnelIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+    routerTunnelIp: tunnelRouterIp,
   });
 
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -699,13 +748,14 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
-  const vpsIp = String(req.query.vpsIp ?? "").trim();
+  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
   const info = describeVpnArchitecture({
-    vpsPublicIp:    vpsIp || "SET_vpsIp_QUERY_PARAM",
+    vpsPublicIp:    vpsIp || "SET_VPS_HOST_OR_QUERY_PARAM",
     routerId:       id,
     vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : 1194,
-    vpnUsername:    String(req.query.vpnUsername   ?? "admin"),
-    routerTunnelIp: String(req.query.tunnelRouterIp ?? "10.8.0.2"),
+    vpnUsername:    String(req.query.vpnUsername   ?? `router-${id}`),
+    routerTunnelIp: tunnelRouterIp,
   });
 
   res.json({
@@ -714,9 +764,9 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
     configuredHost: found.row.host,
     bridgeIp: found.row.bridge_ip,
     scripts: {
-      vpsSetup:       `/api/router/${id}/vps-ovpn-setup?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
-      routerAsClient: `/api/router/${id}/router-as-client?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
-      firewallScript: `/api/router/${id}/firewall-script?vpsIp=${vpsIp || "YOUR_VPS_IP"}`,
+      vpsSetup:       `/api/router/${id}/vps-ovpn-setup${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
+      routerAsClient: `/api/router/${id}/router-as-client${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
+      firewallScript: `/api/router/${id}/firewall-script${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
     },
     ...info,
   });
@@ -733,8 +783,8 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
  * Query params (all optional):
  *   vpsIp         — VPS IP to restrict OVPN access (recommended)
  *   vpnPort       — OVPN port on router (default 1194)
- *   vpnUsername   — VPN user to create (default "admin")
- *   vpnPassword   — VPN user password (default "ochola")
+ *   vpnUsername   — VPN user to create (default "router-<id>")
+ *   VPN credentials are derived from the router's stored install secret.
  *   tunnelNetwork — first 3 octets of VPN tunnel subnet (default "192.168.89")
  *   lanNetwork    — router LAN CIDR VPN clients can access (default "192.168.88.0/24")
  */
@@ -750,14 +800,23 @@ router.get("/router/:id/vpn-setup-script", async (req, res): Promise<void> => {
   const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
     ? row.host.trim()
     : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
+  const vpnPassword = managedVpnPassword(row);
+  if (!vpnPassword) {
+    res.status(409).json({
+      error: "Router install secret is not available",
+      detail: "Run the router registration/setup flow first or pass an explicit VPN credential.",
+    });
+    return;
+  }
 
   const script = generateVpnSetupScript({
     routerPublicIp,
     routerId:      id,
     vpsIp:         String(req.query.vpsIp       ?? "").trim()   || undefined,
     vpnPort:       req.query.vpnPort       ? parseInt(String(req.query.vpnPort),       10) : 1194,
-    vpnUsername:   String(req.query.vpnUsername  ?? "admin"),
-    vpnPassword:   String(req.query.vpnPassword  ?? "ochola"),
+    vpnUsername,
+    vpnPassword,
     tunnelNetwork: String(req.query.tunnelNetwork ?? "192.168.89"),
     lanNetwork:    String(req.query.lanNetwork    ?? "192.168.88.0/24"),
   });
@@ -780,8 +839,8 @@ router.get("/router/:id/vpn-setup-script", async (req, res): Promise<void> => {
  *
  * Query params (all optional):
  *   vpnPort       — OVPN port on router (default 1194)
- *   vpnUsername   — VPN user (default "admin")
- *   vpnPassword   — VPN user password (default "ochola")
+ *   vpnUsername   — VPN user (default "router-<id>")
+ *   VPN credentials are derived from the router's stored install secret.
  *   routeAll      — "true" to route ALL traffic through VPN (default: split)
  *   lanNetwork    — LAN to route through tunnel (default "192.168.88.0/24")
  */
@@ -796,12 +855,21 @@ router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
   const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
     ? row.host.trim()
     : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
+  const vpnPassword = managedVpnPassword(row);
+  if (!vpnPassword) {
+    res.status(409).json({
+      error: "Router install secret is not available",
+      detail: "Run the router registration/setup flow first or pass an explicit VPN credential.",
+    });
+    return;
+  }
 
   const config = generateOvpnClientConfig({
     routerPublicIp,
     vpnPort:        req.query.vpnPort     ? parseInt(String(req.query.vpnPort),     10) : 1194,
-    vpnUsername:    String(req.query.vpnUsername  ?? "admin"),
-    vpnPassword:    String(req.query.vpnPassword  ?? "ochola"),
+    vpnUsername,
+    vpnPassword,
     lanNetwork:     String(req.query.lanNetwork   ?? "192.168.88.0/24"),
     routeAll:       req.query.routeAll === "true",
   });
