@@ -130,7 +130,7 @@ export default function SelfInstall() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,name,host,status,last_seen,ros_version,model,router_secret,admin_id,ip_address,router_username,created_at,updated_at")
+        .select("id,name,host,status,last_seen,ros_version,model,router_secret,admin_id,ip_address,router_username,bridge_ip,vpn_ip,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
         .order("created_at", { ascending: true });
       return (data ?? []) as FullRouter[];
@@ -500,6 +500,13 @@ export default function SelfInstall() {
               ))}
             </div>
           </>
+        )}
+
+        {phase === "generated" && (
+          <div style={{ marginTop: "0.8rem", background: "rgba(20,184,166,0.1)", border: "1px solid rgba(20,184,166,0.28)", borderRadius: 8, padding: "0.65rem 0.8rem", display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.72rem", color: "#ccfbf1" }}>Permanent router VPN IP</span>
+            <code style={{ color: "#5eead4", fontWeight: 800, fontSize: "0.78rem" }}>{activeRouter?.vpn_ip || "Assigning when the profile is generated…"}</code>
+          </div>
         )}
 
         {/* Note */}

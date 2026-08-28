@@ -13,9 +13,9 @@ export interface VpsOvpnSetupOptions {
   vpnUsername?: string;
   /** Password for the VPN user (default "ochola") */
   vpnPassword?: string;
-  /** Tunnel IP pool base — first 3 octets (default "10.8.0") */
+  /** Tunnel IP pool base — first 3 octets (default "10.8.5") */
   tunnelBase?: string;
-  /** Static IP to assign to the router inside the tunnel (default "10.8.0.2") */
+  /** Static IP to assign to the router inside the tunnel (default "10.8.5.2") */
   routerTunnelIp?: string;
   /** Router ID (for labelling) */
   routerId?: number;
@@ -40,8 +40,8 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
     vpnPort       = 1194,
     vpnUsername   = "admin",
     vpnPassword   = "ochola",
-    tunnelBase    = "10.8.0",
-    routerTunnelIp = "10.8.0.2",
+    tunnelBase    = "10.8.5",
+    routerTunnelIp = "10.8.5.2",
     routerId,
   } = opts;
 
@@ -67,45 +67,81 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-OVPN_CONF="/etc/openvpn/server.conf"
+BASE_OVPN_CONF="/etc/openvpn/server.conf"
+OVPN_CONF="/etc/openvpn/server/ochola-router.conf"
 OVPN_DIR="/etc/openvpn"
-CCDDIR="/etc/openvpn/ccd"          # client-config-dir for static IPs
-AUTHFILE="$OVPN_DIR/passwd"         # username:password auth file
-AUTHSCRIPT="$OVPN_DIR/verify-pass.sh"
+CCDDIR="/etc/openvpn/server/ochola-router-ccd" # isolated router client IPs
+AUTHFILE="$OVPN_DIR/router-passwd"             # username:password auth file
+AUTHSCRIPT="$OVPN_DIR/verify-router-pass.sh"
 
 echo "──────────────────────────────────────────────────────────────"
 echo " OcholaSupernet: Configuring OVPN server for MikroTik client"
 echo "──────────────────────────────────────────────────────────────"
 
-# ── 1. Detect the active server config ──────────────────────────────────────
-if [ ! -f "$OVPN_CONF" ]; then
+# ── 1. Detect the legacy server config without changing it ──────────────────
+if [ ! -f "$BASE_OVPN_CONF" ]; then
   # Try common alternative locations
   for f in /etc/openvpn/server/*.conf /etc/openvpn/*.conf; do
-    [ -f "$f" ] && OVPN_CONF="$f" && break
+    [ -f "$f" ] && [ "$f" != "$OVPN_CONF" ] && BASE_OVPN_CONF="$f" && break
   done
 fi
-echo "[1] Using config: $OVPN_CONF"
-cp "$OVPN_CONF" "\${OVPN_CONF}.bak.$(date +%s)"
-echo "    Backup saved: \${OVPN_CONF}.bak.*"
+if [ ! -f "$BASE_OVPN_CONF" ]; then
+  echo "ERROR: Could not find the existing OpenVPN server config."
+  exit 1
+fi
+mkdir -p "$(dirname "$OVPN_CONF")"
+echo "[1] Reading existing config: $BASE_OVPN_CONF"
+echo "    Legacy end-user VPN configuration will not be modified."
 
 # ── 2. Patch: ensure proto tcp ───────────────────────────────────────────────
-echo "[2] Ensuring proto tcp (MikroTik OVPN client requires TCP)..."
-sed -i 's/^proto udp.*/proto tcp/' "$OVPN_CONF"
-if ! grep -q "^proto tcp" "$OVPN_CONF"; then
-  echo "proto tcp" >> "$OVPN_CONF"
+echo "[2] Creating isolated router-management server on ${tunnelBase}.0:${vpnPort}..."
+conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
+CA_FILE="$(conf_value ca)"
+CERT_FILE="$(conf_value cert)"
+KEY_FILE="$(conf_value key)"
+DH_FILE="$(conf_value dh)"
+for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
+  value="$(eval "printf '%s' \"\${$f}\"")"
+  if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
+    eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
+  fi
+done
+if [ -z "$CA_FILE" ] || [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
+  echo "ERROR: The existing OpenVPN config does not expose reusable CA/cert/key paths."
+  exit 1
 fi
+{
+  echo "port ${vpnPort}"
+  echo "proto tcp-server"
+  echo "dev tun-router"
+  echo "server ${serverNet} 255.255.255.0"
+  echo "topology subnet"
+  echo "ca $CA_FILE"
+  echo "cert $CERT_FILE"
+  echo "key $KEY_FILE"
+  [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
+  echo "client-config-dir $CCDDIR"
+  echo "ifconfig-pool-persist /etc/openvpn/router-ipp.txt"
+  echo "keepalive 10 60"
+  echo "persist-key"
+  echo "persist-tun"
+  echo "script-security 3"
+  echo "auth-user-pass-verify $AUTHSCRIPT via-env"
+  echo "username-as-common-name"
+  echo "cipher AES-128-CBC"
+  echo "auth SHA1"
+  echo "status /var/log/openvpn/ochola-router-status.log"
+  echo "verb 3"
+} > "$OVPN_CONF"
+echo "    Dedicated config written: $OVPN_CONF"
 
 # ── 3. Patch: disable tls-auth / tls-crypt ───────────────────────────────────
 echo "[3] Disabling tls-auth / tls-crypt (not supported by MikroTik)..."
-sed -i 's/^tls-auth/;tls-auth/'   "$OVPN_CONF"
-sed -i 's/^tls-crypt/;tls-crypt/' "$OVPN_CONF"
+echo "    Dedicated config does not include tls-auth or tls-crypt."
 
 # ── 4. Patch: set cipher and auth compatible with MikroTik ──────────────────
 echo "[4] Setting cipher=AES-128-CBC auth=SHA1..."
-sed -i '/^cipher/d'  "$OVPN_CONF"
-sed -i '/^auth /d'   "$OVPN_CONF"
-echo "cipher AES-128-CBC" >> "$OVPN_CONF"
-echo "auth SHA1"          >> "$OVPN_CONF"
+echo "    Dedicated config uses cipher=AES-128-CBC auth=SHA1."
 
 # ── 5. Enable username/password authentication ───────────────────────────────
 echo "[5] Enabling username/password auth..."
@@ -114,20 +150,13 @@ echo "[5] Enabling username/password auth..."
 cat > "$AUTHSCRIPT" << 'AUTHEOF'
 #!/usr/bin/env bash
 # Simple username:password verifier for OpenVPN
-PASSFILE="/etc/openvpn/passwd"
-username="$1"
-password="$2"
+PASSFILE="/etc/openvpn/router-passwd"
+username="\${username:-\${1:-}}"
+password="\${password:-\${2:-}}"
 [ -f "$PASSFILE" ] || exit 1
 grep -qF "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
-
-# Add auth-user-pass-verify to server config if not already there
-if ! grep -q "auth-user-pass-verify" "$OVPN_CONF"; then
-  echo "auth-user-pass-verify $AUTHSCRIPT via-env" >> "$OVPN_CONF"
-  echo "script-security 2"                          >> "$OVPN_CONF"
-  echo "username-as-common-name"                    >> "$OVPN_CONF"
-fi
 
 # ── 6. Add the VPN user (${vpnUsername} / ${vpnPassword}) ──────────────────
 echo "[6] Adding VPN user '${vpnUsername}'..."
@@ -161,9 +190,9 @@ echo "    Static IP ${routerTunnelIp} assigned to '${vpnUsername}'"
 echo "[8] Opening firewall rules..."
 # Allow incoming OVPN connections
 iptables -I INPUT -p tcp --dport ${vpnPort} -j ACCEPT 2>/dev/null || true
-# Allow forwarding from tun0 to enable routing
-iptables -I FORWARD -i tun0 -j ACCEPT 2>/dev/null || true
-iptables -I FORWARD -o tun0 -j ACCEPT 2>/dev/null || true
+# Allow forwarding from the isolated router tunnel to enable API traffic
+iptables -I FORWARD -i tun-router -j ACCEPT 2>/dev/null || true
+iptables -I FORWARD -o tun-router -j ACCEPT 2>/dev/null || true
 
 # Persist iptables rules (Ubuntu/Debian)
 if command -v netfilter-persistent &>/dev/null; then
@@ -172,19 +201,18 @@ elif command -v iptables-save &>/dev/null; then
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
-# ── 9. Restart OpenVPN ───────────────────────────────────────────────────────
-echo "[9] Restarting OpenVPN..."
-systemctl restart openvpn@server 2>/dev/null || \\
-  systemctl restart openvpn       2>/dev/null || \\
-  service openvpn restart         2>/dev/null || \\
-  echo "    WARNING: Could not restart OpenVPN — restart manually"
+# ── 9. Restart only the dedicated router-management instance ────────────────
+echo "[9] Starting dedicated router-management OpenVPN..."
+systemctl enable --now openvpn-server@ochola-router 2>/dev/null || \\
+  systemctl restart openvpn@ochola-router 2>/dev/null || \\
+  echo "    WARNING: Could not start the router-management instance — start it manually"
 
 sleep 2
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo " Setup complete. Verify:"
-echo "   systemctl status openvpn@server"
-echo "   ip addr show tun0    # should show ${serverGw}"
+echo "   systemctl status openvpn-server@ochola-router"
+echo "   ip addr show tun-router    # should show ${serverGw}"
 echo ""
 echo " Now import the RouterOS client script on the router:"
 echo "   /import router-as-client${routerId ?? ""}.rsc"
@@ -208,8 +236,8 @@ export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
     vpsPublicIp,
     vpnPort         = 1194,
     vpnUsername     = "admin",
-    tunnelBase      = "10.8.0",
-    routerTunnelIp  = "10.8.0.2",
+    tunnelBase      = "10.8.5",
+    routerTunnelIp  = "10.8.5.2",
     routerId,
   } = opts;
 

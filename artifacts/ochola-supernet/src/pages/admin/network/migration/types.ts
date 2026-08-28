@@ -3,6 +3,7 @@ export interface RouterSummary {
   name: string;
   host: string;
   status: string;
+  vpn_ip?: string | null;
 }
 
 export interface AnalyzeResponse {

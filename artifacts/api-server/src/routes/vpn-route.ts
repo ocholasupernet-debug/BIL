@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { sbSelect, sbUpdate } from "../lib/supabase-client";
 import { pingRouter } from "../lib/mikrotik";
+import { readIppEntries } from "../lib/vpn-status";
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../lib/api-auth.js";
 import { createHash } from "crypto";
@@ -158,7 +159,13 @@ const STATUS_PATHS = [
 ];
 
 function readIppFile(): Map<string, string> {
-  const map = new Map<string, string>();
+  const map = readIppEntries();
+  /*
+   * Keep the endpoint's legacy path discovery behavior. The shared reader
+   * also checks the development fallback, while this endpoint reports the
+   * production paths below.
+   */
+  if (map.size > 0) return map;
   const path = IPP_PATHS.find(p => existsSync(p));
   if (!path) return map;
   try {

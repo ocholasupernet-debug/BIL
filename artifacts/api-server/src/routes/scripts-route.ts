@@ -1,10 +1,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
 import path from "path";
 import { ensureClientCert } from "./vpn-route.js";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
 import { generateRouterAsClientScript } from "../lib/mikrotik.js";
+import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
+import { readIppEntries } from "../lib/vpn-status.js";
 
 const router: IRouter = Router();
 
@@ -304,6 +306,26 @@ function updateVpnCredentials(username: string, password: string): void {
   } catch { /* non-root dev env — silently skip */ }
 }
 
+const ROUTER_CCD_PATHS = [
+  "/etc/openvpn/server/ochola-router-ccd",
+  "/etc/openvpn/server/ccd",
+  "/etc/openvpn/ccd",
+];
+
+function updateRouterVpnAssignment(username: string, ip: string): void {
+  try {
+    const dir = ROUTER_CCD_PATHS.find(candidate => existsSync(candidate)) ?? ROUTER_CCD_PATHS[0];
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, username),
+      `# Persistent MikroTik management address\nifconfig-push ${ip} ${ROUTER_VPN_GATEWAY}\n`,
+      { mode: 0o600 },
+    );
+  } catch {
+    /* The API may not share the VPS filesystem in development. */
+  }
+}
+
 /* Upsert a VPN user record in Supabase (isp_vpn_users table).
    Called when a router setup script is generated so every router
    automatically gets a corresponding VPN login. */
@@ -358,7 +380,50 @@ function routerVpnEndpointHost(origin: string): string {
 }
 
 function defaultRouterTunnelIp(routerId: number): string {
-  return `10.8.0.${2 + ((routerId - 1) % 240)}`;
+  return `10.8.5.${2 + ((routerId - 1) % 253)}`;
+}
+
+async function ensurePersistentRouterTunnelIp(routerId: number, existingIp?: string | null): Promise<string> {
+  if (isRouterVpnIp(existingIp)) return existingIp!.trim();
+
+  const used = new Set<string>(readIppEntries().values());
+  try {
+    const routers = await sbGet<{ vpn_ip: string | null }>(
+      "isp_routers?select=vpn_ip&vpn_ip=not.is.null",
+    );
+    for (const router of routers) {
+      if (isRouterVpnIp(router.vpn_ip)) used.add(router.vpn_ip!.trim());
+    }
+  } catch {
+    /* The deterministic fallback below still gives an existing router a
+       stable address when the metadata lookup is temporarily unavailable. */
+  }
+
+  let assigned: string;
+  try {
+    assigned = allocateRouterVpnIp(used);
+  } catch {
+    assigned = defaultRouterTunnelIp(routerId);
+  }
+
+  try {
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/isp_routers?id=eq.${routerId}`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify({ vpn_ip: assigned, updated_at: new Date().toISOString() }),
+      },
+    );
+  } catch {
+    /* The generated script remains usable; registration will retry the save. */
+  }
+  return assigned;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -375,6 +440,7 @@ function buildMainhotspotRsc(
   heartbeatUrl: string = "",
   installerUrl: string = "",
   routerVpnUrl: string = "",
+  routerVpnIp: string = "",
 ): string {
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
@@ -395,6 +461,7 @@ function buildMainhotspotRsc(
   const safeHeartbeatUrl = rscEscape(heartbeatUrl);
   const safeInstallerUrl = rscEscape(installerUrl);
   const safeRouterVpnUrl = rscEscape(routerVpnUrl);
+  const safeRouterVpnIp = rscEscape(routerVpnIp);
   const vpnScriptSelection = routerVpnUrl
     ? `:set vpnUrl "${safeRouterVpnUrl}"`
     : `:if ($majorVersion = 7) do={
@@ -630,9 +697,11 @@ ${safeInstallerUrl ? `:do {
 
 # --- Report the installed router to this ISP's current app --------------------
 ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
-:local reportedIp ""
-:foreach a in=[/ip address find where interface="ocholasupernet"] do={
-    :set reportedIp [/ip address get $a address]
+:local reportedIp "${safeRouterVpnIp}"
+:if ($reportedIp = "") do={
+    :foreach a in=[/ip address find where interface="ocholasupernet"] do={
+        :set reportedIp [/ip address get $a address]
+    }
 }
 :if ($reportedIp != "") do={
     :local slashPos [:find $reportedIp "/"]
@@ -698,19 +767,23 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let installerUrl = "";
   let routerVpnUrl = "";
 
-  interface InstallRouter { admin_id: number; name: string; }
+  interface InstallRouter { admin_id: number; name: string; vpn_ip?: string | null; }
   interface InstallAdmin { id: number; name: string; }
+  let routerVpnIp = "";
 
   try {
     if (rid && token) {
       /* A valid router secret binds the install script to a specific ISP and
          unlocks the post-install registration call. */
       const routers = await sbGet<InstallRouter>(
-        `isp_routers?id=eq.${rid}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=admin_id,name&limit=1`,
+        `isp_routers?id=eq.${rid}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=admin_id,name,vpn_ip&limit=1`,
       );
       const currentRouter = routers[0];
       if (currentRouter) {
         resolvedRouterName = currentRouter.name;
+        const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
+        updateRouterVpnAssignment(`router-${rid}`, assignedIp);
+        updateVpnCredentials(`router-${rid}`, token);
         registrationUrl = `${origin}/api/isp/router/register/${token}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${token}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
@@ -719,6 +792,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
+        routerVpnUrl = `${origin}/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(token)}`;
+        /* Pass the assignment into the orchestrator so the generated
+           firewall and registration steps advertise the same address. */
+        routerVpnIp = assignedIp;
       }
     } else {
       const subdomain = parseSubdomain(host);
@@ -749,6 +826,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       heartbeatUrl,
       installerUrl,
       routerVpnUrl,
+      routerVpnIp,
     ));
 });
 
@@ -771,9 +849,10 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
     interface RouterVpnIdentity {
       id: number;
       name: string;
+      vpn_ip?: string | null;
     }
     const rows = await sbGet<RouterVpnIdentity>(
-      `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,name&limit=1`,
+      `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,name,vpn_ip&limit=1`,
     );
     if (!rows[0]) {
       res.status(401).type("text/plain").send("# Router VPN bootstrap is not authorized.");
@@ -787,15 +866,15 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       return;
     }
 
-    const vpnPort = Number.parseInt(String(process.env.VPS_OPENVPN_PORT ?? "1194"), 10) || 1194;
-    const tunnelRouterIp = defaultRouterTunnelIp(routerId);
+    const vpnPort = Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196;
+    const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
     const script = generateRouterAsClientScript({
       vpsPublicIp: vpsHost,
       vpnPort,
       vpnUsername: `router-${routerId}`,
       vpnPassword: token,
       tunnelRouterIp,
-      tunnelVpsIp: "10.8.0.1",
+       tunnelVpsIp: ROUTER_VPN_GATEWAY,
       routerId,
     });
 
@@ -1350,7 +1429,7 @@ const USERS_RSC = `# users.rsc – Default hotspot user and group setup
 /* ── Sync-users firewall rules ── */
 const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user synchronisation
 # Opens the MikroTik API port (8728) to the VPN management subnet
-# (10.8.0.0/24) so the billing server can push user accounts.
+# (10.8.5.0/24) so the billing server can push user accounts.
 
 :put "  [syncusers] Applying user-sync firewall rules..."
 
@@ -1365,7 +1444,7 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
     chain=input \\
     protocol=tcp \\
     dst-port=8728 \\
-    src-address=10.8.0.0/24 \\
+     src-address=10.8.5.0/24 \\
     action=accept \\
     comment="SafeNet - allow API sync" \\
     place-before=0
@@ -1375,7 +1454,7 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
       chain=input \\
       protocol=tcp \\
       dst-port=8728 \\
-      src-address=10.8.0.0/24 \\
+       src-address=10.8.5.0/24 \\
       action=accept \\
       comment="SafeNet - allow API sync"
   } on-error={ :put "  WARN: API sync firewall rule failed" }
@@ -1618,6 +1697,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       bridge_interface: string | null;
       hotspot_dns_name: string | null;
       bridge_ip: string | null;
+      vpn_ip: string | null;
       router_secret: string | null;
       last_seen: string | null;
       status: string;
@@ -1743,6 +1823,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const bridgeIface = router_row.bridge_interface  || "hotspot-bridge";
     const hotspotDns  = router_row.hotspot_dns_name  || `wifi.${routerSlug}.local`;
     const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";
+    const routerVpnIp = await ensurePersistentRouterTunnelIp(router_row.id, router_row.vpn_ip);
+    updateRouterVpnAssignment(routerSlug, routerVpnIp);
 
     const ipBase      = bridgeIp.replace(/\.\d+$/, "");
     const ipMask      = `${bridgeIp}/24`;
@@ -1964,7 +2046,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       safeRm(`/ip firewall filter remove [find comment="${companyName} - allow API"]`),
       `# Try place-before=0 first (puts rule at top, before any DROP rules).`,
       `# If the input chain is empty place-before=0 errors — fall back to plain add.`,
-      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow API" } on-error={ :put "  WARN: API allow (VPN) rule failed" } }`,
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${companyName} - allow API" } on-error={ :put "  WARN: API allow (VPN) rule failed" } }`,
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow legacy API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow legacy API" } on-error={ :put "  WARN: API allow (legacy VPN) rule failed" } }`,
       `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${companyName} - allow API" } on-error={ :put "  WARN: API allow (LAN) rule failed" } }`,
       `:put "      NAT redirect + firewall + API rules applied  OK"`,
       ``,
@@ -1994,7 +2077,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=1194 mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=ocholasupernet connect-to="${adminSubdomain}.isplatty.org" port=${Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
@@ -2018,7 +2101,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set rm [/system routerboard get model] } on-error={}`,
       `:do { :set ri [/system identity get name] } on-error={}`,
       `:do { :set rv [/system package get [find name=routeros] version] } on-error={}`,
-      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv . "&ip=${bridgeIp}") mode=https check-certificate=no dst-path=reg.tmp } on-error={}`,
+      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv . "&ip=${routerVpnIp}") mode=https check-certificate=no dst-path=reg.tmp } on-error={}`,
       `:do { /file remove [find name=reg.tmp] } on-error={}`,
       ``,
       `# === Heartbeat Script + Scheduler ===`,

@@ -10,6 +10,7 @@ import {
   Clipboard,
   CloudDownload,
   Database,
+  Download,
   FileCheck2,
   FileClock,
   KeyRound,
@@ -341,6 +342,32 @@ export default function NetworkMigration() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadScriptsBundle = () => {
+    const connectionCommand = collector?.tunnelCommand || tunnel?.command || "";
+    const tunnelScript = tunnel?.scriptUrl
+      ? `# 1. Connection script\n# Downloaded from ${tunnel.scriptUrl}\n\n${connectionCommand}`
+      : `# 1. Connection script\n\n${connectionCommand}`;
+    const exportScript = collector?.scriptUrl
+      ? `# 2. Read-only export script\n# Downloaded from ${collector.scriptUrl}\n\n${collector.command || ""}`
+      : `# 2. Read-only export script\n\n${collector?.command || ""}`;
+    const blob = new Blob([
+      "# OcholaSupernet router migration script bundle\n",
+      "# Run script 1 first, wait for the tunnel, then run script 2.\n\n",
+      tunnelScript,
+      "\n\n============================================================\n\n",
+      exportScript,
+      "\n",
+    ], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "ocholasupernet-router-migration-scripts.txt";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadUrl = (url: string) => `${url}${url.includes("?") ? "&" : "?"}download=1`;
+
   const resetSource = (value: string) => {
     setSourceRouterId(value ? Number(value) : null);
     setTunnel(null);
@@ -409,6 +436,7 @@ export default function NetworkMigration() {
                   <div className="migration-router-meta">
                     <span><Router size={12} /><strong>{sourceRouter.name}</strong></span>
                     <span><Server size={12} /><code>{sourceRouter.host}</code></span>
+                    {sourceRouter.vpn_ip && <span><Wifi size={12} /><code>{sourceRouter.vpn_ip}</code></span>}
                     <span><Wifi size={12} />{sourceRouter.status}</span>
                     <span><Activity size={12} />Source access is read-only</span>
                   </div>
@@ -474,8 +502,9 @@ export default function NetworkMigration() {
                       </div>
                       <div className="migration-action-group">
                         <button className="migration-button ghost" onClick={() => copyText(`${tunnelCommand}\n\n${collector.command}`, "Both scripts")}><Clipboard size={12} /> Copy both scripts</button>
-                        {collector.tunnelScriptUrl && <a className="migration-button ghost" href={collector.tunnelScriptUrl} target="_blank" rel="noreferrer"><FileCheck2 size={12} /> View tunnel script</a>}
-                        <a className="migration-button ghost" href={collector.scriptUrl} target="_blank" rel="noreferrer"><FileCheck2 size={12} /> View export script</a>
+                         <button className="migration-button ghost" onClick={downloadScriptsBundle}><Download size={12} /> Download both</button>
+                         {(collector.tunnelScriptUrl || tunnel?.scriptUrl) && <a className="migration-button ghost" href={downloadUrl(collector.tunnelScriptUrl || tunnel?.scriptUrl || "")} download="router-migration-tunnel.rsc"><Download size={12} /> Download connection</a>}
+                         <a className="migration-button ghost" href={downloadUrl(collector.scriptUrl)} download="router-migration-export.rsc"><Download size={12} /> Download export</a>
                       </div>
                     </div>
                   ) : (
@@ -664,7 +693,7 @@ export default function NetworkMigration() {
         <NetworkTabs active="migration" />
 
         <div className="migration-context">
-          <div className="migration-node"><div className="migration-node-label">Source / read-only</div><div className="migration-node-name">{sourceRouter?.name || sourceLabel || "Select a source router"}</div><div className="migration-node-meta">{sourceRouter ? <><span>{sourceRouter.host} · {sourceRouter.status}</span></> : "No source contacted yet"}</div></div>
+           <div className="migration-node"><div className="migration-node-label">Source / read-only</div><div className="migration-node-name">{sourceRouter?.name || sourceLabel || "Select a source router"}</div><div className="migration-node-meta">{sourceRouter ? <><span>{sourceRouter.host} · {sourceRouter.status}</span>{sourceRouter.vpn_ip && <><span> · </span><code>{sourceRouter.vpn_ip}</code></>}</> : "No source contacted yet"}</div></div>
           <div className="migration-context-arrow"><ArrowRight size={13} /></div>
           <div className="migration-node"><div className="migration-node-label">Target / pending</div><div className="migration-node-name">{targetRouter?.name || "Select after review"}</div><div className="migration-node-meta">{targetRouter ? `${targetRouter.host} · ${targetRouter.status}` : "No target contacted yet"}</div></div>
           <div className="migration-context-state"><ShieldCheck size={12} />{currentStep < 6 ? "No target writes" : "Write boundary"}</div>
@@ -741,6 +770,13 @@ export default function NetworkMigration() {
           </div>
         )}
         {copied && <div className="migration-toast" role="status">{copied} copied to clipboard</div>}
+         <div className="migration-vpn-summary">
+           <div>
+             <strong>Permanent router VPN address</strong>
+             <span>Assigned from the OpenVPN management pool and written to ipp.txt after the router connects.</span>
+           </div>
+           <code>{sourceRouter?.vpn_ip || tunnel?.tunnelAddress || "Assigned when configuration is generated"}</code>
+         </div>
       </div>
     </AdminLayout>
   );

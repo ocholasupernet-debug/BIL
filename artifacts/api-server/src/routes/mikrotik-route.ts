@@ -37,6 +37,7 @@ import {
 import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
+import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 
 const router: IRouter = Router();
 
@@ -92,7 +93,7 @@ function vpnEndpointHost(value: unknown): string {
 
 function defaultTunnelRouterIp(routerId: number): string {
   /* Keep each router's default address distinct inside the VPS tunnel pool. */
-  return `10.8.0.${2 + ((routerId - 1) % 240)}`;
+  return `10.8.5.${2 + ((routerId - 1) % 253)}`;
 }
 
 function managedVpnPassword(row: SbRouter): string {
@@ -147,6 +148,7 @@ interface SbRouter {
   name: string;
   host: string;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
   token?: string | null;
@@ -169,7 +171,8 @@ interface SbRouter {
 function rowToCreds(row: SbRouter): RouterCredentials {
   /* Prefer host (should be public IP); bridge_ip is VPN fallback */
   const primaryHost = row.host?.trim() || "";
-  const vpnFallback = row.bridge_ip?.trim() || undefined;
+  const vpnFallback = row.vpn_ip?.trim()
+    || (isVpnTunnelIp(row.bridge_ip ?? "") ? row.bridge_ip?.trim() : undefined);
 
   /* Auto-detect SSL: if host contains :8729 pattern or is explicitly set */
   const useSSL = false; /* Can be extended via Supabase column later */
@@ -205,10 +208,10 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,router_username,router_secret,token,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
   );
   const row = rows[0];
-  if (!row || (!row.host?.trim() && !row.bridge_ip?.trim())) return null;
+  if (!row || (!row.host?.trim() && !row.bridge_ip?.trim() && !row.vpn_ip?.trim())) return null;
 
   const creds = rowToCreds(row);
 
@@ -240,7 +243,7 @@ async function getRouterCredsByHost(host: string): Promise<RouterCredentials | n
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `host=eq.${encodeURIComponent(host)}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`,
+    `host=eq.${encodeURIComponent(host)}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status&limit=1`,
   );
   const row = rows[0];
   if (!row) return null;
@@ -613,7 +616,7 @@ router.get("/probe", async (req, res): Promise<void> => {
 /* ─── GET /api/router/:id/router-as-client ──────────────────────────────── */
 /**
  * CORRECT ARCHITECTURE for this setup:
- *   VPS = OpenVPN SERVER (already running, tun0 10.8.0.1)
+ *   VPS = OpenVPN SERVER (dedicated router instance, tun-router 10.8.5.1)
  *   MikroTik = OpenVPN CLIENT (connects TO the VPS)
  *
  * Downloads a RouterOS script (.rsc) that configures the router as an OVPN client.
@@ -621,11 +624,11 @@ router.get("/probe", async (req, res): Promise<void> => {
  *
  * Query params:
  *   vpsIp           — VPS public IP (defaults to VPS_HOST)
- *   vpnPort         — OVPN server port (default 1194)
+ *   vpnPort         — OVPN server port (default 1196; legacy end-user VPN remains on 1194)
  *   vpnUsername     — VPN user (default "router-<id>")
  *   vpnPassword     — VPN password (defaults to the router's install secret)
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
- *   tunnelVpsIp     — VPS tunnel IP (default "10.8.0.1")
+ *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
 router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
@@ -653,16 +656,16 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     });
     return;
   }
-  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
+    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
     vpnUsername,
     vpnPassword,
     tunnelRouterIp,
-    tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? "10.8.0.1"),
+    tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
   });
 
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -686,7 +689,7 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
  *
  * Query params:
  *   vpsIp           — VPS public IP (default VPS_HOST)
- *   vpnPort         — OVPN port (default 1194)
+ *   vpnPort         — OVPN port (default 1196; legacy end-user VPN remains on 1194)
  *   vpnUsername     — router VPN user (default "router-<id>")
  *   vpnPassword     — router VPN password (defaults to the router's install secret)
  *   tunnelRouterIp  — static IP to assign to router
@@ -716,15 +719,15 @@ router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
     });
     return;
   }
-  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateVpsOvpnSetupScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1194,
+    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
     vpnUsername,
     vpnPassword,
-    tunnelBase:     String(req.query.tunnelBase     ?? "10.8.0"),
+    tunnelBase:     String(req.query.tunnelBase     ?? "10.8.5"),
     routerTunnelIp: tunnelRouterIp,
   });
 
@@ -749,11 +752,11 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
-  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? defaultTunnelRouterIp(id)).trim();
+  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
   const info = describeVpnArchitecture({
     vpsPublicIp:    vpsIp || "SET_VPS_HOST_OR_QUERY_PARAM",
     routerId:       id,
-    vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : 1194,
+    vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : 1196,
     vpnUsername:    String(req.query.vpnUsername   ?? `router-${id}`),
     routerTunnelIp: tunnelRouterIp,
   });
@@ -763,6 +766,7 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
     routerName: found.row.name,
     configuredHost: found.row.host,
     bridgeIp: found.row.bridge_ip,
+    vpnIp: found.row.vpn_ip,
     scripts: {
       vpsSetup:       `/api/router/${id}/vps-ovpn-setup${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
       routerAsClient: `/api/router/${id}/router-as-client${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,

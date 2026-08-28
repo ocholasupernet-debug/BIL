@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
-import { readVpnClients, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
+import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 
 const router: IRouter = Router();
@@ -667,19 +667,21 @@ router.post("/admin/router/fix-api", async (req, res): Promise<void> => {
     });
     log("✓ API service enabled");
 
-    log("Adding firewall rule for port 8728 (VPN range 10.8.0.0/16)…");
-    await conn.write([
-      "/ip/firewall/filter/add",
-      "=chain=input",
-      "=protocol=tcp",
-      "=dst-port=8728",
-      "=src-address=10.8.0.0/16",
-      "=action=accept",
-      "=place-before=0",
-    ]).catch(() => {
-      /* May fail if rule already exists — not an error */
-      log("  (firewall rule may already exist — skipping)");
-    });
+    log("Adding firewall rules for the persistent and legacy VPN ranges…");
+    for (const sourceAddress of ["10.8.5.0/24", "10.8.0.0/24"]) {
+      await conn.write([
+        "/ip/firewall/filter/add",
+        "=chain=input",
+        "=protocol=tcp",
+        "=dst-port=8728",
+        `=src-address=${sourceAddress}`,
+        "=action=accept",
+        "=place-before=0",
+      ]).catch(() => {
+        /* May fail if rule already exists — not an error */
+        log(`  (firewall rule for ${sourceAddress} may already exist — skipping)`);
+      });
+    }
     log("✓ Firewall rule applied");
 
     log("✅ Auto-fix complete — try syncing again");
@@ -1208,15 +1210,15 @@ async function bridgeAssignmentMatchesSetupRouter(
   const key = hbKey();
   if (!url || !key || !routerId) return false;
   const response = await fetch(
-    `${url}/rest/v1/isp_routers?id=eq.${routerId}&select=host,bridge_ip,router_username,status&limit=1`,
+    `${url}/rest/v1/isp_routers?id=eq.${routerId}&select=host,bridge_ip,vpn_ip,router_username,status&limit=1`,
     { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
   );
   if (!response.ok) return false;
   const row = ((await response.json()) as Array<{
-    host: string | null; bridge_ip: string | null; router_username: string | null; status: string;
+    host: string | null; bridge_ip: string | null; vpn_ip: string | null; router_username: string | null; status: string;
   }>)[0];
   if (!row || !isSetupStatus(row.status)) return false;
-  const trustedHosts = [row.host, row.bridge_ip].filter((value): value is string => Boolean(value?.trim()))
+  const trustedHosts = [row.host, row.bridge_ip, row.vpn_ip].filter((value): value is string => Boolean(value?.trim()))
     .map(value => value.trim());
   return trustedHosts.includes(connectedHost.trim())
     && (row.router_username || "admin") === (username || "admin");
@@ -1670,7 +1672,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
 
     const updated = await patchRes.json() as Array<{
       id: number; name: string; host?: string; status?: string;
-      router_username?: string; router_secret?: string;
+      router_username?: string; router_secret?: string; vpn_ip?: string | null;
     }>;
     const row = updated[0];
     const routerName = row?.name ?? "unknown";
@@ -1712,6 +1714,28 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     const currentHost = row?.host ?? "";
     const hostIsUnreachable = !currentHost || isLanOnlyIp(currentHost);
 
+    /* OpenVPN status plus this authenticated heartbeat identifies the
+       connected MikroTik before its persistent ipp.txt entry is updated. */
+    if (row?.id) {
+      const liveClient = readVpnClients().find(client =>
+        client.cn === `router-${row.id}` &&
+        (!row.vpn_ip || row.vpn_ip === client.vpnIp),
+      );
+      if (liveClient) {
+        syncIppEntry(`router-${row.id}`, liveClient.vpnIp);
+        if (liveClient.vpnIp !== row.vpn_ip) {
+          fetch(
+            `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+            {
+              method: "PATCH",
+              headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ vpn_ip: liveClient.vpnIp }),
+            },
+          ).catch((e: unknown) => console.warn(`[heartbeat] VPN IP save failed: ${e instanceof Error ? e.message : e}`));
+        }
+      }
+    }
+
     if (row && (isVpnIp(srcIp) || (isPublicIp(srcIp) && hostIsUnreachable)) && srcIp !== currentHost) {
       console.log(`[heartbeat] auto-discovering ${routerName} via ${isVpnIp(srcIp) ? "VPN" : "WAN"} IP ${srcIp}`);
 
@@ -1743,9 +1767,9 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     if (row && isPublicIp(srcIp)) {
       const vpnClients = readVpnClients();
       const foundVpnIp = vpnIpFor(srcIp, vpnClients);
-      const storedBridgeIp = (row as Record<string, unknown>).bridge_ip as string | undefined;
-      if (foundVpnIp && foundVpnIp !== storedBridgeIp) {
-        console.log(`[heartbeat] found VPN IP ${foundVpnIp} for router ${routerName} (real ${srcIp}), saving as bridge_ip`);
+      const storedVpnIp = (row as Record<string, unknown>).vpn_ip as string | undefined;
+      if (foundVpnIp && foundVpnIp !== storedVpnIp) {
+        console.log(`[heartbeat] found VPN IP ${foundVpnIp} for router ${routerName}, saving as vpn_ip and ipp.txt`);
         const HB_URL3 = hbUrl();
         const HB_KEY3 = hbKey();
         if (HB_URL3 && HB_KEY3) {
@@ -1755,11 +1779,12 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
             {
               method: "PATCH",
               headers: { apikey: HB_KEY3, Authorization: `Bearer ${HB_KEY3}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ bridge_ip: foundVpnIp }),
+              body: JSON.stringify({ vpn_ip: foundVpnIp }),
             }
-          ).then(() => console.log(`[heartbeat] saved VPN IP ${foundVpnIp} as bridge_ip for ${routerName}`))
+          ).then(() => console.log(`[heartbeat] saved VPN IP ${foundVpnIp} for ${routerName}`))
            .catch((e: unknown) => console.warn(`[heartbeat] VPN IP save failed: ${e instanceof Error ? e.message : e}`));
         }
+        syncIppEntry(`router-${row.id}`, foundVpnIp);
       }
     }
 
@@ -1811,7 +1836,12 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     const patch: Record<string, string> = {};
     if (model)    patch.model       = model;
     if (ver)      patch.ros_version = ver;
-    if (bridgeIp) patch.bridge_ip   = bridgeIp;
+    if (bridgeIp) {
+      /* This callback reports the management interface. Do not overwrite
+         bridge_ip, which is the customer-LAN gateway used by the hotspot. */
+      if (/^10\.8\.5\./.test(bridgeIp)) patch.vpn_ip = bridgeIp;
+      else patch.bridge_ip = bridgeIp;
+    }
     /* If the router still has the auto-generated name, rename it to the RouterOS identity */
     if (rname) patch.identity = rname;   // store identity (non-destructive new field check below)
 
@@ -1872,6 +1902,12 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     }>;
     const row = updated[0];
     const routerName = row?.name ?? existingName ?? rname ?? "unknown";
+    if (row?.id && bridgeIp && /^10\.8\.5\./.test(bridgeIp)) {
+      const liveClient = readVpnClients().find(client =>
+        client.cn === `router-${row.id}` && client.vpnIp === bridgeIp,
+      );
+      if (liveClient) syncIppEntry(`router-${row.id}`, liveClient.vpnIp);
+    }
     console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, model, version: ver });
 

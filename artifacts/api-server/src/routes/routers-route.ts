@@ -71,7 +71,7 @@ router.get("/routers", async (req, res): Promise<void> => {
   const adminId = req.query.adminId ?? req.query.ispId ?? "1";
   const rows = await sbSelect(
     "isp_routers",
-    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
+    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
 });

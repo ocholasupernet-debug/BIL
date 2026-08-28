@@ -25,6 +25,7 @@ interface DbRouter {
   router_username: string;
   router_secret: string | null;
   bridge_ip: string | null;
+  vpn_ip: string | null;
 }
 
 interface ProbeResult {
@@ -745,7 +746,7 @@ export default function ReplaceRouter() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,name,host,status,model,ros_version,last_seen,bridge_interface,router_username,router_secret,bridge_ip")
+        .select("id,name,host,status,model,ros_version,last_seen,bridge_interface,router_username,router_secret,bridge_ip,vpn_ip")
         .eq("admin_id", ADMIN_ID)
         .order("created_at", { ascending: true });
       return (data ?? []) as DbRouter[];
@@ -818,6 +819,20 @@ export default function ReplaceRouter() {
           <strong style={{ color: "var(--isp-accent)" }}>API</strong> — set the router IP, API username and password, then click <em>Test Connection</em> to verify the MikroTik API is reachable on port 8728.{" "}
           <strong style={{ color: "#fbbf24" }}>Reconfigure</strong> — re-apply the setup script.{" "}
           <strong style={{ color: "var(--isp-accent)" }}>Ports</strong> — assign bridge ports for the hotspot.
+        </div>
+
+        <div style={{ background: "rgba(20,184,166,0.07)", border: "1px solid rgba(20,184,166,0.22)", borderRadius: 9, padding: "0.8rem 1rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+          <div>
+            <strong style={{ display: "block", color: "var(--isp-text)", fontSize: "0.78rem" }}>Permanent router VPN pool</strong>
+            <span style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>The assigned management IP is retained after OpenVPN connects and synchronized to ipp.txt.</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+            {routers.map(router => (
+              <code key={router.id} style={{ background: "rgba(20,184,166,0.12)", color: "#5eead4", borderRadius: 5, padding: "0.3rem 0.5rem", fontSize: "0.72rem" }}>
+                {router.name}: {router.vpn_ip || "pending"}
+              </code>
+            ))}
+          </div>
         </div>
 
       </div>

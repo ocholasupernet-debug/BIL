@@ -225,6 +225,7 @@ function genPPPoEOnly(
 # 11. Port 8728 firewall — allow from VPN (10.8.0.0/24) and LAN
 :do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" } on-error={} }
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
 
 # 12. System identity
@@ -371,6 +372,7 @@ function genPPPoEOverHotspot(
 # 14. Port 8728 firewall — allow from VPN and LAN
 :do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" } on-error={} }
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
 
 # 15. System identity
@@ -491,6 +493,7 @@ export function genPPPoEVlan(
 # 10. Port 8728 firewall
 :do { /ip firewall filter remove [find comment="allow-api-8728"] } on-error={}
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="allow-api-8728" } on-error={} }
+:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="allow-api-8728-router-vpn" } on-error={} }
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${net.gateway}/24 action=accept comment="allow-api-8728" } on-error={} }
 
 # 11. System identity

@@ -127,6 +127,12 @@ create table if not exists isp_routers (
 create index if not exists isp_routers_admin_id_idx on isp_routers(admin_id);
 create index if not exists isp_routers_status_idx   on isp_routers(status);
 
+-- Stable OpenVPN management address for a MikroTik router. This is separate
+-- from bridge_ip, which is the router's customer-LAN/captive-portal gateway.
+alter table isp_routers add column if not exists vpn_ip text;
+create unique index if not exists isp_routers_vpn_ip_unique_idx
+  on isp_routers(vpn_ip) where vpn_ip is not null;
+
 -- Encrypted RouterOS migration packages (service role only).
 create table if not exists router_migration_jobs (
   id bigserial primary key,

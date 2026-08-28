@@ -13,6 +13,8 @@
  */
 
 import { Router, type IRouter } from "express";
+import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
+import { readIppEntries } from "../lib/vpn-status.js";
 
 const router: IRouter = Router();
 
@@ -45,6 +47,24 @@ function makeSecret(adminId: number): string {
     .slice(0, 48);
 }
 
+async function allocatePersistentVpnIp(): Promise<string> {
+  const used = new Set<string>(readIppEntries().values());
+  try {
+    const routersRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/isp_routers?select=vpn_ip&vpn_ip=not.is.null`,
+      { headers: sbHeaders(BEST_KEY) },
+    );
+    if (routersRes.ok) {
+      const rows = await routersRes.json() as Array<{ vpn_ip?: string | null }>;
+      for (const row of rows) if (isRouterVpnIp(row.vpn_ip)) used.add(row.vpn_ip!.trim());
+    }
+  } catch {
+    /* Continue with the local ipp snapshot; the unique index protects the
+       final database write when several installers start together. */
+  }
+  return allocateRouterVpnIp(used);
+}
+
 router.post("/admin/router/ensure", async (req, res): Promise<void> => {
   if (!SUPABASE_URL || !BEST_KEY) {
     res.status(503).json({ ok: false, error: "Supabase not configured on this server (missing VITE_SUPABASE_URL or VITE_SUPABASE_KEY)" });
@@ -74,7 +94,24 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
     if (existRes.ok) {
       const rows = await existRes.json() as Record<string, unknown>[];
       if (rows.length > 0) {
-        res.json({ ok: true, router: rows[0], created: false });
+        const existing = rows[0];
+        if (!isRouterVpnIp(String(existing.vpn_ip ?? ""))) {
+          try {
+            const vpnIp = await allocatePersistentVpnIp();
+            const updateRes = await fetch(
+              `${SUPABASE_URL}/rest/v1/isp_routers?id=eq.${existing.id}`,
+              {
+                method: "PATCH",
+                headers: sbHeaders(BEST_KEY),
+                body: JSON.stringify({ vpn_ip: vpnIp }),
+              },
+            );
+            if (updateRes.ok) existing.vpn_ip = vpnIp;
+          } catch (error) {
+            console.warn("[router/ensure] persistent VPN IP allocation deferred:", error);
+          }
+        }
+        res.json({ ok: true, router: existing, created: false });
         return;
       }
     }
@@ -85,6 +122,12 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
   /* ── 2. Try INSERT (service-role key first, then anon key) ── */
   const keysToTry = SERVICE_KEY ? [SERVICE_KEY, ANON_KEY].filter(Boolean) : [ANON_KEY];
   const secret = makeSecret(adminId);
+  let vpnIp = "";
+  try {
+    vpnIp = await allocatePersistentVpnIp();
+  } catch (error) {
+    console.warn("[router/ensure] persistent VPN IP allocation unavailable:", error);
+  }
   const payload = {
     admin_id:         adminId,
     name,
@@ -94,6 +137,7 @@ router.post("/admin/router/ensure", async (req, res): Promise<void> => {
     token:            secret,   /* NOT NULL column — same value as router_secret */
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.88.1",
+    ...(vpnIp ? { vpn_ip: vpnIp } : {}),
     status:           "setup",
   };
 

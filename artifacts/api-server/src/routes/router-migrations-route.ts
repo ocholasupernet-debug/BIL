@@ -16,7 +16,7 @@ import {
 
 const router: IRouter = Router();
 const locks = new Set<string>();
-type RouterRow = { id: number; admin_id: number; name: string; host: string; bridge_ip?: string; router_username: string; router_secret?: string; identity?: string; serial?: string };
+type RouterRow = { id: number; admin_id: number; name: string; host: string; bridge_ip?: string; vpn_ip?: string; router_username: string; router_secret?: string; identity?: string; serial?: string };
 type Job = { id: number; admin_id: number; source_router_id?: number | null; source_label?: string; source_mode?: string; target_router_id?: number; ciphertext?: string; iv?: string; auth_tag?: string; plan_json?: Record<string, unknown>; stages_json?: Record<string, unknown>; verification_json?: Record<string, unknown>; audit_json?: Record<string, unknown>; findings_json?: Record<string, unknown>; status: string };
 type CollectorToken = {
   token_hash: string;
@@ -56,7 +56,7 @@ function cleanHost(value: string | undefined): string {
   return String(value ?? "").trim().replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
 }
 function creds(row: RouterRow): RouterCredentials {
-  return { host: cleanHost(row.host), bridgeIp: row.bridge_ip, port: 8728, username: row.router_username || "admin", password: row.router_secret ?? "" };
+  return { host: cleanHost(row.host), bridgeIp: row.vpn_ip || row.bridge_ip, port: 8728, username: row.router_username || "admin", password: row.router_secret ?? "" };
 }
 function key() { const secret = process.env.SESSION_SECRET ?? process.env.TOKEN_SIGNING_SECRET; if (!secret) throw new Error("Migration encryption is not configured."); return createHash("sha256").update(secret).digest(); }
 function encrypt(value: unknown) { const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key(), iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]); return { ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64") }; }
@@ -94,7 +94,7 @@ function collectorToken(req: Request): string {
 }
 async function ownedRouter(id: number, _adminId?: number) {
   positive(id);
-  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`);
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
   const row = rows[0];
   if (!row) throw new Error("Router not found.");
   const clients = readVpnClients();
@@ -102,7 +102,7 @@ async function ownedRouter(id: number, _adminId?: number) {
   /* Keep the discovered address in memory until a real RouterOS API login
      succeeds. The status file proves that a tunnel client exists, not that
      port 8728 is reachable or that the credentials are valid. */
-  if (discoveredVpnIp) row.bridge_ip = discoveredVpnIp;
+  if (discoveredVpnIp) row.vpn_ip = discoveredVpnIp;
   return row;
 }
 
@@ -243,7 +243,7 @@ async function requireLeasedApiConnection(row: RouterRow, adminId: number, lease
     status: "online",
     last_seen: result.connectedAt,
     last_connected_host: result.connectedHost,
-    bridge_ip: lease.assigned_ip,
+    vpn_ip: lease.assigned_ip,
     model: result.board || undefined,
     ros_version: result.version || undefined,
     updated_at: result.connectedAt,
@@ -257,7 +257,7 @@ async function requireApiConnection(row: RouterRow, adminId: number) {
       status: "online",
       last_seen: result.connectedAt,
       last_connected_host: result.connectedHost,
-      ...(row.bridge_ip ? { bridge_ip: row.bridge_ip } : {}),
+      ...(row.vpn_ip ? { vpn_ip: row.vpn_ip } : {}),
       model: result.board || undefined,
       ros_version: result.version || undefined,
       updated_at: result.connectedAt,
@@ -274,7 +274,7 @@ async function sourceForJob(job: Job, adminId: number): Promise<{ row: RouterRow
   const row = await ownedRouter(job.source_router_id, adminId);
   const audit = job.audit_json as Record<string, unknown> | undefined;
   const tunnel = await tunnelFor(job.source_router_id, adminId, Number(audit?.tunnel_lease_id) || undefined);
-  return { row: { ...row, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip }, tunnel };
+  return { row: { ...row, host: tunnel.assigned_ip, vpn_ip: tunnel.assigned_ip }, tunnel };
 }
 async function migrationStorageAdminId(): Promise<number> {
   const rows = await sbSelectStrict<{ id: number }>("isp_admins", "select=id&order=id.asc&limit=1");
@@ -502,7 +502,10 @@ router.get("/router-migrations/collector-tunnel-script", async (req, res) => {
         },
       ).catch(() => undefined);
     }
-    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-tunnel.rsc"').send(script);
+    res.type("text/plain").set(
+      "Content-Disposition",
+      `${req.query.download === "1" ? "attachment" : "inline"}; filename="router-migration-tunnel.rsc"`,
+    ).send(script);
   } catch {
     res.status(401).send("# Invalid or expired migration tunnel session.");
   }
@@ -539,7 +542,10 @@ router.get("/router-migrations/collector-script", async (req, res) => {
     }
     const uploadUrl = `${publicOrigin(req)}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
     const script = buildDomainRouterExportScript(uploadUrl);
-    res.type("text/plain").set("Content-Disposition", 'inline; filename="router-migration-export.rsc"').send(script);
+    res.type("text/plain").set(
+      "Content-Disposition",
+      `${req.query.download === "1" ? "attachment" : "inline"}; filename="router-migration-export.rsc"`,
+    ).send(script);
   } catch {
     res.status(401).send("# Invalid or expired migration collector session.");
   }
@@ -748,7 +754,7 @@ router.post("/router-migrations/:id/tunnel/revoke", async (req, res) => guarded(
   res.json({ ok: true, status: "revoked", address: tunnel.assigned_ip });
 }, res));
 router.get("/router-migrations/routers", async (req, res) => guarded(req, async a => {
-  const rows = await sbSelectStrict<RouterRow>("isp_routers", "select=id,name,host,status,ros_version&order=name.asc");
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", "select=id,name,host,status,ros_version,vpn_ip&order=name.asc");
   res.json({ routers: rows });
 }, res));
 router.post("/router-migrations/analyze", async (req, res) => guarded(req, async a => {

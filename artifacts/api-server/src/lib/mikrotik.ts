@@ -1937,10 +1937,10 @@ export interface RouterAsClientOptions {
   vpnPassword?: string;
   /**
    * VPN tunnel IP the VPS server will assign to the router.
-   * Depends on the VPS server's IP pool (default "10.8.0.2").
+    * Depends on the VPS server's IP pool (default "10.8.5.2").
    */
   tunnelRouterIp?: string;
-  /** VPS tunnel IP (gateway end, default "10.8.0.1") */
+  /** VPS tunnel IP (gateway end, default "10.8.5.1") */
   tunnelVpsIp?: string;
   /** Router LAN network for routing rules (default "192.168.88.0/24") */
   lanNetwork?: string;
@@ -1953,10 +1953,10 @@ export interface RouterAsClientOptions {
  * as an OpenVPN CLIENT connecting back to the VPS server.
  *
  * Architecture (correct for this setup):
- *   VPS  ──── OpenVPN SERVER (tun0 10.8.0.1) ◄──── MikroTik OVPN CLIENT (gets 10.8.0.2)
+  *   VPS  ──── OpenVPN SERVER (tun0 10.8.5.1) ◄──── MikroTik OVPN CLIENT (gets 10.8.5.2)
  *
  * After connect, the backend reaches the router API at:
- *   MIKROTIK_BRIDGE_IP=10.8.0.2  (router's tunnel IP)
+  *   MIKROTIK_BRIDGE_IP=10.8.5.2  (router's tunnel IP)
  *
  * Import on the router:
  *   /import router-as-client.rsc
@@ -1967,8 +1967,8 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     vpnPort         = 1194,
     vpnUsername     = "admin",
     vpnPassword     = "ochola",
-    tunnelRouterIp  = "10.8.0.2",
-    tunnelVpsIp     = "10.8.0.1",
+    tunnelRouterIp  = "10.8.5.2",
+    tunnelVpsIp     = "10.8.5.1",
     lanNetwork      = "192.168.88.0/24",
     routerId,
   } = opts;
