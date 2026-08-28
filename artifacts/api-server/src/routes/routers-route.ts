@@ -4,6 +4,7 @@ import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.j
 import { pingRouter, detectBridgeInterfaces } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 
 /* ── TCP reachability probe — tries common MikroTik ports ───────────────────
  * Returns the first port that responds, or null if all fail.
@@ -41,6 +42,20 @@ function isPendingSetup(status: string | null | undefined): boolean {
     || status === "awaiting_ports"
     || status === "awaiting_sync"
     || status === "awaiting_connection";
+}
+
+function cleanRouterHost(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
+}
+
+function discoverVpnIp(name: string, host: string, configuredIp: string | null | undefined): string | undefined {
+  const clients = readVpnClients();
+  return vpnIpFor(name, clients)
+    || vpnIpFor(cleanRouterHost(host), clients)
+    || configuredIp?.trim()
+    || undefined;
 }
 
 /*
@@ -173,20 +188,22 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
   const id = req.params.id;
 
   const rows = await sbSelect<{
-    id: number; host: string; bridge_ip: string | null;
+    id: number; name: string; host: string; bridge_ip: string | null;
     router_username: string; router_secret: string | null; status: string;
-  }>("isp_routers", `id=eq.${id}&select=id,host,bridge_ip,router_username,router_secret,status&limit=1`);
+  }>("isp_routers", `id=eq.${id}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`);
 
   const row = rows[0];
   if (!row) { res.status(404).json({ ok: false, error: "Router not found" }); return; }
 
+  const host = cleanRouterHost(row.host);
+  const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
   const creds = {
-    host:     row.host?.trim()      || "",
+    host:     host || discoveredVpnIp || "",
     port:     8728,
     username: row.router_username   || "admin",
     password: row.router_secret     || "",
     useSSL:   false,
-    bridgeIp: row.bridge_ip?.trim() || undefined,
+    bridgeIp: discoveredVpnIp,
     connectTimeoutMs:  8000,
     requestTimeoutMs:  8000,
   };
@@ -196,24 +213,25 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
     const now = result.connectedAt;
     await sbUpdate("isp_routers", `id=eq.${id}`, {
       ...(!isPendingSetup(row.status) ? { status: "online", last_seen: now } : {}),
+      ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
+      last_connected_host: result.connectedHost,
       model: result.board || undefined, ros_version: result.version || undefined,
       updated_at: now,
       ...(result.uptime ? { router_uptime: result.uptime, uptime_at: now } : {}),
     });
     logger.info({ routerId: id, identity: result.identity }, "[router/ping] online via API");
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, via: result.connectedHost === discoveredVpnIp ? "vpn" : "direct", ...result });
   } catch (apiErr) {
     /* API failed — try TCP fallback on common ports */
-    const host = row.host?.trim() || row.bridge_ip?.trim() || "";
-    const openPort = await tcpProbe(host);
+    const openPort = await tcpProbe(host || discoveredVpnIp || "");
     if (openPort !== null) {
       const now = new Date().toISOString();
       await sbUpdate("isp_routers", `id=eq.${id}`, {
-        ...(!isPendingSetup(row.status) ? { status: "online", last_seen: now } : {}),
+        ...(!isPendingSetup(row.status) ? { status: "offline" } : {}),
         updated_at: now,
       });
-      logger.info({ routerId: id, host, port: openPort }, "[router/ping] online via TCP fallback");
-      res.json({ ok: true, online: true, via: `tcp:${openPort}`, note: `Router is reachable (port ${openPort} open) but RouterOS API is unavailable. Check API credentials or enable /ip service api.` });
+      logger.warn({ routerId: id, host, port: openPort }, "[router/ping] TCP reachable but RouterOS API unavailable");
+      res.json({ ok: false, online: false, apiOnline: false, via: `tcp:${openPort}`, error: `Router TCP port ${openPort} is reachable, but RouterOS API authentication or port 8728 is unavailable. Migration and export remain blocked until the API succeeds.`, details: (apiErr as Error).message });
     } else {
       const error = (apiErr as Error).message;
       await sbUpdate("isp_routers", `id=eq.${id}`, {

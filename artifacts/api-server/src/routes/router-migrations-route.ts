@@ -6,6 +6,7 @@ import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/su
 import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
 import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
 import { buildDomainRouterExportScript, READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 
 const router: IRouter = Router();
 const locks = new Set<string>();
@@ -16,7 +17,12 @@ type CollectorChunk = { token_hash: string; chunk_index: number; ciphertext: str
 
 function admin(req: Request): number { const id = Number(req.authUser?.uid); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid administrator identity."); return id; }
 function positive(value: unknown): number { const id = Number(value); if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Invalid numeric identifier."); return id; }
-function creds(row: RouterRow): RouterCredentials { return { host: row.host, bridgeIp: row.bridge_ip, port: 8728, username: row.router_username || "admin", password: row.router_secret ?? "" }; }
+function cleanHost(value: string | undefined): string {
+  return String(value ?? "").trim().replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
+}
+function creds(row: RouterRow): RouterCredentials {
+  return { host: cleanHost(row.host), bridgeIp: row.bridge_ip, port: 8728, username: row.router_username || "admin", password: row.router_secret ?? "" };
+}
 function key() { const secret = process.env.SESSION_SECRET ?? process.env.TOKEN_SIGNING_SECRET; if (!secret) throw new Error("Migration encryption is not configured."); return createHash("sha256").update(secret).digest(); }
 function encrypt(value: unknown) { const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key(), iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]); return { ciphertext: ciphertext.toString("base64"), iv: iv.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64") }; }
 function decrypt(job: Job) { if (!job.ciphertext || !job.iv || !job.auth_tag) throw new Error("Migration package is unavailable."); const decipher = createDecipheriv("aes-256-gcm", key(), Buffer.from(job.iv, "base64")); decipher.setAuthTag(Buffer.from(job.auth_tag, "base64")); return JSON.parse(Buffer.concat([decipher.update(Buffer.from(job.ciphertext, "base64")), decipher.final()]).toString("utf8")) as Record<string, unknown>; }
@@ -50,7 +56,19 @@ function collectorToken(req: Request): string {
   if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) throw new Error("Invalid or expired collector session.");
   return token;
 }
-async function ownedRouter(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`); if (!rows[0]) throw new Error("Router not found."); return rows[0]; }
+async function ownedRouter(id: number, adminId: number) {
+  positive(id);
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,router_username,router_secret&limit=1`);
+  const row = rows[0];
+  if (!row) throw new Error("Router not found.");
+  const clients = readVpnClients();
+  const discoveredVpnIp = vpnIpFor(row.name, clients) || vpnIpFor(cleanHost(row.host), clients);
+  if (discoveredVpnIp && discoveredVpnIp !== row.bridge_ip) {
+    await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, { bridge_ip: discoveredVpnIp, last_connected_host: discoveredVpnIp, updated_at: new Date().toISOString() });
+    row.bridge_ip = discoveredVpnIp;
+  }
+  return row;
+}
 async function jobFor(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&admin_id=eq.${adminId}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
 async function guarded(req: Request, fn: (adminId: number) => Promise<void>, res: any) { try { const id = admin(req); const lock = `${id}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`; if (locks.has(lock)) { res.status(409).json({ ok: false, error: "Migration is already in progress." }); return; } locks.add(lock); try { await fn(id); } finally { locks.delete(lock); } } catch (e) { res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." }); } }
 async function observeDevice(row: RouterRow) {
