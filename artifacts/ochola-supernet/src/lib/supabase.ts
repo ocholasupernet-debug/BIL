@@ -175,6 +175,7 @@ export interface DbRouter {
   ros_version: string | null;
   status: string;
   last_seen: string | null;
+  last_connected_host?: string | null;
   router_uptime: string | null;
   uptime_at: string | null;
   created_at: string;

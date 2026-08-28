@@ -118,6 +118,7 @@ create table if not exists isp_routers (
   bridge_interface text,
   status           text not null default 'offline',  -- online | offline | unreachable
   last_seen        timestamptz,
+  last_connected_host text,
   router_uptime    text,
   uptime_at        timestamptz,
   created_at       timestamptz not null default now(),

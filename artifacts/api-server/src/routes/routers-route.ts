@@ -71,7 +71,7 @@ router.get("/routers", async (req, res): Promise<void> => {
   const adminId = req.query.adminId ?? req.query.ispId ?? "1";
   const rows = await sbSelect(
     "isp_routers",
-    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,proxy_ip,bridge_interface,router_username,status,last_seen,model,ros_version,ip_address`,
+    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
 });
@@ -259,13 +259,15 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
 
   const results = await Promise.allSettled(
     routers.map(async (row) => {
+      const host = cleanRouterHost(row.host);
+      const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
       const creds = {
-        host:     row.host?.trim()      || "",
+        host:     host || discoveredVpnIp || "",
         port:     8728,
         username: row.router_username   || "admin",
         password: row.router_secret     || "",
         useSSL:   false,
-        bridgeIp: row.bridge_ip?.trim() || undefined,
+        bridgeIp: discoveredVpnIp,
         connectTimeoutMs: 8000,
         requestTimeoutMs: 8000,
       };
@@ -273,6 +275,8 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
         const r = await pingRouter(creds);
         await sbUpdate("isp_routers", `id=eq.${row.id}`, {
           ...(!isPendingSetup(row.status) ? { status: "online", last_seen: r.connectedAt } : {}),
+          ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
+          last_connected_host: r.connectedHost,
           model: r.board || undefined, ros_version: r.version || undefined,
           updated_at: r.connectedAt,
           ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),
@@ -360,13 +364,15 @@ export async function sweepAllRouters(): Promise<void> {
 
     await Promise.allSettled(
       routers.map(async (row) => {
+        const host = cleanRouterHost(row.host);
+        const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
         const creds = {
-          host:     row.host?.trim()      || "",
+          host:     host || discoveredVpnIp || "",
           port:     8728,
           username: row.router_username   || "admin",
           password: row.router_secret     || "",
           useSSL:   false,
-          bridgeIp: row.bridge_ip?.trim() || undefined,
+          bridgeIp: discoveredVpnIp,
           connectTimeoutMs: 10_000,
           requestTimeoutMs: 10_000,
         };
@@ -376,6 +382,8 @@ export async function sweepAllRouters(): Promise<void> {
           failureCount.set(row.id, 0);
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
             status: "online", last_seen: r.connectedAt,
+            last_connected_host: r.connectedHost,
+            ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
             model: r.board || undefined, ros_version: r.version || undefined,
             updated_at: r.connectedAt,
             ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),

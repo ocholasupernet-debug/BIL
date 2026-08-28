@@ -1,7 +1,7 @@
 import express, { Router, type IRouter, type Request } from "express";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import { requireAdmin } from "../lib/api-auth.js";
-import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { pingRouter, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
 import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
@@ -63,11 +63,29 @@ async function ownedRouter(id: number, adminId: number) {
   if (!row) throw new Error("Router not found.");
   const clients = readVpnClients();
   const discoveredVpnIp = vpnIpFor(row.name, clients) || vpnIpFor(cleanHost(row.host), clients);
-  if (discoveredVpnIp && discoveredVpnIp !== row.bridge_ip) {
-    await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, { bridge_ip: discoveredVpnIp, last_connected_host: discoveredVpnIp, updated_at: new Date().toISOString() });
-    row.bridge_ip = discoveredVpnIp;
-  }
+  /* Keep the discovered address in memory until a real RouterOS API login
+     succeeds. The status file proves that a tunnel client exists, not that
+     port 8728 is reachable or that the credentials are valid. */
+  if (discoveredVpnIp) row.bridge_ip = discoveredVpnIp;
   return row;
+}
+async function requireApiConnection(row: RouterRow, adminId: number) {
+  try {
+    const result = await pingRouter(creds(row));
+    await sbUpdateStrict("isp_routers", `id=eq.${row.id}&admin_id=eq.${adminId}`, {
+      status: "online",
+      last_seen: result.connectedAt,
+      last_connected_host: result.connectedHost,
+      ...(row.bridge_ip ? { bridge_ip: row.bridge_ip } : {}),
+      model: result.board || undefined,
+      ros_version: result.version || undefined,
+      updated_at: result.connectedAt,
+    });
+    return result;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Router "${row.name}" is not connected through the RouterOS API. Open Routers, run Re-check, and resolve the VPN/API error before migration or export. ${detail}`);
+  }
 }
 async function jobFor(id: number, adminId: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&admin_id=eq.${adminId}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
 async function guarded(req: Request, fn: (adminId: number) => Promise<void>, res: any) { try { const id = admin(req); const lock = `${id}:${req.params.id ?? req.body.sourceRouterId ?? req.body.sourceLabel ?? ""}`; if (locks.has(lock)) { res.status(409).json({ ok: false, error: "Migration is already in progress." }); return; } locks.add(lock); try { await fn(id); } finally { locks.delete(lock); } } catch (e) { res.status(400).json({ ok: false, error: e instanceof Error ? e.message : "Migration request failed." }); } }
@@ -191,11 +209,13 @@ router.get("/router-migrations/routers", async (req, res) => guarded(req, async 
 router.post("/router-migrations/analyze", async (req, res) => guarded(req, async a => {
   const source = await ownedRouter(positive(req.body.sourceRouterId), a);
   for (const command of ["/system/identity/print", "/system/resource/print", "/system/routerboard/print", "/system/license/print"]) assertSourceCommand(command);
+  await requireApiConnection(source, a);
   const observed = await observeDevice(source);
   res.json({ compatible: true, details: "Read-only compatibility analysis completed.", dataPoints: [{ type: "router", count: 1 }], readOnly: true, identity: { name: observed.identity, version: observed.version, boardName: observed.boardName } });
 }, res));
 router.post("/router-migrations/export", async (req, res) => guarded(req, async a => {
   const source = await ownedRouter(positive(req.body.sourceRouterId), a);
+  await requireApiConnection(source, a);
   const pkg = await exportRouterMigration(creds(source)); const secure = encrypt(pkg); const plan = buildMigrationPlan(pkg);
   const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);

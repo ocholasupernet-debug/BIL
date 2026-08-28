@@ -1,5 +1,7 @@
 -- Additive VPN management schema. All secret material is encrypted by the API
 -- with SESSION_SECRET before it reaches these service-role-only tables.
+alter table if exists isp_routers add column if not exists last_connected_host text;
+
 create table if not exists isp_vpn_servers (
   id bigserial primary key,
   admin_id bigint not null references isp_admins(id) on delete cascade,

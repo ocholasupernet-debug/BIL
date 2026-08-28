@@ -621,7 +621,7 @@ export default function Routers() {
 
   /* ping state */
   const [pingState,  setPingState]  = useState<Record<number, "idle" | "pinging" | "online" | "offline">>({});
-  const [pingResult, setPingResult] = useState<Record<number, { identity?: string; uptime?: string; pingAt?: number; error?: string }>>({});
+  const [pingResult, setPingResult] = useState<Record<number, { identity?: string; uptime?: string; pingAt?: number; error?: string; via?: string; connectedHost?: string }>>({});
   const [pingingAll, setPingingAll] = useState(false);
 
   /* ping a single router */
@@ -630,10 +630,10 @@ export default function Routers() {
     setPingResult(p => ({ ...p, [r.id]: {} }));
     try {
       const res = await fetch(`/api/routers/${r.id}/ping`, { method: "POST" });
-      const data = await res.json() as { ok: boolean; identity?: string; uptime?: string; error?: string };
+      const data = await res.json() as { ok: boolean; identity?: string; uptime?: string; error?: string; via?: string; connectedHost?: string };
       const pingAt = data.ok && data.uptime ? Date.now() : undefined;
       setPingState(p => ({ ...p, [r.id]: data.ok ? "online" : "offline" }));
-      setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, pingAt, error: data.error } }));
+      setPingResult(p => ({ ...p, [r.id]: { identity: data.identity, uptime: data.uptime, pingAt, error: data.error, via: data.via, connectedHost: data.connectedHost } }));
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
     } catch (e) {
       setPingState(p => ({ ...p, [r.id]: "offline" }));
@@ -1128,7 +1128,12 @@ export default function Routers() {
                                 <Loader2 size={10} style={{ animation: "spin 1s linear infinite" }} /> Checking…
                               </span>
                             : pingSt === "online"
-                              ? <StatusDot online={true} />
+                               ? <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+                                   <StatusDot online={true} />
+                                   {(pingRes.via === "vpn" || (r.last_connected_host && r.bridge_ip === r.last_connected_host)) && (
+                                     <span style={{ fontSize: "0.65rem", color: "#4ade80", whiteSpace: "nowrap" }}>API via VPN</span>
+                                   )}
+                                 </span>
                               : pingSt === "offline"
                                 ? <>
                                     <StatusDot online={false} sub={timeSince(r.last_seen)} />
@@ -1139,7 +1144,12 @@ export default function Routers() {
                                     )}
                                   </>
                                 : online
-                                  ? <StatusDot online={true} />
+                                   ? <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+                                       <StatusDot online={true} />
+                                       {r.last_connected_host && r.bridge_ip === r.last_connected_host && (
+                                         <span style={{ fontSize: "0.65rem", color: "#4ade80", whiteSpace: "nowrap" }}>API via VPN</span>
+                                       )}
+                                     </span>
                                   : <StatusDot online={false} sub={timeSince(r.last_seen)} />
                           }
                         </td>
