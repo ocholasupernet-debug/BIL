@@ -195,17 +195,17 @@ export function SlateProfessional() {
                 <div className="lg:col-span-2 border border-slate-200 bg-white rounded-lg p-6">
                   <h3 className="text-sm font-semibold text-slate-900 mb-6">Registered Customers</h3>
                   <div className="h-[200px] w-full pt-4">
-                     <svg viewBox={`0 0 ${monthly.length * 40} 140`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
+                    <svg viewBox={`0 0 ${monthly.length * 40} 140`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
                       {monthly.map((count, i) => {
                         const barH = count === 0 ? 0 : Math.round((count / maxCount) * 110);
-                         const x = i * 40 + 8;
+                        const x = i * (100/monthly.length) + "%";
                         const barTop = 120 - barH;
                         return (
                           <g key={MONTHS[i]}>
-                             {barH > 0 && <rect x={x} y={barTop} width={24} height={barH} fill="#0F766E" rx={1} className="transition-all duration-500 hover:opacity-80" />}
-                             {barH === 0 && <rect x={x} y={119} width={24} height={1} fill="#E2E8F0" />}
-                             <text x={x + 12} y={barTop - 8} textAnchor="middle" fill="#64748B" fontSize="10" className="font-mono">{count}</text>
-                             <text x={x + 12} y={138} textAnchor="middle" fill="#94A3B8" fontSize="11" fontWeight="500">{MONTHS[i]}</text>
+                            {barH > 0 && <rect x={x} y={barTop} width="4%" height={barH} fill="#0F766E" rx={1} className="transition-all duration-500 hover:opacity-80" />}
+                            {barH === 0 && <rect x={x} y={119} width="4%" height={1} fill="#E2E8F0" />}
+                            <text x={`calc(${x} + 2%)`} y={barTop - 8} textAnchor="middle" fill="#64748B" fontSize="10" className="font-mono">{count}</text>
+                            <text x={`calc(${x} + 2%)`} y={138} textAnchor="middle" fill="#94A3B8" fontSize="11" fontWeight="500">{MONTHS[i]}</text>
                           </g>
                         );
                       })}

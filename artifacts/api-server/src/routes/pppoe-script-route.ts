@@ -102,10 +102,6 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
-function routeParam(value: string | string[] | undefined, fallback = ""): string {
-  return Array.isArray(value) ? (value[0] ?? fallback) : (value ?? fallback);
-}
-
 /* Strip characters that RouterOS treats as special inside quoted strings.
    # is a line-comment delimiter even mid-line; " would break string delimiters. */
 function rosStr(s: string): string {
@@ -135,7 +131,7 @@ function deriveNet(ip: string): { gateway: string; network: string; poolStart: s
 
 /* ══════════════════════════ Script generators ══════════════════════════ */
 
-export function genPPPoEOnly(
+function genPPPoEOnly(
   router: DbRouter, companyName: string, ros: number,
   adminSubdomain: string
 ): string {
@@ -254,7 +250,7 @@ export function genPPPoEOnly(
 `;
 }
 
-export function genPPPoEOverHotspot(
+function genPPPoEOverHotspot(
   router: DbRouter, companyName: string, ros: number,
   adminSubdomain: string
 ): string {
@@ -531,11 +527,11 @@ export function genPPPoEVlan(
    baseBridge = base bridge name (only for pppoe_vlan, embedded in path)
 ══════════════════════════════════════════════════════════════ */
 async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
-  const routerId   = parseInt(routeParam(req.params.routerId), 10);
-  const mode       = routeParam(req.params.mode) as "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan";
-  const rosVersion = parseInt(routeParam(req.params.rosVersion, "6"), 10) || 6;
-  const vlanId     = parseInt(routeParam(req.params.vlanId, "200"), 10) || 200;
-  const baseBridge = routeParam(req.params.baseBridge, "hotspot-bridge");
+  const routerId   = parseInt(req.params.routerId ?? "", 10);
+  const mode       = req.params.mode as "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan";
+  const rosVersion = parseInt(req.params.rosVersion ?? "6", 10) || 6;
+  const vlanId     = parseInt(req.params.vlanId ?? "200", 10) || 200;
+  const baseBridge = req.params.baseBridge ?? "hotspot-bridge";
 
   if (isNaN(routerId) || !["pppoe_only", "pppoe_over_hotspot", "pppoe_vlan"].includes(mode)) {
     res.status(400).send("# Error: invalid routerId or mode");

@@ -924,10 +924,10 @@ export default function HotspotLogin() {
                         <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                       </div>
                       <h3>Voucher Activated!</h3>
-                      {typeof voucherInfo?.plan_name === "string" && (
+                      {voucherInfo?.plan_name && (
                         <p>Plan: <strong style={{ color: "#fff" }}>{String(voucherInfo.plan_name)}</strong></p>
                       )}
-                      {typeof voucherInfo?.duration === "string" && (
+                      {voucherInfo?.duration && (
                         <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{String(voucherInfo.duration)}</strong></p>
                       )}
                       <div className="hp-connected-badge">

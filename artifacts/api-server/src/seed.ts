@@ -3,9 +3,6 @@ import { logger } from "./lib/logger";
 
 async function seed() {
   logger.info("Seeding demo data...");
-  if (!db) {
-    throw new Error("DATABASE_URL must be configured before seeding demo data");
-  }
 
   const [isp] = await db.insert(ispsTable).values({
     name: "OcholaNet ISP",

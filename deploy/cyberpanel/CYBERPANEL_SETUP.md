@@ -181,42 +181,12 @@ CyberPanel handles Let's Encrypt automatically:
 1. **CyberPanel → SSL → Issue SSL** → select `isplatty.org`
 2. Done — HTTPS is live.
 
-For wildcard SSL (covers `*.isplatty.org` subdomains for per-ISP scripts), use
-a Certbot DNS plugin rather than the interactive `--manual` challenge. The
-DNS plugin makes renewal unattended and lets Certbot's timer renew the
-certificate before expiry.
+For wildcard SSL (covers `*.isplatty.org` subdomains for per-ISP scripts):
 
 ```bash
-# Install the plugin for your DNS provider, for example:
-sudo apt-get install -y python3-certbot-dns-<provider>
-
-# Store the provider credentials file with root-only permissions, then run:
-sudo CERTBOT_DNS_PLUGIN=<provider> \
-  CERTBOT_DNS_CREDENTIALS=/root/.secrets/certbot/<provider>.ini \
-  CERTBOT_EMAIL=admin@example.com \
-  bash deploy/renew-wildcard-certificate.sh --bootstrap
+sudo certbot certonly --manual --preferred-challenges dns \
+  -d isplatty.org -d "*.isplatty.org"
 ```
-
-Replace `<provider>` with the Certbot plugin supported by the authoritative DNS
-provider for `isplatty.org` (for example, `cloudflare`). Do not commit the
-credentials file or put its contents in `.env`.
-
-The certificate must contain both `DNS:isplatty.org` and
-`DNS:*.isplatty.org`. The bootstrap command validates both names, configures
-the wildcard Nginx vhost, and installs a Certbot deploy hook. After the
-certificate is issued, run the normal deployment script once more. The
-deployment will:
-
-1. Generate the wildcard Nginx vhost without replacing the apex vhost.
-2. Serve the React SPA from the built `dist/public` directory.
-3. Proxy each ISP host's `/api/` routes to the API on port 8080.
-4. Verify that Nginx loaded the wildcard vhost after its configuration reload.
-5. Keep the renewal hook and Certbot timer enabled on every deployment.
-
-When Certbot renews the certificate, the deploy hook checks both SANs in the
-renewed certificate before running `nginx -t` and reloading Nginx. If either
-name is missing, the hook exits without reloading Nginx and the existing
-certificate remains in use.
 
 ---
 

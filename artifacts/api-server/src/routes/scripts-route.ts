@@ -217,7 +217,7 @@ function resolveOrigin(host: string): string {
    Sub-script URLs use the requesting ISP's own subdomain so each
    ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-export function buildMainhotspotRsc(
+function buildMainhotspotRsc(
   scriptsBase: string,
   progressUrl: string = "",
   routerName: string = "",
@@ -1441,8 +1441,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       router_row = routers.find(r => slugify(r.name) === slug);
     }
 
-    let createError = "";
-
     /* ── Auto-create when no matching router found ──
        • mainhotspot  → name = ${adminSubdomain}${N}
        • specific slug (e.g. come1) → name = that slug exactly
@@ -1459,6 +1457,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         ? `${adminSubdomain}${routers.length + 1}`
         : slug;   // use the slug as the router name (e.g. "come1")
 
+      let createError = "";
       /* Try service-role key first (bypasses RLS), then anon key */
       const serviceKey = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
       const keysToTry  = serviceKey ? [serviceKey, SUPABASE_KEY].filter(Boolean) : [SUPABASE_KEY];

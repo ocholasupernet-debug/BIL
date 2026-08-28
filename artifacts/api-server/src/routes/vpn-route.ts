@@ -629,7 +629,7 @@ router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => 
       }),
     });
     if (!r.ok) throw new Error(await r.text());
-    const rows = (await r.json()) as { assigned_ip: string }[];
+    const rows = await r.json();
     syncUserToDb(username.trim(), password.trim());
     /* Pre-register the IP in ipp.txt so OpenVPN always assigns this IP */
     writeIppEntry(username.trim(), assignedIp);

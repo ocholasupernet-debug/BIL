@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { Link } from "wouter";
 import { supabase, ADMIN_ID, type DbRouter, type DbTransaction, getPaymentGateway, GATEWAY_OPTIONS } from "@/lib/supabase";
-import { DashboardView } from "./DashboardView";
+import { Loader2, Wifi, WifiOff, Users, Ticket, MessageSquare, Router, DollarSign, TrendingUp, BarChart3, CreditCard } from "lucide-react";
+import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 
 /* Fetch live subscriber count from a single router (hotspot + PPPoE) */
 async function fetchLiveCount(routerId: number): Promise<number> {
@@ -60,7 +62,76 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+function KpiCard({ label, value, icon, accent }: { label: string; value: string; icon: React.ReactNode; accent?: string }) {
+  return (
+    <div style={{ borderRadius: 14, background: "var(--isp-card)", border: "1px solid var(--isp-border)", padding: "1.125rem 1.25rem", display: "flex", alignItems: "flex-start", gap: "0.875rem" }}>
+      <div style={{ width: 40, height: 40, borderRadius: 10, background: accent ? `${accent}12` : "var(--isp-accent-glow)", border: `1px solid ${accent ? `${accent}25` : "var(--isp-accent-border)"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: accent || "var(--isp-accent)" }}>
+        {icon}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.03em", lineHeight: 1.1 }}>{value}</div>
+        <div style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", fontWeight: 500, marginTop: "0.25rem" }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function StatMiniCard({ label, value, href, dotColor }: { label: string; value: string; href: string; dotColor?: string }) {
+  return (
+    <Link href={href}>
+      <div style={{ borderRadius: 12, background: "var(--isp-card)", border: "1px solid var(--isp-border)", padding: "0.875rem 1rem", cursor: "pointer", transition: "border-color 0.15s" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.375rem", marginBottom: "0.25rem" }}>
+          {dotColor && <span style={{ width: 7, height: 7, borderRadius: "50%", background: dotColor, display: "inline-block", flexShrink: 0 }} />}
+          <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", fontWeight: 500 }}>{label}</span>
+        </div>
+        <div style={{ fontSize: "1.375rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.03em" }}>{value}</div>
+        <div style={{ fontSize: "0.68rem", color: "var(--isp-accent)", fontWeight: 600, marginTop: "0.25rem" }}>View All →</div>
+      </div>
+    </Link>
+  );
+}
+
+function DonutChart({ insights }: { insights: { label: string; count: number; color: string }[] }) {
+  const total = insights.reduce((a, b) => a + b.count, 0);
+  const cx = 80, cy = 80, r = 56;
+  const circumference = 2 * Math.PI * r;
+  if (total === 0) {
+    return (
+      <svg viewBox="0 0 160 160" width={160} height={160} style={{ display: "block" }}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--isp-border)" strokeWidth={22} />
+        <text x={cx} y={cy - 8} textAnchor="middle" fill="var(--isp-text)" fontSize="18" fontWeight="800">0</text>
+        <text x={cx} y={cy + 10} textAnchor="middle" fill="var(--isp-text-muted)" fontSize="10">Total Users</text>
+      </svg>
+    );
+  }
+  let offset = 0;
+  const segments = insights.map(s => {
+    const pct = s.count / total;
+    const dash = pct * circumference;
+    const seg = { ...s, dash, offset };
+    offset += dash;
+    return seg;
+  });
+  return (
+    <svg viewBox="0 0 160 160" width={160} height={160} style={{ display: "block" }}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--isp-border)" strokeWidth={22} />
+      {segments.map(seg => (
+        <circle key={seg.label} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color} strokeWidth={22}
+          strokeDasharray={`${seg.dash} ${circumference - seg.dash}`}
+          strokeDashoffset={-seg.offset + circumference * 0.25}
+          style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }} />
+      ))}
+      <text x={cx} y={cy - 8} textAnchor="middle" fill="var(--isp-text)" fontSize="18" fontWeight="800">{total}</text>
+      <text x={cx} y={cy + 10} textAnchor="middle" fill="var(--isp-text-muted)" fontSize="10">Total Users</text>
+    </svg>
+  );
+}
+
+function fmtKsh(n: number) { return fmtMoney(n); }
+
 export default function Dashboard() {
+  const [chartCollapsed,  setChartCollapsed]  = useState(false);
+  const [chartMinimized,  setChartMinimized]  = useState(false);
   const [selectedRouter,  setSelectedRouter]  = useState<number | "all">("all");
 
   const gatewayId   = getPaymentGateway();
@@ -97,10 +168,6 @@ export default function Dashboard() {
       const d = new Date(t.created_at);
       return t.status === "completed" && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     }).reduce((s, t) => s + t.amount, 0), [transactions]);
-  const totalRevenue = useMemo(
-    () => transactions.filter(t => t.status === "completed").reduce((sum, t) => sum + t.amount, 0),
-    [transactions],
-  );
 
   const onlineRouters  = routers.filter(routerOnline).length;
   const offlineRouters = routers.length - onlineRouters;
@@ -157,35 +224,6 @@ export default function Dashboard() {
     return "Good evening";
   })();
 
-  return (
-    <AdminLayout>
-      <DashboardView
-        routers={routers}
-        routersLoading={routersLoading}
-        onlineRouters={onlineRouters}
-        offlineRouters={offlineRouters}
-        routerOptions={routerOptions}
-        selectedRouter={selectedRouter}
-        selectedRouterObj={selectedRouterObj}
-        setSelectedRouter={setSelectedRouter}
-        monthlyData={monthlyData}
-        maxCount={maxCount}
-        userInsights={userInsights}
-        gatewayLabel={gatewayInfo.label}
-        txLoading={txLoading}
-        recentTxs={recentTxs}
-        transactionCount={transactions.length}
-        incomeToday={incomeToday}
-        incomeMonth={incomeMonth}
-        totalRevenue={totalRevenue}
-        totalOnlineNow={totalOnlineNow}
-        liveCountLoading={liveCountLoading}
-        greeting={greeting}
-      />
-    </AdminLayout>
-  );
-
-  /*
   return (
     <AdminLayout>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
@@ -448,5 +486,4 @@ export default function Dashboard() {
       </div>
     </AdminLayout>
   );
-  */
 }

@@ -1508,7 +1508,7 @@ function PaymentGatewaysTab() {
         setFields(prev => ({
           ...prev,
           ...Object.fromEntries(
-            Object.entries(data.configs ?? {}).map(([gatewayId, config]) => [
+            Object.entries(data.configs).map(([gatewayId, config]) => [
               gatewayId,
               { ...(prev[gatewayId] || {}), ...config },
             ]),
