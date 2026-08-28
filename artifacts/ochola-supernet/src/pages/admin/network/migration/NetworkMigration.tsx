@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   fetchRouters,
+  downloadReadOnlyExportScript,
   analyzeSource,
   exportSource,
   setTargetRouter,
@@ -148,6 +149,20 @@ export default function NetworkMigration() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadReadOnlyScript = async () => {
+    try {
+      const blob = await downloadReadOnlyExportScript();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "ocholasupernet-read-only-export.rsc";
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({ title: "Script download failed", description: error instanceof Error ? error.message : "Could not download the script.", variant: "destructive" });
+    }
+  };
+
   const handleNext = () => {
     if (currentStep === 1) {
       if (sourceRouterId) analyzeMutation.mutate(sourceRouterId);
@@ -258,18 +273,31 @@ export default function NetworkMigration() {
                       No routers found. Please add a router to the network before proceeding.
                     </div>
                   ) : (
-                    <select
-                      className="isp-input py-3 w-full cursor-pointer"
-                      value={sourceRouterId || ""}
-                      onChange={(e) => setSourceRouterId(Number(e.target.value))}
-                    >
-                      <option value="">-- Choose source router --</option>
-                      {routers?.map(r => (
-                        <option key={r.id} value={r.id} disabled={r.status !== 'online' && r.status !== 'connected'}>
-                          {r.name} ({r.host}) - {r.status}
-                        </option>
-                      ))}
-                    </select>
+                    <>
+                      <select
+                        className="isp-input py-3 w-full cursor-pointer"
+                        value={sourceRouterId || ""}
+                        onChange={(e) => setSourceRouterId(Number(e.target.value))}
+                      >
+                        <option value="">-- Choose source router --</option>
+                        {routers?.map(r => (
+                          <option key={r.id} value={r.id} disabled={r.status !== 'online' && r.status !== 'connected'}>
+                            {r.name} ({r.host}) - {r.status}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-xl border border-[var(--isp-border)] bg-[var(--isp-inner-card)]">
+                        <div>
+                          <strong className="block text-xs font-bold text-[var(--isp-text)]">Need a portable .rsc instead?</strong>
+                          <p className="text-xs text-[var(--isp-text-muted)] mt-1 max-w-xl">
+                            Download a command-only helper, run it in the active router terminal, and copy its printed export into a file. It reads users, credentials, profiles, limits, durations, schedules, and related settings without changing the router.
+                          </p>
+                        </div>
+                        <button type="button" className="btn btn-ghost shrink-0" onClick={downloadReadOnlyScript}>
+                          <FileCheck size={14} /> Download .rsc helper
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
               </div>

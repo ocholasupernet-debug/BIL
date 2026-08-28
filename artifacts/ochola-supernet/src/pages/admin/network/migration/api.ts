@@ -16,6 +16,16 @@ export async function fetchRouters() {
   return data.routers || [];
 }
 
+export async function downloadReadOnlyExportScript() {
+  const res = await fetch("/api/router-migrations/read-only-export-script", { headers: getHeaders() });
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to download export script");
+  }
+  return res.blob();
+}
+
 export async function analyzeSource(sourceRouterId: number) {
   const res = await fetch("/api/router-migrations/analyze", {
     method: "POST",

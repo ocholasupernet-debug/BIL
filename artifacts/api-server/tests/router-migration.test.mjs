@@ -5,9 +5,10 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 const outdir = "tests/.migration-build";
-await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
+await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
 const exporter = await import(path.resolve(outdir, "router-migration-exporter.cjs"));
 const importer = await import(path.resolve(outdir, "router-migration-importer.cjs"));
+const exportScript = await import(path.resolve(outdir, "router-migration-export-script.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 test("source allowlist excludes files and mutations", () => {
@@ -16,6 +17,11 @@ test("source allowlist excludes files and mutations", () => {
   assert.doesNotThrow(() => exporter.assertSourceCommand("/system/license/print"));
   assert.throws(() => exporter.assertSourceCommand("/file/print"));
   assert.throws(() => exporter.assertSourceCommand("/ip/address/add"));
+});
+test("downloadable helper is read-only and does not create a router file", () => {
+  assert.match(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /\/export show-sensitive terse/);
+  assert.doesNotMatch(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /file\s*=/i);
+  assert.doesNotMatch(exportScript.READ_ONLY_ROUTER_EXPORT_SCRIPT, /\/file\//i);
 });
 test("export redacts secret fields and never reads files", async () => {
   const seen = [];

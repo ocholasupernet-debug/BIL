@@ -5,6 +5,7 @@ import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { assertSourceCommand, exportRouterMigration, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
 import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
+import { READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
 
 const router: IRouter = Router();
 const locks = new Set<string>();
@@ -33,6 +34,14 @@ async function observeDevice(row: RouterRow) {
 }
 
 router.use("/router-migrations", requireAdmin());
+router.get("/router-migrations/read-only-export-script", (req, res) => {
+  try {
+    admin(req);
+    res.type("text/plain").set("Content-Disposition", 'attachment; filename="ocholasupernet-read-only-export.rsc"').send(READ_ONLY_ROUTER_EXPORT_SCRIPT);
+  } catch {
+    res.status(401).json({ ok: false, error: "Invalid administrator identity." });
+  }
+});
 router.get("/router-migrations/routers", async (req, res) => guarded(req, async a => {
   const rows = await sbSelectStrict<RouterRow>("isp_routers", `admin_id=eq.${a}&select=id,name,host,status,ros_version&order=name.asc`);
   res.json({ routers: rows });
