@@ -87,6 +87,14 @@ export default function NetworkMigration() {
     onError: (err: any) => toast({ title: "Collection status unavailable", description: err.message, variant: "destructive" })
   });
 
+  useEffect(() => {
+    if (!collector?.token || collector.migrationId) return;
+    const poll = () => collectorStatusMutation.mutate(collector.token);
+    poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => window.clearInterval(interval);
+  }, [collector?.token, collector?.migrationId]);
+
   const targetMutation = useMutation({
     mutationFn: ({ id, targetId }: { id: string, targetId: number }) => setTargetRouter(id, targetId),
     onSuccess: () => {

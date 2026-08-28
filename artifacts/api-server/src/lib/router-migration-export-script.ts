@@ -42,6 +42,7 @@ export function buildDomainRouterExportScript(uploadUrl: string): string {
     :local exportSize [/file get $exportId size]
     :if ($exportSize > [:len $exportData]) do={ :error "This RouterOS version cannot read an export larger than its script variable limit." }
     :local exportLength [:len $exportData]
+    :if ($exportLength = 0) do={ :error "Export file is empty." }
     :local chunkSize 3500
     :local chunkIndex 0
     :local offset 0
