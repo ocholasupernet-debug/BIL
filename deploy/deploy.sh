@@ -117,7 +117,7 @@ apply_supabase_migration() {
     echo "      Applying admin password setup migration..."
     (
       cd "$PROJECT_DIR/artifacts/api-server"
-      SUPABASE_DB_URL="$database_url" node scripts/apply-admin-password-migration.mjs
+      SUPABASE_DB_URL="$database_url" node scripts/apply-deployment-migrations.mjs
     )
     echo "      ✓ Supabase migration applied"
     return

@@ -235,6 +235,8 @@ export default function HotspotLogin() {
     { id: "login", label: "Login", icon: <User size={16} /> },
     { id: "voucher", label: "Voucher", icon: <Ticket size={16} /> },
   ];
+  const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
+  const voucherDuration = voucherInfo?.duration == null ? "" : String(voucherInfo.duration);
 
   return (
     <>
@@ -928,11 +930,11 @@ export default function HotspotLogin() {
                         <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                       </div>
                       <h3>Voucher Activated!</h3>
-                      {voucherInfo?.plan_name && (
-                        <p>Plan: <strong style={{ color: "#fff" }}>{String(voucherInfo.plan_name)}</strong></p>
+                      {voucherPlanName && (
+                        <p>Plan: <strong style={{ color: "#fff" }}>{voucherPlanName}</strong></p>
                       )}
-                      {voucherInfo?.duration && (
-                        <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{String(voucherInfo.duration)}</strong></p>
+                      {voucherDuration && (
+                        <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{voucherDuration}</strong></p>
                       )}
                       <div className="hp-connected-badge">
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />

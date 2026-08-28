@@ -85,8 +85,8 @@ if [ ! -f "$OVPN_CONF" ]; then
   done
 fi
 echo "[1] Using config: $OVPN_CONF"
-cp "$OVPN_CONF" "${OVPN_CONF}.bak.$(date +%s)"
-echo "    Backup saved: ${OVPN_CONF}.bak.*"
+cp "$OVPN_CONF" "\${OVPN_CONF}.bak.$(date +%s)"
+echo "    Backup saved: \${OVPN_CONF}.bak.*"
 
 # ── 2. Patch: ensure proto tcp ───────────────────────────────────────────────
 echo "[2] Ensuring proto tcp (MikroTik OVPN client requires TCP)..."
@@ -118,7 +118,7 @@ PASSFILE="/etc/openvpn/passwd"
 username="$1"
 password="$2"
 [ -f "$PASSFILE" ] || exit 1
-grep -qF "${username}:${password}" "$PASSFILE" && exit 0 || exit 1
+grep -qF "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
 

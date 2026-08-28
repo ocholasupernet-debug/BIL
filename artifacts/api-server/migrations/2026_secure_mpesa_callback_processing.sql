@@ -71,11 +71,11 @@ begin
 
   if tx.payment_phone is not null and tx.payment_phone <> '' then
     normalized_phone := regexp_replace(tx.payment_phone, '\D', '', 'g');
-    select id into customer_id_to_credit
-    from isp_customers
-    where regexp_replace(phone, '\D', '', 'g') = normalized_phone
-      and (tx.admin_id is null or admin_id = tx.admin_id)
-    order by id
+    select c.id into customer_id_to_credit
+    from isp_customers as c
+    where regexp_replace(c.phone, '\D', '', 'g') = normalized_phone
+      and (tx.admin_id is null or c.admin_id = tx.admin_id)
+    order by c.id
     limit 1
     for update;
 

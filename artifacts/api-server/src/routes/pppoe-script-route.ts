@@ -527,11 +527,13 @@ export function genPPPoEVlan(
    baseBridge = base bridge name (only for pppoe_vlan, embedded in path)
 ══════════════════════════════════════════════════════════════ */
 async function handlePPPoEScript(req: Request, res: Response): Promise<void> {
-  const routerId   = parseInt(req.params.routerId ?? "", 10);
-  const mode       = req.params.mode as "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan";
-  const rosVersion = parseInt(req.params.rosVersion ?? "6", 10) || 6;
-  const vlanId     = parseInt(req.params.vlanId ?? "200", 10) || 200;
-  const baseBridge = req.params.baseBridge ?? "hotspot-bridge";
+  const param = (value: string | string[] | undefined, fallback: string): string =>
+    Array.isArray(value) ? value[0] ?? fallback : value ?? fallback;
+  const routerId   = parseInt(param(req.params.routerId, ""), 10);
+  const mode       = param(req.params.mode, "") as "pppoe_only" | "pppoe_over_hotspot" | "pppoe_vlan";
+  const rosVersion = parseInt(param(req.params.rosVersion, "6"), 10) || 6;
+  const vlanId     = parseInt(param(req.params.vlanId, "200"), 10) || 200;
+  const baseBridge = param(req.params.baseBridge, "hotspot-bridge");
 
   if (isNaN(routerId) || !["pppoe_only", "pppoe_over_hotspot", "pppoe_vlan"].includes(mode)) {
     res.status(400).send("# Error: invalid routerId or mode");

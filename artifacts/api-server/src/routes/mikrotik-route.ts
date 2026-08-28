@@ -249,8 +249,8 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
     routerName: row.name,
     configuredHost: row.host,
     vpnFallbackIp: row.bridge_ip,
-    warnings: [...warnings, ...result.warnings],
     ...result,
+    warnings: [...warnings, ...result.warnings],
   });
 });
 

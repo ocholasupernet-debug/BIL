@@ -1504,11 +1504,12 @@ function PaymentGatewaysTab() {
     fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`)
       .then(response => response.ok ? response.json() : null)
       .then((data: { configs?: Record<string, Record<string, string>> } | null) => {
-        if (!data?.configs) return;
+        const configs = data?.configs;
+        if (!configs) return;
         setFields(prev => ({
           ...prev,
           ...Object.fromEntries(
-            Object.entries(data.configs).map(([gatewayId, config]) => [
+            Object.entries(configs).map(([gatewayId, config]) => [
               gatewayId,
               { ...(prev[gatewayId] || {}), ...config },
             ]),
