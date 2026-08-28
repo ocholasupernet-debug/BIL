@@ -47,7 +47,9 @@ test("temporary tunnel script is address-bound and self-removing", () => {
     schedulerName: "ochola-migration-expiry-42",
   });
   assert.match(script, /Expected router tunnel address: 10\.8\.0\.42/);
-  assert.match(script, /connect-to="vpn\.example\.test"/);
+  assert.match(script, /:local migrationTunnelInterfaceName "ochola-mig-1-abcd"/);
+  assert.match(script, /\/interface ovpn-client add name=\$migrationTunnelInterfaceName connect-to="vpn\.example\.test"/);
+  assert.match(script, /temporary migration tunnel interface was not created/);
   assert.match(script, /interval=1h/);
   assert.match(script, /\/interface ovpn-client remove/);
   assert.match(script, /\/ip firewall filter remove/);

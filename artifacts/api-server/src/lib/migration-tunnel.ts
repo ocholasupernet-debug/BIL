@@ -55,11 +55,13 @@ export function buildMigrationTunnelScript(options: MigrationTunnelScriptOptions
 # This temporary client is separate from the permanent OcholaSupernet VPN.
 # It is removed automatically after one hour and must not be reused later.
 :local migrationTunnelIp "${tunnelIp}"
+:local migrationTunnelInterfaceName "${interfaceName}"
 :put ("OcholaSupernet: starting migration tunnel; expected address " . $migrationTunnelIp)
 :do { /system scheduler remove [find name="${schedulerName}"] } on-error={}
 :do { /ip firewall filter remove [find comment="${firewallComment}"] } on-error={}
 :do { /interface ovpn-client remove [find name="${interfaceName}"] } on-error={}
-/interface ovpn-client add name="${interfaceName}" connect-to="${endpoint}" port=${options.port} mode=ip user="${username}" password="${password}" cipher=aes256 auth=sha1 add-default-route=no disabled=no comment="${firewallComment}"
+/interface ovpn-client add name=$migrationTunnelInterfaceName connect-to="${endpoint}" port=${options.port} mode=ip user="${username}" password="${password}" cipher=aes256 auth=sha1 add-default-route=no disabled=no comment="${firewallComment}"
+:if ([:len [/interface ovpn-client find name=$migrationTunnelInterfaceName]] = 0) do={ :error "OcholaSupernet: temporary migration tunnel interface was not created" }
 /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728 src-address=${serverIp} comment="${firewallComment}"
 /ip firewall filter add chain=input action=accept protocol=icmp src-address=${serverIp} comment="${firewallComment}"
 /system scheduler add name="${schedulerName}" interval=1h on-event="${cleanup}"
