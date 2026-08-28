@@ -477,7 +477,7 @@ function buildMainhotspotRsc(
     :global IPRname
     :local body ("step=" . [:tostr $1] . "&name=" . [:tostr $2] . "&phase=" . [:tostr $3] . "&err=" . [:tostr $4] . "&rname=" . $IPRname)
     :do {
-        /tool fetch url=$IPProgUrl http-method=post http-content-type="application/x-www-form-urlencoded" http-data=$body keep-result=no mode=https check-certificate=no
+        /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no mode=https check-certificate=no
     } on-error={}
 }`
     : `:global pg do={}`;
@@ -740,7 +740,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :global IPProgUrl
     :global IPRname
     :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-content-type="application/x-www-form-urlencoded" http-data=("done=1&rname=" . $IPRname) keep-result=no mode=https check-certificate=no
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname) keep-result=no mode=https check-certificate=no
     }
 } on-error={}
 `;
