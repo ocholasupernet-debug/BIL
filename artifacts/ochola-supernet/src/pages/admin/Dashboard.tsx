@@ -31,8 +31,6 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   ADMIN_ID,
-  GATEWAY_OPTIONS,
-  getPaymentGateway,
   supabase,
   type DbRouter,
   type DbTransaction,
@@ -90,6 +88,51 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
     .limit(50);
   if (error) throw error;
   return data ?? [];
+}
+
+type PaymentSettingsResponse = {
+  settings?: {
+    paymentGateway?: string;
+  };
+};
+
+async function fetchConfiguredGateway(): Promise<string> {
+  const response = await fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`);
+  if (!response.ok) throw new Error("Could not load payment gateway settings.");
+  const data = await response.json() as PaymentSettingsResponse;
+  return data.settings?.paymentGateway || "mpesa_paybill";
+}
+
+const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
+  mpesa_paybill: "M-Pesa PayBill",
+  mpesa_till_push: "M-Pesa Till Push",
+  bank_stk_push: "BankStkPush",
+  airtel: "AirtelMoney",
+  azampay: "AzamPay",
+  custom_paybill: "CustomPaybill",
+  dpo_payments: "DpoPayments",
+  flutterwave: "Flutterwave",
+  intasend: "Intasend",
+  pesapal: "PesaPal",
+  stripe: "Stripe",
+  paypal: "PayPal",
+  tigopesa: "TigoPesa",
+  xendit: "XenditEwallet",
+  manual: "Cash / Manual",
+};
+
+const PAYMENT_GATEWAY_MODES: Record<string, string> = {
+  mpesa_paybill: "mpesapaybillstk",
+  mpesa_till_push: "mpesatillstk",
+  bank_stk_push: "bankstk",
+};
+
+function gatewayMode(id: string): string {
+  return PAYMENT_GATEWAY_MODES[id] || id.replace(/[_\s-]+/g, "").toLowerCase();
+}
+
+function gatewayLabel(id: string): string {
+  return PAYMENT_GATEWAY_LABELS[id] || id;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -194,9 +237,21 @@ export default function Dashboard() {
   const [chartMinimized, setChartMinimized] = useState(false);
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
 
-  const gatewayId = getPaymentGateway();
-  const gatewayInfo = GATEWAY_OPTIONS.find((gateway) => gateway.id === gatewayId) ?? GATEWAY_OPTIONS[0];
   const now = new Date();
+
+  const {
+    data: configuredGatewayId,
+    isLoading: gatewayLoading,
+    isError: gatewayError,
+  } = useQuery({
+    queryKey: ["isp_payment_gateway", ADMIN_ID],
+    queryFn: fetchConfiguredGateway,
+    refetchOnWindowFocus: true,
+  });
+
+  const gatewayId = configuredGatewayId || "";
+  const currentGatewayMode = gatewayLoading ? "Loading…" : gatewayError ? "Unavailable" : gatewayMode(gatewayId);
+  const currentGatewayLabel = gatewayId ? gatewayLabel(gatewayId) : "Payment gateway";
 
   const {
     data: routers = [],
@@ -338,10 +393,13 @@ export default function Dashboard() {
         <section className="gateway-strip" aria-label="Payment gateway status">
           <span className="gateway-icon" aria-hidden="true"><Landmark size={17} /></span>
           <span className="gateway-copy">
-            <strong>{gatewayInfo.label}</strong>
-            <span>Payment gateway configured</span>
+            <strong>{currentGatewayMode}</strong>
+            <span>{currentGatewayLabel}</span>
           </span>
-          <span className="isp-badge isp-badge-green"><CircleCheck size={12} /> Active</span>
+          <span className={`isp-badge ${gatewayError ? "isp-badge-red" : "isp-badge-green"}`}>
+            {gatewayError ? <CircleAlert size={12} /> : <CircleCheck size={12} />}
+            {gatewayError ? "Unavailable" : "Active"}
+          </span>
           <Link href="/admin/settings" className="gateway-link">Manage gateway <ArrowUpRight size={13} /></Link>
         </section>
 
@@ -480,7 +538,7 @@ export default function Dashboard() {
               </div>
               <div className="gateway-detail">
                 <span className="gateway-detail-icon"><Banknote size={18} /></span>
-                <div><strong>{gatewayInfo.label}</strong><span>Ready to accept payments</span></div>
+                <div><strong>{currentGatewayMode}</strong><span>{currentGatewayLabel} · Ready to accept payments</span></div>
               </div>
             </section>
             <section className="section-card insight-card">
