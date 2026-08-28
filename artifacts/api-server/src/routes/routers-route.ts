@@ -50,9 +50,18 @@ function cleanRouterHost(value: string | null | undefined): string {
     .replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
 }
 
-function discoverVpnIp(name: string, host: string, configuredIp: string | null | undefined): string | undefined {
+function discoverVpnIp(
+  name: string,
+  host: string,
+  configuredIp: string | null | undefined,
+  configuredVpnIp?: string | null,
+): string | undefined {
   const clients = readVpnClients();
-  return vpnIpFor(name, clients)
+  /* The persisted management address is authoritative. A live status-file
+     match is useful for older records, but must not replace a configured
+     10.8.5.x address with a legacy/customer tunnel address. */
+  return configuredVpnIp?.trim()
+    || vpnIpFor(name, clients)
     || vpnIpFor(cleanRouterHost(host), clients)
     || configuredIp?.trim()
     || undefined;
@@ -410,13 +419,13 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
   const rows = await sbSelect<{
     id: number; name: string; host: string; bridge_ip: string | null;
     router_username: string; router_secret: string | null; status: string;
-  }>("isp_routers", `id=eq.${id}&select=id,name,host,bridge_ip,router_username,router_secret,status&limit=1`);
+  }>("isp_routers", `id=eq.${id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status&limit=1`);
 
   const row = rows[0];
   if (!row) { res.status(404).json({ ok: false, error: "Router not found" }); return; }
 
   const host = cleanRouterHost(row.host);
-  const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
+  const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip, row.vpn_ip);
   const creds = {
     host:     host || discoveredVpnIp || "",
     port:     8728,
@@ -433,7 +442,7 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
     const now = result.connectedAt;
     await sbUpdate("isp_routers", `id=eq.${id}`, {
       ...(!isPendingSetup(row.status) ? { status: "online", last_seen: now } : {}),
-      ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
+      ...(discoveredVpnIp && discoveredVpnIp !== row.vpn_ip ? { vpn_ip: discoveredVpnIp } : {}),
       last_connected_host: result.connectedHost,
       model: result.board || undefined, ros_version: result.version || undefined,
       updated_at: now,
@@ -473,14 +482,14 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
   const routers = await sbSelect<{
     id: number; name: string; host: string; bridge_ip: string | null;
     router_username: string; router_secret: string | null; status: string;
-  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,router_username,router_secret,status`);
+  }>("isp_routers", `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status`);
 
   if (!routers.length) { res.json({ ok: true, results: [], total: 0 }); return; }
 
   const results = await Promise.allSettled(
     routers.map(async (row) => {
       const host = cleanRouterHost(row.host);
-      const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
+      const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip, row.vpn_ip);
       const creds = {
         host:     host || discoveredVpnIp || "",
         port:     8728,
@@ -495,7 +504,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
         const r = await pingRouter(creds);
         await sbUpdate("isp_routers", `id=eq.${row.id}`, {
           ...(!isPendingSetup(row.status) ? { status: "online", last_seen: r.connectedAt } : {}),
-          ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
+          ...(discoveredVpnIp && discoveredVpnIp !== row.vpn_ip ? { vpn_ip: discoveredVpnIp } : {}),
           last_connected_host: r.connectedHost,
           model: r.board || undefined, ros_version: r.version || undefined,
           updated_at: r.connectedAt,
@@ -578,14 +587,14 @@ export async function sweepAllRouters(): Promise<void> {
     const routers = await sbSelect<{
       id: number; name: string; host: string; bridge_ip: string | null;
       router_username: string; router_secret: string | null;
-    }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,bridge_ip,router_username,router_secret");
+    }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret");
 
     if (!routers.length) return;
 
     await Promise.allSettled(
       routers.map(async (row) => {
         const host = cleanRouterHost(row.host);
-        const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip);
+        const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip, row.vpn_ip);
         const creds = {
           host:     host || discoveredVpnIp || "",
           port:     8728,
@@ -603,7 +612,7 @@ export async function sweepAllRouters(): Promise<void> {
           await sbUpdate("isp_routers", `id=eq.${row.id}`, {
             status: "online", last_seen: r.connectedAt,
             last_connected_host: r.connectedHost,
-            ...(discoveredVpnIp && discoveredVpnIp !== row.bridge_ip ? { bridge_ip: discoveredVpnIp } : {}),
+            ...(discoveredVpnIp && discoveredVpnIp !== row.vpn_ip ? { vpn_ip: discoveredVpnIp } : {}),
             model: r.board || undefined, ros_version: r.version || undefined,
             updated_at: r.connectedAt,
             ...(r.uptime ? { router_uptime: r.uptime, uptime_at: r.connectedAt } : {}),
