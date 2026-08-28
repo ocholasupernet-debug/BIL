@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { randomBytes } from "crypto";
 import {
   fetchHotspotUsers,
   fetchPPPoEActive,
@@ -22,10 +23,13 @@ import {
   generateOvpnClientConfig,
   generateRouterAsClientScript,
   fetchRouterFiles,
+  deployRouterFile,
+  RouterFileExistsError,
   getEnvCredentials,
   isPrivateIp,
   type RouterCredentials,
 } from "../lib/mikrotik";
+import { getDeployableSource, type DeployableSourceType } from "./scripts-route.js";
 import {
   generateVpsOvpnSetupScript,
   describeVpnArchitecture,
@@ -35,6 +39,88 @@ import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 
 const router: IRouter = Router();
+
+interface PendingRouterFileSource {
+  content: Buffer;
+  contentType: string;
+  fileName: string;
+  expiresAt: number;
+}
+
+const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
+const ROUTER_FILE_SOURCE_TTL_MS = 5 * 60 * 1000;
+
+function cleanPendingRouterFileSources(): void {
+  const now = Date.now();
+  for (const [token, source] of pendingRouterFileSources) {
+    if (source.expiresAt <= now) pendingRouterFileSources.delete(token);
+  }
+}
+
+function requestOrigin(req: import("express").Request): string {
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
+    .split(",")[0]
+    .trim();
+  const requestHost = forwardedHost || req.get("host") || "";
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "")
+    .split(",")[0]
+    .trim();
+  const requestHostname = requestHost.split(":")[0].toLowerCase();
+  const isLocalHost = requestHostname === "localhost"
+    || requestHostname === "127.0.0.1"
+    || requestHostname === "0.0.0.0";
+  /* Vite changes the proxy Host to localhost in development. Prefer the
+     public Replit domain when it is available so a real router can reach the
+     one-time source endpoint instead of trying to fetch from its own localhost. */
+  const publicHost = isLocalHost && process.env.REPLIT_DEV_DOMAIN
+    ? process.env.REPLIT_DEV_DOMAIN
+    : requestHost;
+  const protocol = forwardedProto === "https" || req.protocol === "https" || publicHost !== requestHost
+    ? "https"
+    : "http";
+  return `${protocol}://${publicHost}`;
+}
+
+function contentTypeForFile(fileName: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  const contentTypes: Record<string, string> = {
+    css: "text/css; charset=utf-8",
+    html: "text/html; charset=utf-8",
+    js: "text/javascript; charset=utf-8",
+    json: "application/json; charset=utf-8",
+    svg: "image/svg+xml",
+    txt: "text/plain; charset=utf-8",
+    xsd: "application/xml",
+    ico: "image/x-icon",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+  };
+  return contentTypes[extension ?? ""] ?? "application/octet-stream";
+}
+
+/* One-time source endpoint used by the router's /tool fetch command. The
+   browser never receives this URL or the file contents, and the token is
+   consumed on the first request. */
+router.get("/router-file-source/:token", (req, res): void => {
+  cleanPendingRouterFileSources();
+  const token = req.params.token;
+  const source = pendingRouterFileSources.get(token);
+  if (!source || source.expiresAt <= Date.now()) {
+    pendingRouterFileSources.delete(token);
+    res.status(404).send("Upload source expired");
+    return;
+  }
+
+  pendingRouterFileSources.delete(token);
+  res
+    .set("Content-Type", source.contentType)
+    .set("Content-Length", String(source.content.length))
+    .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
+    .send(source.content);
+});
 
 /* ── Supabase isp_routers row shape ─────────────────────────────────────── */
 interface SbRouter {
@@ -285,6 +371,125 @@ router.get("/router/:id/files", async (req, res): Promise<void> => {
     });
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+/* ─── POST /api/router/:id/files/deploy ──────────────────────────────────── */
+/**
+ * Publishes one allowlisted local hotspot asset or RouterOS script to a
+ * selected router. The server owns both the local file read and router
+ * credentials; the browser sends only an asset identifier and admin id.
+ *
+ * Body:
+ *   { adminId, sourceType: "hotspot" | "script", sourceName,
+ *     destinationDirectory? , destinationPath?, overwrite? }
+ */
+router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const sourceType = req.body?.sourceType as DeployableSourceType;
+  const sourceName = String(req.body?.sourceName ?? "").trim();
+  const overwrite = req.body?.overwrite === true;
+
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (sourceType !== "hotspot" && sourceType !== "script") {
+    res.status(400).json({ error: "sourceType must be hotspot or script" });
+    return;
+  }
+  if (!sourceName) { res.status(400).json({ error: "sourceName is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  const source = getDeployableSource(sourceType, sourceName, requestOrigin(req));
+  if (!source) {
+    res.status(400).json({ error: "That local file is not an approved deployable source" });
+    return;
+  }
+
+  let destinationPath: string;
+  if (sourceType === "hotspot") {
+    const directory = String(req.body?.destinationDirectory ?? "hotspot")
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "");
+    if (!/^(?:(?:flash|disk1)\/)?hotspot$/i.test(directory)) {
+      res.status(400).json({
+        error: "Hotspot files must be deployed to hotspot, flash/hotspot, or disk1/hotspot",
+      });
+      return;
+    }
+    destinationPath = `${directory}/${source.source.name}`;
+  } else {
+    destinationPath = String(req.body?.destinationPath ?? source.source.name)
+      .trim()
+      .replaceAll("\\", "/");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.rsc$/i.test(destinationPath)) {
+      res.status(400).json({
+        error: "RouterOS scripts must use a simple .rsc filename without folders",
+      });
+      return;
+    }
+  }
+
+  cleanPendingRouterFileSources();
+  const token = randomBytes(24).toString("hex");
+  pendingRouterFileSources.set(token, {
+    content: source.content,
+    contentType: contentTypeForFile(source.source.name),
+    fileName: source.source.name.split("/").pop() ?? source.source.name,
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+
+  try {
+    const result = await deployRouterFile(found.creds, {
+      destinationPath,
+      sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
+      overwrite,
+      uploadId: token.slice(0, 16),
+    });
+    logger.info({
+      routerId: id,
+      adminId,
+      sourceType,
+      sourceName: source.source.name,
+      destinationPath,
+      replaced: result.replaced,
+      size: result.size,
+    }, "Router file deployed");
+    res.status(201).json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      source: source.source,
+      destinationPath: result.destinationPath,
+      size: result.size,
+      connectedHost: result.connectedHost,
+      replaced: result.replaced,
+    });
+  } catch (err) {
+    if (err instanceof RouterFileExistsError) {
+      res.status(409).json({
+        error: err.message,
+        code: err.code,
+        existingFile: {
+          name: err.existingFile.name,
+          type: err.existingFile.type,
+          size: err.existingFile.size,
+          creationTime: err.existingFile.creationTime,
+        },
+      });
+      return;
+    }
+    routerErrorResponse(res, err);
+  } finally {
+    /* The source endpoint normally consumes this entry. Remove it here too
+       when the router failed before making its fetch request. */
+    pendingRouterFileSources.delete(token);
   }
 });
 

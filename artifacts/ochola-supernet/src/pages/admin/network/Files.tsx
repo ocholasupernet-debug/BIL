@@ -8,11 +8,13 @@ import {
   CheckCircle2,
   Clock3,
   FileCode2,
+  FileUp,
   FileText,
   Files as FilesIcon,
   Folder,
   HardDrive,
   Loader2,
+  Replace,
   RefreshCw,
   Router as RouterIcon,
   Server,
@@ -44,6 +46,20 @@ interface RouterFilesResponse {
   count: number;
   connectedHost: string;
   fetchedAt: string;
+}
+
+type DeployableSourceType = "hotspot" | "script";
+
+interface DeployableSource {
+  id: string;
+  type: DeployableSourceType;
+  name: string;
+  label: string;
+  size: number;
+}
+
+interface DeployableSourcesResponse {
+  sources: DeployableSource[];
 }
 
 const HOTSPOT_FILE_NAMES = new Set([
@@ -126,6 +142,15 @@ async function fetchRouterFiles(routerId: number): Promise<RouterFilesResponse> 
     throw new Error(data.detail ?? data.error ?? `Could not load router files (HTTP ${response.status})`);
   }
   return data as unknown as RouterFilesResponse;
+}
+
+async function fetchDeployableSources(): Promise<DeployableSource[]> {
+  const response = await fetch("/api/scripts/deployable-sources");
+  const data = await response.json() as DeployableSourcesResponse & { error?: string };
+  if (!response.ok) {
+    throw new Error(data.error ?? `Could not load local files (HTTP ${response.status})`);
+  }
+  return Array.isArray(data.sources) ? data.sources : [];
 }
 
 function CategoryBadge({ category }: { category: ReturnType<typeof fileCategory> }) {
@@ -235,6 +260,15 @@ function ErrorPanel({
 
 export default function Files() {
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
+  const [sourceType, setSourceType] = useState<DeployableSourceType>("hotspot");
+  const [sourceName, setSourceName] = useState("");
+  const [destinationDirectory, setDestinationDirectory] = useState("hotspot");
+  const [destinationPath, setDestinationPath] = useState("");
+  const [deployStatus, setDeployStatus] = useState<
+    "idle" | "preparing" | "uploading" | "success" | "error" | "conflict"
+  >("idle");
+  const [deployMessage, setDeployMessage] = useState("");
+  const [conflictDetails, setConflictDetails] = useState<{ name: string; size: number; type: string } | null>(null);
 
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["router-files-routers", ADMIN_ID],
@@ -242,6 +276,12 @@ export default function Files() {
     retry: 1,
   });
   const routers = routersQuery.data ?? [];
+
+  const deployableSourcesQuery = useQuery<DeployableSource[]>({
+    queryKey: ["router-file-sources"],
+    queryFn: fetchDeployableSources,
+    retry: 1,
+  });
 
   useEffect(() => {
     if (selectedRouterId !== null && !routers.some(router => router.id === selectedRouterId)) {
@@ -267,6 +307,87 @@ export default function Files() {
     () => files.filter(file => fileCategory(file) === "Script"),
     [files],
   );
+  const availableSources = useMemo(
+    () => (deployableSourcesQuery.data ?? []).filter(source => source.type === sourceType),
+    [deployableSourcesQuery.data, sourceType],
+  );
+
+  useEffect(() => {
+    if (availableSources.length > 0 && !availableSources.some(source => source.name === sourceName)) {
+      setSourceName(availableSources[0].name);
+    }
+  }, [availableSources, sourceName]);
+
+  useEffect(() => {
+    if (sourceType === "script" && sourceName) setDestinationPath(sourceName);
+  }, [sourceName, sourceType]);
+
+  async function deploySelectedFile(overwrite = false): Promise<void> {
+    if (!selectedRouter || !sourceName) return;
+
+    setDeployStatus("preparing");
+    setDeployMessage("");
+    setConflictDetails(null);
+    /* The router transfer happens server-side. These stages keep the admin
+       informed while the backend connects and waits for RouterOS /tool fetch. */
+    await new Promise(resolve => window.setTimeout(resolve, 120));
+    setDeployStatus("uploading");
+
+    try {
+      const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          sourceType,
+          sourceName,
+          destinationDirectory: sourceType === "hotspot" ? destinationDirectory : undefined,
+          destinationPath: sourceType === "script" ? (destinationPath.trim() || sourceName) : undefined,
+          overwrite,
+        }),
+      });
+      let data: {
+        error?: string;
+        destinationPath?: string;
+        replaced?: boolean;
+        existingFile?: { name: string; size: number; type: string };
+      } = {};
+      try {
+        data = await response.json();
+      } catch {
+        /* Keep the HTTP status as the fallback error below. */
+      }
+
+      if (response.status === 409 && data.existingFile) {
+        setConflictDetails(data.existingFile);
+        setDeployMessage(data.error ?? `A file already exists at ${data.existingFile.name}.`);
+        setDeployStatus("conflict");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(data.error ?? `Deployment failed (HTTP ${response.status})`);
+      }
+
+      setDeployStatus("success");
+      setDeployMessage(
+        data.replaced
+          ? `${data.destinationPath} was replaced successfully.`
+          : `${data.destinationPath} was deployed successfully.`,
+      );
+      void filesQuery.refetch();
+    } catch (error) {
+      setDeployStatus("error");
+      setDeployMessage(error instanceof Error ? error.message : "Deployment failed");
+    }
+  }
+
+  const deploymentProgress = deployStatus === "preparing"
+    ? 25
+    : deployStatus === "uploading" || deployStatus === "conflict"
+      ? 72
+      : deployStatus === "success"
+        ? 100
+        : 0;
 
   return (
     <AdminLayout>
@@ -277,6 +398,7 @@ export default function Files() {
         @media (max-width: 640px) {
           .router-files-picker { flex-direction: column !important; align-items: stretch !important; }
           .router-files-picker > label { min-width: 0 !important; }
+          .router-files-deploy-grid { grid-template-columns: 1fr !important; }
           .router-files-summary { grid-template-columns: 1fr !important; }
           .router-files-error { flex-direction: column !important; }
         }
@@ -384,6 +506,208 @@ export default function Files() {
             </button>
           )}
         </div>
+
+        {selectedRouter && (
+          <div style={{
+            maxWidth: 980,
+            padding: "1.1rem 1.25rem 1.2rem",
+            borderRadius: 12,
+            background: "var(--isp-section)",
+            border: "1px solid var(--isp-border)",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", marginBottom: "1rem" }}>
+              <span style={{
+                width: 31,
+                height: 31,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                borderRadius: 8,
+                background: "rgba(52,211,153,0.12)",
+                color: "#34d399",
+              }}>
+                <FileUp size={16} />
+              </span>
+              <div>
+                <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.9rem", fontWeight: 700 }}>
+                  Deploy a file to {selectedRouter.name}
+                </h2>
+                <p style={{ margin: "0.25rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.73rem", lineHeight: 1.5 }}>
+                  Choose a server-side hotspot asset or RouterOS script. Router credentials stay on the server.
+                </p>
+              </div>
+            </div>
+
+            <div className="router-files-deploy-grid" style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(145px, 0.7fr) minmax(220px, 1.35fr) minmax(160px, 1fr) auto",
+              gap: "0.7rem",
+              alignItems: "end",
+            }}>
+              <label style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 650 }}>
+                File type
+                <select
+                  value={sourceType}
+                  onChange={event => {
+                    setSourceType(event.target.value as DeployableSourceType);
+                    setDeployStatus("idle");
+                    setDeployMessage("");
+                  }}
+                  disabled={deployableSourcesQuery.isLoading || deployStatus === "preparing" || deployStatus === "uploading"}
+                  style={{ ...inputStyle, marginTop: "0.35rem", cursor: "pointer" }}
+                >
+                  <option value="hotspot">Hotspot asset</option>
+                  <option value="script">RouterOS script</option>
+                </select>
+              </label>
+
+              <label style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 650 }}>
+                Local source
+                <select
+                  value={sourceName}
+                  onChange={event => {
+                    setSourceName(event.target.value);
+                    setDeployStatus("idle");
+                    setDeployMessage("");
+                  }}
+                  disabled={deployableSourcesQuery.isLoading || availableSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading"}
+                  style={{ ...inputStyle, marginTop: "0.35rem", cursor: availableSources.length ? "pointer" : "not-allowed" }}
+                >
+                  <option value="">
+                    {deployableSourcesQuery.isLoading ? "Loading local files…" : availableSources.length ? "Choose a file…" : "No files available"}
+                  </option>
+                  {availableSources.map(source => (
+                    <option key={source.id} value={source.name}>
+                      {source.name} {source.size ? `(${formatBytes(source.size)})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {sourceType === "hotspot" ? (
+                <label style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 650 }}>
+                  Router folder
+                  <select
+                    value={destinationDirectory}
+                    onChange={event => setDestinationDirectory(event.target.value)}
+                    disabled={deployStatus === "preparing" || deployStatus === "uploading"}
+                    style={{ ...inputStyle, marginTop: "0.35rem", cursor: "pointer" }}
+                  >
+                    <option value="hotspot">hotspot/</option>
+                    <option value="flash/hotspot">flash/hotspot/</option>
+                    <option value="disk1/hotspot">disk1/hotspot/</option>
+                  </select>
+                </label>
+              ) : (
+                <label style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 650 }}>
+                  Router filename
+                  <input
+                    value={destinationPath}
+                    onChange={event => {
+                      setDestinationPath(event.target.value);
+                      setDeployStatus("idle");
+                      setDeployMessage("");
+                    }}
+                    disabled={deployStatus === "preparing" || deployStatus === "uploading"}
+                    placeholder="setup.rsc"
+                    style={{ ...inputStyle, marginTop: "0.35rem" }}
+                  />
+                </label>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void deploySelectedFile()}
+                disabled={!sourceName || availableSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading"}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.4rem",
+                  minHeight: 37,
+                  padding: "0.55rem 0.85rem",
+                  border: "1px solid rgba(52,211,153,0.35)",
+                  borderRadius: 8,
+                  background: "rgba(52,211,153,0.12)",
+                  color: "#6ee7b7",
+                  fontSize: "0.75rem",
+                  fontWeight: 750,
+                  cursor: !sourceName || availableSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading" ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  opacity: !sourceName || availableSources.length === 0 ? 0.55 : 1,
+                }}
+              >
+                {deployStatus === "preparing" || deployStatus === "uploading"
+                  ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
+                  : <FileUp size={13} />}
+                {deployStatus === "preparing" ? "Preparing…" : deployStatus === "uploading" ? "Deploying…" : "Deploy file"}
+              </button>
+            </div>
+
+            {deployableSourcesQuery.error && (
+              <p style={{ margin: "0.7rem 0 0", color: "#f87171", fontSize: "0.74rem" }}>
+                Could not load local files: {(deployableSourcesQuery.error as Error).message}
+              </p>
+            )}
+
+            {deployStatus !== "idle" && (
+              <div style={{ marginTop: "0.9rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", color: "var(--isp-text-sub)", fontSize: "0.68rem" }}>
+                  <span>{deployStatus === "preparing" ? "Preparing server-side transfer…" : deployStatus === "uploading" ? "Transferring to router…" : deployStatus === "success" ? "Deployment complete" : deployStatus === "conflict" ? "Confirmation required" : "Deployment failed"}</span>
+                  <span>{deploymentProgress}%</span>
+                </div>
+                <div style={{ height: 5, marginTop: "0.35rem", overflow: "hidden", borderRadius: 99, background: "rgba(148,163,184,0.14)" }}>
+                  <div style={{ width: `${deploymentProgress}%`, height: "100%", borderRadius: 99, background: deployStatus === "error" ? "#f87171" : deployStatus === "conflict" ? "#fbbf24" : "#34d399", transition: "width 0.25s ease" }} />
+                </div>
+                {deployMessage && (
+                  <p style={{ margin: "0.55rem 0 0", color: deployStatus === "success" ? "#6ee7b7" : deployStatus === "error" ? "#f87171" : "var(--isp-text-muted)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                    {deployMessage}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {deployStatus === "conflict" && conflictDetails && (
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.8rem",
+                marginTop: "0.75rem",
+                padding: "0.7rem 0.8rem",
+                borderRadius: 8,
+                background: "rgba(251,191,36,0.08)",
+                border: "1px solid rgba(251,191,36,0.28)",
+              }}>
+                <div style={{ minWidth: 0, color: "#fbbf24", fontSize: "0.73rem", lineHeight: 1.45 }}>
+                  <strong>{conflictDetails.name}</strong> already exists ({formatBytes(conflictDetails.size)}). Replace it with the selected source?
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void deploySelectedFile(true)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.35rem",
+                    flexShrink: 0,
+                    padding: "0.45rem 0.65rem",
+                    border: "1px solid rgba(251,191,36,0.35)",
+                    borderRadius: 7,
+                    background: "rgba(251,191,36,0.12)",
+                    color: "#fcd34d",
+                    fontSize: "0.7rem",
+                    fontWeight: 750,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <Replace size={12} /> Replace file
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {routersQuery.isLoading && (
           <div style={{ maxWidth: 980, display: "flex", alignItems: "center", gap: "0.6rem", color: "var(--isp-text-muted)", fontSize: "0.82rem" }}>

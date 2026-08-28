@@ -423,6 +423,130 @@ export interface RouterFilesResult {
   connectedHost: string;
 }
 
+export interface DeployRouterFileOptions {
+  /** RouterOS destination, e.g. hotspot/login.html or router-setup.rsc. */
+  destinationPath: string;
+  /** One-time server URL that the router fetches; never contains credentials. */
+  sourceUrl: string;
+  /** Only true after the administrator explicitly confirmed replacement. */
+  overwrite: boolean;
+  /** Unique suffix for the temporary RouterOS file used during transfer. */
+  uploadId: string;
+}
+
+export interface DeployRouterFileResult {
+  destinationPath: string;
+  size: number;
+  connectedHost: string;
+  replaced: boolean;
+}
+
+export class RouterFileExistsError extends Error {
+  readonly code = "FILE_EXISTS";
+  readonly existingFile: RouterFile;
+
+  constructor(existingFile: RouterFile) {
+    super(`A file named "${existingFile.name}" already exists on the router`);
+    this.name = "RouterFileExistsError";
+    this.existingFile = existingFile;
+  }
+}
+
+function routerFileFromRow(row: Record<string, string>): RouterFile {
+  return {
+    id: row[".id"] ?? row.name ?? "",
+    name: row.name ?? "",
+    type: row.type ?? "file",
+    size: parseBytes(row.size),
+    creationTime: row["creation-time"] ?? "",
+  };
+}
+
+export async function deployRouterFile(
+  creds: RouterCredentials,
+  options: DeployRouterFileOptions,
+): Promise<DeployRouterFileResult> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const listFiles = async (): Promise<RouterFile[]> => {
+      const rows = await withTimeout(
+        conn.write([
+          "/file/print",
+          "=.proplist=.id,name,type,size,creation-time",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      return (Array.isArray(rows) ? rows : [])
+        .map(routerFileFromRow)
+        .filter(file => file.name.length > 0);
+    };
+
+    const existing = (await listFiles()).find(file => file.name === options.destinationPath);
+    if (existing?.type.toLowerCase().includes("directory")) {
+      throw new Error(`"${options.destinationPath}" is a directory, not a file`);
+    }
+    if (existing && !options.overwrite) {
+      throw new RouterFileExistsError(existing);
+    }
+
+    const temporaryPath = `${options.destinationPath}.ochola-upload-${options.uploadId}`;
+    let temporaryFile: RouterFile | undefined;
+    try {
+      /* Fetch into a sibling temporary file. This preserves binary assets and
+         keeps the current file intact if the router cannot complete the
+         transfer. */
+      await withTimeout(
+        conn.write([
+          "/tool/fetch",
+          `=url=${options.sourceUrl}`,
+          `=dst-path=${temporaryPath}`,
+          `=mode=${options.sourceUrl.startsWith("https://") ? "https" : "http"}`,
+          ...(options.sourceUrl.startsWith("https://") ? ["=check-certificate=no"] : []),
+          "=keep-result=yes",
+        ]),
+        Math.max(ms, 120_000),
+      );
+
+      temporaryFile = (await listFiles()).find(file => file.name === temporaryPath);
+      if (!temporaryFile) {
+        throw new Error("The router did not create the temporary upload file");
+      }
+
+      /* Protect against a concurrent upload that created the destination after
+         the initial preflight check. */
+      const currentDestination = (await listFiles()).find(file => file.name === options.destinationPath);
+      if (currentDestination && !options.overwrite) {
+        throw new RouterFileExistsError(currentDestination);
+      }
+
+      if (currentDestination) {
+        await withTimeout(conn.write(["/file/remove", `=.id=${currentDestination.id}`]), ms);
+      }
+      await withTimeout(
+        conn.write(["/file/set", `=.id=${temporaryFile.id}`, `=name=${options.destinationPath}`]),
+        ms,
+      );
+
+      return {
+        destinationPath: options.destinationPath,
+        size: temporaryFile.size,
+        connectedHost,
+        replaced: Boolean(currentDestination),
+      };
+    } catch (error) {
+      /* Best-effort cleanup prevents failed uploads from accumulating on the
+         router. Do not mask the original, more useful error. */
+      try {
+        const leftover = (await listFiles()).find(file => file.name === temporaryPath);
+        if (leftover) await withTimeout(conn.write(["/file/remove", `=.id=${leftover.id}`]), ms);
+      } catch {
+        /* The connection may already be unavailable. */
+      }
+      throw error;
+    }
+  });
+}
+
 export async function fetchRouterFiles(creds: RouterCredentials): Promise<RouterFilesResult> {
   return withConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -434,13 +558,9 @@ export async function fetchRouterFiles(creds: RouterCredentials): Promise<Router
       ms,
     ) as Record<string, string>[];
 
-    const files = (Array.isArray(rows) ? rows : []).map((row) => ({
-      id: row[".id"] ?? row.name ?? "",
-      name: row.name ?? "",
-      type: row.type ?? "file",
-      size: parseBytes(row.size),
-      creationTime: row["creation-time"] ?? "",
-    })).filter((file) => file.name.length > 0);
+    const files = (Array.isArray(rows) ? rows : [])
+      .map(routerFileFromRow)
+      .filter((file) => file.name.length > 0);
 
     return { files, connectedHost };
   });
