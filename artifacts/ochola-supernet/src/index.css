@@ -162,7 +162,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    font-size: 17px;
+    font-size: 18px;
   }
 
   body {
@@ -222,7 +222,7 @@
 .isp-table thead th {
   background: var(--isp-inner-card);
   color: var(--isp-text-muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -332,7 +332,7 @@
   gap: 4px;
   padding: 3px 9px;
   border-radius: 99px;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   white-space: nowrap;
   letter-spacing: 0.01em;
@@ -412,7 +412,7 @@
 }
 
 .nav-section-label {
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -515,7 +515,7 @@
   align-items: center;
   gap: 7px;
   color: var(--isp-accent-strong);
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -540,7 +540,7 @@
 .dashboard-hero p {
   margin: 5px 0 0;
   color: var(--isp-text-muted);
-  font-size: 0.8rem;
+  font-size: 0.95rem;
 }
 .dashboard-date {
   display: inline-flex;
@@ -552,7 +552,7 @@
   border-radius: 9px;
   background: var(--isp-inner-card);
   color: var(--isp-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 600;
 }
 .dashboard-error {
@@ -564,7 +564,7 @@
   border-radius: 10px;
   color: var(--isp-accent-strong);
   background: var(--isp-accent-glow);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
 }
 .dashboard-error-retry {
   margin-left: auto;
@@ -640,7 +640,7 @@
   margin-top: 5px;
   overflow: hidden;
   color: var(--isp-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -680,7 +680,7 @@
 .dashboard-stat-label {
   overflow: hidden;
   color: var(--isp-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -724,9 +724,9 @@
   min-width: 0;
 }
 .gateway-copy strong,
-.gateway-detail strong { color: var(--isp-text); font-size: 0.77rem; }
+.gateway-detail strong { color: var(--isp-text); font-size: 0.875rem; }
 .gateway-copy span,
-.gateway-detail span { color: var(--isp-text-muted); font-size: 0.68rem; }
+.gateway-detail span { color: var(--isp-text-muted); font-size: 0.8rem; }
 .gateway-strip .isp-badge { margin-left: 4px; }
 .gateway-link,
 .panel-link,
@@ -735,7 +735,7 @@
   align-items: center;
   gap: 4px;
   color: var(--isp-accent-strong);
-  font-size: 0.71rem;
+  font-size: 0.8rem;
   font-weight: 700;
   text-decoration: none;
 }
@@ -782,7 +782,7 @@
 .panel-title h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -790,7 +790,7 @@
 .panel-title p {
   margin: 3px 0 0;
   color: var(--isp-text-muted);
-  font-size: 0.66rem;
+  font-size: 0.8rem;
 }
 .panel-heading-meta,
 .panel-actions {
@@ -839,12 +839,12 @@
 .router-card-name {
   overflow: hidden;
   color: var(--isp-text);
-  font-size: 0.76rem;
+  font-size: 0.875rem;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.router-health { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 0.63rem; font-weight: 700; }
+.router-health { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 0.8rem; font-weight: 700; }
 .router-health--online { color: var(--isp-green); }
 .router-health--offline { color: var(--isp-text-muted); }
 .router-host {
@@ -852,12 +852,12 @@
   overflow: hidden;
   color: var(--isp-text-muted);
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.router-meta { margin-top: 4px; color: var(--isp-text-sub); font-size: 0.63rem; }
-.router-seen { margin-top: 7px; color: #b86659; font-size: 0.6rem; }
+.router-meta { margin-top: 4px; color: var(--isp-text-sub); font-size: 0.8125rem; }
+.router-seen { margin-top: 7px; color: #b86659; font-size: 0.8125rem; }
 .status-dot { width: 6px; height: 6px; display: inline-block; flex-shrink: 0; border-radius: 50%; }
 .status-dot--green { background: var(--isp-green); }
 .status-dot--red { background: #c66b5f; }
@@ -870,7 +870,7 @@
   border-radius: 10px;
   background: var(--isp-section);
 }
-.router-filter-label { display: inline-flex; align-items: center; gap: 7px; margin-right: 3px; color: var(--isp-text-muted); font-size: 0.7rem; font-weight: 700; }
+.router-filter-label { display: inline-flex; align-items: center; gap: 7px; margin-right: 3px; color: var(--isp-text-muted); font-size: 0.8rem; font-weight: 700; }
 .router-filter-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .router-filter-pill {
   display: inline-flex;
@@ -883,13 +883,13 @@
   border-radius: 7px;
   cursor: pointer;
   font: inherit;
-  font-size: 0.67rem;
+  font-size: 0.8rem;
   font-weight: 700;
   transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 .router-filter-pill:hover { color: var(--isp-text); background: var(--isp-hover); }
 .router-filter-pill--active { color: var(--isp-accent-strong); background: var(--isp-accent-glow); border-color: var(--isp-accent-border); }
-.router-filter-selected { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--isp-text-muted); font-size: 0.66rem; }
+.router-filter-selected { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--isp-text-muted); font-size: 0.8rem; }
 .router-filter-selected strong { color: var(--isp-text); }
 .router-filter-selected button { display: grid; place-items: center; width: 21px; height: 21px; padding: 0; color: var(--isp-text-muted); background: transparent; border: 1px solid var(--isp-border); border-radius: 6px; cursor: pointer; }
 .router-filter-selected button:hover { color: var(--isp-accent); border-color: var(--isp-accent-border); }
@@ -898,16 +898,16 @@
 .chart-body { min-height: 204px; padding: 16px 16px 13px; }
 .customer-chart { display: block; width: 100%; height: 185px; overflow: visible; }
 .gateway-card .panel-title h2,
-.insight-card .panel-title h2 { font-size: 0.78rem; }
-.gateway-card .isp-badge { font-size: 0.63rem; }
+.insight-card .panel-title h2 { font-size: 0.875rem; }
+.gateway-card .isp-badge { font-size: 0.8rem; }
 .gateway-detail { display: flex; align-items: center; gap: 10px; margin: 0 13px 13px; padding: 10px; background: var(--isp-inner-card); border: 1px solid var(--isp-border-subtle); border-radius: 9px; }
 .gateway-detail-icon { width: 33px; height: 33px; }
 .insight-content { display: flex; align-items: center; gap: 12px; padding: 7px 14px 15px; }
 .donut-chart { display: block; width: 143px; height: 143px; flex-shrink: 0; }
 .insight-legend { display: flex; flex: 1; flex-direction: column; gap: 10px; min-width: 0; }
-.insight-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; color: var(--isp-text-muted); font-size: 0.68rem; }
-.insight-row strong { color: var(--isp-text); font-size: 0.7rem; }
-.insight-row small { color: var(--isp-text-sub); font-size: 0.63rem; }
+.insight-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; color: var(--isp-text-muted); font-size: 0.8rem; }
+.insight-row strong { color: var(--isp-text); font-size: 0.875rem; }
+.insight-row small { color: var(--isp-text-sub); font-size: 0.8125rem; }
 .insight-swatch { width: 8px; height: 8px; border-radius: 3px; }
 .transaction-table-wrap { overflow-x: auto; }
 .transaction-table { min-width: 690px; }
@@ -915,11 +915,11 @@
 .transaction-table tbody td:first-child { padding-left: 15px; }
 .transaction-table thead th:last-child,
 .transaction-table tbody td:last-child { padding-right: 15px; }
-.transaction-table .table-mono { color: var(--isp-text-muted); font-family: var(--font-mono); font-size: 0.64rem; }
+.transaction-table .table-mono { color: var(--isp-text-muted); font-family: var(--font-mono); font-size: 0.8125rem; }
 .transaction-table .table-amount { color: var(--isp-green); font-weight: 700; white-space: nowrap; }
-.transaction-table .table-date { color: var(--isp-text-muted); font-size: 0.67rem; white-space: nowrap; }
+.transaction-table .table-date { color: var(--isp-text-muted); font-size: 0.8125rem; white-space: nowrap; }
 .dashboard-loading,
-.dashboard-empty { display: flex; align-items: center; gap: 8px; min-height: 42px; color: var(--isp-text-muted); font-size: 0.72rem; }
+.dashboard-empty { display: flex; align-items: center; gap: 8px; min-height: 42px; color: var(--isp-text-muted); font-size: 0.8rem; }
 .dashboard-loading--center,
 .dashboard-empty--center { justify-content: center; min-height: 115px; }
 .dashboard-empty a { margin-left: 4px; }
@@ -952,4 +952,52 @@
   .dashboard-hero h1 { font-size: 1.4rem; }
   .insight-content { align-items: flex-start; flex-direction: column; }
   .donut-chart { align-self: center; }
+}
+
+/* Readable utility scale: keep normal interface text out of the 10–12px range. */
+.text-xs {
+  font-size: 0.875rem !important;
+  line-height: 1.4;
+}
+.text-sm {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+[class~="text-[9px]"],
+[class~="text-[10px]"],
+[class~="text-[11px]"],
+[class~="text-[12px]"] {
+  font-size: 0.875rem !important;
+  line-height: 1.35;
+}
+
+/* A few older screens use inline rem values for labels. Promote only the
+   compact label range; larger inputs and headings keep their own sizes. */
+[style*="font-size: 0.57rem"],
+[style*="font-size: 0.58rem"],
+[style*="font-size: 0.59rem"],
+[style*="font-size: 0.6rem"],
+[style*="font-size: 0.61rem"],
+[style*="font-size: 0.62rem"],
+[style*="font-size: 0.625rem"],
+[style*="font-size: 0.63rem"],
+[style*="font-size: 0.64rem"],
+[style*="font-size: 0.65rem"],
+[style*="font-size: 0.66rem"],
+[style*="font-size: 0.67rem"],
+[style*="font-size: 0.68rem"],
+[style*="font-size: 0.6875rem"],
+[style*="font-size: 0.69rem"],
+[style*="font-size: 0.7rem"],
+[style*="font-size: 0.71rem"],
+[style*="font-size: 0.72rem"],
+[style*="font-size: 0.73rem"],
+[style*="font-size: 0.74rem"],
+[style*="font-size: 0.75rem"],
+[style*="font-size: 0.76rem"],
+[style*="font-size: 0.77rem"],
+[style*="font-size: 0.775rem"],
+[style*="font-size: 0.78rem"],
+[style*="font-size: 0.79rem"] {
+  font-size: 0.8125rem !important;
 }

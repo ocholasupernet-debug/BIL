@@ -400,7 +400,7 @@
   align-items: center;
   gap: 7px;
   color: var(--isp-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
 }
 
 .migration-section-heading {
@@ -719,7 +719,7 @@
 .migration-target-option.disabled { cursor: not-allowed; opacity: .55; }
 .migration-target-option input { accent-color: var(--isp-accent); }
 .migration-target-copy { min-width: 0; flex: 1; }
-.migration-target-copy strong { display: block; font-size: 0.7rem; }
+.migration-target-copy strong { display: block; font-size: 0.8125rem; }
 .migration-target-copy span { display: block; margin-top: 2px; color: var(--isp-text-muted); font-size: 0.64rem; }
 .migration-dryrun-table { width: 100%; border-collapse: collapse; font-size: 0.67rem; }
 .migration-dryrun-table th { padding: 8px; border-bottom: 1px solid var(--isp-border); color: var(--isp-text-muted); background: var(--isp-inner-card); font-size: 0.59rem; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
