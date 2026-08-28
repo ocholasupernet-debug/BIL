@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:migration": "node --test tests/router-migration.test.mjs"
+    "test:migration": "node --test tests/router-migration.test.mjs",
+    "test:vpn-fallback": "node --test tests/router-vpn-fallback.test.mjs"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",

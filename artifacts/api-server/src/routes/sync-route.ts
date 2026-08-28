@@ -1645,7 +1645,11 @@ async function handleInstallProgressUpdate(
     const prev = p.steps.get(step);
     if (!prev || order[phase] >= order[prev.phase]) {
       p.steps.set(step, { step, name: name || prev?.name || "", phase, error: err || undefined, ts: Date.now() });
-      if (phase === "failed" && (!prev || prev.phase !== "failed")) p.failures += 1;
+      /* A failed protocol attempt is expected during ordered VPN fallback.
+         Only the final aggregate `vpn` failure should count against the
+         install when every configured protocol has failed. */
+      const recoverableVpnAttempt = phase === "failed" && name.startsWith("vpn-");
+      if (phase === "failed" && !recoverableVpnAttempt && (!prev || prev.phase !== "failed")) p.failures += 1;
     }
   }
 

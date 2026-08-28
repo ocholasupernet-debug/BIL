@@ -4,7 +4,11 @@ import path from "path";
 import { ensureClientCert } from "./vpn-route.js";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
-import { generateRouterAsClientScript } from "../lib/mikrotik.js";
+import {
+  generateRouterAsClientScript,
+  generateRouterIpsecClientScript,
+  generateRouterWireGuardClientScript,
+} from "../lib/mikrotik.js";
 import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 
@@ -440,6 +444,8 @@ function buildMainhotspotRsc(
   heartbeatUrl: string = "",
   installerUrl: string = "",
   routerVpnUrl: string = "",
+  routerWireGuardUrl: string = "",
+  routerIpsecUrl: string = "",
   routerVpnIp: string = "",
 ): string {
   /* When progressUrl is set, every [N/7] step posts a status update to
@@ -461,14 +467,9 @@ function buildMainhotspotRsc(
   const safeHeartbeatUrl = rscEscape(heartbeatUrl);
   const safeInstallerUrl = rscEscape(installerUrl);
   const safeRouterVpnUrl = rscEscape(routerVpnUrl);
+  const safeRouterWireGuardUrl = rscEscape(routerWireGuardUrl);
+  const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
-  const vpnScriptSelection = routerVpnUrl
-    ? `:set vpnUrl "${safeRouterVpnUrl}"`
-    : `:if ($majorVersion = 7) do={
-    :set vpnUrl "${scriptsBase}/vpn7.rsc"
-} else={
-    :set vpnUrl "${scriptsBase}/vpn6.rsc"
-}`;
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
@@ -482,12 +483,43 @@ function buildMainhotspotRsc(
 }`
     : `:global pg do={}`;
 
+  const openVpnSelection = routerVpnUrl
+    ? `:set openVpnUrl "${safeRouterVpnUrl}"`
+    : `:if ($majorVersion = 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
+  const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => `:if (!$vpnConfigured) do={
+    :do {
+        $pg 1 "vpn-${protocol}" "downloading" ""
+        :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
+        :do { /file remove [find name="${fileName}"] } on-error={}
+        /tool fetch url=$${urlVariable} dst-path="${fileName}" mode=https check-certificate=no
+        :delay 2s
+        /import "${fileName}"
+        :do { /file remove [find name="${fileName}"] } on-error={}
+        :set vpnConfigured true
+        :set vpnProtocol "${protocol}"
+        :put "      ${protocol.toUpperCase()} router-management VPN verified."
+        $pg 1 "vpn-${protocol}" "applied" ""
+    } on-error={
+        :put ("  WARN [vpn-${protocol}] FAILED: " . $error)
+        :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $error . "; ")
+        $pg 1 "vpn-${protocol}" "failed" $error
+        :do { /file remove [find name="failed-${fileName}"] } on-error={}
+        :do { /file set [find name="${fileName}"] name="failed-${fileName}" } on-error={}
+    }
+}`;
+  const wireGuardAttempt = routerWireGuardUrl
+    ? `:if ($majorVersion = 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n} else={ :put "      WIREGUARD skipped: RouterOS 7 or newer is required." }`
+    : `:put "      WIREGUARD skipped: server-side WireGuard fallback is not configured."`;
+  const ipsecAttempt = routerIpsecUrl
+    ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")
+    : `:put "      IPSEC skipped: server-side IPsec fallback is not configured."`;
+
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
 #
 # INSTALL BUNDLE — downloaded in this order:
-#   1. router-vpn.rsc   -> vpnsetup.rsc       (router-specific, required)
+#   1. router VPN child scripts                 (OpenVPN → WireGuard → IPsec)
 #   2. hotspotsetup.rsc -> hotspotsetup.rsc  (required)
 #   3. pppoesetup.rsc   -> pppoesetup.rsc     (required)
 #   4. users.rsc        -> users.rsc          (required)
@@ -524,26 +556,25 @@ ${pgDef}
 :put " ${safeCompanyName} router setup"
 :put "======================================================"
 
-# --- VPN configuration --------------------------------------------------------
-:local vpnUrl
-${vpnScriptSelection}
-:do {
-    $pg 1 "vpn" "downloading" ""
-    :put "[1/7] Downloading VPN configuration..."
-    :do { /file remove [find name=vpnsetup.rsc] } on-error={}
-    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https check-certificate=no
-    :delay 2s
-    :put "      Applying VPN configuration..."
-    /import vpnsetup.rsc
-    :do { /file remove vpnsetup.rsc } on-error={}
-    :put "      VPN configuration applied."
-    $pg 1 "vpn" "applied" ""
-} on-error={
+# --- Ordered router-management VPN fallback -----------------------------------
+# Attempts OpenVPN first, then WireGuard, then IPsec. Each child must verify
+# its own resources; a successful child prevents all later children from running.
+:local openVpnUrl
+${openVpnSelection}
+:local wireGuardUrl "${safeRouterWireGuardUrl}"
+:local ipsecUrl "${safeRouterIpsecUrl}"
+:local vpnConfigured false
+:local vpnProtocol ""
+:local vpnFailureSummary ""
+${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
+${wireGuardAttempt}
+${ipsecAttempt}
+:if (!$vpnConfigured) do={
     :set failures ($failures + 1)
-    :put ("  WARN [vpnsetup.rsc] FAILED: " . $error)
-    $pg 1 "vpn" "failed" $error
-    :do { /file remove [find name=failed-vpnsetup.rsc] } on-error={}
-    :do { /file set [find name=vpnsetup.rsc] name=failed-vpnsetup.rsc } on-error={}
+    :put ("  ERROR: no router-management VPN protocol succeeded. " . $vpnFailureSummary)
+    $pg 1 "vpn" "failed" $vpnFailureSummary
+} else={
+    :put ("      Selected router-management VPN: " . $vpnProtocol)
 }
 
 # --- Hotspot configuration ----------------------------------------------------
@@ -794,6 +825,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let heartbeatUrl = "";
   let installerUrl = "";
   let routerVpnUrl = "";
+  let routerWireGuardUrl = "";
+  let routerIpsecUrl = "";
 
   interface InstallRouter {
     admin_id: number; name: string; vpn_ip?: string | null;
@@ -825,11 +858,23 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        if (routerWireGuardFallbackConfigured(Number(rid))) {
+          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
+        }
+        if (routerIpsecFallbackConfigured(Number(rid))) {
+          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
+        }
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        if (routerWireGuardFallbackConfigured(Number(rid))) {
+          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
+        }
+        if (routerIpsecFallbackConfigured(Number(rid))) {
+          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
+        }
         /* Pass the assignment into the orchestrator so the generated
            firewall and registration steps advertise the same address. */
         routerVpnIp = assignedIp;
@@ -863,6 +908,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       heartbeatUrl,
       installerUrl,
       routerVpnUrl,
+      routerWireGuardUrl,
+      routerIpsecUrl,
       routerVpnIp,
     ));
 });
@@ -872,6 +919,38 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
    install script therefore fetches this authenticated, router-specific
    bootstrap first. Its token is already bound to the router and is used as
    the unique VPN password, so no placeholder credential is embedded. */
+type RouterVpnProtocol = "openvpn" | "wireguard" | "ipsec";
+
+function requestedRouterVpnProtocol(value: unknown): RouterVpnProtocol {
+  const protocol = String(value ?? "openvpn").trim().toLowerCase();
+  if (protocol === "openvpn" || protocol === "wireguard" || protocol === "ipsec") return protocol;
+  throw new Error("Unsupported router VPN protocol");
+}
+
+function configuredEnv(name: string): string {
+  return String(process.env[name] ?? "").trim();
+}
+
+function validVpnEndpoint(value: string): boolean {
+  return value.length > 0 && value.length <= 255 && /^[A-Za-z0-9:._-]+$/.test(value);
+}
+
+function routerEnv(name: string, routerId: number): string {
+  return configuredEnv(`${name}_${routerId}`) || configuredEnv(name);
+}
+
+function routerWireGuardFallbackConfigured(routerId: number): boolean {
+  return Boolean(
+    routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId) &&
+    routerEnv("ROUTER_WIREGUARD_SERVER_PUBLIC_KEY", routerId) &&
+    routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId),
+  );
+}
+
+function routerIpsecFallbackConfigured(routerId: number): boolean {
+  return Boolean(routerEnv("ROUTER_IPSEC_ENDPOINT", routerId) && routerEnv("ROUTER_IPSEC_PSK", routerId));
+}
+
 router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
   const ridRaw = String(req.query.rid ?? "").trim();
   const token = String(req.query.token ?? "").trim();
@@ -896,28 +975,70 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       return;
     }
 
-    const host = (req.headers.host ?? "") as string;
-    const vpsHost = routerVpnEndpointHost(resolveOrigin(host));
-    if (!vpsHost) {
-      res.status(503).type("text/plain").send("# VPS OpenVPN endpoint is not configured. Set VPS_HOST.");
-      return;
-    }
-
-    const vpnPort = Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196;
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
-    const script = generateRouterAsClientScript({
-      vpsPublicIp: vpsHost,
-      vpnPort,
-      vpnUsername: `router-${routerId}`,
-      vpnPassword: token,
-      tunnelRouterIp,
-       tunnelVpsIp: ROUTER_VPN_GATEWAY,
-      routerId,
-    });
+    const protocol = requestedRouterVpnProtocol(req.query.protocol);
+    let script: string;
+
+    if (protocol === "openvpn") {
+      const host = (req.headers.host ?? "") as string;
+      const vpsHost = routerVpnEndpointHost(resolveOrigin(host));
+      if (!vpsHost) {
+        res.status(503).type("text/plain").send("# VPS OpenVPN endpoint is not configured. Set VPS_HOST.");
+        return;
+      }
+      const vpnPort = Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196;
+      script = generateRouterAsClientScript({
+        vpsPublicIp: vpsHost,
+        vpnPort,
+        vpnUsername: `router-${routerId}`,
+        vpnPassword: token,
+        tunnelRouterIp,
+        tunnelVpsIp: ROUTER_VPN_GATEWAY,
+        routerId,
+      });
+    } else if (protocol === "wireguard") {
+      const endpoint = routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);
+      const serverPublicKey = routerEnv("ROUTER_WIREGUARD_SERVER_PUBLIC_KEY", routerId);
+      const clientPrivateKey = routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId);
+      if (!routerWireGuardFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) ||
+          !/^[A-Za-z0-9+/=]{32,}$/.test(serverPublicKey) ||
+          !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
+        res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with valid server-side values.");
+        return;
+      }
+      const endpointPort = Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820;
+      if (endpointPort < 1 || endpointPort > 65535) {
+        res.status(503).type("text/plain").send("# Router WireGuard fallback has an invalid endpoint port.");
+        return;
+      }
+      script = generateRouterWireGuardClientScript({
+        endpoint,
+        endpointPort,
+        serverPublicKey,
+        clientPrivateKey,
+        tunnelRouterIp,
+        tunnelVpsIp: ROUTER_VPN_GATEWAY,
+        routerId,
+      });
+    } else {
+      const endpoint = routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
+      const preSharedKey = routerEnv("ROUTER_IPSEC_PSK", routerId);
+      if (!routerIpsecFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
+        res.status(503).type("text/plain").send("# Router IPsec fallback is not configured with valid server-side values.");
+        return;
+      }
+      script = generateRouterIpsecClientScript({
+        endpoint,
+        preSharedKey,
+        tunnelRouterIp,
+        tunnelVpsIp: ROUTER_VPN_GATEWAY,
+        routerId,
+      });
+    }
 
     res
       .set("Content-Type", "text/plain; charset=utf-8")
-      .set("Content-Disposition", `attachment; filename="router-vpn-${routerId}.rsc"`)
+      .set("Content-Disposition", `attachment; filename="router-vpn-${protocol}-${routerId}.rsc"`)
       .set("Cache-Control", "no-store")
       .send(script);
   } catch (err) {

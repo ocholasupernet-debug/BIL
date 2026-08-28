@@ -573,6 +573,17 @@ export default function SelfInstall() {
               <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", display: "flex", gap: 10, flexWrap: "wrap" }}>
                 Installer progress: {progress.steps.filter(step => step.phase === "applied").length}/7 stages applied
                 {progress.failures > 0 && <span style={{ color: "#f87171" }}>{progress.failures} stage failure(s)</span>}
+                  {(() => {
+                    const vpnSteps = progress.steps.filter(step => step.name.startsWith("vpn"));
+                    const selected = vpnSteps.find(step => step.phase === "applied" && step.name !== "vpn");
+                    const label = selected?.name.replace(/^vpn-/, "").toUpperCase();
+                    const allFailed = vpnSteps.some(step => step.name === "vpn" && step.phase === "failed");
+                    return vpnSteps.length > 0 ? (
+                      <span style={{ color: selected ? "#86efac" : allFailed ? "#f87171" : "#fbbf24" }}>
+                        VPN fallback: OpenVPN → WireGuard → IPsec · {selected ? `selected ${label}` : allFailed ? "all protocols failed" : "attempting"}
+                      </span>
+                    ) : null;
+                  })()}
               </div>
             )}
           </>

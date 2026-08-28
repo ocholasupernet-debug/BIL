@@ -2052,6 +2052,36 @@ export interface RouterAsClientOptions {
   routerId?: number;
 }
 
+export interface RouterWireGuardClientOptions {
+  /** WireGuard endpoint hostname or IP address. */
+  endpoint: string;
+  /** WireGuard endpoint UDP port. */
+  endpointPort?: number;
+  /** Public key of the VPS WireGuard peer. */
+  serverPublicKey: string;
+  /** Private key assigned to this router on the VPS. */
+  clientPrivateKey: string;
+  /** Router address on the management WireGuard network. */
+  tunnelRouterIp?: string;
+  /** VPS address on the management WireGuard network. */
+  tunnelVpsIp?: string;
+  /** Router ID for comment labels. */
+  routerId?: number;
+}
+
+export interface RouterIpsecClientOptions {
+  /** IPsec peer hostname or IP address. */
+  endpoint: string;
+  /** Pre-shared key for the VPS IPsec peer. */
+  preSharedKey: string;
+  /** Local management address used by the IPsec policy. */
+  tunnelRouterIp?: string;
+  /** Remote management address used by the IPsec policy. */
+  tunnelVpsIp?: string;
+  /** Router ID for comment labels. */
+  routerId?: number;
+}
+
 /**
  * Generates a MikroTik RouterOS script (.rsc) that configures the router
  * as an OpenVPN CLIENT connecting back to the VPS server.
@@ -2103,13 +2133,15 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
 # Make this safe to re-import during recovery or after a failed migration.
+:local ovpnError ""
 :do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
-:do { /interface ovpn-client add name=ovpn-to-vps connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :put "${tag}: OVPN client creation failed; check RouterOS version and /log" }
+:do { /interface ovpn-client add name=ovpn-to-vps connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError $error }
+:if ([:len $ovpnError] > 0) do={ :error ("${tag}: OVPN client creation failed: " . $ovpnError) }
 
-:delay 5s
+:delay 10s
 :put "${tag}: waiting for OVPN client to establish..."
 :if ([:len [/interface ovpn-client find where name="ovpn-to-vps" and running=yes]] = 0) do={
-    :put "${tag}: OVPN client is not running yet; check /log and retry the API check."
+    :error "${tag}: OVPN client did not establish a running session."
 } else={
     :put "${tag}: OVPN client is running."
 }
@@ -2118,17 +2150,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 # The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
 /ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
-add action=accept chain=input \\
-    src-address=${tunnelVpsIp}/32 \\
-    protocol=tcp dst-port=8728,8729 \\
-    comment="${tag}-api-from-vps-tunnel"
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
 
 # ── Step 3: Allow ping from VPS (connectivity check) ─────────────────────────
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
-add action=accept chain=input \\
-    src-address=${tunnelVpsIp}/32 \\
-    protocol=icmp \\
-    comment="${tag}-ping-from-vps-tunnel"
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"
 
 # ── Step 4: Ensure API service is enabled ────────────────────────────────────
 /ip service
@@ -2145,6 +2171,81 @@ enable api
 
 :log info "${tag}: OVPN client configured → ${vpsPublicIp}:${vpnPort}"
 :log info "${tag}: After connect, router API reachable at ${tunnelRouterIp}:8728"
+`;
+}
+
+/** Generate a RouterOS 7-only WireGuard management-client script. */
+export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientOptions): string {
+  const {
+    endpoint,
+    endpointPort = 51820,
+    serverPublicKey,
+    clientPrivateKey,
+    tunnelRouterIp = "10.8.5.2",
+    tunnelVpsIp = "10.8.5.1",
+    routerId,
+  } = opts;
+  const tag = routerId ? `ISP-${routerId}` : "ISP-WG";
+  const interfaceName = "ochola-wg";
+
+  return `# ${tag} — MikroTik RouterOS 7 WireGuard management client
+# This child script is fetched only after the OpenVPN attempt fails.
+# RouterOS 6 devices must not import this file.
+
+:put "${tag}: configuring WireGuard fallback..."
+:do { /interface wireguard peers remove [find where comment="${tag} WireGuard management peer"] } on-error={}
+:do { /ip address remove [find interface="${interfaceName}"] } on-error={}
+:do { /interface wireguard remove [find where name="${interfaceName}"] } on-error={}
+:do { /interface wireguard add name="${interfaceName}" private-key="${clientPrivateKey}" disabled=no comment="${tag} WireGuard management" } on-error={ :error ("${tag}: WireGuard interface creation failed: " . $error) }
+:do { /ip address add address=${tunnelRouterIp}/24 interface="${interfaceName}" comment="${tag} WireGuard management address" } on-error={ :error ("${tag}: WireGuard address creation failed: " . $error) }
+:do { /interface wireguard peers add interface="${interfaceName}" public-key="${serverPublicKey}" endpoint-address="${endpoint}" endpoint-port=${endpointPort} allowed-address=${tunnelVpsIp}/32 persistent-keepalive=25 comment="${tag} WireGuard management peer" } on-error={ :error ("${tag}: WireGuard peer creation failed: " . $error) }
+:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :error ("${tag}: WireGuard API firewall rule failed: " . $error) }
+:do { /ip firewall filter remove [find where comment="${tag}-ping-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vpn-tunnel" } on-error={ :error ("${tag}: WireGuard ping firewall rule failed: " . $error) }
+:delay 5s
+:if ([:len [/interface wireguard find where name="${interfaceName}"]] = 0) do={ :error "${tag}: WireGuard interface was not verified." }
+:put "${tag}: WireGuard management resources verified."
+:log info "${tag}: WireGuard fallback configured via ${endpoint}:${endpointPort}"
+`;
+}
+
+/** Generate a RouterOS 6/7-compatible IPsec management-client script. */
+export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions): string {
+  const {
+    endpoint,
+    preSharedKey,
+    tunnelRouterIp = "10.8.5.2",
+    tunnelVpsIp = "10.8.5.1",
+    routerId,
+  } = opts;
+  const tag = routerId ? `ISP-${routerId}` : "ISP-IPSEC";
+  const peerName = `ochola-ipsec-${routerId ?? "management"}`;
+  const endpointPrefix = endpoint.includes(":") ? `${endpoint}/128` : `${endpoint}/32`;
+  const safePreSharedKey = preSharedKey
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+
+  return `# ${tag} — MikroTik IPsec management fallback
+# This child script is attempted only after OpenVPN and WireGuard fail.
+# IPsec is policy-based, so verification confirms the peer, identity and policy
+# resources; the authenticated heartbeat must confirm end-to-end reachability.
+
+:put "${tag}: configuring IPsec fallback..."
+:do { /ip ipsec policy remove [find where comment="${tag} IPsec management policy"] } on-error={}
+:do { /ip ipsec identity remove [find where comment="${tag} IPsec management identity"] } on-error={}
+:do { /ip ipsec peer remove [find where comment="${tag} IPsec management peer"] } on-error={}
+:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :error ("${tag}: IPsec peer creation failed: " . $error) }
+:do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}" comment="${tag} IPsec management identity" } on-error={ :error ("${tag}: IPsec identity creation failed: " . $error) }
+:do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :error ("${tag}: IPsec policy creation failed: " . $error) }
+:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :error ("${tag}: IPsec API firewall rule failed: " . $error) }
+:if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] = 0) do={ :error "${tag}: IPsec peer was not verified." }
+:if ([:len [/ip ipsec identity find where comment="${tag} IPsec management identity"]] = 0) do={ :error "${tag}: IPsec identity was not verified." }
+:if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] = 0) do={ :error "${tag}: IPsec policy was not verified." }
+:put "${tag}: IPsec management resources verified; waiting for authenticated heartbeat."
+:log info "${tag}: IPsec fallback configured via ${endpoint}"
 `;
 }
 
