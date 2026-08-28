@@ -137,7 +137,36 @@ export function requireAuth(requiredType?: "a" | "c") {
 }
 
 export function requireAdmin() {
-  return requireAuth("a");
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const token = extractToken(req);
+    const payload = validateToken(token);
+
+    if (!payload) {
+      res.status(401).json({ ok: false, error: "Invalid or expired token" });
+      return;
+    }
+    if (payload.type !== "a") {
+      res.status(403).json({ ok: false, error: "Insufficient permissions" });
+      return;
+    }
+
+    /* The superadmin UI keeps its privileged token while impersonating an ISP
+       admin. Tenant-scoped routes need the selected tenant ID, but only a
+       validated superadmin token may provide this override. */
+    const rawImpersonatedId = req.headers["x-impersonated-admin-id"];
+    const impersonatedId = Array.isArray(rawImpersonatedId) ? rawImpersonatedId[0] : rawImpersonatedId;
+    if (
+      payload.uid === "superadmin" &&
+      typeof impersonatedId === "string" &&
+      /^[1-9]\d*$/.test(impersonatedId) &&
+      Number.isSafeInteger(Number(impersonatedId))
+    ) {
+      req.authUser = { ...payload, uid: String(Number(impersonatedId)) };
+    } else {
+      req.authUser = payload;
+    }
+    next();
+  };
 }
 
 export function requireCustomer() {

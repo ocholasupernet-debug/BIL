@@ -146,3 +146,10 @@ test("collector tunnel association requires an owned router and lease", async ()
   assert.match(route, /tunnel = await tunnelFor\(sourceRouterId, a, tunnelId\)/);
   assert.match(route, /id=eq\.\$\{positive\(session\.tunnel_lease_id\)\}&admin_id=eq\.\$\{session\.admin_id\}/);
 });
+test("superadmin impersonation supplies the tenant scope for migration APIs", async () => {
+  const auth = await readFile("src/lib/api-auth.ts", "utf8");
+  const api = await readFile("../ochola-supernet/src/pages/admin/network/migration/api.ts", "utf8");
+  assert.match(auth, /x-impersonated-admin-id/);
+  assert.match(auth, /payload\.uid === "superadmin"/);
+  assert.match(api, /X-Impersonated-Admin-Id/);
+});

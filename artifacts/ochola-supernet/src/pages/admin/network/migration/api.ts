@@ -2,9 +2,19 @@ import { getAdminApiToken } from "@/lib/supabase";
 
 function getHeaders() {
   const token = getAdminApiToken();
+  const impersonatedAdminId = (() => {
+    try {
+      return localStorage.getItem("ochola_impersonating") === "true"
+        ? localStorage.getItem("ochola_admin_id") || ""
+        : "";
+    } catch {
+      return "";
+    }
+  })();
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(impersonatedAdminId ? { "X-Impersonated-Admin-Id": impersonatedAdminId } : {}),
   };
 }
 

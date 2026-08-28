@@ -31,6 +31,7 @@ import {
 } from "./api";
 import type { RouterSummary, CollectorSession, MigrationTunnelSession, ExportResponse, DryRunResponse, ReportResponse } from "./types";
 import { useToast } from "@/hooks/use-toast";
+import { isImpersonating, isSuperAdmin } from "@/lib/supabase";
 
 const STEPS = [
   { id: 1, label: "Source" },
@@ -60,6 +61,7 @@ export default function NetworkMigration() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
+  const needsTenantContext = isSuperAdmin() && !isImpersonating();
 
   const { data: routers, isLoading: routersLoading, error: routersError } = useQuery<RouterSummary[]>({
     queryKey: ["migration-routers"],
@@ -343,6 +345,18 @@ export default function NetworkMigration() {
           </div>
         </div>
 
+        {needsTenantContext && (
+          <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 text-sm">
+            <AlertTriangle size={20} className="shrink-0 mt-0.5" />
+            <div>
+              <strong className="block uppercase tracking-wider text-xs font-bold mb-1">Choose an ISP account first</strong>
+              <span className="text-xs">
+                Migration data belongs to one ISP account. Open <strong>Super Admin → Impersonate Admin</strong>, choose the ISP account that owns the source router, and then return here.
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col border border-[var(--isp-border)] rounded-xl bg-[var(--isp-card)] shadow-[var(--shadow-card)] overflow-hidden min-h-[400px]">
           <div className="p-5 border-b border-[var(--isp-border)] bg-[var(--isp-section)] flex items-center justify-between">
             <h2 className="text-sm font-bold flex items-center gap-2">
@@ -388,6 +402,16 @@ export default function NetworkMigration() {
                         <option key={r.id} value={r.id}>{r.name} · {r.status}</option>
                       ))}
                     </select>
+                    {routersError && (
+                      <p className="text-xs text-red-600">
+                        {routersError instanceof Error ? routersError.message : "Registered routers could not be loaded."}
+                      </p>
+                    )}
+                    {!routersLoading && !routersError && routers?.length === 0 && (
+                      <p className="text-xs text-[var(--isp-text-muted)]">
+                        No registered routers are available for this ISP account.
+                      </p>
+                    )}
                   </div>
                   {sourceRouterId && tunnel && (
                     <div className="space-y-3 rounded-lg border border-[var(--isp-border)] bg-[var(--isp-inner-card)] p-3">
