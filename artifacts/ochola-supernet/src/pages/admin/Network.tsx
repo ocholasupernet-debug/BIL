@@ -351,7 +351,7 @@ export default function Network() {
           </h1>
           {activeTab === "routers" && (
             <button style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "var(--isp-accent)", border: "none", borderRadius: 8, padding: "0.5rem 1rem", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
-              <Plus style={{ width: 15, height: 15 }} /> Add Router
+              <Plus style={{ width: 15, height: 15 }} /> Self Install
             </button>
           )}
           {activeTab === "self-install" && (

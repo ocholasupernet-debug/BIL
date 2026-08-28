@@ -740,8 +740,8 @@ export default function Files() {
             <p style={{ margin: "0.4rem 0 0", fontSize: "0.78rem" }}>
               Add and configure a MikroTik router before inspecting its files.
             </p>
-            <a href="/admin/network/add-router" style={{ display: "inline-block", marginTop: "0.9rem", color: "var(--isp-accent)", fontSize: "0.78rem", fontWeight: 700 }}>
-              Add a router →
+            <a href="/admin/network/self-install" style={{ display: "inline-block", marginTop: "0.9rem", color: "var(--isp-accent)", fontSize: "0.78rem", fontWeight: 700 }}>
+              Start Self Install →
             </a>
           </div>
         )}

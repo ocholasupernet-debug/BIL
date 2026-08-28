@@ -790,7 +790,7 @@ export default function ReplaceRouter() {
           }}>
             <WifiOff size={28} style={{ color: "#64748b" }} />
             <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--isp-text)" }}>No routers yet</div>
-            <div style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>Use <strong>Self Install</strong> to add your first router.</div>
+            <div style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>Use <strong>Self Install</strong> to connect your first router.</div>
             <button
               onClick={() => navigate("/admin/network/self-install")}
               style={{ marginTop: "0.25rem", padding: "0.5rem 1.25rem", borderRadius: 7, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", fontFamily: "inherit" }}

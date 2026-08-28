@@ -108,7 +108,7 @@ const navSections: NavSection[] = [
         name: "Network", icon: Network,
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
-          { name: "Add Router",     href: "/admin/network/add-router" },
+          { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "PPPoE",          href: "/admin/network/pppoe" },

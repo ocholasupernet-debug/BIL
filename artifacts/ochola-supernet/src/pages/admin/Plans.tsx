@@ -338,7 +338,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
             {routers.length === 0 ? (
               <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.18)", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                 No routers configured — router assignment is optional.{" "}
-                <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", textDecoration: "underline" }}>Add a router</a> anytime later.
+                <a href="/admin/network/self-install" style={{ color: "var(--isp-accent)", textDecoration: "underline" }}>use Self Install</a> anytime later.
               </div>
             ) : (
               <select style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => setRouterId(e.target.value)}>

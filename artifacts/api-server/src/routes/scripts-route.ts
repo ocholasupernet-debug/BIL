@@ -1873,11 +1873,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     }
     const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
     const registerUrl  = `https://${adminSubdomain}.${baseDomain}/api/isp/router/register/${routerSecret}`;
+    const routerVpnPassword = routerSecret ?? "";
 
     /* Ensure this router has a TLS client certificate ready on the server.
        Also keeps the psw-file in sync as a fallback during transition. */
     ensureClientCert(routerSlug);
-    updateVpnCredentials(routerSlug, "ocholasupernet");
+    updateVpnCredentials(routerSlug, routerVpnPassword);
 
     /* Mirror the same credential into isp_vpn_users so the admin UI
        can see / audit / manage the VPN login that this router uses.
@@ -1888,7 +1889,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        router slug (e.g. "come1") to match what is configured on the
        MikroTik OVPN client and in the VPS auth file — keeping all three
        sources of truth in sync. */
-    void ensureVpnUser(adminId, routerSlug, "ocholasupernet", routerName);
+    void ensureVpnUser(adminId, routerSlug, routerVpnPassword, routerName);
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [

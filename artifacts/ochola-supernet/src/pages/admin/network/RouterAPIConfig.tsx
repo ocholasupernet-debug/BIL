@@ -349,7 +349,7 @@ function RouterForm({
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <Settings size={15} style={{ color: "var(--isp-accent)" }} />
           <span style={{ fontWeight: 800, fontSize: 15, color: "var(--isp-text)" }}>
-            {routerId ? "Edit Router API Credentials" : "Add New Router"}
+            {routerId ? "Edit Router API Credentials" : "Self Install Router"}
           </span>
         </div>
         <button onClick={onCancel} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 4 }}><X size={16} /></button>
@@ -842,7 +842,7 @@ export default function RouterAPIConfig() {
           {!showAddForm && !editingRouter && (
             <button onClick={() => setShowAddForm(true)}
               style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-              <Plus size={14} /> Add Router
+              <Plus size={14} /> Self Install
             </button>
           )}
         </div>
@@ -907,7 +907,7 @@ export default function RouterAPIConfig() {
                 <Server size={32} style={{ color: "var(--isp-text-muted)", margin: "0 auto 12px", display: "block" }} />
                 <p style={{ fontWeight: 700, fontSize: 15, color: "var(--isp-text)", margin: "0 0 6px" }}>No routers configured</p>
                 <p style={{ fontSize: 13, color: "var(--isp-text-muted)", margin: "0 0 18px" }}>
-                  Add your first MikroTik router to enable automatic PPPoE and Hotspot account management.
+                  Use Self Install to connect your first MikroTik router and enable automatic PPPoE and Hotspot account management.
                 </p>
                 <button onClick={() => setShowAddForm(true)}
                   style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 20px", borderRadius: 9, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>

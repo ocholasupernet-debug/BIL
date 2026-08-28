@@ -94,6 +94,18 @@ function SubdomainGuard() {
 function StubPage({ title }: { title: string }) {
   return <div className="p-8 text-white"><h1 className="text-2xl font-bold">{title}</h1><p>Module wired and loading...</p></div>;
 }
+
+function LegacySelfInstallRedirect() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    const query = window.location.search;
+    setLocation(`/admin/network/self-install${query}`);
+  }, [setLocation]);
+
+  return null;
+}
+
 function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#080c10]">
@@ -120,7 +132,8 @@ function Router() {
       <Route path="/admin/network/pppoe"          component={NetworkPPPoE}         />
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
-      <Route path="/admin/network/add-router"     component={NetworkSelfInstall}   />
+      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
+      <Route path="/admin/network/add-router"     component={LegacySelfInstallRedirect} />
       <Route path="/admin/network/migration"      component={NetworkMigration}     />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
@@ -129,7 +142,6 @@ function Router() {
       <Route path="/admin/network/files"          component={NetworkFiles}       />
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
-      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />

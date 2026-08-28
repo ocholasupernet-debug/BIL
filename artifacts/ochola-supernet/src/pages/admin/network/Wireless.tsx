@@ -386,8 +386,8 @@ export default function Wireless() {
             color: "var(--isp-text-muted)", fontSize: "0.875rem",
           }}>
             No routers found.{" "}
-            <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", fontWeight: 600 }}>
-              Add a router first →
+            <a href="/admin/network/self-install" style={{ color: "var(--isp-accent)", fontWeight: 600 }}>
+              Start Self Install →
             </a>
           </div>
         )}

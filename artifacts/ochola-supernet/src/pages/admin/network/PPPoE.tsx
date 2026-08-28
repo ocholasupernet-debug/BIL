@@ -695,8 +695,8 @@ export default function PPPoE() {
                   {loadingRouters ? "Loading routers…" : "Select a router above to generate commands"}
                 </p>
                 {!loadingRouters && routers.length === 0 && (
-                  <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8rem" }}>
-                    Add a router first →
+                  <a href="/admin/network/self-install" style={{ color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8rem" }}>
+                    Start Self Install →
                   </a>
                 )}
               </div>

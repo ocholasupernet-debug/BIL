@@ -221,7 +221,7 @@ export default function SelfInstall() {
           </p>
         </div>
 
-        <NetworkTabs active="add-router" />
+        <NetworkTabs active="self-install" />
 
         {/* ── Blue profile banner ── */}
         <div style={{

@@ -920,7 +920,7 @@ export default function Routers() {
           </button>
           <div style={{ flex: 1 }} />
           <button
-            onClick={() => navigate("/admin/network/add-router")}
+            onClick={() => navigate("/admin/network/self-install")}
             style={{
               display: "flex", alignItems: "center", gap: "0.35rem",
               padding: "0.45rem 1rem", background: "#1e3a5f",
@@ -928,7 +928,7 @@ export default function Routers() {
               fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit",
             }}
           >
-            <Plus size={13} /> New Router
+            <Plus size={13} /> Self Install
           </button>
         </div>
 
@@ -959,7 +959,7 @@ export default function Routers() {
                     <tr>
                       <td colSpan={15} style={{ padding: "3rem 1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.875rem" }}>
                         {search ? `No routers matching "${search}"` : (
-                          <>No routers added yet. <a href="/admin/network/add-router" style={{ color: "var(--isp-accent)", textDecoration: "underline", fontWeight: 600 }}>Add your first router</a></>
+                          <>No routers configured yet. <a href="/admin/network/self-install" style={{ color: "var(--isp-accent)", textDecoration: "underline", fontWeight: 600 }}>Start Self Install</a></>
                         )}
                       </td>
                     </tr>

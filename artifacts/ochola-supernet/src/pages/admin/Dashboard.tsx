@@ -426,7 +426,7 @@ export default function Dashboard() {
               <div className="dashboard-empty">
                 <Server size={19} />
                 <span>No routers registered yet.</span>
-                <Link href="/admin/network">Add a router <ArrowUpRight size={13} /></Link>
+                <Link href="/admin/network/self-install">Self Install <ArrowUpRight size={13} /></Link>
               </div>
             ) : visibleRouters.map((router) => {
               const isOnline = routerOnline(router);
