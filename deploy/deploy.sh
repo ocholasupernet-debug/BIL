@@ -195,7 +195,8 @@ fi
 
 # 6b. Require and enable DNS-01 wildcard subdomain routing without replacing
 #     the existing Certbot-managed apex configuration. The helper also checks
-#     that the generated vhost is present in nginx's loaded configuration.
+#     that the generated vhost is present in nginx's loaded configuration and
+#     installs the deploy hook used after unattended certificate renewal.
 echo "[6b/7] Configuring wildcard subdomain routing..."
 if command -v nginx >/dev/null 2>&1 &&
    systemctl is-active --quiet nginx 2>/dev/null &&
