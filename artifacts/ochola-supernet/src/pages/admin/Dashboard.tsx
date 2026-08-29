@@ -10,6 +10,8 @@ import {
   CircleAlert,
   CircleCheck,
   CreditCard,
+  Eye,
+  EyeOff,
   Landmark,
   Loader2,
   Maximize2,
@@ -239,7 +241,7 @@ function DonutChart({ insights }: { insights: { label: string; count: number; co
 }
 
 export default function Dashboard() {
-  const { preferences } = useDashboardPreferences();
+  const { preferences, saving: preferencesSaving, savePreferences } = useDashboardPreferences();
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartMinimized, setChartMinimized] = useState(false);
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
@@ -359,6 +361,13 @@ export default function Dashboard() {
     "--dashboard-accent-border": `${preferences.accentColor}45`,
   } as CSSProperties;
 
+  const toggleAmounts = () => {
+    void savePreferences({
+      ...preferences,
+      hideAmounts: !preferences.hideAmounts,
+    }).catch(() => undefined);
+  };
+
   return (
     <AdminLayout>
       <div className={`dashboard-page dashboard-page--${preferences.layout} dashboard-shape--${preferences.cardShape}`} style={dashboardStyle}>
@@ -394,7 +403,19 @@ export default function Dashboard() {
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
           <span>01</span>
           Financial pulse
-          <span>Updated from live payment activity</span>
+          <span className="dashboard-section-meta">Updated from live payment activity</span>
+          <button
+            type="button"
+            className="dashboard-amount-toggle"
+            aria-pressed={preferences.hideAmounts}
+            aria-label={preferences.hideAmounts ? "Show financial amounts" : "Hide financial amounts"}
+            title={preferences.hideAmounts ? "Show financial amounts" : "Hide financial amounts"}
+            onClick={toggleAmounts}
+            disabled={preferencesSaving}
+          >
+            {preferences.hideAmounts ? <Eye size={13} /> : <EyeOff size={13} />}
+            <span>{preferences.hideAmounts ? "Show amounts" : "Hide amounts"}</span>
+          </button>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
           <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />

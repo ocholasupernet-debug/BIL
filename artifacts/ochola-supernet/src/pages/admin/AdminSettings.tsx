@@ -2108,10 +2108,10 @@ export default function AdminSettings() {
 
   return (
     <AdminLayout>
-      <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+      <div className="settings-layout" style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
         {/* Sidebar */}
-        <aside style={{ width: 220, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", position: "sticky", top: 0 }}>
+        <aside className="settings-sidebar" style={{ width: 220, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", position: "sticky", top: 0 }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
             <p style={{ fontSize: "0.7rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", margin: 0 }}>Settings</p>
           </div>
@@ -2144,6 +2144,11 @@ export default function AdminSettings() {
             <p style={{ fontSize: "0.75rem", color: C.muted, margin: "3px 0 0" }}>
               Manage your {TABS.find(t => t.id === tab)?.label.toLowerCase()} settings
             </p>
+          </div>
+          <div className="settings-mobile-nav">
+            <Select value={tab} onChange={event => selectTab(event.target.value)} aria-label="Choose settings section">
+              {TABS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </Select>
           </div>
 
           {tab === "profile"       && <IspProfileTab />}

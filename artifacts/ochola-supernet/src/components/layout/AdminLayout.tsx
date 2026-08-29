@@ -245,7 +245,7 @@ const SIDEBAR_W = 248;
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 768);
   const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const { toggle, isDark }            = useTheme();
@@ -333,7 +333,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       <style>{adminLayoutStyles}</style>
 
       {/* ── SIDEBAR ──────────────────────────────────────────────── */}
-      <aside className="admin-sidebar" style={{ width: sidebarOpen ? SIDEBAR_W : 0 }}>
+      <aside className={`admin-sidebar ${sidebarOpen ? "admin-sidebar--open" : "admin-sidebar--closed"}`} style={{ width: sidebarOpen ? SIDEBAR_W : 0 }}>
 
         {/* Logo strip */}
         <div className="sidebar-logo">
@@ -435,6 +435,14 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
       {/* ── MAIN AREA ─────────────────────────────────────────────── */}
       <div className="admin-main">
@@ -1002,5 +1010,33 @@ const adminLayoutStyles = `
   .header-search { max-width: 180px; }
   .header-live-pill { display: none; }
   .header-logout-btn span { display: none; }
+  .admin-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: ${SIDEBAR_W}px !important;
+    transform: translateX(-100%);
+    box-shadow: 12px 0 30px rgba(0,0,0,0.28);
+  }
+  .admin-sidebar--open { transform: translateX(0); }
+  .admin-sidebar--closed { width: 0 !important; }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    background: rgba(15,23,42,0.48);
+    border: 0;
+    cursor: pointer;
+  }
+  .admin-main { width: 100%; }
+}
+@media (min-width: 769px) {
+  .sidebar-backdrop { display: none; }
 }
 `;
