@@ -63,10 +63,12 @@ function genPassword(len = 10): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
-function genUsername(name: string): string {
-  const base = name.trim().split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-  const num  = Math.floor(1000 + Math.random() * 9000);
-  return `${base}${num}`;
+function genUsername(phoneOrName: string): string {
+  const phone = phoneOrName.replace(/\D/g, "");
+  const fallback = phoneOrName.trim().split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "") || "user";
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  return `${time}-${phone || fallback}`;
 }
 function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
   return {
@@ -307,8 +309,14 @@ function CustomerModal({
   };
 
   const handleNameBlur = () => {
-    if (form.name && !form.username) set("username", genUsername(form.name));
-    if (form.name && !form.pppoe_username) set("pppoe_username", genUsername(form.name));
+    if (form.name && !form.username && !form.phone) set("username", genUsername(form.name));
+    if (form.name && !form.pppoe_username && !form.phone) set("pppoe_username", genUsername(form.name));
+  };
+  const handlePhoneBlur = () => {
+    if (!form.phone) return;
+    const generated = genUsername(form.phone);
+    if (!form.username || /^(\d{4})-/.test(form.username)) set("username", generated);
+    if (!form.pppoe_username || /^(\d{4})-/.test(form.pppoe_username)) set("pppoe_username", generated);
   };
 
   const handleSubmit = async () => {
@@ -381,7 +389,7 @@ function CustomerModal({
               </Field>
               <Field label="Phone Number">
                 <input style={inp} value={form.phone} placeholder="+254 7XX XXX XXX"
-                  onChange={e => set("phone", e.target.value)} />
+                  onChange={e => set("phone", e.target.value)} onBlur={handlePhoneBlur} />
               </Field>
             </div>
 

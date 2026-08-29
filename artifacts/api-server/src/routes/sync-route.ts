@@ -485,8 +485,9 @@ router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/users", async (req, res): Promise<void> => {
-  const { host, bridgeIp, username, password, users } = req.body as {
-    host: string; bridgeIp?: string; username: string; password: string;
+  const { host: bodyHost, bridgeIp: bodyBridgeIp, username: bodyUsername, password: bodyPassword, routerId, adminId, users } = req.body as {
+    host?: string; bridgeIp?: string; username?: string; password?: string;
+    routerId?: number; adminId?: number;
     users: Array<{
       username: string; password: string;
       type: string;           // "hotspot" | "pppoe" | "static" | "voucher"
@@ -497,6 +498,31 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
       comment?: string;
     }>;
   };
+
+  let host = bodyHost || "";
+  let bridgeIp = bodyBridgeIp;
+  let username = bodyUsername || "";
+  let password = bodyPassword || "";
+  if (routerId !== undefined) {
+    const id = Number(routerId);
+    const tenantId = Number(adminId);
+    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(tenantId) || tenantId < 1) {
+      res.status(400).json({ ok: false, error: "A valid router and ISP account are required" });
+      return;
+    }
+    const rows = await sbSelect<{
+      host: string; bridge_ip: string | null; router_username: string | null; router_secret: string | null;
+    }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=host,bridge_ip,router_username,router_secret&limit=1`);
+    const routerRow = rows[0];
+    if (!routerRow) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
+      return;
+    }
+    host = routerRow.host || "";
+    bridgeIp = routerRow.bridge_ip || undefined;
+    username = routerRow.router_username || "admin";
+    password = routerRow.router_secret || "";
+  }
 
   if ((!host && !bridgeIp) || !users?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and users are required" }); return; }
 
