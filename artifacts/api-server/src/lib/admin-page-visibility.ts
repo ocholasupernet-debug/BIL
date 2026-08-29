@@ -57,6 +57,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
       { key: "network.ppp", label: "PPP", description: "Manage PPP profiles and sessions." },
       { key: "network.wireless", label: "Wireless", description: "Manage wireless settings." },
       { key: "network.queues", label: "Queues", description: "Manage bandwidth queues." },
+      { key: "network.load-balancing", label: "Load Balancing", description: "Manage multi-WAN traffic distribution and failover." },
       { key: "network.ip-pools", label: "IP Pools", description: "Manage router IP pools." },
       { key: "network.router-api-config", label: "API Config", description: "Configure router API access." },
       { key: "network.files", label: "Files", description: "Inspect and deploy router files." },

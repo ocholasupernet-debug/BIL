@@ -561,6 +561,20 @@ export async function deployRouterFile(
   });
 }
 
+/** Execute an already-uploaded RouterOS script file. */
+export async function runRouterScript(
+  creds: RouterCredentials,
+  fileName: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    await withTimeout(
+      conn.write(["/import", `=file-name=${fileName}`]),
+      ms,
+    );
+  });
+}
+
 export async function fetchRouterFiles(creds: RouterCredentials): Promise<RouterFilesResult> {
   return withConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;

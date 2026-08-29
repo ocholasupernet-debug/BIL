@@ -2,7 +2,7 @@ import React from "react";
 import { Link } from "wouter";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import {
-  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files, RefreshCw
+  Server, Shield, PlusCircle, Activity, Database, Wifi, Users, Settings2, RotateCcw, Files, RefreshCw, Scale
 } from "lucide-react";
 
 const TABS = [
@@ -14,6 +14,7 @@ const TABS = [
   { id: "ppp",               label: "PPP",             href: "/admin/network/ppp",               icon: Users     },
   { id: "wireless",          label: "Wireless",        href: "/admin/network/wireless",          icon: Wifi      },
   { id: "queues",            label: "Queues",          href: "/admin/network/queues",            icon: Activity  },
+  { id: "load-balancing",    label: "Load Balancing",  href: "/admin/network/load-balancing",    icon: Scale     },
   { id: "ip-pools",          label: "IP Pools",        href: "/admin/network/ip-pools",          icon: Database  },
   { id: "router-api-config", label: "API Config",      href: "/admin/network/router-api-config", icon: Settings2 },
   { id: "files",             label: "Files",           href: "/admin/network/files",             icon: Files     },
