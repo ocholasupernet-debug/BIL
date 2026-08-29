@@ -83,11 +83,19 @@ echo "  Dir:         $PROJECT_DIR"
 echo "  web root:    ${PUBLIC_HTML:-NOT FOUND}"
 echo "══════════════════════════════════════════"
 
-# 1. Force pull latest code (discard any local changes)
-echo "[1/6] Pulling latest from GitHub..."
-git fetch --all
-git reset --hard origin/main
-echo "      → Now on: $(git log -1 --format='%h %s')"
+# 1. Use the release delivered by GitHub Actions, or pull latest code when
+#    this script is run manually on the VPS.
+if [ "${DEPLOY_FROM_ARCHIVE:-0}" = "1" ]; then
+  echo "[1/7] Using the release delivered by GitHub Actions..."
+  if [ -n "${DEPLOY_SOURCE_COMMIT:-}" ]; then
+    echo "      → Source commit: ${DEPLOY_SOURCE_COMMIT}"
+  fi
+else
+  echo "[1/7] Pulling latest from GitHub..."
+  git fetch --all
+  git reset --hard origin/main
+  echo "      → Now on: $(git log -1 --format='%h %s')"
+fi
 
 # 2. Install dependencies (no frozen-lockfile so it never blocks)
 echo "[2/7] Installing dependencies..."

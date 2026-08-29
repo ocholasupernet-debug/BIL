@@ -6,12 +6,51 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: SSH Deploy
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out the release
+        uses: actions/checkout@v4
+
+      - name: Package release for VPS
+        run: |
+          tar \
+            --exclude='./.git' \
+            --exclude='./.env' \
+            --exclude='*/.env' \
+            --exclude='./node_modules' \
+            --exclude='*/node_modules' \
+            --exclude='./dist' \
+            --exclude='*/dist' \
+            --exclude='./logs' \
+            --exclude='*/logs' \
+            --exclude='*.log' \
+            -czf ocholasupernet-release.tgz .
+
+      - name: Copy release to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          port: 22
+          source: ocholasupernet-release.tgz
+          target: /tmp
+          overwrite: true
+          timeout: 120s
+          command_timeout: 15m
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
         with:
@@ -28,10 +67,12 @@ jobs:
             echo "=== Starting deploy at $(date) ==="
             cd /var/www/ocholasupernet
 
-            # Load the deployment script from the pushed revision. A running
-            # shell script cannot update its own already-loaded instructions.
-            git fetch origin main
-            git reset --hard origin/main
+            # The GitHub runner has already checked out the exact release. The
+            # VPS no longer needs to fetch GitHub over its unreliable outbound
+            # connection, which previously failed with a broken pipe.
+            test -s /tmp/ocholasupernet-release.tgz
+            tar -xzf /tmp/ocholasupernet-release.tgz -C .
+            rm -f /tmp/ocholasupernet-release.tgz
 
             # Inject Supabase credentials and the encryption key into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
@@ -53,7 +94,9 @@ jobs:
 
             sudo -E bash deploy/configure-nginx.sh
 
-            bash deploy/deploy.sh
+            DEPLOY_FROM_ARCHIVE=1 \
+            DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
+              bash deploy/deploy.sh
             echo "=== Deploy finished at $(date) ==="
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
