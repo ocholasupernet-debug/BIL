@@ -24,6 +24,7 @@ jobs:
 
       - name: Package release for VPS
         run: |
+          release_archive="${RUNNER_TEMP}/ocholasupernet-release.tgz"
           tar \
             --exclude='./.git' \
             --exclude='./.env' \
@@ -35,7 +36,8 @@ jobs:
             --exclude='./logs' \
             --exclude='*/logs' \
             --exclude='*.log' \
-            -czf ocholasupernet-release.tgz .
+            -czf "$release_archive" .
+          mv "$release_archive" ocholasupernet-release.tgz
 
       - name: Copy release to VPS
         uses: appleboy/scp-action@v0.1.7
