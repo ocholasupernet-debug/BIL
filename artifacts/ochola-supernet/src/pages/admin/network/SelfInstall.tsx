@@ -310,7 +310,7 @@ export default function SelfInstall() {
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
   const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}`;
   const caUrl = `${window.location.origin}/api/scripts/ochola-isrg-root-x1.pem`;
-  const fetchCommand = `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes certificate=ochola-isrg-root-x1`;
+  const fetchCommand = `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;

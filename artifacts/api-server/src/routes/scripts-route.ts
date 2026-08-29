@@ -291,7 +291,7 @@ function verifyFetchedFile(pathExpression: string, label: string): string {
 }
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
-  `mode=https check-certificate=yes certificate=${ROUTER_HTTPS_CERTIFICATE_NAME}`;
+  `mode=https check-certificate=yes`;
 
 function routerHttpsTrustBootstrap(scriptsBase: string): string {
   const caUrl = `${scriptsBase}/${ROUTER_HTTPS_CERTIFICATE_FILE}`;

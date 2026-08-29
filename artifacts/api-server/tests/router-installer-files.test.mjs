@@ -74,7 +74,8 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
   assert.match(httpsTrust, /-----BEGIN CERTIFICATE-----/);
   assert.match(scriptsRoute, /\/certificate import file-name="\$caFile" name="\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}" trusted=yes/);
   assert.match(scriptsRoute, /ROUTER_HTTPS_FETCH_OPTIONS/);
-  assert.match(scriptsRoute, /check-certificate=yes certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
+  assert.match(scriptsRoute, /const ROUTER_HTTPS_FETCH_OPTIONS =\s+`mode=https check-certificate=yes`/);
+  assert.doesNotMatch(scriptsRoute, /const ROUTER_HTTPS_FETCH_OPTIONS[\s\S]{0,120}certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
 
   const unverifiedFetches = scriptsRoute.match(/mode=https check-certificate=no/g) ?? [];
   assert.equal(unverifiedFetches.length, 1, "only the one-time public CA bootstrap may skip certificate validation");
@@ -82,7 +83,8 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
 
 test("PPPoE installers use the same verified HTTPS policy", () => {
   assert.match(pppoeRoute, /pppoeHttpsTrustBootstrap/);
-  assert.match(pppoeRoute, /ROUTER_HTTPS_FETCH_OPTIONS[\s\S]*check-certificate=yes certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
+  assert.match(pppoeRoute, /const ROUTER_HTTPS_FETCH_OPTIONS =\s+`mode=https check-certificate=yes`/);
+  assert.doesNotMatch(pppoeRoute, /const ROUTER_HTTPS_FETCH_OPTIONS[\s\S]{0,120}certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
 
   const unverifiedFetches = pppoeRoute.match(/mode=https check-certificate=no/g) ?? [];
   assert.equal(unverifiedFetches.length, 1, "PPPoE bootstrap should be the only unverified fetch");

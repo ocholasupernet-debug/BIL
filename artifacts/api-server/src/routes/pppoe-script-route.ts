@@ -18,7 +18,7 @@ const SUPABASE_URL = resolveSupabaseUrl();
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
 const BASE_DOMAIN  = "isplatty.org";
 const ROUTER_HTTPS_FETCH_OPTIONS =
-  `mode=https check-certificate=yes certificate=${ROUTER_HTTPS_CERTIFICATE_NAME}`;
+  `mode=https check-certificate=yes`;
 
 function pppoeHttpsTrustBootstrap(adminSubdomain: string): string {
   const caUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api${ROUTER_HTTPS_CERTIFICATE_PATH}`;
