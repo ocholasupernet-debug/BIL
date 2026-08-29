@@ -71,16 +71,25 @@ pm2 save
 pm2 startup            # follow the printed command to enable on reboot
 ```
 
-### HTTPS with a supplied wildcard certificate
+### HTTPS with Cloudflare DNS-01
 
 ```bash
-# The automated deployment installs the certificate from these GitHub Actions
-# secrets; do not commit either file to the repository:
-#   WILDCARD_CERT_B64      = base64 -w0 fullchain.pem
-#   WILDCARD_CERT_KEY_B64  = base64 -w0 privkey.pem
-
-# The certificate must contain both isplatty.org and *.isplatty.org.
-# After the secrets are configured, run the Deploy to VPS workflow.
+# Keep the domain registered at Namecheap, but change its nameservers to the
+# two nameservers Cloudflare assigns to the isplatty.org zone. Copy every
+# existing DNS record before changing nameservers, including mail records.
+#
+# Create a Cloudflare API token with:
+#   - Zone:Read
+#   - Zone:DNS:Edit
+#   - restricted to the isplatty.org zone
+#
+# Add the token as the encrypted GitHub Actions secret CLOUDFLARE_API_TOKEN.
+# CLOUDFLARE_ZONE_ID is optional; the deployment discovers it by zone name.
+# The deployment stores the token only on the VPS at
+# /etc/letsencrypt/cloudflare-api-token with root-only permissions so the
+# system Certbot renewal timer can renew the certificate without a deploy.
+# The deployment then obtains and renews a certificate for:
+#   isplatty.org, www.isplatty.org, and *.isplatty.org
 ```
 
 ---
