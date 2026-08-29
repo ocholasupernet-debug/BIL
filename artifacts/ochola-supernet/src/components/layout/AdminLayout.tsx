@@ -118,6 +118,7 @@ const navSections: NavSection[] = [
           { name: "PPP",            href: "/admin/network/ppp" },
           { name: "Wireless",       href: "/admin/network/wireless" },
           { name: "Queues",         href: "/admin/network/queues" },
+          { name: "Load Balancing", href: "/admin/network/load-balancing" },
           { name: "IP Pools",       href: "/admin/network/ip-pools" },
           { name: "API Config",     href: "/admin/network/router-api-config" },
           { name: "Files",          href: "/admin/network/files" },
