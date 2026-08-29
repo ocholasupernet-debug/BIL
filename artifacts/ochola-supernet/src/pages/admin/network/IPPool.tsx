@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
@@ -30,6 +30,54 @@ interface DbRouter {
   router_username: string;
   router_secret: string | null;
   status: string;
+}
+
+const REQUIRED_POOL_TYPES = ["active", "pppoe", "expired"] as const;
+type RequiredPoolType = typeof REQUIRED_POOL_TYPES[number];
+type RangeField = "start" | "end";
+type RouterPoolForm = Record<RequiredPoolType, { start: string; end: string }>;
+
+const POOL_TYPE_LABELS: Record<RequiredPoolType, { label: string; detail: string; color: string }> = {
+  active:  { label: "Active",  detail: "Connected subscribers", color: "#22c55e" },
+  pppoe:   { label: "PPPoE",   detail: "PPPoE subscriber addresses", color: "var(--isp-accent)" },
+  expired: { label: "Expired", detail: "Recovery / lapsed subscribers", color: "#f59e0b" },
+};
+
+function emptyRouterPoolForm(): RouterPoolForm {
+  return {
+    active:  { start: "", end: "" },
+    pppoe:   { start: "", end: "" },
+    expired: { start: "", end: "" },
+  };
+}
+
+function buildRouterPoolForms(routers: DbRouter[], pools: DbPool[]): Record<number, RouterPoolForm> {
+  return Object.fromEntries(routers.map(router => {
+    const form = emptyRouterPoolForm();
+    for (const type of REQUIRED_POOL_TYPES) {
+      const pool = pools.find(p =>
+        p.router_id === router.id && p.name.trim().toLowerCase() === type
+      );
+      if (pool) form[type] = { start: pool.range_start, end: pool.range_end };
+    }
+    return [router.id, form];
+  }));
+}
+
+function ipv4Number(value: string): number | null {
+  const parts = value.trim().split(".");
+  if (parts.length !== 4 || parts.some(part => !/^\d+$/.test(part))) return null;
+  const octets = parts.map(Number);
+  if (octets.some(octet => octet < 0 || octet > 255)) return null;
+  return octets.reduce((number, octet) => number * 256 + octet, 0);
+}
+
+function rangeError(range: { start: string; end: string }): string | null {
+  const start = ipv4Number(range.start);
+  const end = ipv4Number(range.end);
+  if (start === null || end === null) return "use valid IPv4 addresses";
+  if (start > end) return "start IP must not be after end IP";
+  return null;
 }
 
 /* ── Supabase helpers ── */
@@ -89,7 +137,7 @@ export default function IPPool() {
     queryFn:  fetchPools,
     staleTime: 10_000,
   });
-  const { data: routers = [] } = useQuery<DbRouter[]>({
+  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_pools", ADMIN_ID],
     queryFn:  fetchRouters,
     staleTime: 15_000,
@@ -97,6 +145,11 @@ export default function IPPool() {
 
   const routerMap = useMemo(() =>
     Object.fromEntries(routers.map(r => [r.id, r])), [routers]);
+
+  const initialRouterPoolForms = useMemo(
+    () => buildRouterPoolForms(routers, pools),
+    [routers, pools],
+  );
 
   /* ── UI state ── */
   const [search,  setSearch]  = useState("");
@@ -121,6 +174,20 @@ export default function IPPool() {
   const [fRouterId,  setFRouterId]  = useState("");
   const [saving,     setSaving]     = useState(false);
   const [saveErr,    setSaveErr]    = useState<string | null>(null);
+  const [routerPoolForms, setRouterPoolForms] = useState<Record<number, RouterPoolForm>>({});
+  const [savingRouterId, setSavingRouterId] = useState<number | null>(null);
+  const [routerPoolErrors, setRouterPoolErrors] = useState<Record<number, string | null>>({});
+
+  useEffect(() => {
+    if (poolsLoading || routersLoading) return;
+    setRouterPoolForms(current => {
+      const next = { ...current };
+      for (const router of routers) {
+        if (!next[router.id]) next[router.id] = initialRouterPoolForms[router.id] ?? emptyRouterPoolForm();
+      }
+      return next;
+    });
+  }, [initialRouterPoolForms, poolsLoading, routers, routersLoading]);
 
   /* ── Filtered + paginated ── */
   const filtered = useMemo(() =>
@@ -170,6 +237,70 @@ export default function IPPool() {
     await supabase.from("isp_ip_pools").delete().eq("id", id);
     qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
     setDeleting(null);
+  }
+
+  function updateRouterPoolField(routerId: number, type: RequiredPoolType, field: RangeField, value: string) {
+    setRouterPoolForms(current => {
+      const form = current[routerId] ?? emptyRouterPoolForm();
+      return {
+        ...current,
+        [routerId]: {
+          ...form,
+          [type]: { ...form[type], [field]: value },
+        },
+      };
+    });
+  }
+
+  async function saveRouterPools(routerId: number) {
+    const form = routerPoolForms[routerId] ?? emptyRouterPoolForm();
+    const missing = REQUIRED_POOL_TYPES.find(type => !form[type].start.trim() || !form[type].end.trim());
+    if (missing) {
+      setRouterPoolErrors(current => ({
+        ...current,
+        [routerId]: `${POOL_TYPE_LABELS[missing].label} pool start and end IPs are required.`,
+      }));
+      return;
+    }
+    const invalid = REQUIRED_POOL_TYPES.find(type => rangeError(form[type]));
+    if (invalid) {
+      setRouterPoolErrors(current => ({
+        ...current,
+        [routerId]: `${POOL_TYPE_LABELS[invalid].label} pool ${rangeError(form[invalid])}.`,
+      }));
+      return;
+    }
+
+    setSavingRouterId(routerId);
+    setRouterPoolErrors(current => ({ ...current, [routerId]: null }));
+    try {
+      const now = new Date().toISOString();
+      for (const type of REQUIRED_POOL_TYPES) {
+        const range = form[type];
+        const existing = pools.find(p =>
+          p.router_id === routerId && p.name.trim().toLowerCase() === type
+        );
+        const payload = {
+          name: type,
+          range_start: range.start.trim(),
+          range_end: range.end.trim(),
+          router_id: routerId,
+          updated_at: now,
+        };
+        const result = existing
+          ? await supabase.from("isp_ip_pools").update(payload).eq("id", existing.id)
+          : await supabase.from("isp_ip_pools").insert({ ...payload, admin_id: ADMIN_ID, created_at: now });
+        if (result.error) throw result.error;
+      }
+      await qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+    } catch (error) {
+      setRouterPoolErrors(current => ({
+        ...current,
+        [routerId]: error instanceof Error ? error.message : "Could not save this router's pools.",
+      }));
+    } finally {
+      setSavingRouterId(null);
+    }
   }
 
   /* ── Sync handlers ── */
@@ -290,13 +421,113 @@ export default function IPPool() {
 
         <NetworkTabs active="ip-pools" />
 
+        {/* ── Required per-router PPPoE pools ── */}
+        <div style={{
+          background: "var(--isp-card)", border: "1px solid var(--isp-border)",
+          borderRadius: 10, padding: "1rem",
+        }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: "0.8rem" }}>
+            <div>
+              <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.95rem", fontWeight: 800 }}>
+                Router pool assignments
+              </h2>
+              <p style={{ margin: "0.3rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.75rem" }}>
+                Assign the active, PPPoE, and expired address ranges separately for every router.
+              </p>
+            </div>
+            <span style={{
+              color: "#fbbf24", background: "rgba(251,191,36,0.08)",
+              border: "1px solid rgba(251,191,36,0.2)", borderRadius: 6,
+              padding: "0.25rem 0.55rem", fontSize: "0.68rem", fontWeight: 700,
+            }}>
+              3 required pools per router
+            </span>
+          </div>
+
+          {routers.length === 0 ? (
+            <div style={{ padding: "1rem 0 0.25rem", color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
+              Add a router first. Its three pool ranges will appear here.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: "0.75rem" }}>
+              {routers.map(router => {
+                const form = routerPoolForms[router.id] ?? emptyRouterPoolForm();
+                const isSaving = savingRouterId === router.id;
+                return (
+                  <div key={router.id} style={{
+                    border: "1px solid var(--isp-border)", borderRadius: 9,
+                    background: "var(--isp-section)", padding: "0.8rem",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.7rem" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 800 }}>
+                          <Server size={13} style={{ color: "var(--isp-accent)", flexShrink: 0 }} />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{router.name}</span>
+                        </div>
+                        <div style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", marginTop: "0.18rem", paddingLeft: "1.05rem" }}>
+                          {router.host || router.bridge_ip || "No router IP"}
+                        </div>
+                      </div>
+                      <span style={{ color: router.status === "online" ? "#4ade80" : "var(--isp-text-muted)", fontSize: "0.65rem", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        {router.status === "online" ? "● Online" : "● Offline"}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+                      {REQUIRED_POOL_TYPES.map(type => {
+                        const metadata = POOL_TYPE_LABELS[type];
+                        return (
+                          <div key={type}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+                              <span style={{ color: metadata.color, fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                                {metadata.label}
+                              </span>
+                              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.64rem" }}>{metadata.detail}</span>
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem" }}>
+                              {(["start", "end"] as const).map(field => (
+                                <input
+                                  key={field}
+                                  value={form[type][field]}
+                                  onChange={event => updateRouterPoolField(router.id, type, field, event.target.value)}
+                                  placeholder={field === "start" ? "Start IP" : "End IP"}
+                                  aria-label={`${metadata.label} ${field} IP for ${router.name}`}
+                                  style={{ ...INPUT, fontFamily: "monospace", fontSize: "0.75rem", boxSizing: "border-box" }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {routerPoolErrors[router.id] && (
+                      <div style={{ marginTop: "0.65rem", color: "#f87171", fontSize: "0.7rem" }}>
+                        {routerPoolErrors[router.id]}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => void saveRouterPools(router.id)}
+                      disabled={isSaving}
+                      style={{ ...btn("var(--isp-accent)"), width: "100%", justifyContent: "center", marginTop: "0.75rem", opacity: isSaving ? 0.7 : 1 }}
+                    >
+                      {isSaving ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <CheckCircle2 size={12} />}
+                      {isSaving ? "Saving ranges…" : "Save router pools"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* ── Help panel ── */}
         {showHelp && (
           <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 10, padding: "0.875rem 1rem", fontSize: "0.79rem", color: "#4ade80", lineHeight: 1.75 }}>
             <strong>IP Pool Guide</strong><br />
-            • Pool names <code style={{ fontFamily: "monospace" }}>active</code>, <code style={{ fontFamily: "monospace" }}>pppoe</code>, <code style={{ fontFamily: "monospace" }}>expired</code> are synced to RouterOS as-is.<br />
-            • <strong>Active</strong> — hotspot / general DHCP clients. <strong>PPPoE</strong> — PPPoE subscriber IPs. <strong>Expired</strong> — lapsed customers.<br />
-            • Assign each pool to a router, then click <strong>Sync All</strong> or <strong>Sync by Router</strong>.
+            • Every router should have one <code style={{ fontFamily: "monospace" }}>active</code>, <code style={{ fontFamily: "monospace" }}>pppoe</code>, and <code style={{ fontFamily: "monospace" }}>expired</code> pool assignment.<br />
+            • <strong>Active</strong> — connected subscribers. <strong>PPPoE</strong> — PPPoE subscriber addresses. <strong>Expired</strong> — recovery / lapsed subscribers.<br />
+            • Save the router card first, then click <strong>Sync All</strong> or <strong>Sync by Router</strong> to push its ranges.
           </div>
         )}
 
