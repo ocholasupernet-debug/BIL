@@ -3,10 +3,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
-  Network, Settings, Bell, Wifi, Layers, Shield,
-  Globe, Radio, MonitorSmartphone, Sliders, FileCode2, Star,
-  Activity, BookOpen, LogOut, Webhook, ChevronRight,
-  Zap, MessageSquare, CheckSquare, Search, Sun, Moon, Menu,
+  Network, Settings, Bell, Wifi, Shield,
+  Sliders, BookOpen, LogOut, Webhook, ChevronRight,
+  Zap, CheckSquare, Search, Sun, Moon, Menu,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
@@ -56,12 +55,8 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Activation", icon: CheckSquare, badge: "New", visibilityKey: "customers.activation",
-        children: [
-          { name: "Pending",       href: "/admin/activation" },
-          { name: "Approved",      href: "/admin/activation?status=approved" },
-          { name: "Prepaid Users", href: "/admin/activation/prepaid-users" },
-        ],
+        name: "Prepaid Users", icon: CheckSquare, visibilityKey: "customers.activation",
+        href: "/admin/activation/prepaid-users",
       },
       {
         name: "Hotspot Vouchers", icon: Ticket, visibilityKey: "customers.vouchers",
@@ -129,13 +124,6 @@ const navSections: NavSection[] = [
         ],
       },
       {
-        name: "Access Points", icon: MonitorSmartphone, badge: "New", visibilityKey: "network.access-points",
-        children: [
-          { name: "All APs",  href: "/admin/access-points" },
-          { name: "Add New",  href: "/admin/access-points?action=add" },
-        ],
-      },
-      {
         name: "PPPoE Settings", icon: Sliders, visibilityKey: "network.pppoe-settings",
         children: [
           { name: "General",   href: "/admin/pppoe-settings" },
@@ -165,44 +153,15 @@ const navSections: NavSection[] = [
           { name: "VPN Settings",  href: "/admin/vpn/settings" },
         ],
       },
-      {
-        name: "Bulk Actions", icon: Layers, visibilityKey: "tools.bulk",
-        children: [
-          { name: "Renew Expired", href: "/admin/bulk" },
-          { name: "Send SMS",      href: "/admin/bulk?action=sms" },
-        ],
-      },
-      {
-        name: "UISP", icon: Activity, visibilityKey: "tools.uisp",
-        children: [
-          { name: "Devices", href: "/admin/uisp" },
-          { name: "Sites",   href: "/admin/uisp?tab=sites" },
-        ],
-      },
-      {
-        name: "Bonga Points", icon: Star, visibilityKey: "tools.bonga",
-        children: [
-          { name: "Dashboard", href: "/admin/bonga" },
-          { name: "Redeem",    href: "/admin/bonga?tab=redeem" },
-        ],
-      },
       { name: "Webhooks",    href: "/admin/webhooks",      icon: Webhook, visibilityKey: "tools.webhooks" },
-      { name: "TR069 ACS",   href: "/admin/acs",           icon: Radio, visibilityKey: "tools.acs" },
-      { name: "Page Builder",href: "/admin/page-builder",  icon: FileCode2, visibilityKey: "tools.page-builder" },
     ],
   },
   {
     label: "Admin",
     visibilityKey: "admin",
     items: [
-      { name: "Support Tickets", href: "/admin/support", icon: MessageSquare, visibilityKey: "admin.support" },
       {
-        name: "Notifications", icon: Bell, visibilityKey: "admin.notifications",
-        children: [
-          { name: "All",              href: "/admin/notifications" },
-          { name: "Expiry Alerts",    href: "/admin/notifications?type=expiry" },
-          { name: "Message Templates",href: "/admin/message-templates" },
-        ],
+        name: "Message Templates", icon: Bell, href: "/admin/message-templates", visibilityKey: "admin.notifications",
       },
       {
         name: "Logs", icon: BookOpen, visibilityKey: "admin.logs",
@@ -211,14 +170,6 @@ const navSections: NavSection[] = [
           { name: "System Logs", href: "/admin/logs?type=system" },
         ],
       },
-      {
-        name: "Extras", icon: Settings, visibilityKey: "admin.extras",
-        children: [
-          { name: "SMS Gateway",  href: "/admin/extras/sms" },
-          { name: "Email Config", href: "/admin/extras/email" },
-        ],
-      },
-      { name: "FreeRADIUS", href: "/admin/radius",   icon: Shield, visibilityKey: "admin.radius" },
       {
         name: "Settings", icon: Settings, visibilityKey: "admin.settings",
         children: [
@@ -236,7 +187,6 @@ const navSections: NavSection[] = [
           { name: "Plugins",               href: "/admin/settings?tab=plugins" },
         ],
       },
-      { name: "Static Pages",href: "/admin/pages",   icon: Globe, visibilityKey: "admin.pages" },
     ],
   },
 ];
