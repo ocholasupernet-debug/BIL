@@ -24,6 +24,16 @@ fi
 if ! has_wildcard_certificate; then
   : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required to issue or renew the wildcard certificate}"
 
+  if ! python3 "${PROJECT_DIR}/deploy/cloudflare-dns-hook.py" verify; then
+    if systemctl is-active --quiet nginx && nginx -t; then
+      echo "Cloudflare cannot manage ${DOMAIN}; preserving the active Nginx/TLS configuration." >&2
+      echo "Application deployment will continue without changing certificates." >&2
+      exit 0
+    fi
+    echo "Cloudflare cannot manage ${DOMAIN}, and no healthy Nginx service is available." >&2
+    exit 1
+  fi
+
   certbot certonly \
     --non-interactive \
     --agree-tos \

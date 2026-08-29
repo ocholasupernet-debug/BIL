@@ -131,12 +131,22 @@ def cleanup() -> None:
     write_state(state)
 
 
+def verify() -> None:
+    """Confirm the configured token can resolve the production zone."""
+    zone_id()
+
+
 if __name__ == "__main__":
     try:
-        if len(sys.argv) > 1 and sys.argv[1] == "auth":
+        action = sys.argv[1] if len(sys.argv) > 1 else "cleanup"
+        if action == "auth":
             auth()
-        else:
+        elif action == "cleanup":
             cleanup()
+        elif action == "verify":
+            verify()
+        else:
+            raise RuntimeError(f"Unsupported Cloudflare DNS hook action: {action}")
     except Exception as error:
         print(f"Cloudflare DNS hook failed: {error}", file=sys.stderr)
         raise
