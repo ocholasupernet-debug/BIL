@@ -131,4 +131,6 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.ippPath/);
   assert.match(scriptsRoute, /routerManagementVpnReadiness\(\)/);
   assert.match(scriptsRoute, /routerManagementVpnPort\(\)/);
+  assert.match(scriptsRoute, /if \(!readiness\.endpointConfigured\)/);
+  assert.match(scriptsRoute, /The OpenVPN server may be hosted separately/);
 });

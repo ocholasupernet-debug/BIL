@@ -1222,10 +1222,10 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
 
     if (protocol === "openvpn") {
       const readiness = routerManagementVpnReadiness();
-      if (!readiness.ready) {
+      if (!readiness.endpointConfigured) {
         res.status(503).type("text/plain").send(
-          `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. ` +
-          "Run the VPS OpenVPN setup first, then retry.",
+          "# Router-management VPN endpoint is not configured. " +
+          "Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST, then retry.",
         );
         return;
       }
@@ -1237,6 +1237,10 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         return;
       }
       const vpnPort = routerManagementVpnPort();
+      const readinessWarning = readiness.ready
+        ? ""
+        : `# WARNING: API could not verify local OpenVPN files (${readiness.missing.join(", ")}).\n` +
+          "# The OpenVPN server may be hosted separately; RouterOS will verify the tunnel after import.\n";
       script = generateRouterAsClientScript({
         vpsPublicIp: vpsHost,
         vpnPort,
@@ -1246,6 +1250,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
       });
+      script = readinessWarning + script;
     } else if (protocol === "wireguard") {
       const material = await routerFallbackMaterial(routerId, "wireguard");
       const endpoint = material?.endpoint || routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);
