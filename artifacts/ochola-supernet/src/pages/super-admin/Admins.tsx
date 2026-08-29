@@ -9,6 +9,7 @@ import {
 
 const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 const inp: React.CSSProperties = { background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-accent-glow)", borderRadius: 8, padding: "9px 14px", color: "#e2e8f0", fontSize: "0.82rem", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "proxyvpn", "mail", "admin"]);
 
 interface Admin {
   id: number; name: string; username: string; email: string | null;
@@ -21,6 +22,26 @@ interface AdminForm {
   role: string; subdomain: string; password: string;
 }
 const EMPTY: AdminForm = { name: "", username: "", email: "", phone: "", role: "admin", subdomain: "", password: "" };
+
+function makeUniqueSubdomain(name: string, requested: string, admins: Admin[], currentId?: number): string {
+  const requestedSlug = requested.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  const nameSlug = name.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  if (!requestedSlug && !nameSlug) throw new Error("Enter a company name or subdomain.");
+  if (requestedSlug && RESERVED_SUBDOMAINS.has(requestedSlug)) {
+    throw new Error(`"${requestedSlug}" is reserved and cannot be assigned to a tenant.`);
+  }
+  const rawBase = requestedSlug || nameSlug;
+  const base = requestedSlug || !RESERVED_SUBDOMAINS.has(rawBase) ? rawBase : `${rawBase}-isp`;
+  for (let ordinal = 1; ordinal <= 1000; ordinal += 1) {
+    const suffix = ordinal === 1 ? "" : `-${ordinal}`;
+    const candidate = `${base.slice(0, 63 - suffix.length)}${suffix}`;
+    const taken = admins.some(admin =>
+      admin.id !== currentId && admin.subdomain?.toLowerCase() === candidate,
+    );
+    if (!taken) return candidate;
+  }
+  throw new Error("No unique tenant subdomain is available for this name.");
+}
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
@@ -75,7 +96,7 @@ export default function SuperAdminAdmins() {
 
   const createAdmin = useMutation({
     mutationFn: async (f: AdminForm) => {
-      const slug = f.subdomain || f.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+      const slug = makeUniqueSubdomain(f.name, f.subdomain, admins);
       const { error } = await supabase.from("isp_admins").insert({
         name: f.name, username: f.username, email: f.email || null,
         phone: f.phone || null, role: f.role, subdomain: slug,
@@ -89,7 +110,8 @@ export default function SuperAdminAdmins() {
 
   const updateAdmin = useMutation({
     mutationFn: async ({ id, f }: { id: number; f: AdminForm }) => {
-      const patch: Record<string, string | null> = { name: f.name, username: f.username, email: f.email || null, phone: f.phone || null, role: f.role, subdomain: f.subdomain || null };
+      const slug = makeUniqueSubdomain(f.name, f.subdomain, admins, id);
+      const patch: Record<string, string | null> = { name: f.name, username: f.username, email: f.email || null, phone: f.phone || null, role: f.role, subdomain: slug };
       if (f.password) patch.password = f.password;
       const { error } = await supabase.from("isp_admins").update(patch).eq("id", id);
       if (error) throw error;
