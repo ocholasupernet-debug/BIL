@@ -86,13 +86,20 @@ function validRouterIp(value: string): boolean {
 }
 
 function safeFailure(result: { stderr: string; stdout: string; error?: string }, secrets: string[]): string {
-  const raw = result.error || result.stderr || result.stdout || "VPS reconciliation failed.";
-  let message = raw.replace(/\s+/g, " ").trim();
+  const clean = (value: string): string => value
+    .replace(/[.+*]{8,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let message = result.error
+    ? clean(result.error)
+    : [clean(result.stderr.slice(-220)), clean(result.stdout.slice(-220))]
+      .filter(Boolean)
+      .join(" | ") || "VPS reconciliation failed.";
   for (const secret of secrets.filter(Boolean)) {
     message = message.split(secret).join("[redacted]");
     message = message.split(b64(secret)).join("[redacted]");
   }
-  return message.slice(0, 300) || "VPS reconciliation failed.";
+  return message.slice(0, 500) || "VPS reconciliation failed.";
 }
 
 async function loadFallbacks(routerId: number): Promise<FallbackRow[]> {
@@ -207,7 +214,7 @@ command -v wg >/dev/null 2>&1 || missing="$missing wireguard-tools"
 command -v ipsec >/dev/null 2>&1 || missing="$missing strongswan"
 if [ -n "$missing" ]; then
   ${autoInstall ? `$SUDO apt-get update -qq
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard-tools strongswan strongswan-starter iptables-persistent` : `echo "Required VPS packages are missing:$missing. Set ROUTER_VPN_AUTO_INSTALL_PACKAGES=true and retry."; exit 1`}
+$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard-tools strongswan strongswan-starter iptables-persistent` : `echo "Required VPS packages are missing:$missing. Set ROUTER_VPN_AUTO_INSTALL_PACKAGES=true and retry."; exit 1`}
 fi
 
 $SUDO install -d -m 700 /etc/wireguard "$WG_PEER_DIR" /etc/ipsec.d /etc/ipsec.secrets.d
@@ -230,7 +237,7 @@ EOF
 mv '$WG_PEER_DIR/router-$ROUTER_ID.conf.tmp' '$WG_PEER_DIR/router-$ROUTER_ID.conf'"
 $SUDO sh -c "{
   printf '%s\\\\n' '[Interface]' 'Address = ${ROUTER_MANAGEMENT_VPN.gateway}/24' 'ListenPort = ${input.wireGuardPort}' 'PrivateKey = '$WG_SERVER_PRIVATE
-  for peer in '$WG_PEER_DIR'/*.conf; do [ -f \\"$peer\\" ] && cat \\"$peer\\"; done
+  for peer in '$WG_PEER_DIR'/*.conf; do [ -f \\"\\$peer\\" ] && cat \\"\\$peer\\"; done
 } > '$WG_CONFIG.tmp' && chmod 600 '$WG_CONFIG.tmp' && mv '$WG_CONFIG.tmp' '$WG_CONFIG'"
 if $SUDO systemctl is-active --quiet "wg-quick@$WG_NAME"; then
   $SUDO wg syncconf "$WG_NAME" <($SUDO wg-quick strip "$WG_NAME")
@@ -249,6 +256,12 @@ if command -v netfilter-persistent >/dev/null 2>&1; then $SUDO netfilter-persist
 
 # strongSwan fragments are isolated per router and require the standard
 # include hooks; no global customer IPsec connection is overwritten.
+if ! $SUDO grep -Eq '^[[:space:]]*include[[:space:]]+/etc/ipsec.d/\\*\\.conf' /etc/ipsec.conf 2>/dev/null; then
+  $SUDO sh -c 'printf "\\ninclude /etc/ipsec.d/*.conf\\n" >> /etc/ipsec.conf'
+fi
+if ! $SUDO grep -Eq '^[[:space:]]*include[[:space:]]+/etc/ipsec.secrets.d/\\*\\.secrets' /etc/ipsec.secrets 2>/dev/null; then
+  $SUDO sh -c 'printf "\\ninclude /etc/ipsec.secrets.d/*.secrets\\n" >> /etc/ipsec.secrets'
+fi
 if ! $SUDO grep -Eq '^[[:space:]]*include[[:space:]]+/etc/ipsec.d/\\*\\.conf' /etc/ipsec.conf 2>/dev/null; then
   echo "strongSwan does not include /etc/ipsec.d/*.conf; refusing to modify the global IPsec configuration."
   exit 1
@@ -280,18 +293,27 @@ $SUDO iptables -C FORWARD -s "$ROUTER_IP/32" -m comment --comment ochola-router-
 $SUDO iptables -C FORWARD -d "$ROUTER_IP/32" -m comment --comment ochola-router-ipsec-forward -j ACCEPT 2>/dev/null || $SUDO iptables -I FORWARD -d "$ROUTER_IP/32" -m comment --comment ochola-router-ipsec-forward -j ACCEPT
 if command -v netfilter-persistent >/dev/null 2>&1; then $SUDO netfilter-persistent save >/dev/null 2>&1 || true; fi
 $SUDO systemctl enable --now strongswan-starter 2>/dev/null || $SUDO systemctl enable --now strongswan 2>/dev/null || true
-$SUDO ipsec rereadall >/dev/null 2>&1 || $SUDO ipsec reload >/dev/null 2>&1
-$SUDO ipsec statusall | grep -q "ochola-router-$ROUTER_ID" || { echo "strongSwan did not load ochola-router-$ROUTER_ID."; exit 1; }
+IPSEC_RELOAD="$($SUDO ipsec reload 2>&1 || true)"
+IPSEC_REREAD="$($SUDO ipsec rereadall 2>&1 || true)"
+IPSEC_STATUS="$($SUDO ipsec statusall 2>&1 || true)"
+printf '%s\n' "$IPSEC_STATUS" | grep -q "ochola-router-$ROUTER_ID" || {
+  echo "strongSwan did not load ochola-router-$ROUTER_ID."
+  printf '%s\n' "$IPSEC_RELOAD" | tail -n 40
+  printf '%s\n' "$IPSEC_REREAD" | tail -n 40
+  printf '%s\n' "$IPSEC_STATUS" | tail -n 40
+  $SUDO ipsec listconns 2>&1 | tail -n 40 || true
+  exit 1
+}
 
 if ! $SUDO systemctl is-active --quiet openvpn-server@ochola-router 2>/dev/null && ! $SUDO systemctl is-active --quiet openvpn@ochola-router 2>/dev/null; then
   echo "Dedicated OpenVPN router-management service is not active."
   exit 1
 fi
-printf 'OCHOLA_WG_SERVER_PUBLIC_KEY=%s\\\\n' "$WG_SERVER_PUBLIC"
-printf 'OCHOLA_WG_INTERFACE=%s\\\\n' "$WG_NAME"
-printf 'OCHOLA_IPSEC_CONNECTION=ochola-router-%s\\\\n' "$ROUTER_ID"
-printf 'OCHOLA_OPENVPN_READY=true\\\\n'
-printf 'OCHOLA_VPN_READY=true\\\\n'
+printf 'OCHOLA_WG_SERVER_PUBLIC_KEY=%s\\n' "$WG_SERVER_PUBLIC"
+printf 'OCHOLA_WG_INTERFACE=%s\\n' "$WG_NAME"
+printf 'OCHOLA_IPSEC_CONNECTION=ochola-router-%s\\n' "$ROUTER_ID"
+printf 'OCHOLA_OPENVPN_READY=true\\n'
+printf 'OCHOLA_VPN_READY=true\\n'
 `;
 }
 
@@ -374,7 +396,10 @@ async function reconcileRouterVpn(
   const readyMarker = /^OCHOLA_VPN_READY=true$/m.test(result.stdout);
 
   if (!result.ok || !serverPublicKey || !readyMarker) {
-    const error = safeFailure(result, [input.routerPassword, wgPrivate, ipsecPsk]);
+    const markerFailure = result.ok
+      ? `VPS command completed without readiness markers (wireguard=${serverPublicKey ? "present" : "missing"}, vpn=${readyMarker ? "present" : "missing"}).`
+      : "";
+    const error = markerFailure || safeFailure(result, [input.routerPassword, wgPrivate, ipsecPsk]);
     await Promise.all([
       updateFallback(wg.id, { status: "failed", last_error: error, status_json: { stage: "vps-reconciliation" } }),
       updateFallback(ipsec.id, { status: "failed", last_error: error, status_json: { stage: "vps-reconciliation" } }),

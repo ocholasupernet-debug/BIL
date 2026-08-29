@@ -80,6 +80,7 @@ OVPN_DIR="/etc/openvpn"
 CCDDIR="${ROUTER_MANAGEMENT_VPN.ccdPath}" # isolated router client IPs
 AUTHFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}" # username:password auth file
 AUTHSCRIPT="${ROUTER_MANAGEMENT_VPN.authScriptPath}"
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 
 echo "──────────────────────────────────────────────────────────────"
 echo " OcholaSupernet: Configuring OVPN server for MikroTik client"
@@ -92,29 +93,58 @@ if [ ! -f "$BASE_OVPN_CONF" ]; then
     [ -f "$f" ] && [ "$f" != "$OVPN_CONF" ] && BASE_OVPN_CONF="$f" && break
   done
 fi
-if [ ! -f "$BASE_OVPN_CONF" ]; then
-  echo "ERROR: Could not find the existing OpenVPN server config."
-  exit 1
-fi
 mkdir -p "$(dirname "$OVPN_CONF")"
-echo "[1] Reading existing config: $BASE_OVPN_CONF"
-echo "    Legacy end-user VPN configuration will not be modified."
+if [ -f "$BASE_OVPN_CONF" ]; then
+  echo "[1] Reading existing config: $BASE_OVPN_CONF"
+  echo "    Legacy end-user VPN configuration will not be modified."
+else
+  echo "[1] No existing OpenVPN config found; bootstrapping an isolated management PKI."
+  echo "    No legacy customer VPN configuration will be created or changed."
+  $SUDO apt-get update -qq
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openvpn easy-rsa
+  EASYRSA_DIR="/etc/openvpn/easy-rsa"
+  $SUDO install -d -m 700 "$EASYRSA_DIR"
+  if [ ! -x "$EASYRSA_DIR/easyrsa" ]; then
+    if [ ! -x /usr/share/easy-rsa/easyrsa ]; then
+      echo "ERROR: easy-rsa was installed but its easyrsa command is unavailable."
+      exit 1
+    fi
+    $SUDO cp -a /usr/share/easy-rsa/. "$EASYRSA_DIR/"
+  fi
+  if [ ! -d "$EASYRSA_DIR/pki" ]; then
+    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 ./easyrsa init-pki"
+  fi
+  if [ ! -f "$EASYRSA_DIR/pki/ca.crt" ]; then
+    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 EASYRSA_REQ_CN='OcholaSupernet-CA' ./easyrsa build-ca nopass"
+  fi
+  if [ ! -f "$EASYRSA_DIR/pki/issued/ochola-router-server.crt" ] || [ ! -f "$EASYRSA_DIR/pki/private/ochola-router-server.key" ]; then
+    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 ./easyrsa build-server-full ochola-router-server nopass"
+  fi
+  CA_FILE="$EASYRSA_DIR/pki/ca.crt"
+  CERT_FILE="$EASYRSA_DIR/pki/issued/ochola-router-server.crt"
+  KEY_FILE="$EASYRSA_DIR/pki/private/ochola-router-server.key"
+  # Avoid a slow DH parameter generation on a fresh VPS. OpenVPN negotiates
+  # modern ECDH when dh is set to none; existing configs keep their own DH.
+  DH_FILE="none"
+fi
 
 # ── 2. Patch: ensure proto tcp ───────────────────────────────────────────────
 echo "[2] Creating isolated router-management server on ${tunnelBase}.0:${vpnPort}..."
-conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
-CA_FILE="$(conf_value ca)"
-CERT_FILE="$(conf_value cert)"
-KEY_FILE="$(conf_value key)"
-DH_FILE="$(conf_value dh)"
-for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
-  value="$(eval "printf '%s' \"\${$f}\"")"
-  if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
-    eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
-  fi
-done
+if [ -f "$BASE_OVPN_CONF" ]; then
+  conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
+  CA_FILE="$(conf_value ca)"
+  CERT_FILE="$(conf_value cert)"
+  KEY_FILE="$(conf_value key)"
+  DH_FILE="$(conf_value dh)"
+  for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
+    value="$(eval "printf '%s' \"\${$f}\"")"
+    if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
+      eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
+    fi
+  done
+fi
 if [ -z "$CA_FILE" ] || [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
-  echo "ERROR: The existing OpenVPN config does not expose reusable CA/cert/key paths."
+  echo "ERROR: OpenVPN CA/cert/key paths are unavailable."
   exit 1
 fi
 {
@@ -127,6 +157,7 @@ fi
   echo "cert $CERT_FILE"
   echo "key $KEY_FILE"
   [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
+  [ "$DH_FILE" = "none" ] && echo "ecdh-curve prime256v1"
   echo "client-config-dir $CCDDIR"
   echo "ifconfig-pool-persist ${ROUTER_MANAGEMENT_VPN.ippPath}"
   echo "keepalive 10 60"
