@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { sbSelect, sbUpdate } from "../lib/supabase-client";
 import { pingRouter } from "../lib/mikrotik";
-import { readIppEntries } from "../lib/vpn-status";
+import { readIppEntries, VPN_IPP_PATHS, VPN_STATUS_PATHS } from "../lib/vpn-status.js";
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../lib/api-auth.js";
 import { createHash } from "crypto";
@@ -144,19 +144,8 @@ router.get("/vpn/status", (_req, res): void => {
  * Reads OpenVPN ipp.txt (all-time IP assignments) and status.log (currently
  * connected clients) from the VPS. Returns a map of client → VPN IP.
  * ══════════════════════════════════════════════════════════════════════════ */
-const IPP_PATHS = [
-  "/etc/openvpn/server/ipp.txt",
-  "/etc/openvpn/ipp.txt",
-  "/var/log/openvpn/ipp.txt",
-];
-const STATUS_PATHS = [
-  "/run/openvpn/server.status",          /* systemd unit: --status /run/openvpn/server.status */
-  "/run/openvpn/server.status.tmp",
-  "/etc/openvpn/server/openvpn-status.log",
-  "/var/log/openvpn/status.log",
-  "/tmp/openvpn-status.log",
-  "/etc/openvpn/openvpn-status.log",
-];
+const IPP_PATHS = VPN_IPP_PATHS;
+const STATUS_PATHS = VPN_STATUS_PATHS;
 
 function readIppFile(): Map<string, string> {
   const map = readIppEntries();

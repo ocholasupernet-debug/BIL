@@ -280,6 +280,9 @@ export default function SelfInstall() {
         body: JSON.stringify({ adminId: ADMIN_ID, routerName: activeRouter?.name || `router${routers.length + 1}` }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
+      await jsonRequest<{ ok: boolean; ready: boolean }>(
+        `/api/scripts/router-vpn/readiness?rid=${result.router.id}&adminId=${ADMIN_ID}`,
+      );
       setActiveRouterId(result.router.id);
       setPhase("install");
       qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });

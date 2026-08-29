@@ -3,11 +3,12 @@
  * Generates bash scripts to prepare the existing VPS OpenVPN server
  * to accept connections from MikroTik routers as OVPN clients.
  */
+import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
 
 export interface VpsOvpnSetupOptions {
   /** VPS public IP (shown to the user as the endpoint) */
   vpsPublicIp: string;
-  /** OpenVPN server port (default 1194) */
+  /** OpenVPN server port (default 1196; customer VPN remains on 1194) */
   vpnPort?: number;
   /** Username to add for the router (default "admin") */
   vpnUsername?: string;
@@ -37,11 +38,11 @@ export interface VpsOvpnSetupOptions {
 export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const {
     vpsPublicIp,
-    vpnPort       = 1194,
+    vpnPort       = ROUTER_MANAGEMENT_VPN.port,
     vpnUsername   = "admin",
     vpnPassword   = "ochola",
-    tunnelBase    = "10.8.5",
-    routerTunnelIp = "10.8.5.2",
+    tunnelBase    = ROUTER_MANAGEMENT_VPN.tunnelBase,
+    routerTunnelIp = `${ROUTER_MANAGEMENT_VPN.tunnelBase}.2`,
     routerId,
   } = opts;
 
@@ -68,11 +69,11 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
 set -euo pipefail
 
 BASE_OVPN_CONF="/etc/openvpn/server.conf"
-OVPN_CONF="/etc/openvpn/server/ochola-router.conf"
+OVPN_CONF="${ROUTER_MANAGEMENT_VPN.configPath}"
 OVPN_DIR="/etc/openvpn"
-CCDDIR="/etc/openvpn/server/ochola-router-ccd" # isolated router client IPs
-AUTHFILE="$OVPN_DIR/router-passwd"             # username:password auth file
-AUTHSCRIPT="$OVPN_DIR/verify-router-pass.sh"
+CCDDIR="${ROUTER_MANAGEMENT_VPN.ccdPath}" # isolated router client IPs
+AUTHFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}" # username:password auth file
+AUTHSCRIPT="${ROUTER_MANAGEMENT_VPN.authScriptPath}"
 
 echo "──────────────────────────────────────────────────────────────"
 echo " OcholaSupernet: Configuring OVPN server for MikroTik client"
@@ -121,7 +122,7 @@ fi
   echo "key $KEY_FILE"
   [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
   echo "client-config-dir $CCDDIR"
-  echo "ifconfig-pool-persist /etc/openvpn/router-ipp.txt"
+  echo "ifconfig-pool-persist ${ROUTER_MANAGEMENT_VPN.ippPath}"
   echo "keepalive 10 60"
   echo "persist-key"
   echo "persist-tun"
@@ -130,7 +131,7 @@ fi
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
   echo "auth SHA1"
-  echo "status /var/log/openvpn/ochola-router-status.log"
+  echo "status ${ROUTER_MANAGEMENT_VPN.statusPath}"
   echo "verb 3"
 } > "$OVPN_CONF"
 echo "    Dedicated config written: $OVPN_CONF"
@@ -150,7 +151,7 @@ echo "[5] Enabling username/password auth..."
 cat > "$AUTHSCRIPT" << 'AUTHEOF'
 #!/usr/bin/env bash
 # Simple username:password verifier for OpenVPN
-PASSFILE="/etc/openvpn/router-passwd"
+PASSFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}"
 username="\${username:-\${1:-}}"
 password="\${password:-\${2:-}}"
 [ -f "$PASSFILE" ] || exit 1
@@ -176,7 +177,7 @@ if ! grep -q "^client-config-dir" "$OVPN_CONF"; then
   echo "client-config-dir $CCDDIR" >> "$OVPN_CONF"
 fi
 if ! grep -q "^ifconfig-pool-persist" "$OVPN_CONF"; then
-  echo "ifconfig-pool-persist /etc/openvpn/ipp.txt" >> "$OVPN_CONF"
+  echo "ifconfig-pool-persist ${ROUTER_MANAGEMENT_VPN.ippPath}" >> "$OVPN_CONF"
 fi
 
 # Static IP for the router client
@@ -234,10 +235,10 @@ echo "════════════════════════�
 export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
   const {
     vpsPublicIp,
-    vpnPort         = 1194,
+    vpnPort         = ROUTER_MANAGEMENT_VPN.port,
     vpnUsername     = "admin",
-    tunnelBase      = "10.8.5",
-    routerTunnelIp  = "10.8.5.2",
+    tunnelBase      = ROUTER_MANAGEMENT_VPN.tunnelBase,
+    routerTunnelIp  = `${ROUTER_MANAGEMENT_VPN.tunnelBase}.2`,
     routerId,
   } = opts;
 

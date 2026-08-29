@@ -7,8 +7,10 @@
  * to the VPN tunnel IP when a router's WAN/LAN IP is unreachable.
  */
 import { existsSync, readFileSync, writeFileSync } from "fs";
+import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
 
 const STATUS_PATHS = [
+  ROUTER_MANAGEMENT_VPN.statusPath,
   "/etc/openvpn/openvpn-status.log",
   "/etc/openvpn/server/openvpn-status.log",
   "/var/log/openvpn/openvpn-status.log",
@@ -16,6 +18,7 @@ const STATUS_PATHS = [
 ];
 
 const IPP_PATHS = [
+  ROUTER_MANAGEMENT_VPN.ippPath,
   "/etc/openvpn/server/ipp.txt",
   "/etc/openvpn/ipp.txt",
   "/var/log/openvpn/ipp.txt",
@@ -37,6 +40,7 @@ export interface VpnClient {
  * Returns an empty array if no file is found or no clients are connected.
  */
 export function readVpnClients(): VpnClient[] {
+  const clientsByName = new Map<string, VpnClient>();
   for (const path of STATUS_PATHS) {
     try {
       const text = readFileSync(path, "utf-8");
@@ -63,14 +67,15 @@ export function readVpnClients(): VpnClient[] {
         }
       }
 
-      if (clients.length > 0) {
-        console.log(`[vpn-status] ${clients.length} client(s) from ${path}:`,
-          clients.map(c => `${c.cn}=${c.vpnIp}(${c.realIp})`).join(", "));
-        return clients;
-      }
+      for (const client of clients) clientsByName.set(client.cn, client);
     } catch { /* file not found or unreadable — try next path */ }
   }
-  return [];
+  const clients = [...clientsByName.values()];
+  if (clients.length > 0) {
+    console.log("[vpn-status] clients:",
+      clients.map(c => `${c.cn}=${c.vpnIp}(${c.realIp})`).join(", "));
+  }
+  return clients;
 }
 
 /**
@@ -87,15 +92,16 @@ export function vpnIpFor(hostOrCn: string, clients: VpnClient[]): string | null 
 /** Read OpenVPN's persistent client-name → tunnel-IP assignments. */
 export function readIppEntries(): Map<string, string> {
   const map = new Map<string, string>();
-  const path = IPP_PATHS.find(candidate => existsSync(candidate));
-  if (!path) return map;
-  try {
-    for (const line of readFileSync(path, "utf-8").split("\n")) {
-      const [name, ip] = line.trim().split(",");
-      if (name && ip && /^10\./.test(ip.trim())) map.set(name.trim(), ip.trim());
+  for (const path of IPP_PATHS) {
+    if (!existsSync(path)) continue;
+    try {
+      for (const line of readFileSync(path, "utf-8").split("\n")) {
+        const [name, ip] = line.trim().split(",");
+        if (name && ip && /^10\./.test(ip.trim())) map.set(name.trim(), ip.trim());
+      }
+    } catch {
+      /* Try the next known OpenVPN persistence file. */
     }
-  } catch {
-    /* The development server normally has no OpenVPN filesystem. */
   }
   return map;
 }
@@ -110,7 +116,10 @@ export function syncIppEntry(clientName: string, ip: string): boolean {
   const address = ip.trim();
   if (!name || !/^10\./.test(address)) return false;
   try {
-    const path = IPP_PATHS.find(candidate => existsSync(candidate)) ?? IPP_PATHS[0];
+    const legacyPaths = IPP_PATHS.filter(candidate => candidate !== ROUTER_MANAGEMENT_VPN.ippPath);
+    const path = address.startsWith(`${ROUTER_MANAGEMENT_VPN.tunnelBase}.`)
+      ? ROUTER_MANAGEMENT_VPN.ippPath
+      : legacyPaths.find(candidate => existsSync(candidate)) ?? legacyPaths[0];
     const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
     const lines = content
       .split("\n")

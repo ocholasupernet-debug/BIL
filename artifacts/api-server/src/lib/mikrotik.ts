@@ -1,6 +1,7 @@
 import * as net from "net";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
+import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -2033,7 +2034,7 @@ function prefixToMask(prefix: number): string {
 export interface RouterAsClientOptions {
   /** VPS public IP that is running the OpenVPN server */
   vpsPublicIp: string;
-  /** OpenVPN server port on the VPS (default 1194) */
+  /** Router-management OpenVPN server port on the VPS (default 1196) */
   vpnPort?: number;
   /** Username to authenticate with the VPS OVPN server */
   vpnUsername?: string;
@@ -2098,7 +2099,7 @@ export interface RouterIpsecClientOptions {
 export function generateRouterAsClientScript(opts: RouterAsClientOptions): string {
   const {
     vpsPublicIp,
-    vpnPort         = 1194,
+    vpnPort         = ROUTER_MANAGEMENT_VPN.port,
     vpnUsername     = "admin",
     vpnPassword     = "ochola",
     tunnelRouterIp  = "10.8.5.2",

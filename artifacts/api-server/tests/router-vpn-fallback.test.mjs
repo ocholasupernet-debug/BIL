@@ -8,7 +8,11 @@ process.env.NODE_ENV = "production";
 
 const outdir = "tests/.router-vpn-build";
 await build({
-  entryPoints: ["src/lib/mikrotik.ts"],
+  entryPoints: [
+    "src/lib/mikrotik.ts",
+    "src/lib/router-management-vpn.ts",
+    "src/lib/vpn-utils.ts",
+  ],
   outdir,
   bundle: true,
   platform: "node",
@@ -18,10 +22,13 @@ await build({
   logLevel: "silent",
 });
 const mikrotik = await import(path.resolve(outdir, "mikrotik.cjs"));
+const vpnContract = await import(path.resolve(outdir, "router-management-vpn.cjs"));
+const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
+const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 
 test("OpenVPN child fails loudly when the client is not created or running", () => {
   const script = mikrotik.generateRouterAsClientScript({
@@ -58,7 +65,7 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   assert.match(script, /\/interface wireguard add/);
   assert.match(script, /management resources verified/);
   assert.match(scriptsRoute, /:if \(\$majorVersion = 7\) do=\{/);
-  assert.match(scriptsRoute, /server-side WireGuard fallback is not configured/);
+  assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
 test("IPsec child verifies peer, identity, and policy resources without leaking secrets", () => {
@@ -74,7 +81,7 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.match(script, /\/ip ipsec policy add/);
   assert.match(script, /IPsec policy was not verified/);
   assert.match(script, /a-secret-with-\\"quotes\\"/);
-  assert.match(scriptsRoute, /server-side IPsec fallback is not configured/);
+  assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
 test("fallback order is OpenVPN then WireGuard then IPsec and stops after success", () => {
@@ -94,4 +101,34 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
 test("recoverable protocol failures do not poison a later successful install", () => {
   assert.match(syncRoute, /recoverableVpnAttempt = phase === "failed" && name\.startsWith\("vpn-"\)/);
   assert.match(syncRoute, /Only the final aggregate `vpn` failure/);
+});
+
+test("router-management VPN contract is consistent and defaults to TCP 1196", () => {
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.port, 1196);
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.network, "10.8.5.0/24");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.authFilePath, "/etc/openvpn/router-passwd");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.ccdPath, "/etc/openvpn/server/ochola-router-ccd");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.statusPath, "/var/log/openvpn/ochola-router-status.log");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN.ippPath, "/etc/openvpn/router-ipp.txt");
+  delete process.env.ROUTER_OPENVPN_PORT;
+  assert.equal(vpnContract.routerManagementVpnPort(), 1196);
+  process.env.ROUTER_OPENVPN_PORT = "1196";
+  assert.equal(vpnContract.routerManagementVpnPort(), 1196);
+  process.env.ROUTER_OPENVPN_PORT = "not-a-port";
+  assert.throws(() => vpnContract.routerManagementVpnPort(), /ROUTER_OPENVPN_PORT/);
+  delete process.env.ROUTER_OPENVPN_PORT;
+});
+
+test("VPS setup and runtime status readers use the same management paths", () => {
+  const setup = vpnUtils.generateVpsOvpnSetupScript({ vpsPublicIp: "vpn.example.test" });
+  assert.match(setup, /VPN Port  : 1196\/tcp/);
+  assert.match(setup, /\/etc\/openvpn\/server\/ochola-router\.conf/);
+  assert.match(setup, /\/etc\/openvpn\/router-passwd/);
+  assert.match(setup, /\/etc\/openvpn\/server\/ochola-router-ccd/);
+  assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
+  assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
+  assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.statusPath/);
+  assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.ippPath/);
+  assert.match(scriptsRoute, /routerManagementVpnReadiness\(\)/);
+  assert.match(scriptsRoute, /routerManagementVpnPort\(\)/);
 });

@@ -12,6 +12,11 @@ import {
 import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
+import {
+  ROUTER_MANAGEMENT_VPN,
+  routerManagementVpnPort,
+  routerManagementVpnReadiness,
+} from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -314,30 +319,24 @@ function safeRm(cmd: string): string {
   return `:do { ${cleaned} } on-error={}`;
 }
 
-/* ── VPN psw-file updater ──
-   Keeps /etc/openvpn/psw-file in sync with the router's credentials.
-   The checkpsw.sh script reads this file on every connection attempt,
+/* ── Router-management VPN auth updater ──
+   Keeps the dedicated username:password file in sync with router credentials.
+   The dedicated OpenVPN verify script reads this file on every connection attempt,
    so no OpenVPN reload is needed — just a file write.
    No-ops when the file doesn't exist (dev / non-VPS environments). ── */
-const PSW_FILE = "/etc/openvpn/psw-file";
+const PSW_FILE = ROUTER_MANAGEMENT_VPN.authFilePath;
 function updateVpnCredentials(username: string, password: string): void {
   try {
     const existing = existsSync(PSW_FILE) ? readFileSync(PSW_FILE, "utf-8") : "";
-    const lines = existing.split("\n").filter(l => l.trim() && !l.startsWith(`${username} `));
-    lines.push(`${username} ${password}`);
+    const lines = existing.split("\n").filter(l => l.trim() && !l.startsWith(`${username}:`));
+    lines.push(`${username}:${password}`);
     writeFileSync(PSW_FILE, lines.join("\n") + "\n", { mode: 0o600 });
   } catch { /* non-root dev env — silently skip */ }
 }
 
-const ROUTER_CCD_PATHS = [
-  "/etc/openvpn/server/ochola-router-ccd",
-  "/etc/openvpn/server/ccd",
-  "/etc/openvpn/ccd",
-];
-
 function updateRouterVpnAssignment(username: string, ip: string): void {
   try {
-    const dir = ROUTER_CCD_PATHS.find(candidate => existsSync(candidate)) ?? ROUTER_CCD_PATHS[0];
+    const dir = ROUTER_MANAGEMENT_VPN.ccdPath;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       path.join(dir, username),
@@ -387,7 +386,11 @@ function resolveOrigin(host: string): string {
 }
 
 function routerVpnEndpointHost(origin: string): string {
-  const configured = (process.env.VPS_HOST || "").trim();
+  const configured = (
+    process.env.ROUTER_OPENVPN_ENDPOINT
+    || process.env.VPS_HOST
+    || (process.env.NODE_ENV === "production" ? "" : origin)
+  ).trim();
   if (configured) {
     return configured
       .replace(/^https?:\/\//i, "")
@@ -901,6 +904,14 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       );
       const currentRouter = routers[0];
       if (currentRouter) {
+        const readiness = routerManagementVpnReadiness();
+        if (!readiness.ready) {
+          res.status(503).type("text/plain").send(
+            `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. ` +
+            "Run the VPS OpenVPN setup first, then retry.",
+          );
+          return;
+        }
         resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         resolvedRouterName = currentRouter.name;
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
@@ -966,6 +977,55 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
     ));
 });
 
+/* ── Router-management VPN readiness ───────────────────────────────────────
+   The browser uses this preflight before showing a router installer. It
+   reports deployment configuration only; no credentials or private material
+   is ever returned. */
+router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
+  const ridRaw = String(req.query.rid ?? "").trim();
+  const adminIdRaw = String(req.query.adminId ?? "").trim();
+  const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
+  const adminId = /^\d+$/.test(adminIdRaw) ? Number(adminIdRaw) : 0;
+
+  if (!routerId || !adminId) {
+    res.status(400).json({ ok: false, ready: false, error: "A valid router id and admin id are required" });
+    return;
+  }
+
+  try {
+    const rows = await sbGet<{ admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=admin_id,name&limit=1`,
+    );
+    if (!rows[0]) {
+      res.status(404).json({ ok: false, ready: false, error: "Router not found for this ISP account" });
+      return;
+    }
+
+    const readiness = routerManagementVpnReadiness();
+    const requestHost = String(req.headers.host ?? "");
+    const endpoint = routerVpnEndpointHost(resolveOrigin(requestHost));
+    const message = readiness.ready
+      ? "Router-management VPN is ready for installation."
+      : `Router-management VPN is not ready: ${readiness.missing.join(", ")}. Run the VPS OpenVPN setup first, then retry.`;
+    res.status(readiness.ready ? 200 : 503).json({
+      ok: readiness.ready,
+      ready: readiness.ready,
+      error: readiness.ready ? undefined : message,
+      message,
+      missing: readiness.missing,
+      endpoint: endpoint || null,
+      port: readiness.port,
+      network: readiness.network,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      ready: false,
+      error: `Router-management VPN readiness could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+});
+
 /* ── Per-router VPN bootstrap used by mainhotspot.rsc ───────────────────────
    The read-only migration collector must never change router state. The
    install script therefore fetches this authenticated, router-specific
@@ -995,12 +1055,17 @@ function routerWireGuardFallbackConfigured(routerId: number): boolean {
   return Boolean(
     routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId) &&
     routerEnv("ROUTER_WIREGUARD_SERVER_PUBLIC_KEY", routerId) &&
-    routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId),
+    routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId) &&
+    routerEnv("ROUTER_WIREGUARD_SERVER_READY", routerId) === "true",
   );
 }
 
 function routerIpsecFallbackConfigured(routerId: number): boolean {
-  return Boolean(routerEnv("ROUTER_IPSEC_ENDPOINT", routerId) && routerEnv("ROUTER_IPSEC_PSK", routerId));
+  return Boolean(
+    routerEnv("ROUTER_IPSEC_ENDPOINT", routerId)
+    && routerEnv("ROUTER_IPSEC_PSK", routerId)
+    && routerEnv("ROUTER_IPSEC_SERVER_READY", routerId) === "true",
+  );
 }
 
 router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
@@ -1032,13 +1097,23 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
     let script: string;
 
     if (protocol === "openvpn") {
+      const readiness = routerManagementVpnReadiness();
+      if (!readiness.ready) {
+        res.status(503).type("text/plain").send(
+          `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. ` +
+          "Run the VPS OpenVPN setup first, then retry.",
+        );
+        return;
+      }
       const host = (req.headers.host ?? "") as string;
       const vpsHost = routerVpnEndpointHost(resolveOrigin(host));
       if (!vpsHost) {
-        res.status(503).type("text/plain").send("# VPS OpenVPN endpoint is not configured. Set VPS_HOST.");
+        res.status(503).type("text/plain").send(
+          "# VPS OpenVPN endpoint is not configured. Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST.",
+        );
         return;
       }
-      const vpnPort = Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196;
+      const vpnPort = routerManagementVpnPort();
       script = generateRouterAsClientScript({
         vpsPublicIp: vpsHost,
         vpnPort,
@@ -1055,7 +1130,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       if (!routerWireGuardFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) ||
           !/^[A-Za-z0-9+/=]{32,}$/.test(serverPublicKey) ||
           !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
-        res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with valid server-side values.");
+         res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with complete server-side prerequisites.");
         return;
       }
       const endpointPort = Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820;
@@ -1076,7 +1151,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       const endpoint = routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
       const preSharedKey = routerEnv("ROUTER_IPSEC_PSK", routerId);
       if (!routerIpsecFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
-        res.status(503).type("text/plain").send("# Router IPsec fallback is not configured with valid server-side values.");
+         res.status(503).type("text/plain").send("# Router IPsec fallback is not configured with complete server-side prerequisites.");
         return;
       }
       script = generateRouterIpsecClientScript({
@@ -1095,7 +1170,8 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       .send(script);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).type("text/plain").send(`# Error generating router VPN bootstrap: ${message}`);
+    const status = message.includes("ROUTER_OPENVPN_PORT") ? 503 : 500;
+    res.status(status).type("text/plain").send(`# Error generating router VPN bootstrap: ${message}`);
   }
 });
 
@@ -2031,7 +2107,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const routerVpnPassword = routerSecret ?? "";
 
     /* Ensure this router has a TLS client certificate ready on the server.
-       Also keeps the psw-file in sync as a fallback during transition. */
+       Also keeps the dedicated router-management auth file in sync. */
     ensureClientCert(routerSlug);
     updateVpnCredentials(routerSlug, routerVpnPassword);
 
@@ -2234,7 +2310,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=coreispbilling connect-to="${adminSubdomain}.isplatty.org" port=${Number.parseInt(String(process.env.ROUTER_OPENVPN_PORT ?? "1196"), 10) || 1196} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=coreispbilling connect-to="${adminSubdomain}.isplatty.org" port=${routerManagementVpnPort()} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
