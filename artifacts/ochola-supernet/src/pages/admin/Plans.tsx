@@ -550,7 +550,7 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
     try {
       const payload = {
         admin_id:        ADMIN_ID,
-        name,
+        name:            name.trim(),
         speed_down:      parseFloat(dl),
         speed_up:        parseFloat(ul),
         speed_down_unit: dlUnit,
@@ -558,8 +558,14 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
         burst_enabled:   burst,
         updated_at:      new Date().toISOString(),
       };
+      if (!payload.name || !Number.isFinite(payload.speed_down) || payload.speed_down <= 0 ||
+          !Number.isFinite(payload.speed_up) || payload.speed_up <= 0) {
+        throw new Error("Enter a name and positive download and upload rates.");
+      }
       if (isEdit && initialData) {
-        const { error: err } = await supabase.from("isp_bandwidth").update(payload).eq("id", initialData.id);
+        const { error: err } = await supabase.from("isp_bandwidth").update(payload)
+          .eq("id", initialData.id)
+          .eq("admin_id", ADMIN_ID);
         if (err) throw err;
       } else {
         const { error: err } = await supabase.from("isp_bandwidth").insert({ ...payload, is_active: true, created_at: new Date().toISOString() });
@@ -678,7 +684,7 @@ function BandwidthPlansTab() {
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
-      const { error } = await supabase.from("isp_bandwidth").delete().eq("id", id);
+      const { error } = await supabase.from("isp_bandwidth").delete().eq("id", id).eq("admin_id", ADMIN_ID);
       if (error) throw error;
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["isp_bandwidth"] }); setDeletingBw(null); },

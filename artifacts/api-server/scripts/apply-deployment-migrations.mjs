@@ -44,6 +44,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_dashboard_amount_visibility.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_typography.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_prepaid_user_operations.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_bandwidth_profiles.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_service_payment_routing.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });

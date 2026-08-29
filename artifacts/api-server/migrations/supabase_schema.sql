@@ -135,6 +135,26 @@ create table if not exists isp_plans (
 );
 create index if not exists isp_plans_admin_id_idx on isp_plans(admin_id);
 
+-- Reusable bandwidth profiles
+create table if not exists isp_bandwidth (
+  id              bigserial primary key,
+  admin_id        bigint not null references isp_admins(id) on delete cascade,
+  name            text not null,
+  speed_down      numeric(10,2) not null check (speed_down > 0),
+  speed_up        numeric(10,2) not null check (speed_up > 0),
+  speed_down_unit text not null default 'Mbps'
+    check (speed_down_unit in ('Kbps', 'Mbps', 'Gbps')),
+  speed_up_unit   text not null default 'Mbps'
+    check (speed_up_unit in ('Kbps', 'Mbps', 'Gbps')),
+  burst_enabled   boolean not null default false,
+  burst_down      numeric(10,2),
+  burst_up        numeric(10,2),
+  is_active       boolean not null default true,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists isp_bandwidth_admin_id_idx on isp_bandwidth(admin_id);
+
 -- Subscribers / customers
 create table if not exists isp_customers (
   id              bigserial primary key,
