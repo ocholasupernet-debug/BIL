@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "OcholaSuperNet Mobile",
+    "slug": "ocholasupernet-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/ocholasupernet-app-icon.png",
+    "scheme": "ocholasupernet",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/ocholasupernet-app-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#081416"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.isplatty.ocholasupernet"
+    },
+    "android": {
+      "package": "org.isplatty.ocholasupernet",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/ocholasupernet-mark.png",
+        "backgroundColor": "#081416"
+      }
+    },
+    "web": {
+      "favicon": "./assets/images/ocholasupernet-mark.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true,
+      "baseUrl": "/mobile"
+    }
+  }
+}
