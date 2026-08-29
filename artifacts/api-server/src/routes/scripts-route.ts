@@ -390,6 +390,30 @@ function resolveOrigin(host: string): string {
   return `${proto}://${host}`;
 }
 
+function requestOrigin(req: Request): string {
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
+    .split(",")[0]
+    .trim();
+  const requestHost = forwardedHost || req.get("host") || "";
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "")
+    .split(",")[0]
+    .trim();
+  const hostname = requestHost.split(":")[0].toLowerCase();
+  const isLocalHost = hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "0.0.0.0";
+  const publicHost = isLocalHost && process.env.REPLIT_DEV_DOMAIN
+    ? process.env.REPLIT_DEV_DOMAIN
+    : requestHost;
+  if (parseSubdomain(publicHost)) return resolveOrigin(publicHost);
+  const protocol = forwardedProto === "https"
+    || req.protocol === "https"
+    || publicHost !== requestHost
+    ? "https"
+    : (publicHost.startsWith("localhost") || publicHost.startsWith("127.") ? "http" : "https");
+  return `${protocol}://${publicHost}`;
+}
+
 function routerVpnEndpointHost(origin: string): string {
   const configured = (
     process.env.ROUTER_OPENVPN_ENDPOINT
@@ -474,6 +498,7 @@ function buildMainhotspotRsc(
   routerWireGuardUrl: string = "",
   routerIpsecUrl: string = "",
   routerVpnIp: string = "",
+  routerVpnWarning: string = "",
 ): string {
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
@@ -497,6 +522,7 @@ function buildMainhotspotRsc(
   const safeRouterWireGuardUrl = rscEscape(routerWireGuardUrl);
   const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
+  const safeRouterVpnWarning = rscEscape(routerVpnWarning);
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
@@ -570,6 +596,8 @@ function buildMainhotspotRsc(
 # into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
+
+${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
 :global version [/system package update get installed-version]
 :local majorVersion 0
@@ -864,8 +892,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 }
 
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
-  const host = (req.headers.host ?? "") as string;
-  const origin = resolveOrigin(host);
+  const origin = requestOrigin(req);
   const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
      progress callbacks. The admin UI may instead send rid+adminId; in that
@@ -913,19 +940,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
         resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         if (!resolvedToken) throw new Error("Router install secret is not available.");
-        const provisioning = await provisionRouterManagementVpn({
-          adminId: Number(currentRouter.admin_id),
-          routerId: Number(rid),
-          routerIp: assignedIp,
-          routerPassword: resolvedToken,
-        });
-        const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
-        if (!readiness.ready) {
-          res.status(503).type("text/plain").send(
-            `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. Retry after the VPS prerequisites are corrected.`,
-          );
-          return;
-        }
+        /* Personalize the bundle before reconciling the remote VPN. The
+           installer can still configure the router's local services when the
+           VPS SSH channel is temporarily unavailable; the VPN child script
+           will fail visibly and the dashboard will keep showing recovery. */
         resolvedRouterName = currentRouter.name;
         updateRouterVpnAssignment(`router-${rid}`, assignedIp);
         updateVpnCredentials(`router-${rid}`, resolvedToken);
@@ -933,6 +951,23 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        routerVpnIp = assignedIp;
+
+        try {
+          const provisioning = await provisionRouterManagementVpn({
+            adminId: Number(currentRouter.admin_id),
+            routerId: Number(rid),
+            routerIp: assignedIp,
+            routerPassword: resolvedToken,
+          });
+          const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
+          if (!readiness.ready) {
+            throw new Error(`Router-management VPN is not ready: ${readiness.missing.join(", ")}`);
+          }
+        } catch (error) {
+          vpnProvisioningError = error instanceof Error ? error.message : String(error);
+        }
+
         if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
           routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
         }
@@ -950,12 +985,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
           routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
         }
-        /* Pass the assignment into the orchestrator so the generated
-           firewall and registration steps advertise the same address. */
-        routerVpnIp = assignedIp;
       }
     } else {
-      const subdomain = parseSubdomain(host);
+      const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+      const subdomain = parseSubdomain(requestHost);
       if (subdomain) {
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?subdomain=eq.${encodeURIComponent(subdomain)}&select=id,name&limit=1`,
@@ -968,8 +1001,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   }
 
   if (vpnProvisioningError) {
-    res.status(503).type("text/plain").send(`# Router-management VPN provisioning failed: ${vpnProvisioningError}`);
-    return;
+    console.warn(`[scripts/mainhotspot] VPN provisioning deferred: ${vpnProvisioningError}`);
   }
 
   const progressUrl = (rid && resolvedToken)
@@ -991,6 +1023,9 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       routerWireGuardUrl,
       routerIpsecUrl,
       routerVpnIp,
+       vpnProvisioningError
+         ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
+         : "",
     ));
 });
 
@@ -1046,7 +1081,7 @@ router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
 
     const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
     const requestHost = String(req.headers.host ?? "");
-    const endpoint = routerVpnEndpointHost(resolveOrigin(requestHost));
+    const endpoint = routerVpnEndpointHost(requestOrigin(req));
     const message = readiness.ready
       ? "Router-management VPN is ready for installation."
       : `Router-management VPN is not ready: ${readiness.missing.join(", ")}. Run the VPS OpenVPN setup first, then retry.`;
@@ -1153,8 +1188,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const host = (req.headers.host ?? "") as string;
-      const vpsHost = routerVpnEndpointHost(resolveOrigin(host));
+      const vpsHost = routerVpnEndpointHost(requestOrigin(req));
       if (!vpsHost) {
         res.status(503).type("text/plain").send(
           "# VPS OpenVPN endpoint is not configured. Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST.",
@@ -1394,8 +1428,6 @@ add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action
      GET /scripts/vlanpppoe.rsc?routerId=X — query-param (legacy, browser-friendly)
    Falls back to dynamic-origin static script when no routerId is resolvable.  ── */
 async function handleVlanPPPoERsc(req: Request, res: Response): Promise<void> {
-  const host = (req.headers.host ?? "") as string;
-
   /* Path param takes precedence (RouterOS-safe, no `?` that the terminal eats).
      Fall through to query param for browser download links. */
   const rawId = (req.params.routerId ?? req.query.routerId ?? req.query.router_id ?? "") as string;
@@ -1404,7 +1436,7 @@ async function handleVlanPPPoERsc(req: Request, res: Response): Promise<void> {
   if (!routerId || isNaN(routerId)) {
     /* No routerId — serve origin-resolved static fallback for legacy integrations */
     res.type("text/plain");
-    res.send(buildVlanpppoeRsc(resolveOrigin(host)));
+    res.send(buildVlanpppoeRsc(requestOrigin(req)));
     return;
   }
 
@@ -1438,7 +1470,7 @@ async function handleVlanPPPoERsc(req: Request, res: Response): Promise<void> {
        can handle. Uses resolveOrigin to emit the correct ISP-specific subdomain.
        Re-deriving from pppoe_mode on each fetch ensures the saved VLAN gateway
        is always reflected — no config drift from daily auto-updates. */
-    const origin = resolveOrigin(host);
+    const origin = requestOrigin(req);
     const scriptBaseOverride = `${origin}/api/scripts/vlanpppoe/${routerId}.rsc`;
 
     const script = genPPPoEVlan(
@@ -1600,9 +1632,8 @@ add    chain=dstnat src-address=192.168.178.0/24 protocol=tcp dst-port=53 action
 }
 
 router.get("/scripts/normalpppoe.rsc", (req, res): void => {
-  const host = (req.headers.host ?? "") as string;
   res.type("text/plain");
-  res.send(buildNormalpppoeRsc(resolveOrigin(host)));
+  res.send(buildNormalpppoeRsc(requestOrigin(req)));
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1863,8 +1894,7 @@ const STATIC_SUBSCRIPTS: Record<string, SubScriptEntry> = {
 
 for (const [filename, entry] of Object.entries(STATIC_SUBSCRIPTS)) {
   router.get(`/scripts/${filename}`, (req, res): void => {
-    const host    = (req.headers.host ?? "") as string;
-    const origin  = resolveOrigin(host);
+    const origin  = requestOrigin(req);
     const content = typeof entry === "function" ? entry(origin) : entry;
     res
       .set("Content-Type", "text/plain; charset=utf-8")
@@ -1878,7 +1908,7 @@ for (const [filename, entry] of Object.entries(STATIC_SUBSCRIPTS)) {
    Files page may publish. This intentionally returns source identifiers, not
    filesystem paths or file contents. */
 router.get("/scripts/deployable-sources", (req, res): void => {
-  const origin = resolveOrigin((req.headers.host ?? "") as string);
+  const origin = requestOrigin(req);
   const sources = listDeployableSources().map(source => {
     if (source.type !== "script") return source;
     const content = getDeployableSource("script", source.name, origin);
@@ -1895,7 +1925,7 @@ router.get("/scripts/router-migration-collector.rsc", (req, res): void => {
     res.status(401).type("text/plain").send("# Invalid or expired migration collector session.");
     return;
   }
-  const origin = resolveOrigin((req.headers.host ?? "") as string);
+  const origin = requestOrigin(req);
   const uploadUrl = `${origin}/api/router-migrations/collector-upload?token=${encodeURIComponent(token)}`;
   res
     .set("Content-Type", "text/plain; charset=utf-8")

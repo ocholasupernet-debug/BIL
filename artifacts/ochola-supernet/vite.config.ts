@@ -51,7 +51,9 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://localhost:8080",
-        changeOrigin: true,
+        /* Preserve the public Host so generated RouterOS URLs point back to
+           the reachable preview/deployment origin instead of localhost. */
+        changeOrigin: false,
       },
     },
   },

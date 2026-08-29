@@ -110,7 +110,13 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  const data = await response.json().catch(() => ({})) as T & { error?: string };
+  const body = await response.text();
+  let data: T & { error?: string } = {} as T & { error?: string };
+  try {
+    data = JSON.parse(body) as T & { error?: string };
+  } catch {
+    if (body.trim()) data.error = body.replace(/^#\s?/gm, "").trim();
+  }
   if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
 }
@@ -280,11 +286,19 @@ export default function SelfInstall() {
         body: JSON.stringify({ adminId: ADMIN_ID, routerName: activeRouter?.name || `router${routers.length + 1}` }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
-      await jsonRequest<{ ok: boolean; ready: boolean }>(
-        `/api/scripts/router-vpn/readiness?rid=${result.router.id}&adminId=${ADMIN_ID}`,
-      );
+      let vpnWarning = "";
+      try {
+        await jsonRequest<{ ok: boolean; ready: boolean }>(
+          `/api/scripts/router-vpn/readiness?rid=${result.router.id}&adminId=${ADMIN_ID}`,
+        );
+      } catch (error) {
+        vpnWarning = error instanceof Error ? error.message : String(error);
+      }
       setActiveRouterId(result.router.id);
       setPhase("install");
+      if (vpnWarning) {
+        setPageError(`Profile created. The installer is available, but router-management VPN provisioning is pending: ${vpnWarning}`);
+      }
       qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : String(error));
