@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
@@ -2091,7 +2092,19 @@ const TABS = [
 ];
 
 export default function AdminSettings() {
-  const [tab, setTab] = useState("profile");
+  const [location, setLocation] = useLocation();
+  const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
+  const initialTab = TABS.some(item => item.id === requestedTab) ? requestedTab! : "profile";
+  const [tab, setTab] = useState(initialTab);
+
+  useEffect(() => {
+    if (requestedTab && TABS.some(item => item.id === requestedTab)) setTab(requestedTab);
+  }, [requestedTab]);
+
+  const selectTab = (nextTab: string) => {
+    setTab(nextTab);
+    setLocation(`/admin/settings?tab=${nextTab}`);
+  };
 
   return (
     <AdminLayout>
@@ -2106,7 +2119,7 @@ export default function AdminSettings() {
             const Icon = t.icon;
             const active = tab === t.id;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{
+              <button key={t.id} onClick={() => selectTab(t.id)} style={{
                 display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 16px",
                 background: active ? "rgba(37,99,235,0.1)" : "transparent",
                 borderTop: "none", borderRight: "none",
