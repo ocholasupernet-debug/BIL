@@ -163,7 +163,9 @@ function PortalAccessGate({
       <style>{PORTAL_CSS}</style>
       <header className="pppoe-header pppoe-shell">
         <div className="pppoe-brand">
-          <div className="pppoe-brand-mark"><Wifi size={18} color="#fff" /></div>
+          <div className="pppoe-brand-mark">
+            <img src="/ocholasupernet-logo.png" alt={`${ispName} logo`} />
+          </div>
           <div>
             <div className="pppoe-brand-name">{ispName}</div>
             <div className="pppoe-brand-meta">Secure access</div>
@@ -218,7 +220,7 @@ const PORTAL_CSS = `
   .pppoe-shell { width:min(1180px,100%); margin:0 auto; padding:0 26px; }
   .pppoe-header { height:72px; display:flex; align-items:center; justify-content:space-between; gap:20px; border-bottom:1px solid rgba(255,255,255,.1); }
   .pppoe-brand { display:flex; align-items:center; gap:11px; min-width:0; }
-  .pppoe-brand-mark { width:38px; height:38px; border-radius:11px; display:grid; place-items:center; overflow:hidden; flex:none; background:linear-gradient(135deg,var(--pppoe-primary),var(--pppoe-accent)); box-shadow:0 8px 22px color-mix(in srgb,var(--pppoe-primary) 25%,transparent); }
+  .pppoe-brand-mark { width:130px; height:54px; border-radius:0; display:grid; place-items:center; overflow:hidden; flex:none; background:transparent; }
   .pppoe-brand-mark img { width:100%; height:100%; object-fit:contain; }
   .pppoe-brand-name { color:var(--pppoe-text); font-size:.9rem; font-weight:850; letter-spacing:-.02em; white-space:nowrap; }
   .pppoe-brand-meta { color:rgba(244,248,245,.5); font-size:.66rem; margin-top:2px; }
@@ -527,7 +529,7 @@ export function PPPoELogin({
       <header className="pppoe-header pppoe-shell">
         <div className="pppoe-brand">
           <div className="pppoe-brand-mark">
-            {logoUrl ? <img src={logoUrl} alt="" /> : <Wifi size={18} color="#fff" />}
+            <img src={logoUrl || "/ocholasupernet-logo.png"} alt={`${ispName} logo`} />
           </div>
           <div>
             <div className="pppoe-brand-name">{ispName}</div>

@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken, supabase } from "@/lib/supabase";
 import { getHostSubdomain } from "@/lib/subdomain";
+import { Logo } from "@/components/Logo";
 
 interface CompanyInfo {
   id: number;
@@ -150,14 +151,8 @@ export default function AdminLogin() {
           background: "var(--isp-accent-glow)",
         }} />
 
-         <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
-           <img
-             src="/ocholasupernet-logo.png"
-             alt="OcholaSuperNet"
-             style={{
-               width: 194, height: 108, objectFit: "contain", display: "block",
-             }}
-           />
+         <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
+           <Logo size="lg" />
          </div>
 
         <div style={{ position: "relative" }}>
@@ -203,15 +198,9 @@ export default function AdminLogin() {
       }}>
         <div style={{ width: "100%", maxWidth: 420 }}>
 
-           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 9, marginBottom: 30 }}>
-             <img
-               src="/ocholasupernet-logo.png"
-               alt="OcholaSuperNet"
-               style={{
-                 width: 224, height: 138, objectFit: "contain", display: "block",
-               }}
-             />
-             <div style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", fontWeight: 600 }}>
+           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 9, marginBottom: 30 }}>
+             <Logo size="lg" />
+             <div style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", fontWeight: 600, textAlign: "center" }}>
                {displayName} · {displayDomain}
              </div>
            </div>

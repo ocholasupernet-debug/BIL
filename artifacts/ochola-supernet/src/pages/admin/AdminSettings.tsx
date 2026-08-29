@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { Logo } from "@/components/Logo";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { useTypography } from "@/context/TypographyContext";
@@ -149,7 +150,9 @@ function IspProfileTab() {
     <>
       <Card title="ISP Identity" desc="Branding and contact info shown to customers and on invoices">
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 18 }}>
-          <div style={{ width: 64, height: 64, borderRadius: 12, background: `linear-gradient(135deg,${C.cyan},${C.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem", fontWeight: 900, color: "white", flexShrink: 0 }}>{brand.ispName.charAt(0)}</div>
+          <div style={{ width: 150, height: 68, display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <Logo size="lg" />
+          </div>
           <div>
             <p style={{ fontSize: "0.9rem", fontWeight: 800, color: C.text, margin: 0 }}>{brand.ispName}</p>
             <p style={{ fontSize: "0.72rem", color: C.muted, margin: "2px 0 4px" }}>{brand.domain}</p>

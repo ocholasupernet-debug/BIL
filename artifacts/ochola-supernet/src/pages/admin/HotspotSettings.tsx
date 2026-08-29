@@ -306,7 +306,7 @@ const STYLES = `
   .hs-preview-screen { min-height:270px; overflow:hidden; border-radius:11px; border:1px solid var(--isp-border); background:linear-gradient(145deg,#081018,#122137); position:relative; }
   .hs-preview-screen::before { content:""; position:absolute; inset:0; opacity:.35; background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px); background-size:26px 26px; }
   .hs-mini-content { position:relative; padding:17px 14px; text-align:center; color:#fff; }
-  .hs-mini-logo { width:34px; height:34px; margin:0 auto 10px; border-radius:10px; display:flex; align-items:center; justify-content:center; overflow:hidden; background:linear-gradient(135deg,var(--mini-primary),var(--mini-accent)); }
+  .hs-mini-logo { width:116px; height:48px; margin:0 auto 10px; display:flex; align-items:center; justify-content:center; overflow:hidden; background:transparent; }
   .hs-mini-logo img { width:100%; height:100%; object-fit:contain; }
   .hs-mini-content h3 { color:#fff; margin:0; font-size:1rem; font-weight:850; }
   .hs-mini-content p { color:rgba(255,255,255,.55); margin:5px auto 16px; font-size:.65rem; line-height:1.4; }
@@ -789,7 +789,7 @@ export default function HotspotSettings() {
                 <div className="hs-preview-screen" style={previewStyle}>
                   <div className="hs-mini-content">
                     <div className="hs-mini-logo">
-                      {settings.logoUrl ? <img src={settings.logoUrl} alt="" /> : <Wifi size={18} color="#fff" />}
+                      <img src={settings.logoUrl || "/ocholasupernet-logo.png"} alt="" />
                     </div>
                     <h3>{safeText(settings.ispName, "Your ISP")}</h3>
                     <p>{safeText(settings.tagline, "Fast and reliable internet")}</p>

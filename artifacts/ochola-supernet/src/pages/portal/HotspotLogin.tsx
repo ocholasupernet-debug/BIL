@@ -364,13 +364,7 @@ export default function HotspotLogin() {
         }
 
         .hp-logo { display: flex; align-items: center; gap: 12px; }
-        .hp-logo-icon {
-           width: 42px; height: 42px; border-radius: 13px;
-           background: linear-gradient(145deg, var(--isp-accent), var(--isp-accent-light, var(--isp-accent)));
-          display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 4px 16px var(--isp-accent-border);
-        }
-        .hp-logo-text { font-weight: 800; font-size: 15px; color: #fff; }
+         .hp-logo-image { width: 128px; height: 54px; object-fit: contain; flex: 0 0 auto; display: block; }
         .hp-logo-sub { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; }
 
         .hp-status {
@@ -754,11 +748,8 @@ export default function HotspotLogin() {
         {/* Header */}
         <header className="hp-header">
           <div className="hp-logo">
-            <div className="hp-logo-icon">
-              <Wifi size={18} color="#fff" strokeWidth={2.5} />
-            </div>
+            <img className="hp-logo-image" src="/ocholasupernet-logo.png" alt={brand.ispName} />
             <div>
-              <div className="hp-logo-text">{brand.ispName}</div>
               <div className="hp-logo-sub">{brand.domain}</div>
             </div>
           </div>

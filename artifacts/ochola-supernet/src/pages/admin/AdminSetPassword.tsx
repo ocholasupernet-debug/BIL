@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { KeyRound, Eye, EyeOff, CheckCircle2, AlertCircle, Zap } from "lucide-react";
+import { KeyRound, Eye, EyeOff, CheckCircle2, AlertCircle } from "lucide-react";
 import { clearPasswordSetupToken, getPasswordSetupToken, setAdminAuth } from "@/lib/supabase";
+import { Logo } from "@/components/Logo";
 
 export default function AdminSetPassword() {
   const [, setLocation] = useLocation();
@@ -92,14 +93,9 @@ export default function AdminSetPassword() {
     <div style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
       <div style={{ width: "100%", maxWidth: 420 }}>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 9, background: "var(--isp-accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Zap size={18} style={{ color: "white" }} />
-          </div>
-          <div>
-            <div style={{ fontSize: "0.95rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.02em" }}>ISPlatty</div>
-            <div style={{ fontSize: "0.65rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>ISP Management Platform</div>
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8, marginBottom: 30 }}>
+          <Logo size="lg" />
+          <div style={{ fontSize: "0.65rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>ISP Management Platform</div>
         </div>
 
         <h1 style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.03em", marginBottom: 6 }}>Create Your Password</h1>

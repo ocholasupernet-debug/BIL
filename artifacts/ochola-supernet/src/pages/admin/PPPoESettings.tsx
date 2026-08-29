@@ -126,7 +126,7 @@ const ADMIN_CSS = `
   .pppoe-settings-preview-head span { color:#6e827c; font-size:.6rem; }
   .pppoe-settings-preview-body { padding:14px; }
   .pppoe-settings-preview-brand { display:flex; align-items:center; gap:8px; padding-bottom:13px; border-bottom:1px solid rgba(185,210,201,.08); }
-  .pppoe-settings-preview-logo { display:grid; place-items:center; width:29px; height:29px; overflow:hidden; border-radius:8px; color:#fff; background:linear-gradient(135deg,var(--isp-accent),#f09562); }
+  .pppoe-settings-preview-logo { display:grid; place-items:center; width:92px; height:38px; overflow:hidden; border-radius:0; color:#fff; background:transparent; }
   .pppoe-settings-preview-logo img { width:100%; height:100%; object-fit:contain; }
   .pppoe-settings-preview-brand strong { display:block; color:#dce8e1; font-size:.71rem; }
   .pppoe-settings-preview-brand span { display:block; margin-top:2px; color:#718681; font-size:.58rem; }
@@ -463,7 +463,7 @@ export default function PPPoESettings() {
               <div className="pppoe-settings-preview-head"><strong>Portal at a glance</strong><span>Unsaved changes included</span></div>
               <div className="pppoe-settings-preview-body">
                 <div className="pppoe-settings-preview-brand">
-                  <div className="pppoe-settings-preview-logo">{settings.logoUrl ? <img src={settings.logoUrl} alt="" /> : <Wifi size={14} />}</div>
+                  <div className="pppoe-settings-preview-logo"><img src={settings.logoUrl || "/ocholasupernet-logo.png"} alt="" /></div>
                   <div><strong>{settings.ispName || "Your ISP"}</strong><span>PPPoE customer portal</span></div>
                 </div>
                 <div className="pppoe-settings-preview-stat"><div /><div /><div /></div>

@@ -5,13 +5,14 @@ import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
-  Zap, CheckSquare, Search, Sun, Moon, Menu,
+  CheckSquare, Search, Sun, Moon, Menu,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
 import { clearAdminAuth, getAdminName } from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
+import { Logo } from "@/components/Logo";
 
 interface NavChild {
   name: string;
@@ -292,13 +293,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         {/* Logo strip */}
         <div className="sidebar-logo">
           <div className="sidebar-logo-inner">
-            <div className="sidebar-logo-icon">
-              <Zap size={16} color="white" />
-            </div>
-            <div>
-              <div className="sidebar-brand-name">{brand.ispName || "ISPlatty"}</div>
-              <div className="sidebar-brand-sub">Admin Panel</div>
-            </div>
+             <Logo size="sm" />
+             <div className="sidebar-brand-sub">Admin Panel</div>
           </div>
           <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Collapse sidebar" aria-label="Collapse sidebar">
             <Menu size={14} />
@@ -409,7 +405,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
           </button>
 
           {!sidebarOpen && (
-            <span className="header-brand">{brand.ispName || "ISPlatty"}</span>
+            <Logo size="xs" />
           )}
 
           <div className="header-search">

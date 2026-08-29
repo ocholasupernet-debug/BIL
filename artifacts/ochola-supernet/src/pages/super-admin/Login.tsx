@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { User, Key, Lock, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight, Clock, LogOut } from "lucide-react";
+import { User, Key, Lock, Eye, EyeOff, AlertCircle, ArrowRight, Clock, LogOut } from "lucide-react";
+import { Logo } from "@/components/Logo";
 
 /* ── Helper: store super admin session in localStorage ── */
 function setSuperAdminSession(name: string, token: string, issuedAt: number) {
@@ -134,9 +135,8 @@ export default function SuperAdminLogin() {
 
         {/* Logo + header */}
         <div style={{ textAlign: "center", marginBottom: 36 }}>
-          {/* Shield icon */}
-          <div style={{ width: 72, height: 72, borderRadius: 20, background: "linear-gradient(135deg,#b8860b,#d4b34a,#8b6914)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", boxShadow: "0 0 40px rgba(212,179,74,0.3), 0 8px 24px rgba(0,0,0,0.4)" }}>
-            <ShieldCheck size={34} color="#fff" strokeWidth={1.5} />
+          <div style={{ display: "flex", justifyContent: "center", margin: "0 auto 14px" }}>
+            <Logo size="lg" />
           </div>
           <h1 style={{ color: "#f5f0e8", fontWeight: 900, fontSize: 26, margin: "0 0 6px", letterSpacing: "-0.02em" }}>
             Super Admin
