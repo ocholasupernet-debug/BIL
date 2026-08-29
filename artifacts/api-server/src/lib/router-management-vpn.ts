@@ -80,8 +80,8 @@ export interface RouterManagementVpnReadiness {
  * explicit SERVER_READY flag after the VPS setup script has completed; this
  * avoids pretending that the API container can inspect another machine.
  */
-export function routerManagementVpnReadiness(): RouterManagementVpnReadiness {
-  const serverReadyOverride = process.env.ROUTER_OPENVPN_SERVER_READY === "true";
+export function routerManagementVpnReadiness(options: { remoteReady?: boolean } = {}): RouterManagementVpnReadiness {
+  const serverReadyOverride = process.env.ROUTER_OPENVPN_SERVER_READY === "true" || options.remoteReady === true;
   const filesystemChecksRequired =
     process.env.NODE_ENV === "production"
     && !serverReadyOverride

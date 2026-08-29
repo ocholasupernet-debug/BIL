@@ -2233,6 +2233,9 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
   } = opts;
   const tag = "coreispbilling";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
+  const identityIds = routerId
+    ? ` my-id=fqdn:router-${routerId} remote-id=fqdn:ochola-router-${routerId}-server`
+    : "";
   const endpointPrefix = endpoint.includes(":") ? `${endpoint}/128` : `${endpoint}/32`;
   const safePreSharedKey = preSharedKey
     .replace(/[\u0000-\u001F\u007F]/g, "")
@@ -2251,7 +2254,7 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 :do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
-:do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}" comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
+:do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}"${identityIds} comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
 :do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
 :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }

@@ -1,8 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
-import { chmodSync, unlinkSync as unlinkTemp } from "fs";
-import { spawn } from "child_process";
-import { randomUUID } from "crypto";
+import { runVpsScript } from "./vps-ssh.js";
 
 export const MIGRATION_TUNNEL_TTL_MS = 60 * 60 * 1000;
 export const MIGRATION_TUNNEL_NETWORK = "10.8.0";
@@ -124,52 +122,9 @@ function localRevoke(username: string): boolean {
   }
 }
 
-function b64(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64");
-}
-
 async function runVpsCommand(script: string): Promise<boolean> {
-  const host = process.env.VPS_HOST?.trim();
-  const user = process.env.VPS_USER?.trim();
-  const key = (process.env.VPS_SSH_KEY || process.env.VPS_DEPLOYMENT_KEY_V3 || process.env.VPS_DEPLOYMENT_KEY_V2 || process.env.VPS_DEPLOYMENT_KEY || "").trim();
-  if (!host || !user || !key) return false;
-
-  const keyPath = `/tmp/ochola-migration-key-${randomUUID()}`;
-  const askPassPath = `/tmp/ochola-migration-askpass-${randomUUID()}`;
-  try {
-    writeFileSync(keyPath, key, { mode: 0o600 });
-    chmodSync(keyPath, 0o600);
-    const passphrase = process.env.VPS_SSH_PASSPHRASE || "";
-    const args = [
-      "-i", keyPath,
-      "-o", "StrictHostKeyChecking=accept-new",
-      "-o", "ConnectTimeout=10",
-      "-o", "PasswordAuthentication=no",
-      `${user}@${host}`,
-      "sh",
-      "-s",
-    ];
-    const env = { ...process.env };
-    if (passphrase) {
-      writeFileSync(askPassPath, `#!/bin/sh\nprintf '%s' '${b64(passphrase)}' | base64 -d\n`, { mode: 0o700 });
-      chmodSync(askPassPath, 0o700);
-      args.unshift("-o", "BatchMode=no");
-      env.SSH_ASKPASS = askPassPath;
-      env.SSH_ASKPASS_REQUIRE = "force";
-      env.DISPLAY = env.DISPLAY || "none";
-    } else {
-      args.unshift("-o", "BatchMode=yes");
-    }
-    return await new Promise(resolve => {
-      const child = spawn("ssh", args, { env, stdio: ["pipe", "ignore", "ignore"] });
-      child.on("error", () => resolve(false));
-      child.on("close", code => resolve(code === 0));
-      child.stdin.end(script);
-    });
-  } finally {
-    try { unlinkTemp(keyPath); } catch { /* best effort cleanup */ }
-    try { unlinkTemp(askPassPath); } catch { /* best effort cleanup */ }
-  }
+  const result = await runVpsScript(script, { timeoutMs: 120_000 });
+  return result.ok;
 }
 
 function remoteConfigured(): boolean {
@@ -181,9 +136,9 @@ function remoteConfigured(): boolean {
 export async function provisionMigrationOpenVpnLease(username: string, password: string, tunnelIp: string): Promise<boolean> {
   if (process.env.VPS_SSH_KEY || process.env.VPS_DEPLOYMENT_KEY_V3 || process.env.VPS_DEPLOYMENT_KEY_V2 || process.env.VPS_DEPLOYMENT_KEY) {
     const script = `set -eu
-USER_B64='${b64(username)}'
-PASSWORD_B64='${b64(password)}'
-IP_B64='${b64(tunnelIp)}'
+USER_B64='${Buffer.from(username, "utf8").toString("base64")}'
+PASSWORD_B64='${Buffer.from(password, "utf8").toString("base64")}'
+IP_B64='${Buffer.from(tunnelIp, "utf8").toString("base64")}'
 USER="$(printf '%s' "$USER_B64" | base64 -d)"
 PASSWORD="$(printf '%s' "$PASSWORD_B64" | base64 -d)"
 IP="$(printf '%s' "$IP_B64" | base64 -d)"
@@ -203,7 +158,7 @@ $SUDO sh -c 'printf "ifconfig-push %s 10.8.0.1\\n" "$2" > /tmp/ochola-ccd.$$; in
 export async function revokeMigrationOpenVpnLease(username: string): Promise<boolean> {
   if (process.env.VPS_SSH_KEY || process.env.VPS_DEPLOYMENT_KEY_V3 || process.env.VPS_DEPLOYMENT_KEY_V2 || process.env.VPS_DEPLOYMENT_KEY) {
     const script = `set -eu
-USER_B64='${b64(username)}'
+USER_B64='${Buffer.from(username, "utf8").toString("base64")}'
 USER="$(printf '%s' "$USER_B64" | base64 -d)"
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 $SUDO sh -c 'awk -F: -v u="$1" "$1 != u" /etc/openvpn/passwd > /tmp/ochola-passwd.$$ || true; install -m 600 /tmp/ochola-passwd.$$ /etc/openvpn/passwd; rm -f /tmp/ochola-passwd.$$' sh "$USER"

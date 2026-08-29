@@ -22,6 +22,10 @@ export interface VpsOvpnSetupOptions {
   routerId?: number;
 }
 
+function base64(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64");
+}
+
 /**
  * Generates a bash script to run on the VPS that:
  *  1. Patches the existing OpenVPN server config to support MikroTik clients
@@ -49,6 +53,8 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const tag       = routerId ? `router${routerId}` : "router";
   const serverNet = `${tunnelBase}.0`;
   const serverGw  = `${tunnelBase}.1`;
+  const usernameB64 = base64(vpnUsername);
+  const passwordB64 = base64(vpnPassword);
 
   return `#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
@@ -159,14 +165,16 @@ grep -qF "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
 
-# ── 6. Add the VPN user (${vpnUsername} / ${vpnPassword}) ──────────────────
+# ── 6. Add the VPN user (${vpnUsername}) ────────────────────────────────────
+VPN_USERNAME="$(printf '%s' '${usernameB64}' | base64 -d)"
+VPN_PASSWORD="$(printf '%s' '${passwordB64}' | base64 -d)"
 echo "[6] Adding VPN user '${vpnUsername}'..."
 touch "$AUTHFILE"
 chmod 600 "$AUTHFILE"
 
 # Remove existing entry for this user and re-add
-sed -i '/^${vpnUsername}:/d' "$AUTHFILE"
-echo "${vpnUsername}:${vpnPassword}" >> "$AUTHFILE"
+sed -i "/^\${VPN_USERNAME}:/d" "$AUTHFILE"
+printf '%s:%s\n' "$VPN_USERNAME" "$VPN_PASSWORD" >> "$AUTHFILE"
 echo "    User '${vpnUsername}' added to $AUTHFILE"
 
 # ── 7. Enable client-config-dir for static IP assignment ────────────────────

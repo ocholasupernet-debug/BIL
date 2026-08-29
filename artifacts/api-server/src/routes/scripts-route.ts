@@ -17,6 +17,11 @@ import {
   routerManagementVpnPort,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
+import {
+  generatedRouterVpnChildScript,
+  provisionRouterManagementVpn,
+  routerFallbackMaterial,
+} from "../lib/router-vpn-provisioning.js";
 
 const router: IRouter = Router();
 
@@ -882,6 +887,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let routerVpnUrl = "";
   let routerWireGuardUrl = "";
   let routerIpsecUrl = "";
+  let vpnProvisioningError = "";
 
   interface InstallRouter {
     admin_id: number; name: string; vpn_ip?: string | null;
@@ -904,27 +910,33 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       );
       const currentRouter = routers[0];
       if (currentRouter) {
-        const readiness = routerManagementVpnReadiness();
+        const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
+        resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
+        if (!resolvedToken) throw new Error("Router install secret is not available.");
+        const provisioning = await provisionRouterManagementVpn({
+          adminId: Number(currentRouter.admin_id),
+          routerId: Number(rid),
+          routerIp: assignedIp,
+          routerPassword: resolvedToken,
+        });
+        const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
         if (!readiness.ready) {
           res.status(503).type("text/plain").send(
-            `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. ` +
-            "Run the VPS OpenVPN setup first, then retry.",
+            `# Router-management VPN is not ready: ${readiness.missing.join(", ")}. Retry after the VPS prerequisites are corrected.`,
           );
           return;
         }
-        resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         resolvedRouterName = currentRouter.name;
-        const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
         updateRouterVpnAssignment(`router-${rid}`, assignedIp);
         updateVpnCredentials(`router-${rid}`, resolvedToken);
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
         installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
-        if (routerWireGuardFallbackConfigured(Number(rid))) {
+        if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
           routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
         }
-        if (routerIpsecFallbackConfigured(Number(rid))) {
+        if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
           routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
         }
         const admins = await sbGet<InstallAdmin>(
@@ -932,10 +944,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         );
         companyName = admins[0]?.name || companyName;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
-        if (routerWireGuardFallbackConfigured(Number(rid))) {
+        if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
           routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
         }
-        if (routerIpsecFallbackConfigured(Number(rid))) {
+        if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
           routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
         }
         /* Pass the assignment into the orchestrator so the generated
@@ -951,8 +963,13 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         companyName = admins[0]?.name || companyName;
       }
     }
-  } catch {
-    /* The script remains usable when the identity lookup is temporarily down. */
+  } catch (error) {
+    vpnProvisioningError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (vpnProvisioningError) {
+    res.status(503).type("text/plain").send(`# Router-management VPN provisioning failed: ${vpnProvisioningError}`);
+    return;
   }
 
   const progressUrl = (rid && resolvedToken)
@@ -979,8 +996,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
 
 /* ── Router-management VPN readiness ───────────────────────────────────────
    The browser uses this preflight before showing a router installer. It
-   reports deployment configuration only; no credentials or private material
-   is ever returned. */
+   reconciles the server-side peers and returns safe status only; no
+   credentials or private material is ever returned. */
 router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
   const ridRaw = String(req.query.rid ?? "").trim();
   const adminIdRaw = String(req.query.adminId ?? "").trim();
@@ -993,15 +1010,41 @@ router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
   }
 
   try {
-    const rows = await sbGet<{ admin_id: number; name: string }>(
-      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=admin_id,name&limit=1`,
+    const rows = await sbGet<{
+      admin_id: number;
+      name: string;
+      vpn_ip: string | null;
+      router_secret: string | null;
+      token: string | null;
+    }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=admin_id,name,vpn_ip,router_secret,token&limit=1`,
     );
     if (!rows[0]) {
       res.status(404).json({ ok: false, ready: false, error: "Router not found for this ISP account" });
       return;
     }
 
-    const readiness = routerManagementVpnReadiness();
+    const provisioningRouter = rows[0];
+    const currentIp = await ensurePersistentRouterTunnelIp(routerId, provisioningRouter.vpn_ip);
+    const identitySecret = provisioningRouter.router_secret || provisioningRouter.token || "";
+    if (!identitySecret) {
+      res.status(503).json({ ok: false, ready: false, error: "Router install secret is not available." });
+      return;
+    }
+    let provisioning: Awaited<ReturnType<typeof provisionRouterManagementVpn>>;
+    try {
+      provisioning = await provisionRouterManagementVpn({
+        adminId: provisioningRouter.admin_id,
+        routerId,
+        routerIp: currentIp,
+        routerPassword: identitySecret,
+      });
+    } catch (error) {
+      res.status(503).type("text/plain").send(`# Router-management VPN provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+
+    const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
     const requestHost = String(req.headers.host ?? "");
     const endpoint = routerVpnEndpointHost(resolveOrigin(requestHost));
     const message = readiness.ready
@@ -1016,6 +1059,11 @@ router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
       endpoint: endpoint || null,
       port: readiness.port,
       network: readiness.network,
+      provisioning: {
+        openvpn: provisioning.openvpn.ready ? "ready" : "failed",
+        wireguard: provisioning.wireguard.ready ? "ready" : "failed",
+        ipsec: provisioning.ipsec.ready ? "ready" : "failed",
+      },
     });
   } catch (error) {
     res.status(503).json({
@@ -1124,16 +1172,18 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         routerId,
       });
     } else if (protocol === "wireguard") {
-      const endpoint = routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);
+      const material = await routerFallbackMaterial(routerId, "wireguard");
+      const endpoint = material?.endpoint || routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);
       const serverPublicKey = routerEnv("ROUTER_WIREGUARD_SERVER_PUBLIC_KEY", routerId);
-      const clientPrivateKey = routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId);
-      if (!routerWireGuardFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) ||
-          !/^[A-Za-z0-9+/=]{32,}$/.test(serverPublicKey) ||
-          !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
-         res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with complete server-side prerequisites.");
+      const dbServerPublicKey = material?.serverPublicKey || serverPublicKey;
+      const clientPrivateKey = material?.secret || routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId);
+      if ((!material && !routerWireGuardFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) ||
+           !/^[A-Za-z0-9+/=]{32,}$/.test(dbServerPublicKey) ||
+           !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
+        res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with complete server-side prerequisites.");
         return;
       }
-      const endpointPort = Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820;
+      const endpointPort = material?.endpointPort ?? (Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820);
       if (endpointPort < 1 || endpointPort > 65535) {
         res.status(503).type("text/plain").send("# Router WireGuard fallback has an invalid endpoint port.");
         return;
@@ -1141,26 +1191,29 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       script = generateRouterWireGuardClientScript({
         endpoint,
         endpointPort,
-        serverPublicKey,
+        serverPublicKey: dbServerPublicKey,
         clientPrivateKey,
         tunnelRouterIp,
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
       });
     } else {
-      const endpoint = routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
-      const preSharedKey = routerEnv("ROUTER_IPSEC_PSK", routerId);
-      if (!routerIpsecFallbackConfigured(routerId) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
+      const material = await routerFallbackMaterial(routerId, "ipsec");
+      const endpoint = material?.endpoint || routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
+      const preSharedKey = material?.secret || routerEnv("ROUTER_IPSEC_PSK", routerId);
+      if ((!material && !routerIpsecFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
          res.status(503).type("text/plain").send("# Router IPsec fallback is not configured with complete server-side prerequisites.");
         return;
       }
-      script = generateRouterIpsecClientScript({
-        endpoint,
-        preSharedKey,
-        tunnelRouterIp,
-        tunnelVpsIp: ROUTER_VPN_GATEWAY,
-        routerId,
-      });
+      script = material
+        ? generatedRouterVpnChildScript("ipsec", routerId, material)
+        : generateRouterIpsecClientScript({
+            endpoint,
+            preSharedKey,
+            tunnelRouterIp,
+            tunnelVpsIp: ROUTER_VPN_GATEWAY,
+            routerId,
+          });
     }
 
     res
