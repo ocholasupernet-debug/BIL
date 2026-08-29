@@ -33,8 +33,10 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
   });
-  assert.match(script, /\/interface ovpn-client add name=ocholasupernet/);
-  assert.match(script, /name="ocholasupernet" and running=yes/);
+  assert.match(script, /\/interface ovpn-client add name=coreispbilling/);
+  assert.match(script, /name="coreispbilling" and running=yes/);
+  assert.match(script, /name="ocholasupernet"/);
+  assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
   assert.match(script, /OVPN client did not establish a running session/);
   assert.match(script, /Check \/log for TLS, credential, certificate, or reachability errors/);
@@ -83,8 +85,9 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.ok(openVpn >= 0 && wireGuard > openVpn && ipsec > wireGuard);
   assert.match(scriptsRoute, /:set vpnConfigured true/);
   assert.match(scriptsRoute, /:if \(!\$vpnConfigured\) do=\{/);
+  assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
-  assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{fileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
   assert.match(scriptsRoute, /child script import failed/);
 });
 
