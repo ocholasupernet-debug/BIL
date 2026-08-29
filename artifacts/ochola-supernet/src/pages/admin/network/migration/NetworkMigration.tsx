@@ -14,6 +14,7 @@ import {
   FileCheck2,
   FileClock,
   KeyRound,
+  LockKeyhole,
   RefreshCw,
   Router,
   Server,
@@ -307,6 +308,7 @@ export default function NetworkMigration() {
     ? Math.max(0, Math.floor((new Date(tunnel.expiresAt).getTime() - clock) / 1000))
     : 0;
   const tunnelCountdown = `${Math.floor(tunnelSecondsRemaining / 3600)}h ${String(Math.floor((tunnelSecondsRemaining % 3600) / 60)).padStart(2, "0")}m ${String(tunnelSecondsRemaining % 60).padStart(2, "0")}s`;
+  const connectionConfirmed = tunnel?.status === "connected" || tunnel?.status === "exported";
 
   const isDryRunDirty = () => {
     if (!lastDryRunIds) return false;
@@ -395,7 +397,7 @@ export default function NetworkMigration() {
 
   const primaryDisabled =
     isBusy ||
-    (currentStep === 1 && !collector?.migrationId && !migrationId && !sourceRouterId) ||
+    (currentStep === 1 && !migrationId) ||
     (currentStep === 4 && !targetRouterId) ||
     (currentStep === 5 && (!dryRunData || isDryRunDirty() || dryRunData.plannedChanges.length === 0 || selectedIds.size === 0)) ||
     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER");
@@ -409,9 +411,9 @@ export default function NetworkMigration() {
           <section className="migration-card">
             <CardHead
               icon={Terminal}
-              title="Collect source router"
-              description="Issue a bounded path, then run the two read-only scripts in order."
-              status={tunnel ? <Pill>{tunnel.status === "connected" ? "Tunnel connected" : tunnel.status.replace("_", " ")}</Pill> : <Pill tone="neutral">Not started</Pill>}
+               title="Prepare source connection"
+               description="Generate one connection script, confirm the tunnel, then run the separate export script."
+               status={connectionConfirmed ? <Pill><CheckCircle2 size={11} /> Connection successful</Pill> : tunnel ? <Pill tone="warn"><FileClock size={11} /> Waiting for connection</Pill> : <Pill tone="neutral">Not started</Pill>}
             />
             <div className="migration-card-body">
               <div className="migration-form-block">
@@ -447,7 +449,7 @@ export default function NetworkMigration() {
                 <div className="migration-tunnel revoked" style={{ marginTop: 12 }}>
                   <div className="migration-tunnel-title"><AlertTriangle size={14} /> No migration tunnel issued for this source</div>
                   <p className="migration-tunnel-copy">Issue a new one-hour connection-scoped tunnel before running the collector.</p>
-                  <button className="migration-button primary" style={{ marginTop: 11 }} onClick={generateConfiguration} disabled={isBusy}>
+                   <button className="migration-button success" style={{ marginTop: 11 }} onClick={generateConfiguration} disabled={isBusy}>
                     <Terminal size={13} /> Generate configuration
                   </button>
                 </div>
@@ -482,30 +484,52 @@ export default function NetworkMigration() {
                     <h3>Two-script handoff</h3>
                     <span>Run in this order</span>
                   </div>
-                  {tunnelCommand && collector?.command ? (
+                   {tunnelCommand ? (
                     <div className="migration-script-stack">
                       <div className="migration-script">
                         <div className="migration-script-head">
-                          <div className="migration-script-label"><span>1</span>Connect the router to the web through VPN</div>
+                           <div className="migration-script-label"><span>1</span>Connection script — run first</div>
                           <button className="migration-copy-button" onClick={() => copyText(tunnelCommand, "Tunnel command")}><Clipboard size={11} />{copied === "Tunnel command" ? "Copied" : "Copy"}</button>
                         </div>
                         <pre>{tunnelCommand}</pre>
-                        <div className="migration-script-note"><ShieldAlert size={11} />Adds only the temporary interface, cleanup scheduler, and two connection-only firewall rules.</div>
+                         <div className="migration-script-note"><ShieldAlert size={11} />Connects only the selected source router through the temporary migration tunnel. No export is performed yet.</div>
                       </div>
-                      <div className="migration-script">
-                        <div className="migration-script-head">
-                          <div className="migration-script-label"><span>2</span>Enable the read-only export</div>
-                          <button className="migration-copy-button" onClick={() => copyText(collector.command, "Export command")}><Clipboard size={11} />{copied === "Export command" ? "Copied" : "Copy"}</button>
-                        </div>
-                        <pre>{collector.command}</pre>
-                        <div className="migration-script-note"><CheckCircle2 size={11} />Reads and uploads configuration only. The source router is never modified by the export.</div>
-                      </div>
-                      <div className="migration-action-group">
-                        <button className="migration-button ghost" onClick={() => copyText(`${tunnelCommand}\n\n${collector.command}`, "Both scripts")}><Clipboard size={12} /> Copy both scripts</button>
-                         <button className="migration-button ghost" onClick={downloadScriptsBundle}><Download size={12} /> Download both</button>
-                         {(collector.tunnelScriptUrl || tunnel?.scriptUrl) && <a className="migration-button ghost" href={downloadUrl(collector.tunnelScriptUrl || tunnel?.scriptUrl || "")} download="router-migration-tunnel.rsc"><Download size={12} /> Download connection</a>}
-                         <a className="migration-button ghost" href={downloadUrl(collector.scriptUrl)} download="router-migration-export.rsc"><Download size={12} /> Download export</a>
-                      </div>
+                       <div className={`migration-connection-state ${connectionConfirmed ? "success" : ""}`} role="status" aria-live="polite">
+                         {connectionConfirmed ? <CheckCircle2 size={18} /> : <RefreshCw size={17} className={tunnelStatusQuery.isFetching ? "animate-spin" : ""} />}
+                         <div>
+                           <strong>{connectionConfirmed ? "Connection successful — export is ready" : "Run the connection script above"}</strong>
+                           <span>{connectionConfirmed ? "The source router is reachable through the temporary tunnel. You can now run script 2." : "The export script stays locked until this page confirms the source router connection."}</span>
+                         </div>
+                         {!connectionConfirmed && <button className="migration-button ghost" onClick={() => tunnelStatusQuery.refetch()} disabled={isBusy}><RefreshCw size={12} /> Check connection</button>}
+                       </div>
+                       {connectionConfirmed && collector?.command ? (
+                         <>
+                           <div className="migration-script export-ready">
+                             <div className="migration-script-head">
+                               <div className="migration-script-label"><span>2</span>Read-only export script — run second</div>
+                               <button className="migration-copy-button" onClick={() => copyText(collector.command, "Export command")}><Clipboard size={11} />{copied === "Export command" ? "Copied" : "Copy"}</button>
+                             </div>
+                             <pre>{collector.command}</pre>
+                             <div className="migration-script-note"><CheckCircle2 size={11} />Reads and uploads configuration only. The source router is never modified by the export.</div>
+                           </div>
+                           <div className="migration-action-group">
+                             <button className="migration-button ghost" onClick={() => copyText(`${tunnelCommand}\n\n${collector.command}`, "Both scripts")}><Clipboard size={12} /> Copy both scripts</button>
+                             <button className="migration-button ghost" onClick={downloadScriptsBundle}><Download size={12} /> Download both</button>
+                             {(collector.tunnelScriptUrl || tunnel?.scriptUrl) && <a className="migration-button ghost" href={downloadUrl(collector.tunnelScriptUrl || tunnel?.scriptUrl || "")} download="router-migration-tunnel.rsc"><Download size={12} /> Download connection</a>}
+                             <a className="migration-button ghost" href={downloadUrl(collector.scriptUrl)} download="router-migration-export.rsc"><Download size={12} /> Download export</a>
+                           </div>
+                         </>
+                       ) : connectionConfirmed ? (
+                         <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the read-only export script…</div>
+                       ) : (
+                         <div className="migration-script export-locked">
+                           <div className="migration-script-head">
+                             <div className="migration-script-label"><span>2</span>Read-only export script — locked</div>
+                             <LockKeyhole size={13} />
+                           </div>
+                           <div className="migration-locked-copy">Run script 1 and wait for the green connection confirmation. The export command will appear here automatically.</div>
+                         </div>
+                       )}
                     </div>
                   ) : (
                     <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the two one-time scripts…</div>
@@ -679,7 +703,7 @@ export default function NetworkMigration() {
           </div>
           <div className="migration-page-header-actions">
             <button
-              className="migration-button primary"
+              className="migration-button success"
               onClick={generateConfiguration}
               disabled={isBusy || scriptsGenerated || !sourceRouterId}
               title={!sourceRouterId ? "Choose a registered source router first" : undefined}
@@ -756,7 +780,8 @@ export default function NetworkMigration() {
               <button className={`migration-button ${currentStep === 6 ? "danger" : "primary"}`} onClick={handleNext} disabled={primaryDisabled}>
                 {isBusy ? <><RefreshCw size={13} className="animate-spin" /> Processing…</> : <>
                   {currentStep === 1 && !tunnel && "Generate configuration"}
-                  {currentStep === 1 && tunnel && !migrationId && "Verify tunnel & export"}
+                  {currentStep === 1 && tunnel && !connectionConfirmed && "Waiting for connection"}
+                  {currentStep === 1 && tunnel && connectionConfirmed && !migrationId && "Waiting for export"}
                   {currentStep === 1 && migrationId && "Continue to export"}
                   {currentStep === 2 && "Review collected data"}
                   {currentStep === 3 && "Choose target"}

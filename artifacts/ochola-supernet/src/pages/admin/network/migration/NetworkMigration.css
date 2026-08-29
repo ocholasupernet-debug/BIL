@@ -591,6 +591,12 @@
   box-shadow: 0 3px 9px rgba(217,105,53,.2);
 }
 .migration-button.primary:hover { transform: translateY(-1px); background: var(--isp-accent-strong); }
+.migration-button.success {
+  color: #fff;
+  background: linear-gradient(135deg, #22c55e, #15803d);
+  box-shadow: 0 4px 12px rgba(21, 128, 61, .24);
+}
+.migration-button.success:hover { transform: translateY(-1px); background: linear-gradient(135deg, #16a34a, #166534); }
 .migration-button.ghost {
   border-color: var(--isp-border);
   color: var(--isp-text-muted);
@@ -604,6 +610,46 @@
 }
 .migration-button.danger:hover { background: rgba(186, 76, 71, .11); }
 .migration-button:disabled { cursor: not-allowed; opacity: .48; transform: none; box-shadow: none; }
+
+.migration-connection-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(183, 121, 33, .28);
+  border-radius: 8px;
+  color: #a66c16;
+  background: rgba(183, 121, 33, .08);
+}
+.migration-connection-state > svg { flex: 0 0 auto; }
+.migration-connection-state > div { min-width: 0; flex: 1; }
+.migration-connection-state strong,
+.migration-connection-state span { display: block; }
+.migration-connection-state strong { color: var(--isp-text); font-size: .68rem; }
+.migration-connection-state span { margin-top: 3px; color: var(--isp-text-muted); font-size: .63rem; line-height: 1.4; }
+.migration-connection-state.success {
+  border-color: rgba(22, 163, 74, .3);
+  color: #16a34a;
+  background: rgba(34, 197, 94, .1);
+}
+.migration-connection-state.success strong { color: #166534; }
+.migration-connection-state .migration-button { flex: 0 0 auto; }
+.migration-script.export-ready { border-color: rgba(34, 197, 94, .45); }
+.migration-script.export-ready .migration-script-label span { background: #16a34a; }
+.migration-script.export-locked {
+  border-style: dashed;
+  border-color: rgba(183, 121, 33, .32);
+  background: rgba(183, 121, 33, .06);
+}
+.migration-script.export-locked .migration-script-head { color: #a66c16; }
+.migration-script.export-locked .migration-script-label { color: #b9c8c0; }
+.migration-script.export-locked .migration-script-head > svg { color: #d99442; }
+.migration-locked-copy {
+  padding: 13px 10px;
+  color: #aebfb5;
+  font-size: .63rem;
+  line-height: 1.45;
+}
 
 .migration-aside { display: grid; gap: 14px; }
 .migration-list { display: grid; gap: 12px; padding: 15px 16px 17px; }
@@ -862,4 +908,6 @@
   .migration-tunnel-top { display: block; }
   .migration-tunnel-top .migration-mono { display: block; margin-top: 8px; }
   .migration-vpn-summary { align-items: flex-start; flex-direction: column; }
+  .migration-connection-state { align-items: flex-start; flex-wrap: wrap; }
+  .migration-connection-state .migration-button { margin-left: 28px; }
 }
