@@ -680,6 +680,43 @@ export async function fetchHotspotUsers(
   });
 }
 
+/**
+ * Resolve a captive-portal client from the address RouterOS assigned it.
+ * Browsers cannot read a Wi-Fi adapter MAC, but the router can identify the
+ * same client from its hotspot host table or DHCP lease table.
+ */
+export async function resolveHotspotClientMac(
+  creds: RouterCredentials,
+  clientIp: string,
+): Promise<string | null> {
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(clientIp)) return null;
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const queries: Array<{ path: string; macKey: string }> = [
+      { path: "/ip/hotspot/host/print", macKey: "mac-address" },
+      { path: "/ip/dhcp-server/lease/print", macKey: "mac-address" },
+    ];
+
+    for (const query of queries) {
+      try {
+        const rows = (await withTimeout(
+          conn.write([query.path, `?address=${clientIp}`]),
+          ms,
+        )) as Record<string, string>[];
+        const match = (Array.isArray(rows) ? rows : []).find((row) => row.address === clientIp);
+        const rawMac = String(match?.[query.macKey] ?? "").trim();
+        if (/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(rawMac)) {
+          return rawMac.toUpperCase();
+        }
+      } catch {
+        /* Some RouterOS versions or permissions may not expose one table. */
+      }
+    }
+    return null;
+  });
+}
+
 /* ══ Hotspot User Management ═══════════════════════════════════════════════ */
 export interface HotspotUser {
   id: string;

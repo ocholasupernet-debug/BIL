@@ -16,7 +16,7 @@ import { logger } from "../lib/logger.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
-import { addHotspotIpBinding, type RouterCredentials } from "../lib/mikrotik.js";
+import { addHotspotIpBinding, resolveHotspotClientMac, type RouterCredentials } from "../lib/mikrotik.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 
 const router: IRouter = Router();
@@ -213,6 +213,14 @@ function readMacAddress(value: unknown): { value: string; invalid: boolean } {
   if (typeof value !== "string" || !value.trim()) return { value: "", invalid: false };
   const normalized = normaliseMacAddress(value);
   return { value: normalized, invalid: !normalized };
+}
+
+function readClientIp(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const ip = value.trim();
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) return "";
+  const octets = ip.split(".").map(Number);
+  return octets.every((octet) => octet >= 0 && octet <= 255) ? ip : "";
 }
 
 function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
@@ -457,6 +465,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const requestedService = req.body?.service_type === "pppoe" ? "pppoe" : "hotspot";
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
+  const clientIp = readClientIp(req.body?.client_ip);
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
     return;
@@ -469,9 +478,9 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
-  const plans = await sbSelect<{ id: number; price: number | string; type?: string }>(
+  const plans = await sbSelect<{ id: number; price: number | string; type?: string; router_id: number | null }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id&limit=1`,
   );
   const plan = plans[0];
   const serviceType = String(plan?.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
@@ -498,15 +507,66 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "The selected plan is not available for payment." });
     return;
   }
+  let resolvedMac = mac.value;
+  if (serviceType === "hotspot" && !resolvedMac) {
+    if (!clientIp) {
+      res.status(400).json({
+        ok: false,
+        error: "The hotspot router did not provide a client address. Reopen the Wi-Fi sign-in page from this network.",
+      });
+      return;
+    }
+    if (!plan.router_id) {
+      res.status(503).json({ ok: false, error: "The hotspot plan is not assigned to a MikroTik router yet." });
+      return;
+    }
+    const routers = await sbSelect<{
+      host: string | null;
+      bridge_ip: string | null;
+      vpn_ip: string | null;
+      router_username: string | null;
+      router_secret: string | null;
+    }>(
+      "isp_routers",
+      `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const routerRow = routers[0];
+    if (!routerRow || (!routerRow.host && !routerRow.bridge_ip && !routerRow.vpn_ip)) {
+      res.status(503).json({ ok: false, error: "The hotspot router is not reachable from the ISP server." });
+      return;
+    }
+    try {
+      resolvedMac = await resolveHotspotClientMac({
+        host: routerRow.host || routerRow.vpn_ip || routerRow.bridge_ip || "",
+        bridgeIp: routerRow.vpn_ip || routerRow.bridge_ip || undefined,
+        port: 8728,
+        username: routerRow.router_username || "admin",
+        password: routerRow.router_secret || "",
+        useSSL: false,
+        connectTimeoutMs: 10_000,
+        requestTimeoutMs: 12_000,
+      }, clientIp) ?? "";
+    } catch (error) {
+      logger.warn({ err: error, adminId, planId, clientIp }, "[mpesa/intent] router client lookup failed");
+    }
+    if (!resolvedMac) {
+      res.status(409).json({
+        ok: false,
+        error: "The router could not match this Wi-Fi address to a device yet. Keep the Wi-Fi sign-in page open and try again.",
+      });
+      return;
+    }
+  }
   try {
     res.json({
       ok: true,
       paymentIntent: generatePaymentIntent({
         adminId, planId, amount, phone, serviceType,
         ...(serviceType === "pppoe" ? { customerId: requestedCustomerId } : {}),
-        ...(mac.value ? { macAddress: mac.value } : {}),
+        ...(resolvedMac ? { macAddress: resolvedMac } : {}),
       }),
       amount,
+      ...(resolvedMac ? { deviceMacAddress: resolvedMac } : {}),
     });
   } catch {
     res.status(503).json({ ok: false, error: "Secure payment checkout is temporarily unavailable." });

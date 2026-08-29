@@ -210,27 +210,38 @@ export default function HotspotLogin() {
     e.preventDefault();
     if (!selectedPlan || !phone.trim()) return;
     const macAddress = normalizeMacAddress(deviceMacAddress);
-    if (!macAddress) {
-      setPayError("This device MAC address is required for automatic hotspot access. Enter it below or reopen this page from the Wi-Fi login prompt.");
-      return;
-    }
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
       const intentResponse = await fetch("/api/mpesa/intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), plan_id: selectedPlan.id, adminId, mac_address: macAddress }),
+        body: JSON.stringify({
+          phone: phone.trim(),
+          plan_id: selectedPlan.id,
+          adminId,
+          ...(macAddress ? { mac_address: macAddress } : {}),
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
       });
-      const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number };
+      const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number; deviceMacAddress?: string };
       if (!intentResponse.ok || !intentData.ok || !intentData.paymentIntent || !intentData.amount) {
         setPayError(intentData.error ?? "Could not start a secure payment checkout. Please try again.");
         return;
       }
+      if (intentData.deviceMacAddress) setDeviceMacAddress(intentData.deviceMacAddress);
       const res = await fetch("/api/mpesa/stk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim(), amount: intentData.amount, plan_id: selectedPlan.id, adminId, account_ref: brand.ispName, paymentIntent: intentData.paymentIntent, mac_address: macAddress }),
+        body: JSON.stringify({
+          phone: phone.trim(),
+          amount: intentData.amount,
+          plan_id: selectedPlan.id,
+          adminId,
+          account_ref: brand.ispName,
+          paymentIntent: intentData.paymentIntent,
+          ...(macAddress ? { mac_address: macAddress } : {}),
+        }),
       });
       const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
       if (!res.ok || !data.ok) setPayError(data.error ?? "Failed to send STK push. Please try again.");
@@ -972,15 +983,15 @@ export default function HotspotLogin() {
                                         <div className="hp-device-icon"><Wifi size={16} /></div>
                                         <div className="hp-device-copy">
                                           <span className="hp-device-kicker">This device</span>
-                                          <strong>{deviceMacAddress || "MAC address not detected"}</strong>
-                                          <small>{portalContext.ip ? `IP address ${portalContext.ip}` : "MikroTik will provide the address when connected"}</small>
+                                          <strong>{deviceMacAddress || "Identified by router"}</strong>
+                                          <small>{portalContext.ip ? `Router IP ${portalContext.ip} · MAC resolved server-side` : "MikroTik will resolve this device securely"}</small>
                                         </div>
                                         {deviceMacAddress && <span className="hp-device-state"><CheckCircle2 size={12} /> Detected</span>}
                                       </div>
                                       {!deviceMacAddress && (
                                         <div className="hp-error" role="alert">
                                           <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                          This device was not identified by the MikroTik login prompt. Reopen the Wi-Fi sign-in page to continue; a MAC address cannot be safely collected by browser JavaScript.
+                                          Your router will identify this device from its assigned Wi-Fi address. Keep this page open while you pay.
                                         </div>
                                       )}
                                       <div className="hp-input-group">
@@ -999,7 +1010,7 @@ export default function HotspotLogin() {
                                         </div>
                                       )}
 
-                                       <button type="submit" disabled={payLoading || !deviceMacAddress} className="hp-btn hp-btn-mpesa">
+                                       <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
                                         {payLoading ? (
                                           <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                         ) : (
