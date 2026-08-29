@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { processDeferredMpesaCallbacks } from "./mpesa-route.js";
-import { sbInsert, sbRpc, sbSelect, sbSelectStrict, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import {
   ensureMpesaRegistrationDestination,
   getMpesaSettings,
@@ -10,6 +10,7 @@ import {
 } from "../lib/settings-store.js";
 import { logger } from "../lib/logger.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
+import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
@@ -17,6 +18,28 @@ const INITIAL_ADMIN_PASSWORD = "admin";
 
 function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+function subdomainCandidate(base: string, ordinal: number): string {
+  const suffix = ordinal === 1 ? "" : `-${ordinal}`;
+  return `${base.slice(0, 63 - suffix.length)}${suffix}`;
+}
+
+async function findAvailableSubdomain(company: string): Promise<string> {
+  const slug = slugify(company);
+  const base = RESERVED_SUBDOMAINS.has(slug) ? `${slug}-isp` : slug;
+  if (!base) throw new Error("A usable company subdomain could not be generated.");
+
+  for (let ordinal = 1; ordinal <= 1000; ordinal += 1) {
+    const candidate = subdomainCandidate(base, ordinal);
+    const matches = await sbSelect<{ id: number }>(
+      "isp_admins",
+      `subdomain=eq.${encodeURIComponent(candidate)}&select=id&limit=1`,
+    );
+    if (!matches.length) return candidate;
+  }
+
+  throw new Error("No available ISP subdomain remains for this company name.");
 }
 
 function normalizeKenyanPhone(value: string): string {
@@ -157,24 +180,33 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
-  const [nameMatches, phoneMatches] = await Promise.all([
-    sbSelect<{ id: number }>("isp_admins", `subdomain=eq.${encodeURIComponent(slug)}&select=id&limit=1`),
-    sbSelect<{ id: number }>("isp_admins", `phone=eq.${encodeURIComponent(phone)}&select=id&limit=1`),
-  ]);
-  if (nameMatches.length || phoneMatches.length) {
-    res.status(409).json({ ok: false, error: "This company name or phone number is already registered." });
+  const phoneMatches = await sbSelect<{ id: number }>(
+    "isp_admins",
+    `phone=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
+  );
+  if (phoneMatches.length) {
+    res.status(409).json({ ok: false, error: "This phone number is already registered." });
     return;
   }
 
-  const pendingAdmins = await sbInsert<{ id: number; username: string; subdomain: string }>("isp_admins", {
-    name: company, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
-    password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
-    is_active: false, role: "isp_admin", subdomain: slug, status: "pending_payment",
-    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  });
-  const pendingAdmin = pendingAdmins[0];
+  let pendingAdmin: { id: number; username: string; subdomain: string } | undefined;
+  for (let attempt = 0; attempt < 5 && !pendingAdmin; attempt += 1) {
+    const candidate = await findAvailableSubdomain(company);
+    try {
+      const inserted = await sbInsertStrict<{ id: number; username: string; subdomain: string }>("isp_admins", {
+        name: company, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
+        password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
+        is_active: false, role: "isp_admin", subdomain: candidate, status: "pending_payment",
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      });
+      pendingAdmin = inserted[0];
+    } catch (error) {
+      if (!String(error).includes("HTTP 409")) throw error;
+      /* Another registration won the candidate between SELECT and INSERT. */
+    }
+  }
   if (!pendingAdmin) {
-    res.status(500).json({ ok: false, error: "Could not start the registration. Please try again." });
+    res.status(503).json({ ok: false, error: "Could not allocate a unique ISP subdomain. Please try again." });
     return;
   }
 
