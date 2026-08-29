@@ -65,6 +65,15 @@ sudo ln -s /etc/nginx/sites-available/ocholasupernet \
 sudo nginx -t          # test config
 sudo systemctl reload nginx
 
+# The API uses these values for the router-management OpenVPN endpoint and
+# server-side reconciliation. Keep VPS_HOST pointed at this VPS; the legacy
+# customer OpenVPN service remains on TCP 1194 and the management service uses
+# TCP 1196.
+cat >> .env <<'EOF'
+VPS_HOST=YOUR_VPS_PUBLIC_IP
+VPS_USER=YOUR_VPS_SSH_USER
+EOF
+
 # Start API server with PM2 (nginx mode — SERVE_STATIC=false)
 pm2 start ecosystem.config.cjs --env production
 pm2 save
