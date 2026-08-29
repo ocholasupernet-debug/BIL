@@ -22,6 +22,7 @@ interface CustomerRecord {
   admin_id: number;
   type: string | null;
   status: string | null;
+  phone: string | null;
   username: string | null;
   pppoe_username: string | null;
   name: string | null;
@@ -67,7 +68,7 @@ async function tenantOwnsAdmin(req: Request, adminId: number): Promise<boolean> 
 
 async function findPppoeCustomer(adminId: number, username: string): Promise<CustomerRecord | null> {
   const encodedUsername = encodeURIComponent(username);
-  const fields = "id,admin_id,type,status,username,pppoe_username,name";
+  const fields = "id,admin_id,type,status,username,pppoe_username,name,phone";
   const byPppoeUsername = await sbSelect<CustomerRecord>(
     "isp_customers",
     `admin_id=eq.${adminId}&type=eq.pppoe&pppoe_username=eq.${encodedUsername}&select=${fields}&limit=1`,
@@ -92,7 +93,7 @@ async function findEligibleCustomer(payload: PppoePortalReferencePayload, req: R
 
   const customers = await sbSelect<CustomerRecord>(
     "isp_customers",
-    `id=eq.${payload.customerId}&admin_id=eq.${payload.adminId}&type=eq.pppoe&select=id,admin_id,type,status,username,pppoe_username,name&limit=1`,
+    `id=eq.${payload.customerId}&admin_id=eq.${payload.adminId}&type=eq.pppoe&select=id,admin_id,type,status,username,pppoe_username,name,phone&limit=1`,
   );
   const customer = customers[0];
   if (
@@ -193,6 +194,9 @@ router.get("/public/pppoe-portal/access", async (req: Request, res: Response): P
       name: customer.name,
       username: customer.pppoe_username ?? customer.username,
       status: customer.status,
+      customerId: customer.id,
+      adminId: customer.admin_id,
+      phone: customer.phone,
     },
   });
 });

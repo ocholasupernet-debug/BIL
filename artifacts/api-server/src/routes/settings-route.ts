@@ -22,6 +22,17 @@ import {
 import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { extractToken, validateToken } from "../lib/api-auth.js";
+import {
+  gatewayConfigMap as routingGatewayConfigMap,
+  paymentCollectionMode,
+  paymentGateway as routingPaymentGateway,
+  publicServiceStatus,
+  servicePaymentConfigMap,
+  isGatewayConfigComplete,
+  collectionConfig,
+  type PaymentService,
+  type ServicePaymentConfig,
+} from "../lib/payment-routing.js";
 
 const router: IRouter = Router();
 const MPESA_CALLBACK_PATH = "/api/mpesa/callback";
@@ -191,6 +202,8 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
   bankStkPush: BankStkPushConfig;
   mpesaTillPush: MpesaTillPushConfig;
   mpesaPaybill: MpesaPaybillConfig;
+  paymentCollectionMode: "shared" | "separate";
+  serviceConfigs: Partial<Record<PaymentService, ServicePaymentConfig>>;
 }> {
   if (!adminId) {
     return {
@@ -198,24 +211,43 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
       bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
       mpesaTillPush: { tillNumber: "" },
       mpesaPaybill: { paybillNumber: "", accountNumber: "" },
+      paymentCollectionMode: "shared",
+      serviceConfigs: {},
     };
   }
-  const rows = await sbSelect<{ payment_gateway?: string; payment_gateway_config?: unknown }>(
+  const rows = await sbSelect<{
+    payment_gateway?: string;
+    payment_gateway_config?: unknown;
+    payment_collection_mode?: string;
+    payment_service_config?: unknown;
+  }>(
     "isp_admins",
-    `id=eq.${adminId}&select=payment_gateway,payment_gateway_config&limit=1`,
+    `id=eq.${adminId}&select=payment_gateway,payment_gateway_config,payment_collection_mode,payment_service_config&limit=1`,
   );
+  const mode = paymentCollectionMode(rows[0]?.payment_collection_mode);
+  const serviceConfigs = servicePaymentConfigMap(rows[0]?.payment_service_config);
+  const sharedGatewayId = getPaymentGateway(rows[0]?.payment_gateway);
+  const sharedConfigs = gatewayConfigMap(rows[0]?.payment_gateway_config);
+  const selected = mode === "separate" ? undefined : sharedConfigs;
   return {
-    paymentGateway: getPaymentGateway(rows[0]?.payment_gateway),
-    bankStkPush: bankStkPushConfig(rows[0]?.payment_gateway_config),
-    mpesaTillPush: mpesaTillPushConfig(rows[0]?.payment_gateway_config),
-    mpesaPaybill: mpesaPaybillConfig(rows[0]?.payment_gateway_config),
+    paymentGateway: mode === "separate"
+      ? (serviceConfigs.hotspot?.gatewayId ?? "unconfigured")
+      : sharedGatewayId,
+    bankStkPush: selected ? bankStkPushConfig(selected) : serviceConfigs.hotspot?.gatewayId === "bank_stk_push"
+      ? { bankName: serviceConfigs.hotspot.config.bankName ?? "", paybillNumber: serviceConfigs.hotspot.config.paybillNumber ?? "", accountNumber: serviceConfigs.hotspot.config.accountNumber ?? "" }
+      : { bankName: "", paybillNumber: "", accountNumber: "" },
+    mpesaTillPush: selected ? mpesaTillPushConfig(selected) : { tillNumber: serviceConfigs.hotspot?.config.tillNumber ?? "" },
+    mpesaPaybill: selected ? mpesaPaybillConfig(selected) : { paybillNumber: serviceConfigs.hotspot?.config.paybillNumber ?? "", accountNumber: serviceConfigs.hotspot?.config.accountNumber ?? "" },
+    paymentCollectionMode: mode,
+    serviceConfigs,
   };
 }
 
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
-  const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminIdFromRequest(req));
+  const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
+    await getAdminPaymentSettings(adminIdFromRequest(req));
   res.json({
     ok: true,
     configured: isMpesaConfigured(s),
@@ -227,6 +259,7 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
       bankStkPushConfigured: isBankStkPushConfigured(bankStkPush),
       adminTillPushConfigured: !!mpesaTillPush.tillNumber,
       adminPaybillConfigured: !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber),
+      paymentCollectionMode: collectionMode,
     },
   });
 });
@@ -251,6 +284,96 @@ router.post("/admin/payment-gateway", async (req: Request, res: Response): Promi
     return;
   }
   res.json({ ok: true, paymentGateway });
+});
+
+/* ── ISP Admin shared/separate service collection routing ── */
+router.get("/admin/payment-routing", async (req: Request, res: Response): Promise<void> => {
+  const adminId = adminIdFromRequest(req);
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "A valid adminId is required." });
+    return;
+  }
+  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  const settings = await getAdminPaymentSettings(adminId);
+  const sharedConfig = settings.paymentGateway === "mpesa_till_push"
+    ? settings.mpesaTillPush
+    : settings.paymentGateway === "bank_stk_push"
+    ? settings.bankStkPush
+    : settings.mpesaPaybill;
+  const status = publicServiceStatus(
+    settings.paymentCollectionMode,
+    settings.paymentGateway,
+    { ...sharedConfig },
+    settings.serviceConfigs,
+  );
+  res.json({
+    ok: true,
+    mode: settings.paymentCollectionMode,
+    services: {
+      hotspot: { gatewayId: status.hotspot.gatewayId, configured: status.hotspot.configured, config: status.hotspot.config },
+      pppoe: { gatewayId: status.pppoe.gatewayId, configured: status.pppoe.configured, config: status.pppoe.config },
+    },
+  });
+});
+
+router.post("/admin/payment-routing", async (req: Request, res: Response): Promise<void> => {
+  const adminId = Number(req.body?.adminId);
+  const mode = paymentCollectionMode(req.body?.mode);
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid adminId is required." });
+    return;
+  }
+  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (req.body?.mode !== "shared" && req.body?.mode !== "separate") {
+    res.status(400).json({ ok: false, error: "Choose shared or separate payment collection." });
+    return;
+  }
+
+  const rawServices = req.body?.services;
+  const serviceConfigs: Partial<Record<PaymentService, ServicePaymentConfig>> = {};
+  if (mode === "separate") {
+    for (const service of ["hotspot", "pppoe"] as PaymentService[]) {
+      const raw = rawServices?.[service];
+      const gatewayId = routingPaymentGateway(raw?.gatewayId);
+      if (!raw || raw.gatewayId !== gatewayId || !["mpesa_paybill", "mpesa_till_push", "bank_stk_push"].includes(gatewayId)) {
+        res.status(400).json({ ok: false, error: `Choose a supported M-Pesa collection account for ${service.toUpperCase()}.` });
+        return;
+      }
+      const config = collectionConfig(gatewayId, raw.config);
+      if (!isGatewayConfigComplete(gatewayId, config)) {
+        res.status(400).json({ ok: false, error: `Complete the ${gatewayId.replaceAll("_", " ")} destination for ${service.toUpperCase()}.` });
+        return;
+      }
+      serviceConfigs[service] = { gatewayId, config };
+    }
+  }
+
+  const current = await sbSelect<{ payment_service_config?: unknown }>(
+    "isp_admins",
+    `id=eq.${adminId}&select=payment_service_config&limit=1`,
+  );
+  const preservedConfigs = servicePaymentConfigMap(current[0]?.payment_service_config);
+  const updated = await sbUpdate("isp_admins", `id=eq.${adminId}`, {
+    payment_collection_mode: mode,
+    payment_service_config: mode === "separate" ? serviceConfigs : preservedConfigs,
+  });
+  if (updated.length === 0) {
+    res.status(404).json({ ok: false, error: "ISP admin was not found or the payment routing could not be saved." });
+    return;
+  }
+  res.json({
+    ok: true,
+    mode,
+    services: Object.fromEntries(
+      (["hotspot", "pppoe"] as PaymentService[]).map(service => {
+        const selected = mode === "separate" ? serviceConfigs[service] : null;
+        return [service, {
+          gatewayId: selected?.gatewayId ?? getPaymentGateway(req.body?.sharedGatewayId),
+          configured: selected ? isGatewayConfigComplete(selected.gatewayId, selected.config) : true,
+        }];
+      }),
+    ),
+  });
 });
 
 /* ── ISP Admin BankStkPush configuration ── */

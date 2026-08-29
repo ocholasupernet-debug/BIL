@@ -1703,6 +1703,14 @@ function PaymentGatewaysTab() {
   const [savingGateway, setSavingGateway] = useState<string | null>(null);
   const [saveError, setSaveError] = useState("");
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  const [routingMode, setRoutingMode] = useState<"shared" | "separate">("shared");
+  const [routingServices, setRoutingServices] = useState<Record<"hotspot" | "pppoe", { gatewayId: string; config: Record<string, string> }>>({
+    hotspot: { gatewayId: "mpesa_paybill", config: {} },
+    pppoe: { gatewayId: "mpesa_paybill", config: {} },
+  });
+  const [routingSaving, setRoutingSaving] = useState(false);
+  const [routingSaved, setRoutingSaved] = useState(false);
+  const [routingError, setRoutingError] = useState("");
 
   useEffect(() => {
     fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`)
@@ -1718,6 +1726,23 @@ function PaymentGatewaysTab() {
               { ...(prev[gatewayId] || {}), ...config },
             ]),
           ),
+        }));
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, { headers: adminApiHeaders() })
+      .then(response => response.ok ? response.json() : null)
+      .then((data: {
+        mode?: "shared" | "separate";
+        services?: Record<"hotspot" | "pppoe", { gatewayId?: string; config?: Record<string, string> }>;
+      } | null) => {
+        if (!data) return;
+        setRoutingMode(data.mode === "separate" ? "separate" : "shared");
+        setRoutingServices(prev => ({
+          hotspot: { gatewayId: data.services?.hotspot?.gatewayId || prev.hotspot.gatewayId, config: data.services?.hotspot?.config || prev.hotspot.config },
+          pppoe: { gatewayId: data.services?.pppoe?.gatewayId || prev.pppoe.gatewayId, config: data.services?.pppoe?.config || prev.pppoe.config },
         }));
       })
       .catch(() => {});
@@ -1754,6 +1779,47 @@ function PaymentGatewaysTab() {
     }
   };
 
+  const updateRoutingConfig = (service: "hotspot" | "pppoe", key: string, value: string) => {
+    setRoutingServices(prev => ({
+      ...prev,
+      [service]: {
+        ...prev[service],
+        config: { ...prev[service].config, [key]: value },
+      },
+    }));
+  };
+
+  const saveRouting = async () => {
+    setRoutingError("");
+    setRoutingSaving(true);
+    setRoutingSaved(false);
+    try {
+      const response = await fetch("/api/admin/payment-routing", {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          mode: routingMode,
+          services: routingMode === "separate" ? routingServices : undefined,
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save payment routing.");
+      setRoutingSaved(true);
+      setTimeout(() => setRoutingSaved(false), 2200);
+      window.dispatchEvent(new Event("ochola-payment-gateway-change"));
+    } catch (error) {
+      setRoutingError(error instanceof Error ? error.message : "Could not save payment routing.");
+    } finally {
+      setRoutingSaving(false);
+    }
+  };
+
+  const routingGatewayOptions = GATEWAYS.filter(gateway =>
+    gateway.id === "mpesa_paybill" || gateway.id === "mpesa_till_push" || gateway.id === "bank_stk_push"
+  );
+  const routingFields = (gatewayId: string) => GATEWAYS.find(gateway => gateway.id === gatewayId)?.fields ?? [];
+
   const activeGw = GATEWAYS.find(g => g.id === selectedGw);
   return (
     <>
@@ -1761,6 +1827,92 @@ function PaymentGatewaysTab() {
         Select one active payment gateway for this ISP. You can switch to another gateway whenever needed without Super Admin approval.
       </div>
       <AdminPaymentGatewayCard />
+
+      <Card title="Service payment routing" desc="Use one collection account for both services, or send Hotspot and PPPoE payments to separate M-Pesa destinations. API credentials remain managed centrally by Super Admin.">
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {([
+            ["shared", "Shared account", "One destination for Hotspot and PPPoE"],
+            ["separate", "Separate accounts", "Different destination per service"],
+          ] as const).map(([value, label, description]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setRoutingMode(value)}
+              style={{
+                flex: 1, textAlign: "left", padding: "12px 14px", borderRadius: 10, cursor: "pointer",
+                fontFamily: "inherit", background: routingMode === value ? "rgba(8,145,178,.15)" : C.card,
+                color: C.text, border: `1px solid ${routingMode === value ? C.cyan : C.border}`,
+              }}
+            >
+              <div style={{ fontSize: "0.82rem", fontWeight: 800 }}>{label}</div>
+              <div style={{ color: C.muted, fontSize: "0.7rem", marginTop: 4 }}>{description}</div>
+            </button>
+          ))}
+        </div>
+        {routingMode === "shared" ? (
+          <p style={{ color: C.muted, fontSize: "0.75rem", lineHeight: 1.5, margin: "0 0 14px" }}>
+            Both plan types use the active gateway and destination configured below. Save the gateway details first, then save this routing choice.
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: 12 }}>
+            {(["hotspot", "pppoe"] as const).map(service => {
+              const serviceGateway = routingServices[service].gatewayId;
+              const fieldsForGateway = routingFields(serviceGateway);
+              return (
+                <div key={service} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}>
+                    <div>
+                      <div style={{ color: C.text, fontSize: "0.82rem", fontWeight: 800 }}>{service === "hotspot" ? "Hotspot payments" : "PPPoE payments"}</div>
+                      <div style={{ color: C.muted, fontSize: "0.7rem", marginTop: 3 }}>Collection destination for {service.toUpperCase()} plans</div>
+                    </div>
+                    <Select
+                      value={serviceGateway}
+                      onChange={event => setRoutingServices(prev => ({
+                        ...prev,
+                        [service]: { gatewayId: event.target.value, config: {} },
+                      }))}
+                      style={{ width: 190 }}
+                    >
+                      {routingGatewayOptions.map(gateway => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
+                    </Select>
+                  </div>
+                  {fieldsForGateway.map(field => (
+                    <div key={field.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 0" }}>
+                      <label style={{ width: 170, flexShrink: 0, color: C.muted, fontSize: "0.72rem", textAlign: "right" }}>{field.label}</label>
+                      {field.type === "select" && field.options ? (
+                        <Select
+                          value={routingServices[service].config[field.key] || ""}
+                          onChange={event => updateRoutingConfig(service, field.key, event.target.value)}
+                        >
+                          <option value="">-- Select --</option>
+                          {field.options.map(option => <option key={option} value={option}>{option}</option>)}
+                        </Select>
+                      ) : (
+                        <Input
+                          value={routingServices[service].config[field.key] || ""}
+                          onChange={event => updateRoutingConfig(service, field.key, event.target.value)}
+                          placeholder={field.hint || `Enter ${field.label.toLowerCase()}`}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {routingError && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "12px 0 0" }}><AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />{routingError}</p>}
+        <Row>
+          <button
+            type="button"
+            onClick={saveRouting}
+            disabled={routingSaving}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: routingSaved ? "#10b981" : C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: routingSaving ? 0.65 : 1 }}
+          >
+            {routingSaved ? <><Check size={13} /> Saved!</> : routingSaving ? "Saving…" : <><Save size={13} /> Save routing</>}
+          </button>
+        </Row>
+      </Card>
 
       <Card title="Payment Gateway Configurations" desc="Add or update the account details for the payment gateways available to this ISP.">
         <div style={{

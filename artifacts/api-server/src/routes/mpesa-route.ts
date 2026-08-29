@@ -17,6 +17,7 @@ import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { addHotspotIpBinding, type RouterCredentials } from "../lib/mikrotik.js";
+import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 
 const router: IRouter = Router();
 
@@ -143,11 +144,12 @@ function isDarajaGateway(paymentGateway: PaymentGateway): boolean {
   return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push" || paymentGateway === "bank_stk_push";
 }
 
-async function getAdminPaymentSettings(adminId: number | undefined): Promise<{
+async function getAdminPaymentSettings(adminId: number | undefined, serviceType: PaymentService = "hotspot"): Promise<{
   paymentGateway: PaymentGateway;
   bankStkPush: BankStkPushConfig;
   mpesaTillPush: MpesaTillPushConfig;
   mpesaPaybill: MpesaPaybillConfig;
+  paymentCollectionMode: "shared" | "separate";
 }> {
   if (!adminId) {
     return {
@@ -155,17 +157,32 @@ async function getAdminPaymentSettings(adminId: number | undefined): Promise<{
       bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
       mpesaTillPush: { tillNumber: "" },
       mpesaPaybill: { paybillNumber: "", accountNumber: "" },
+      paymentCollectionMode: "shared",
     };
   }
-  const rows = await sbSelect<{ payment_gateway?: string; payment_gateway_config?: unknown }>(
+  const rows = await sbSelect<{
+    payment_gateway?: string;
+    payment_gateway_config?: unknown;
+    payment_collection_mode?: string;
+    payment_service_config?: unknown;
+  }>(
     "isp_admins",
-    `id=eq.${adminId}&select=payment_gateway,payment_gateway_config&limit=1`,
+    `id=eq.${adminId}&select=payment_gateway,payment_gateway_config,payment_collection_mode,payment_service_config&limit=1`,
   );
+  const mode = paymentCollectionMode(rows[0]?.payment_collection_mode);
+  const service = servicePaymentConfigMap(rows[0]?.payment_service_config)[serviceType];
+  const config = mode === "separate" && service
+    ? { [service.gatewayId]: service.config }
+    : rows[0]?.payment_gateway_config;
+  const paymentGateway = mode === "separate"
+    ? (service?.gatewayId ?? "unconfigured")
+    : getPaymentGateway(rows[0]?.payment_gateway);
   return {
-    paymentGateway: getPaymentGateway(rows[0]?.payment_gateway),
-    bankStkPush: bankStkPushConfig(rows[0]?.payment_gateway_config),
-    mpesaTillPush: mpesaTillPushConfig(rows[0]?.payment_gateway_config),
-    mpesaPaybill: mpesaPaybillConfig(rows[0]?.payment_gateway_config),
+    paymentGateway,
+    bankStkPush: bankStkPushConfig(config),
+    mpesaTillPush: mpesaTillPushConfig(config),
+    mpesaPaybill: mpesaPaybillConfig(config),
+    paymentCollectionMode: mode,
   };
 }
 
@@ -437,6 +454,8 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const adminId = Number(req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
+  const requestedService = req.body?.service_type === "pppoe" ? "pppoe" : "hotspot";
+  const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
@@ -450,11 +469,30 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
-  const plans = await sbSelect<{ id: number; price: number | string }>(
+  const plans = await sbSelect<{ id: number; price: number | string; type?: string }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type&limit=1`,
   );
   const plan = plans[0];
+  const serviceType = String(plan?.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
+  if (plan && serviceType !== requestedService) {
+    res.status(409).json({ ok: false, error: "The selected package is for a different service. Refresh and try again." });
+    return;
+  }
+  if (serviceType === "pppoe" && (!Number.isSafeInteger(requestedCustomerId) || requestedCustomerId < 1)) {
+    res.status(400).json({ ok: false, error: "A verified PPPoE customer account is required for this package." });
+    return;
+  }
+  if (serviceType === "pppoe") {
+    const customers = await sbSelect<{ id: number; admin_id: number; type: string }>(
+      "isp_customers",
+      `id=eq.${requestedCustomerId}&admin_id=eq.${adminId}&type=eq.pppoe&select=id,admin_id,type&limit=1`,
+    );
+    if (!customers[0]) {
+      res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+      return;
+    }
+  }
   const amount = Math.ceil(Number(plan?.price));
   if (!plan || !Number.isFinite(amount) || amount <= 0) {
     res.status(404).json({ ok: false, error: "The selected plan is not available for payment." });
@@ -463,7 +501,11 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   try {
     res.json({
       ok: true,
-      paymentIntent: generatePaymentIntent({ adminId, planId, amount, phone, ...(mac.value ? { macAddress: mac.value } : {}) }),
+      paymentIntent: generatePaymentIntent({
+        adminId, planId, amount, phone, serviceType,
+        ...(serviceType === "pppoe" ? { customerId: requestedCustomerId } : {}),
+        ...(mac.value ? { macAddress: mac.value } : {}),
+      }),
       amount,
     });
   } catch {
@@ -534,8 +576,16 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
       }
-      if (paymentGateway === "bank_stk_push" && !isBankStkPushConfigured(bankStkPush)) {
-       res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
+       if (paymentGateway === "bank_stk_push" && !isBankStkPushConfigured(bankStkPush)) {
+        res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
+        return;
+      }
+      if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
+        res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
+        return;
+      }
+      if (paymentGateway === "mpesa_till_push" && !mpesaTillPush.tillNumber) {
+        res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
        return;
      }
       const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
@@ -690,8 +740,8 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number;
   };
   const mac = readMacAddress(mac_address);
 
@@ -716,6 +766,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const normalised = normaliseKenyanPhone(String(phone));
   const requestedAmount = Math.ceil(Number(amount));
   const requestedPlanId = Number(plan_id);
+  const requestedCustomerId = Number(customer_id);
   const intent = typeof paymentIntent === "string" ? validatePaymentIntent(paymentIntent) : null;
   const adminAuth = validateToken(extractToken(req));
   const hasAdminSession = !!adminAuth && adminAuth.type === "a" &&
@@ -726,7 +777,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     intent.adminId === scopedAdminId &&
     intent.planId === requestedPlanId &&
     intent.amount === requestedAmount &&
-    intent.phone === normalised;
+    intent.phone === normalised &&
+    (intent.serviceType ?? "hotspot") === (service_type === "pppoe" ? "pppoe" : "hotspot") &&
+    (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null);
   if (intent && (intent.macAddress ?? "") !== mac.value) {
     res.status(400).json({ ok: false, error: "The TV MAC address changed. Start the payment again." });
     return;
@@ -736,14 +789,37 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     return;
   }
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
-    const plans = await sbSelect<{ id: number; price: number | string; name: string }>(
+    const plans = await sbSelect<{ id: number; price: number | string; name: string; type?: string }>(
       "isp_plans",
-      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name&limit=1`,
+      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type&limit=1`,
     );
     const plan = plans[0];
     if (!plan) {
       res.status(404).json({ ok: false, error: "The selected package is not available for payment." });
       return;
+    }
+    const serviceType = String(plan.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
+    if (service_type && service_type !== serviceType) {
+      res.status(400).json({ ok: false, error: "The package service type does not match the selected package." });
+      return;
+    }
+    if (intent && (intent.serviceType ?? "hotspot") !== serviceType) {
+      res.status(400).json({ ok: false, error: "The payment checkout service changed. Start the payment again." });
+      return;
+    }
+    if (serviceType === "pppoe") {
+      if (!intent?.customerId || intent.customerId !== requestedCustomerId) {
+        res.status(401).json({ ok: false, error: "Create a new verified PPPoE checkout before requesting payment." });
+        return;
+      }
+      const customers = await sbSelect<{ id: number }>(
+        "isp_customers",
+        `id=eq.${intent.customerId}&admin_id=eq.${scopedAdminId}&type=eq.pppoe&select=id&limit=1`,
+      );
+      if (!customers[0]) {
+        res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+        return;
+      }
     }
     if (requestedAmount !== Math.ceil(Number(plan.price))) {
       res.status(400).json({ ok: false, error: "The package amount changed. Refresh the package list and try again." });
@@ -771,7 +847,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   }
 
   try {
-      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId);
+      const serviceType = intent?.serviceType ?? (service_type === "pppoe" ? "pppoe" : "hotspot");
+      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId, serviceType);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -780,6 +857,14 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
        return;
      }
+      if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
+        res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
+        return;
+      }
+      if (paymentGateway === "mpesa_till_push" && !mpesaTillPush.tillNumber) {
+        res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
+        return;
+      }
       const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
       const { businessShortcode, destination } = payment;
      if (paymentGateway === "mpesa_till_push" && !destination) {
@@ -794,6 +879,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
      const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
        admin_id: scopedAdminId,
        plan_id: plan_id ?? null,
+        customer_id: intent?.customerId ?? null,
        amount: Math.ceil(Number(amount)),
        payment_method: "mpesa",
        payment_phone: normalised,

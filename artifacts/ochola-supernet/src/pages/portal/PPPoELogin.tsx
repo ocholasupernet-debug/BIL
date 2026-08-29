@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   ArrowRight, Check, CheckCircle2, ChevronRight, Eye, EyeOff, HelpCircle,
-  KeyRound, LifeBuoy, LockKeyhole, Mail, MessageCircle, Router, Send,
+  KeyRound, LifeBuoy, LockKeyhole, Mail, MessageCircle, Router, Send, CreditCard,
   ShieldCheck, Ticket, UserRound, Wifi, X, Zap,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
@@ -308,7 +308,7 @@ export function PPPoELogin({
   const [portalAccess, setPortalAccess] = useState<PortalAccessState>(previewSettings ? "allowed" : "checking");
   const [storedSettings] = useState(loadSettings);
   const settings = previewSettings ?? storedSettings;
-  const [tab, setTab] = useState<"login" | "forgot" | "voucher">("login");
+  const [tab, setTab] = useState<"login" | "forgot" | "voucher" | "plans">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -320,6 +320,13 @@ export function PPPoELogin({
   const [code, setCode] = useState("");
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
+  const [customerContext, setCustomerContext] = useState<{ customerId: number; adminId: number; phone: string } | null>(null);
+  const [packages, setPackages] = useState<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>>([]);
+  const [packagesLoading, setPackagesLoading] = useState(false);
+  const [purchasePlanId, setPurchasePlanId] = useState<number | null>(null);
+  const [purchaseState, setPurchaseState] = useState<"idle" | "sending" | "pending" | "paid" | "failed">("idle");
+  const [purchaseCheckoutId, setPurchaseCheckoutId] = useState("");
+  const [purchaseError, setPurchaseError] = useState("");
 
   const ispName = settings.ispName.trim() || brand.ispName || "Your ISP";
   const phone = settings.supportPhone.trim();
@@ -373,10 +380,17 @@ export function PPPoELogin({
     })
       .then(response => {
         if (!response.ok) throw new Error("Portal access was denied.");
-        return response.json() as Promise<{ ok?: boolean }>;
+        return response.json() as Promise<{ ok?: boolean; customer?: { customerId?: number; adminId?: number; phone?: string | null } }>;
       })
       .then(result => {
         if (!result.ok) throw new Error("Portal access was denied.");
+        if (result.customer?.customerId && result.customer.adminId) {
+          setCustomerContext({
+            customerId: result.customer.customerId,
+            adminId: result.customer.adminId,
+            phone: result.customer.phone ?? "",
+          });
+        }
         setPortalAccess("allowed");
         const cleanUrl = `${window.location.pathname}${window.location.hash}`;
         window.history.replaceState({}, document.title, cleanUrl);
@@ -389,9 +403,45 @@ export function PPPoELogin({
     return () => controller.abort();
   }, [previewSettings]);
 
+  useEffect(() => {
+    if (!customerContext) return;
+    setPackagesLoading(true);
+    fetch(`/api/plans?adminId=${customerContext.adminId}`)
+      .then(response => response.ok ? response.json() as Promise<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>> : [])
+      .then(rows => setPackages(rows.filter(plan => String(plan.type || "").toLowerCase() === "pppoe" && plan.id)))
+      .catch(() => setPackages([]))
+      .finally(() => setPackagesLoading(false));
+  }, [customerContext]);
+
+  useEffect(() => {
+    if (!purchaseCheckoutId || purchaseState !== "pending") return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(purchaseCheckoutId)}`, { cache: "no-store" });
+        const result = await response.json() as { paid?: boolean; status?: string; failureReason?: string };
+        if (!active) return;
+        if (result.paid) setPurchaseState("paid");
+        else if (result.status === "failed") {
+          setPurchaseError(result.failureReason || "The payment prompt was cancelled or declined.");
+          setPurchaseState("failed");
+        }
+      } catch {
+        /* Keep polling while the callback is in flight. */
+      }
+    };
+    poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [purchaseCheckoutId, purchaseState]);
+
   const tabs = [
     { id: "login" as const, label: "Sign in" },
     { id: "forgot" as const, label: "Reset access" },
+    { id: "plans" as const, label: "Packages" },
     ...(showVoucher ? [{ id: "voucher" as const, label: "Voucher" }] : []),
   ];
 
@@ -413,6 +463,62 @@ export function PPPoELogin({
     event.preventDefault();
     setActivating(true);
     window.setTimeout(() => { setActivating(false); setActivated(true); }, 900);
+  }
+
+  async function handlePackagePurchase(plan: { id: number; price: number | string }) {
+    if (!customerContext?.phone) {
+      setPurchaseError("Your account does not have a registered payment phone number. Contact support to update it.");
+      return;
+    }
+    const amount = Math.ceil(Number(plan.price));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setPurchaseError("This package is not configured with a valid price.");
+      return;
+    }
+    setPurchasePlanId(plan.id);
+    setPurchaseState("sending");
+    setPurchaseCheckoutId("");
+    setPurchaseError("");
+    try {
+      const intentResponse = await fetch("/api/mpesa/intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          adminId: customerContext.adminId,
+          plan_id: plan.id,
+          phone: customerContext.phone,
+          service_type: "pppoe",
+          customer_id: customerContext.customerId,
+        }),
+      });
+      const intent = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number };
+      if (!intentResponse.ok || !intent.ok || !intent.paymentIntent || !intent.amount) {
+        throw new Error(intent.error || "Could not start the secure package checkout.");
+      }
+      const paymentResponse = await fetch("/api/mpesa/stk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          phone: customerContext.phone,
+          amount: intent.amount,
+          plan_id: plan.id,
+          adminId: customerContext.adminId,
+          service_type: "pppoe",
+          customer_id: customerContext.customerId,
+          paymentIntent: intent.paymentIntent,
+          account_ref: `PPPoE ${customerContext.customerId}`,
+        }),
+      });
+      const payment = await paymentResponse.json() as { ok?: boolean; error?: string; CheckoutRequestID?: string };
+      if (!paymentResponse.ok || !payment.ok || !payment.CheckoutRequestID) {
+        throw new Error(payment.error || "Could not send the M-Pesa payment prompt.");
+      }
+      setPurchaseCheckoutId(payment.CheckoutRequestID);
+      setPurchaseState("pending");
+    } catch (error) {
+      setPurchaseError(error instanceof Error ? error.message : "Could not start payment.");
+      setPurchaseState("failed");
+    }
   }
 
   return (
@@ -468,10 +574,10 @@ export function PPPoELogin({
         <section className="pppoe-content-grid">
           <div className="pppoe-card">
             <div className="pppoe-card-head">
-              <div className="pppoe-card-icon">{tab === "login" ? <UserRound size={16} /> : tab === "forgot" ? <KeyRound size={16} /> : <Ticket size={16} />}</div>
+              <div className="pppoe-card-icon">{tab === "login" ? <UserRound size={16} /> : tab === "forgot" ? <KeyRound size={16} /> : tab === "plans" ? <CreditCard size={16} /> : <Ticket size={16} />}</div>
               <div>
-                <h2>{tab === "login" ? "Member access" : tab === "forgot" ? "Recover your access" : "Redeem a voucher"}</h2>
-                <p>{tab === "login" ? "Use the credentials provided for your PPPoE connection." : tab === "forgot" ? "We’ll help you get back online securely." : "Apply a voucher to renew your PPPoE subscription."}</p>
+                <h2>{tab === "login" ? "Member access" : tab === "forgot" ? "Recover your access" : tab === "plans" ? "Renew your package" : "Redeem a voucher"}</h2>
+                <p>{tab === "login" ? "Use the credentials provided for your PPPoE connection." : tab === "forgot" ? "We’ll help you get back online securely." : tab === "plans" ? "Choose a PPPoE package and pay securely from your registered number." : "Apply a voucher to renew your PPPoE subscription."}</p>
               </div>
             </div>
             <div className="pppoe-tabs" role="tablist" aria-label="PPPoE account actions">
@@ -537,6 +643,45 @@ export function PPPoELogin({
                   <PortalButton type="submit" disabled={resetting} variant="secondary">{resetting ? "Sending request…" : <>Request a reset <ArrowRight size={15} /></>}</PortalButton>
                   <p className="pppoe-form-note">We’ll use the number on your account to verify the request.</p>
                 </form>
+              )
+            )}
+
+            {tab === "plans" && (
+              purchaseState === "paid" ? (
+                <ResultState
+                  icon={<CheckCircle2 size={31} />}
+                  eyebrow="Payment confirmed"
+                  title="You’re back online"
+                  message="Your PPPoE package has been renewed and your access is active."
+                  action={<PortalButton type="button" variant="secondary" onClick={() => { setPurchaseState("idle"); setPurchasePlanId(null); }}>Choose another package</PortalButton>}
+                />
+              ) : (
+                <div className="pppoe-form">
+                  {purchaseState === "pending" && (
+                    <div className="pppoe-alert"><CreditCard size={16} /> Approve the M-Pesa prompt on {customerContext?.phone || "your registered phone"}. We’ll activate the package after the callback is confirmed.</div>
+                  )}
+                  {purchaseError && <div className="pppoe-alert maintenance">{purchaseError}</div>}
+                  {packagesLoading ? (
+                    <p className="pppoe-form-note">Loading available PPPoE packages…</p>
+                  ) : packages.length === 0 ? (
+                    <p className="pppoe-form-note">No active PPPoE packages are available right now. Please contact support.</p>
+                  ) : (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {packages.map(plan => (
+                        <div key={plan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "14px", border: "1px solid rgba(255,255,255,.12)", borderRadius: 11, background: "rgba(255,255,255,.035)" }}>
+                          <div>
+                            <strong style={{ display: "block", color: "var(--pppoe-text)", fontSize: ".84rem" }}>{plan.name}</strong>
+                            <span style={{ display: "block", marginTop: 4, color: "rgba(244,248,245,.52)", fontSize: ".72rem" }}>{plan.validity_days ?? plan.validity ?? 30} days access</span>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <strong style={{ display: "block", color: "var(--pppoe-accent)", fontSize: ".9rem" }}>KES {Math.ceil(Number(plan.price)).toLocaleString()}</strong>
+                            <button type="button" className="pppoe-link-button" disabled={purchaseState === "sending" || purchaseState === "pending"} onClick={() => handlePackagePurchase(plan)}>{purchasePlanId === plan.id && purchaseState === "sending" ? "Starting…" : "Pay now"} <ArrowRight size={13} style={{ verticalAlign: "middle" }} /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )
             )}
 
