@@ -26,6 +26,7 @@ interface RouterSummary {
   name: string;
   host: string;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   status: string;
   model: string | null;
   ros_version: string | null;
@@ -461,7 +462,7 @@ export default function Files() {
               </option>
               {routers.map(router => (
                 <option key={router.id} value={router.id}>
-                  {router.name} — {router.host || router.bridge_ip || "no address"}
+                  {router.name} — {router.host || router.vpn_ip || "no address"}
                 </option>
               ))}
             </select>
@@ -924,7 +925,7 @@ export default function Files() {
 
             <div style={{ maxWidth: 980, display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text-sub)", fontSize: "0.7rem" }}>
               <WifiOff size={12} />
-              Connected through {filesQuery.data.connectedHost || selectedRouter.host || selectedRouter.bridge_ip || "configured router address"} · Last read {new Date(filesQuery.data.fetchedAt).toLocaleString()}
+              Connected through {filesQuery.data.connectedHost || selectedRouter.host || selectedRouter.vpn_ip || "configured router address"} · Last read {new Date(filesQuery.data.fetchedAt).toLocaleString()}
             </div>
           </>
         )}

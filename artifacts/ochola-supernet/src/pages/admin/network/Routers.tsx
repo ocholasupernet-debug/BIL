@@ -52,7 +52,7 @@ function pingErrorInfo(err: string): { label: string; cmds: string[]; hint: stri
       hint:  "Run both commands in Winbox → Terminal:",
       cmds:  [
         "/ip service enable api",
-        "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+         "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
       ],
     };
   }
@@ -542,7 +542,7 @@ export default function Routers() {
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "", coordinates: "", coverage: "" });
+  const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", vpn_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "", coordinates: "", coverage: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
@@ -554,6 +554,7 @@ export default function Routers() {
       name:             r.name               ?? "",
       host:             r.host               ?? "",
       bridge_ip:        r.bridge_ip          ?? "",
+      vpn_ip:           r.vpn_ip             ?? "",
       proxy_ip:         r.proxy_ip           ?? "",
       bridge_interface: r.bridge_interface   ?? "",
       router_username:  r.router_username    ?? "admin",
@@ -600,6 +601,7 @@ export default function Routers() {
           name:             editForm.name.trim()             || editRouter.name,
           host:             editForm.host.trim()             || editRouter.host,
           bridge_ip:        editForm.bridge_ip.trim()        || null,
+          vpn_ip:           editForm.vpn_ip.trim()           || null,
           proxy_ip:         editForm.proxy_ip.trim()         || null,
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
           router_username:  editForm.router_username.trim()  || "admin",
@@ -1386,13 +1388,14 @@ export default function Routers() {
         <Modal title={`Edit Router — ${editRouter.name}`} onClose={() => setEditRouter(null)}>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
             <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
-              <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and only set the <em>VPN Tunnel IP</em>. The system uses the VPN IP to reach the router. Seeing the same IP in both fields is normal.
+              <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and set its <em>Router Management VPN IP</em>. Use the assigned <strong>10.8.5.x</strong> address; the <em>Hotspot/LAN Gateway</em> such as 192.168.88.1 is not a tunnel address.
             </div>
-            {(["name", "host", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret", "coordinates", "coverage"] as const).map((field) => {
+            {(["name", "host", "vpn_ip", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret", "coordinates", "coverage"] as const).map((field) => {
               const labels: Record<string, string> = {
                 name:             "Router Name",
                 host:             "WAN / Public IP (optional — leave empty if no public IP)",
-                bridge_ip:        "VPN Tunnel IP (10.8.0.x) — Main VPN connection",
+                vpn_ip:           "Router Management VPN IP (10.8.5.x) — TCP 1196",
+                bridge_ip:        "Hotspot/LAN Gateway (for example 192.168.88.1)",
                 proxy_ip:         "Proxy VPN IP (10.9.0.x) — Backup connection via OcholaSuper-Proxy",
                 bridge_interface: "Hotspot Bridge Interface",
                 router_username:  "API Username",
@@ -1403,7 +1406,8 @@ export default function Routers() {
               const placeholders: Record<string, string> = {
                 name:             "e.g. come1",
                 host:             "e.g. 41.80.123.45 — public WAN IP if available",
-                bridge_ip:        "e.g. 10.8.0.2 — assigned by main OpenVPN",
+                vpn_ip:           "e.g. 10.8.5.42 — assigned by router-management OpenVPN",
+                bridge_ip:        "e.g. 192.168.88.1 — local hotspot gateway",
                 proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
                 bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",

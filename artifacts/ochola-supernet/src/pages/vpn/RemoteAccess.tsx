@@ -35,7 +35,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 type DbRouter = {
-  id: number; name: string; host: string; bridge_ip: string;
+  id: number; name: string; host: string; bridge_ip: string; vpn_ip: string;
   router_username: string; status: string; model?: string;
   ros_version?: string; last_seen?: string;
 };
@@ -43,7 +43,7 @@ type DbRouter = {
 function RouterCard({ r }: { r: DbRouter }) {
   const [expanded, setExpanded] = useState(false);
   const online = r.status === "online";
-  const vpnIp = r.bridge_ip || r.host || "—";
+  const vpnIp = r.vpn_ip || r.host || "—";
 
   return (
     <div className={`bg-white rounded-xl shadow-sm border ${online ? "border-gray-200" : "border-red-200"} overflow-hidden`}>
@@ -400,7 +400,7 @@ export default function RemoteAccess() {
           <div className="text-sm">
             <p className="font-semibold text-amber-800">VPN Connection Required</p>
             <p className="text-amber-700 text-xs mt-0.5">
-              Router VPN IPs (<span className="font-mono">10.8.0.x</span>) are only reachable through the OpenVPN tunnel.
+              Router management VPN IPs (<span className="font-mono">10.8.5.x</span>) are only reachable through the router-management OpenVPN tunnel.
               Connect your device to the VPN before accessing Winbox or WebFig.
             </p>
           </div>

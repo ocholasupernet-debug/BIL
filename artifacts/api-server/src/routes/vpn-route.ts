@@ -265,7 +265,7 @@ router.get("/vpn/ip-map", async (_req: Request, res: Response): Promise<void> =>
  * POST /api/vpn/auto-fix-ips
  *
  * Reads the VPN IP map, fuzzy-matches client names to router names in
- * Supabase, updates bridge_ip to the 10.8.0.x VPN IP, then pings each
+ * Supabase, updates vpn_ip to the matched VPN IP, then pings each
  * updated router to verify the connection immediately.
  * ══════════════════════════════════════════════════════════════════════════ */
 function normalize(s: string): string {
@@ -519,7 +519,7 @@ function generateOvpn(username: string, type: "main" | "proxy" = "main"): string
 
 /* ══════════════════════════════════════════════════════════════════════════
  * IP ALLOCATION — picks the next free 10.8.0.x address that is not used
- * by any VPN user (assigned_ip) or any router (bridge_ip) across ALL admins
+ * by any VPN user (assigned_ip) or any router VPN field across ALL admins
  * so IPs are globally unique, not just per-admin.
  * ══════════════════════════════════════════════════════════════════════════ */
 /* prefix for each pool:
@@ -544,13 +544,16 @@ async function collectUsedVpnIps(url: string, key: string, subnet: "10.8" | "10.
 
   /* Router IPs in this subnet */
   try {
-    const r = await fetch(`${url}/rest/v1/isp_routers?select=bridge_ip,proxy_ip`, {
+    const r = await fetch(`${url}/rest/v1/isp_routers?select=bridge_ip,vpn_ip,proxy_ip`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
     if (r.ok) {
-      const rows = (await r.json()) as { bridge_ip: string | null; proxy_ip: string | null }[];
+      const rows = (await r.json()) as { bridge_ip: string | null; vpn_ip: string | null; proxy_ip: string | null }[];
       for (const row of rows) {
+        /* Keep legacy bridge_ip assignments reserved while new management
+           addresses live in vpn_ip. */
         if (row.bridge_ip?.startsWith(subnet + ".")) used.add(row.bridge_ip);
+        if (row.vpn_ip?.startsWith(subnet + "."))    used.add(row.vpn_ip);
         if (row.proxy_ip?.startsWith(subnet + "."))  used.add(row.proxy_ip);
       }
     }

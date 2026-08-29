@@ -27,6 +27,7 @@ interface DbRouter {
   name: string;
   host: string;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
   status: string;
@@ -93,7 +94,7 @@ async function fetchPools(): Promise<DbPool[]> {
 async function fetchRouters(): Promise<DbRouter[]> {
   const { data } = await supabase
     .from("isp_routers")
-    .select("id,name,host,bridge_ip,router_username,router_secret,status")
+    .select("id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status")
     .eq("admin_id", ADMIN_ID)
     .order("name");
   return (data ?? []) as DbRouter[];
@@ -105,11 +106,11 @@ async function syncRouterPools(
 ): Promise<boolean> {
   const rPools = pools.filter(p => p.router_id === router.id);
   if (!rPools.length) { log(`  ℹ No pools assigned to ${router.name}`); return true; }
-  const host = router.host || router.bridge_ip || "";
+  const host = router.host || router.vpn_ip || "";
   if (!host) { log(`  ⚠ ${router.name} has no IP — skipped`); return false; }
   log(`\n▶ ${router.name} (${host})`);
   const payload = {
-    host, bridgeIp: router.bridge_ip || undefined,
+    host, bridgeIp: router.vpn_ip || undefined,
     username: router.router_username || "admin",
     password: router.router_secret || "",
     pools: rPools.map(p => ({ name: p.name, rangeStart: p.range_start, rangeEnd: p.range_end })),
@@ -465,7 +466,7 @@ export default function IPPool() {
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{router.name}</span>
                         </div>
                         <div style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", marginTop: "0.18rem", paddingLeft: "1.05rem" }}>
-                          {router.host || router.bridge_ip || "No router IP"}
+                          {router.host || router.vpn_ip || "No router IP"}
                         </div>
                       </div>
                       <span style={{ color: router.status === "online" ? "#4ade80" : "var(--isp-text-muted)", fontSize: "0.65rem", fontWeight: 700, whiteSpace: "nowrap" }}>
@@ -725,7 +726,7 @@ export default function IPPool() {
                   <option value="">— unassigned —</option>
                   {routers.map(r => (
                     <option key={r.id} value={r.id}>
-                      {r.name} {r.status === "online" ? "🟢" : "🔴"} — {r.host || r.bridge_ip || "no IP"}
+                      {r.name} {r.status === "online" ? "🟢" : "🔴"} — {r.host || r.vpn_ip || "no IP"}
                     </option>
                   ))}
                 </select>

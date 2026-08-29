@@ -82,7 +82,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
   const defaultUser = router.router_username || router.name || "admin";
   const defaultPass = router.router_secret   || DEFAULT_PASSWORD;
 
-  const [host,     setHost]     = useState(router.host || router.bridge_ip || "");
+  const [host,     setHost]     = useState(router.host || router.vpn_ip || "");
   const [user,     setUser]     = useState(defaultUser);
   const [pass,     setPass]     = useState(defaultPass);
   const [showPass, setShowPass] = useState(false);
@@ -94,7 +94,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
 
   /* Reset fields if router prop changes */
   useEffect(() => {
-    setHost(router.host || router.bridge_ip || "");
+    setHost(router.host || router.vpn_ip || "");
     setUser(router.router_username || router.name || "admin");
     setPass(router.router_secret   || DEFAULT_PASSWORD);
     setProbe(null);
@@ -137,7 +137,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
           host:     testHost,
           username: user.trim() || "admin",
           password: pass,
-          bridgeIp: router.bridge_ip ?? undefined,
+          bridgeIp: router.vpn_ip ?? undefined,
         }),
       });
       const data = await res.json() as ProbeResult;
@@ -338,8 +338,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
                 </div>
                 {[
                   "/ip service set api enabled=yes",
-                  `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="OcholaNet API" place-before=0`,
-                  `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${router.bridge_ip ?? "192.168.88.0"}/24 action=accept comment="OcholaNet API" place-before=0`,
+                  `/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="OcholaNet API" place-before=0`,
                 ].map((cmd, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.375rem" }}>
                     <code style={{ flex: 1, fontFamily: "monospace", fontSize: "0.7rem", color: "#a3e635", background: "rgba(0,0,0,0.25)", padding: "0.25rem 0.5rem", borderRadius: 5, wordBreak: "break-all" }}>{cmd}</code>
@@ -364,7 +363,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
 /* ─── Access Panel (WebFig / Winbox dropdown) ─────────────────── */
 function AccessPanel({ router, onClose }: { router: DbRouter; onClose: () => void }) {
   const ref  = useRef<HTMLDivElement>(null);
-  const host = router.host || router.bridge_ip || "";
+  const host = router.host || router.vpn_ip || "";
   const user = router.router_username || "admin";
   const pass = router.router_secret   || "";
 

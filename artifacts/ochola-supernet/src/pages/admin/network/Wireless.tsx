@@ -10,7 +10,7 @@ import {
 
 /* ══════════════════════════ Types ══════════════════════════ */
 interface DbRouter {
-  id: number; name: string; host: string; bridge_ip: string | null;
+  id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
   status: string; ros_version: string;
 }
 
@@ -274,7 +274,7 @@ export default function Wireless() {
     queryKey: ["isp_routers_wireless", ADMIN_ID],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("isp_routers").select("id,name,host,bridge_ip,status,ros_version").eq("admin_id", ADMIN_ID);
+        .from("isp_routers").select("id,name,host,bridge_ip,vpn_ip,status,ros_version").eq("admin_id", ADMIN_ID);
       if (error) throw error;
       return (data ?? []) as DbRouter[];
     },
@@ -355,7 +355,7 @@ export default function Wireless() {
               {routers.length === 0 && !loadingRouters && <option>No routers found</option>}
               {routers.map(r => (
                 <option key={r.id} value={r.id}>
-                  {r.name} — {r.host || r.bridge_ip || "no IP"} {r.status === "online" ? "🟢" : "🔴"}
+                  {r.name} — {r.host || r.vpn_ip || "no IP"} {r.status === "online" ? "🟢" : "🔴"}
                 </option>
               ))}
             </select>

@@ -1276,10 +1276,12 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     bridgeIp?: string; routerId?: number;
   };
 
-  /* Accept bridgeIp as a fallback when host is absent */
-  const primaryHost = host || bridgeIp || "";
+  /* Keep the request field for compatibility, but never use the router's
+     192.168.88.x LAN gateway as a tunnel endpoint. */
+  const validVpnIp = isRouterVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : "";
+  const primaryHost = host || validVpnIp || "";
   if (!primaryHost || !bridge) {
-    res.status(400).json({ ok: false, logs: ["❌ host/bridgeIp and bridge name are required"], error: "host and bridge are required" });
+    res.status(400).json({ ok: false, logs: ["❌ public host or 10.8.5.x management VPN IP and bridge name are required"], error: "public host or management VPN IP and bridge are required" });
     return;
   }
 
@@ -1304,8 +1306,9 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
       await withTimeout(conn.connect(), 12000);
       log(`✓ Connected to ${primaryHost}`);
     } catch (directErr) {
-      /* If primaryHost is already the bridgeIp, or bridgeIp is different, try it */
-      const altHost = bridgeIp && bridgeIp !== primaryHost ? bridgeIp : null;
+      /* If primaryHost is already the management VPN IP, or the VPN IP is
+         different, try it as the alternate path. */
+      const altHost = validVpnIp && validVpnIp !== primaryHost ? validVpnIp : null;
       if (altHost) {
         conn = makeConn(altHost, username, password);
         await withTimeout(conn.connect(), 12000);
@@ -2015,8 +2018,8 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
     /* ── VPN IP auto-save ──────────────────────────────────────────
        Even when heartbeat arrives over WAN, the router may be
        connected via VPN.  Read the OpenVPN status file and, if
-       we find a VPN IP for this router's WAN IP, save it as
-       bridge_ip so the bridge-ports endpoint can use the tunnel.
+       we find a management VPN IP for this router's WAN IP, save it as
+       vpn_ip so the bridge-ports endpoint can use the tunnel.
     ── */
     if (row && isPublicIp(srcIp)) {
       const vpnClients = readVpnClients();

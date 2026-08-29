@@ -47,7 +47,7 @@ function RouterErrorPanel({ error }: { error: string }) {
     hint   = "Open Winbox → New Terminal and run these two commands:";
     cmds   = [
       "/ip service enable api",
-      "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+       "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
     ];
   } else if (isNoVpn) {
     title  = "Router Not Reachable (VPN Down?)";
@@ -58,7 +58,7 @@ function RouterErrorPanel({ error }: { error: string }) {
     hint = "Run these commands in Winbox → New Terminal to enable the API:";
     cmds = [
       "/ip service enable api",
-      "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+      "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
     ];
   }
 
@@ -130,13 +130,13 @@ interface PortsPayload {
 interface SbRouter {
   id: number; name: string; host: string; status: string;
   router_username: string; router_secret: string | null;
-  bridge_ip: string | null;
+  bridge_ip: string | null; vpn_ip: string | null;
 }
 
 interface UnifiedRouter {
   key: string; id: number; name: string;
   host: string; router_username: string; router_secret: string;
-  bridge_ip: string | null; source: "supabase"; status: string;
+  bridge_ip: string | null; vpn_ip: string | null; source: "supabase"; status: string;
 }
 
 /* ── Classify an interface name into a purpose type ── */
@@ -315,7 +315,7 @@ export default function BridgePorts() {
       try {
         const { data } = await supabase
           .from("isp_routers")
-          .select("id,name,host,status,router_username,router_secret,bridge_ip")
+          .select("id,name,host,status,router_username,router_secret,bridge_ip,vpn_ip")
           .eq("admin_id", ADMIN_ID);
         return (data ?? []) as SbRouter[];
       } catch { return []; }
@@ -332,6 +332,7 @@ export default function BridgePorts() {
     router_username: r.router_username ?? "admin",
     router_secret:   r.router_secret ?? "",
     bridge_ip:       r.bridge_ip ?? null,
+    vpn_ip:          r.vpn_ip ?? null,
     source:          "supabase" as const,
     status:          r.status,
   }));
@@ -379,7 +380,7 @@ export default function BridgePorts() {
   const activeRouter = routers.find(r => r.key === selectedKey) ?? null;
 
   function effectiveHost(r: UnifiedRouter): string {
-    return r.host || r.bridge_ip || "";
+    return r.host || r.vpn_ip || "";
   }
 
   async function fetchPortsForRouter(r: UnifiedRouter) {
@@ -402,7 +403,7 @@ export default function BridgePorts() {
           host,
           username: r.router_username || "admin",
           password: r.router_secret   || "",
-          bridgeIp: r.bridge_ip || undefined,
+          bridgeIp: r.vpn_ip || undefined,
           routerCn: cn,
           routerId: r.id,
         }),
@@ -457,7 +458,7 @@ export default function BridgePorts() {
           bridge:   selectedBridge,
           addPorts, removePorts,
           desiredPorts: [...selectedPorts],
-          bridgeIp: activeRouter.bridge_ip || undefined,
+          bridgeIp: activeRouter.vpn_ip || undefined,
           routerId: activeRouter.id,
         }),
       });
@@ -506,7 +507,7 @@ export default function BridgePorts() {
           username: activeRouter.router_username || "admin",
           password: activeRouter.router_secret   || "",
           bridgeName: "hotspot-bridge",
-          bridgeIp: activeRouter.bridge_ip || undefined,
+           bridgeIp: activeRouter.vpn_ip || undefined,
         }),
       });
       if (!res.ok && !res.headers.get("content-type")?.includes("json")) {
@@ -527,7 +528,7 @@ export default function BridgePorts() {
     }
   }
 
-  const connectedIp = connectedVia || activeRouter?.bridge_ip || activeRouter?.host || "";
+  const connectedIp = connectedVia || activeRouter?.vpn_ip || activeRouter?.host || "";
   const profileName = activeRouter ? `${slugify(activeRouter.name)}.ovpn` : "";
   const bridgeLabel = selectedBridge ? `*${selectedBridge.replace(/hotspot-?/i, "").replace(/bridge/i, "B") || "B"}` : "*B";
 

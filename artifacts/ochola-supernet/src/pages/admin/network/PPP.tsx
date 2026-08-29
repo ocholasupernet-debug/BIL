@@ -123,7 +123,7 @@ function RouterErrorActions({
 
   const fallbackCmds = [
     "/ip service enable api",
-    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
   ];
 
   async function handleFix() {

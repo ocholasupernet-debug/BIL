@@ -196,9 +196,9 @@ export function RouterLiveStats({
               /* Restrict to VPN subnet only — never open to 0.0.0.0/0 */
               cmds: [
                 "/ip service enable api",
-                "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept comment=\"ISP-API\" place-before=0",
+                "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment=\"ISP-API\" place-before=0",
               ],
-              note: "Replace 10.8.0.0/16 with your VPS VPN subnet if different. Download the auto-generated script below for a complete, ready-to-paste ruleset.",
+              note: "The router-management VPN uses 10.8.5.0/24. Download the auto-generated script below for a complete, ready-to-paste ruleset.",
             }
           : null;
 

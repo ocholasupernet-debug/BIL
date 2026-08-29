@@ -1640,7 +1640,7 @@ export async function testConnection(
     warnings.push(
       `Host ${creds.host} is a private/local IP. This will only work if the VPS ` +
       `is on the same LAN. For remote access, use the router's public IP or ` +
-      `configure a VPN tunnel and set bridge_ip.`
+      `configure the router-management VPN and set vpn_ip.`
     );
   }
   if (!creds.host && creds.bridgeIp) {

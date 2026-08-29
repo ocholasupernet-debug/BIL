@@ -25,6 +25,7 @@ interface DbRouter {
   host: string;
   ip_address: string | null;
   bridge_ip: string | null;
+  vpn_ip: string | null;
   proxy_ip: string | null;
   bridge_interface: string | null;
   main_bridge_interface: string | null;
@@ -130,7 +131,7 @@ function RouterStatusCard({ router, onTest }: { router: DbRouter; onTest: (id: n
           <div>
             <p style={{ margin: 0, fontWeight: 800, fontSize: 14, color: "var(--isp-text)" }}>{router.name}</p>
             <p style={{ margin: 0, fontSize: 11, color: "var(--isp-text-muted)", fontFamily: "monospace" }}>
-              {router.host || router.bridge_ip || "No IP configured"}
+              {router.host || router.vpn_ip || "No IP configured"}
             </p>
           </div>
         </div>
@@ -159,6 +160,7 @@ interface RouterForm {
   name: string;
   host: string;
   bridge_ip: string;
+  vpn_ip: string;
   proxy_ip: string;
   bridge_interface: string;
   main_bridge_interface: string;
@@ -170,7 +172,7 @@ interface RouterForm {
 
 const EMPTY_FORM: RouterForm = {
   name: "", host: "",
-  bridge_ip: "", proxy_ip: "",
+  bridge_ip: "", vpn_ip: "", proxy_ip: "",
   bridge_interface: "", main_bridge_interface: "bridge",
   router_username: "admin", router_secret: "", api_port: 8728, description: "",
 };
@@ -247,7 +249,7 @@ function RouterForm({
   }
 
   async function handleTest() {
-    if (!form.host && !form.bridge_ip) {
+    if (!form.host && !form.vpn_ip && !form.bridge_ip) {
       setTestResult({ ok: false, error: "Enter a MikroTik IP address first." });
       return;
     }
@@ -257,11 +259,11 @@ function RouterForm({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          host:      form.host || form.bridge_ip,
+          host:      form.host || form.vpn_ip || form.bridge_ip,
           port:      form.api_port || 8728,
           username:  form.router_username || "admin",
           password:  form.router_secret,
-          bridgeIp:  form.bridge_ip || undefined,
+          bridgeIp:  form.vpn_ip || undefined,
         }),
       });
       const j = await r.json() as TestResult;
@@ -294,7 +296,7 @@ function RouterForm({
 
   async function handleSave() {
     if (!form.name.trim()) { setSaveErr("Router name is required."); return; }
-    if (!form.host.trim() && !form.bridge_ip.trim()) { setSaveErr("Enter at least one IP address (public or VPN)."); return; }
+    if (!form.host.trim() && !form.vpn_ip.trim() && !form.bridge_ip.trim()) { setSaveErr("Enter a public IP, management VPN IP, or router LAN address."); return; }
     if (!form.router_username.trim()) { setSaveErr("API username is required."); return; }
     setSaving(true); setSaveErr("");
     try {
@@ -312,6 +314,7 @@ function RouterForm({
         name:                  form.name.trim(),
         host:                  form.host.trim(),
         bridge_ip:             form.bridge_ip.trim()             || null,
+        vpn_ip:                form.vpn_ip.trim()                || null,
         proxy_ip:              form.proxy_ip.trim()              || null,
         bridge_interface:      form.bridge_interface.trim()      || "hotspot-bridge",
         main_bridge_interface: form.main_bridge_interface.trim() || "bridge",
@@ -444,24 +447,41 @@ function RouterForm({
             </p>
           </div>
 
-          {/* 3 — Main VPN (remote access) */}
+          {/* 3 — Router management VPN */}
           <div style={{ padding: "13px 15px", borderRight: "1px solid rgba(37,99,235,0.1)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--isp-accent)", flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-accent)" }}>VPN Remote Access IP</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--isp-accent)" }}>Router Management VPN IP</span>
+            </div>
+            <input
+              value={form.vpn_ip}
+              onChange={e => set("vpn_ip", e.target.value)}
+              style={{ ...inp, fontSize: "0.8rem" }}
+              placeholder="e.g. 10.8.5.42"
+            />
+            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
+              Persistent management address assigned to this router (10.8.5.x, TCP port 1196). Used for remote API access.
+            </p>
+          </div>
+
+          {/* 4 — Router LAN/hotspot gateway */}
+          <div style={{ padding: "13px 15px", borderBottom: "1px solid rgba(37,99,235,0.1)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#64748b", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8" }}>Hotspot/LAN Gateway</span>
             </div>
             <input
               value={form.bridge_ip}
               onChange={e => set("bridge_ip", e.target.value)}
               style={{ ...inp, fontSize: "0.8rem" }}
-              placeholder="e.g. 10.8.0.6"
+              placeholder="e.g. 192.168.88.1"
             />
             <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
-              Main OpenVPN IP assigned to this router (10.8.0.x, port 1194). Used for remote API access.
+              Local customer-network address on the hotspot bridge. This is not a VPN tunnel address.
             </p>
           </div>
 
-          {/* 4 — Proxy VPN (ocholasuperproxy backup) */}
+          {/* 5 — Proxy VPN (ocholasuperproxy backup) */}
           <div style={{ padding: "13px 15px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fb923c", flexShrink: 0 }} />
@@ -493,7 +513,7 @@ function RouterForm({
           <div style={{ fontSize: 11, color: "#fbbf24", lineHeight: 1.6, flex: 1 }}>
             <strong>Firewall note:</strong> The VPS ({window.location.hostname || "your VPS"}) must be able to reach the MikroTik API port (8728/8729).
             On the router, allow: <code style={{ fontFamily: "monospace" }}>/ip firewall filter add chain=input src-address=VPS_IP protocol=tcp dst-port=8728 action=accept</code>.
-            If using OpenVPN, ensure the VPN tunnel is up and use the bridge IP (10.8.0.x).
+            If using the router-management OpenVPN, ensure the tunnel is up and use the management VPN IP (10.8.5.x).
             {routerId && (
               <FirewallScriptLink routerId={routerId} />
             )}
@@ -605,7 +625,7 @@ function AdminRouterCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <p style={{ margin: 0, fontWeight: 800, fontSize: 14, color: "var(--isp-text)" }}>{router.name}</p>
           <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--isp-text-muted)", fontFamily: "monospace" }}>
-            {router.host || "—"}{router.bridge_ip ? ` · VPN: ${router.bridge_ip}` : ""}
+            {router.host || "—"}{router.vpn_ip ? ` · Management VPN: ${router.vpn_ip}` : ""}
           </p>
         </div>
 
@@ -659,9 +679,9 @@ function AdminRouterCard({
                   ip: null,
                 },
                 {
-                  color: "var(--isp-accent)", label: "VPN Remote Access", role: "Main OpenVPN — port 1194",
+                   color: "var(--isp-accent)", label: "Router Management VPN", role: "OpenVPN — TCP port 1196",
                   value: "ovpn-out1",
-                  ip: router.bridge_ip || "—",
+                   ip: router.vpn_ip || "—",
                 },
                 {
                   color: "#fb923c", label: "Proxy (ocholasuperproxy)", role: "Backup OpenVPN — port 1195",
@@ -729,7 +749,7 @@ export default function RouterAPIConfig() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,admin_id,name,host,ip_address,bridge_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
+        .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
         .order("name");
       return (data ?? []) as DbRouter[];
@@ -769,6 +789,7 @@ export default function RouterAPIConfig() {
     name:                  editingRouter.name,
     host:                  editingRouter.host ?? "",
     bridge_ip:             editingRouter.bridge_ip ?? "",
+    vpn_ip:                editingRouter.vpn_ip ?? "",
     proxy_ip:              editingRouter.proxy_ip ?? "",
     bridge_interface:      editingRouter.bridge_interface ?? "",
     main_bridge_interface: editingRouter.main_bridge_interface ?? "bridge",

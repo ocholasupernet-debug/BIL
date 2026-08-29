@@ -134,7 +134,7 @@ function SyncFailedActions({
   const showFallback = fixResult && !fixResult.ok && fixResult.canConnect === false;
   const fallbackCmds = [
     "/ip service enable api",
-    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/16 action=accept place-before=0",
+    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
   ];
 
   return (
@@ -333,13 +333,13 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
   const { data: routers = [] } = useQuery<DbRouterMin[]>({
     queryKey: ["isp_routers_sync"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID);
+      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,vpn_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID);
       return (data ?? []) as DbRouterMin[];
     },
   });
 
   const selectedRouter = routers.find(r => r.id === selectedId) ?? null;
-  const canSync = !!selectedRouter && !!(selectedRouter.host || selectedRouter.bridge_ip);
+  const canSync = !!selectedRouter && !!(selectedRouter.host || selectedRouter.vpn_ip);
 
   const handleSync = async () => {
     if (!selectedRouter || !canSync) return;
@@ -347,8 +347,8 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
     setResult(null);
     try {
       const payload = {
-        host:     selectedRouter.host     || selectedRouter.bridge_ip || "",
-        bridgeIp: selectedRouter.bridge_ip || undefined,
+        host:     selectedRouter.host     || selectedRouter.vpn_ip || "",
+        bridgeIp: selectedRouter.vpn_ip || undefined,
         routerId: selectedRouter.id,
         username: selectedRouter.router_username || "admin",
         password: selectedRouter.router_secret   || "",
@@ -396,7 +396,7 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         >
           <option value="" disabled>Select router…</option>
           {routers.map(r => (
-            <option key={r.id} value={r.id}>{r.name} — {r.host || r.bridge_ip || "?"} [{r.status === "online" || r.status === "connected" ? "online" : "offline"}]</option>
+            <option key={r.id} value={r.id}>{r.name} — {r.host || r.vpn_ip || "?"} [{r.status === "online" || r.status === "connected" ? "online" : "offline"}]</option>
           ))}
         </select>
 
@@ -467,8 +467,8 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           logs={result?.logs ?? (syncing ? ["▶ Connecting…"] : [])}
           ok={result ? result.ok : null}
           error={result?.error}
-          host={selectedRouter?.host || selectedRouter?.bridge_ip || ""}
-          bridgeIp={selectedRouter?.bridge_ip ?? undefined}
+          host={selectedRouter?.host || selectedRouter?.vpn_ip || ""}
+          bridgeIp={selectedRouter?.vpn_ip ?? undefined}
           username={selectedRouter?.router_username || "admin"}
           password={selectedRouter?.router_secret || ""}
           onClose={() => setResult(null)}

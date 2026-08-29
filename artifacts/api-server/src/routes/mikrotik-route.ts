@@ -1052,11 +1052,11 @@ router.post("/router/test-raw", async (req, res): Promise<void> => {
     return;
   }
 
-  /* Auto-resolve VPN tunnel IP from the OpenVPN status file.
-     If bridgeIp is already a VPN IP (10.8.x.x) use it as-is.
+  /* Auto-resolve management VPN IP from the OpenVPN status file.
+     If bridgeIp is already a management VPN IP (10.8.5.x) use it as-is.
      Otherwise look up the tunnel IP by the router's WAN/host IP so
      withConn() can try the VPN path first (avoids 6-second WAN timeout). */
-  const isVpnAddr = (ip: string) => /^10\.8\./.test(ip);
+  const isVpnAddr = (ip: string) => /^10\.8\.5\./.test(ip);
   let resolvedBridgeIp = bridgeIp?.trim() || undefined;
   if (!resolvedBridgeIp || !isVpnAddr(resolvedBridgeIp)) {
     const vpnClients = readVpnClients();
