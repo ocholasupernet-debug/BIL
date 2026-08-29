@@ -160,9 +160,12 @@ const navSections: NavSection[] = [
     label: "Admin",
     visibilityKey: "admin",
     items: [
-      {
-        name: "Message Templates", icon: Bell, href: "/admin/message-templates", visibilityKey: "admin.notifications",
-      },
+       {
+         name: "Message Templates", icon: Bell, href: "/admin/message-templates", visibilityKey: "admin.notifications",
+       },
+       {
+         name: "Platform Notifications", icon: Bell, href: "/admin/notifications", visibilityKey: "admin.notifications",
+       },
       {
         name: "Logs", icon: BookOpen, visibilityKey: "admin.logs",
         children: [
@@ -430,7 +433,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
 
-            <button className="header-btn" title="Notifications" aria-label="Open notifications">
+            <button className="header-btn" onClick={() => { window.location.href = "/admin/notifications"; }} title="Notifications" aria-label="Open notifications">
               <Bell size={15} />
             </button>
 

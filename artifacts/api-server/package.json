@@ -11,7 +11,8 @@
     "test:migration": "node --test tests/router-migration.test.mjs",
     "test:vpn-fallback": "node --test tests/router-vpn-fallback.test.mjs",
     "test:pppoe-portal": "node --test tests/pppoe-portal-reference.test.mjs",
-    "test:payment-routing": "node --test tests/payment-routing.test.mjs"
+    "test:payment-routing": "node --test tests/payment-routing.test.mjs",
+    "test:storage-governance": "node --test tests/storage-governance.test.mjs"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",

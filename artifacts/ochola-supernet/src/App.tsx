@@ -57,6 +57,7 @@ import SuperAdminBackups from "./pages/super-admin/Backups";
 import SuperAdminApiIntegrations from "./pages/super-admin/ApiIntegrations";
 import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
 import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
+import SuperAdminStorage from "./pages/super-admin/Storage";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -68,6 +69,7 @@ import AdminSettings from "./pages/admin/AdminSettings";
 import AdminInvoices from "./pages/admin/Invoices";
 import AdminCustomerBalance from "./pages/admin/CustomerBalance";
 import AdminMessageTemplates from "./pages/admin/MessageTemplates";
+import PlatformNotifications from "./pages/admin/PlatformNotifications";
 import AdminRegister from "./pages/admin/AdminRegister";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 
@@ -164,6 +166,7 @@ function Router() {
       <Route path="/admin/invoices" component={AdminInvoices} />
       <Route path="/admin/balance" component={AdminCustomerBalance} />
       <Route path="/admin/message-templates" component={AdminMessageTemplates} />
+      <Route path="/admin/notifications" component={PlatformNotifications} />
       <Route path="/admin/settings" component={AdminSettings} />
       
       {/* VPN — inside admin panel */}
@@ -203,6 +206,7 @@ function Router() {
       <Route path="/super-admin/api"            component={SuperAdminApiIntegrations}  />
       <Route path="/super-admin/limits"         component={SuperAdminSystemLimits}     />
       <Route path="/super-admin/impersonate"    component={SuperAdminImpersonate}      />
+      <Route path="/super-admin/storage"         component={SuperAdminStorage}          />
       <Route path="/super-admin/login" component={SuperAdminLogin} />
       
       <Route component={NotFound} />

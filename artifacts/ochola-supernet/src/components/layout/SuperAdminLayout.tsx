@@ -3,9 +3,9 @@ import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
+   LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
-  Plug, Gauge, LogOut, Menu, ChevronRight,
+   Plug, Gauge, LogOut, Menu, ChevronRight, HardDrive,
   Globe, LogIn, Sun, Moon, Clock, PanelLeftClose,
 } from "lucide-react";
 
@@ -58,6 +58,7 @@ const NAV: NavSection[] = [
     label: "Platform",
     items: [
       { name: "Backups", href: "/super-admin/backups", icon: Database },
+      { name: "Storage", href: "/super-admin/storage", icon: HardDrive },
       { name: "API & Integrations", href: "/super-admin/api", icon: Plug },
     ],
   },
@@ -80,6 +81,7 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/notifications", title: "Notifications" },
   { prefix: "/super-admin/automation", title: "Automation" },
   { prefix: "/super-admin/backups", title: "Backups" },
+  { prefix: "/super-admin/storage", title: "Storage governance" },
   { prefix: "/super-admin/api", title: "API and integrations" },
 ];
 

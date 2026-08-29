@@ -55,6 +55,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_registration_payments.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_secure_daraja_settings.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_service_payment_routing.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_tenant_storage_governance.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

@@ -27,6 +27,7 @@ import adminPageVisibilityRouter from "./admin-page-visibility-route.js";
 import dashboardPreferencesRouter from "./dashboard-preferences-route.js";
 import typographyRouter from "./typography-route.js";
 import pppoePortalRouter from "./pppoe-portal-route.js";
+import storageGovernanceRouter from "./storage-governance-route.js";
 
 const router: IRouter = Router();
 
@@ -58,5 +59,6 @@ router.use(adminPageVisibilityRouter);
 router.use(dashboardPreferencesRouter);
   router.use(typographyRouter);
   router.use(pppoePortalRouter);
+  router.use(storageGovernanceRouter);
 
 export default router;
