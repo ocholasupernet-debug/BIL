@@ -37,7 +37,6 @@ if ! has_wildcard_certificate; then
     --expand \
     --keep-until-expiring \
     -d "${DOMAIN}" \
-    -d "www.${DOMAIN}" \
     -d "*.${DOMAIN}"
 fi
 
