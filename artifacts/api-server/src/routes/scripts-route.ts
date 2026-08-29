@@ -262,18 +262,40 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
   ].join("\r\n");
 }
 
+/* ── Verify a RouterOS download created a usable file.
+   RouterOS can report a successful fetch even when the destination is a
+   directory or an empty result. Keep this inside the fetch's :do block so the
+   caller's on-error handler reports the exact destination. ── */
+function verifyFetchedFile(pathExpression: string, label: string): string {
+  return `:local fetchedFile [/file find name=${pathExpression}]
+:if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
+:local fetchedType [/file get $fetchedFile type]
+:if ($fetchedType = "directory") do={ :error "download destination is a directory: ${label}" }
+:local fetchedSize [/file get $fetchedFile size]
+:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }`;
+}
+
 /* ── Safe fetch (static path): wraps /tool fetch in :do {} on-error={}.
-   The file simply won't be updated if the fetch fails — prior versions
-   on flash remain intact. ── */
+   The destination is kept on the router and verified so a pasted installer
+   leaves a visible copy in Files instead of silently discarding failures. ── */
 function safeFetch(url: string, dst: string): string {
-  return `:do { /tool fetch url="${url}" dst-path="${dst}" mode=https check-certificate=no } on-error={}`;
+  return `:do {
+    /tool fetch url="${url}" dst-path="${dst}" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"${dst}"`, dst)}
+  } on-error={ :put ("  WARN: ${dst} download failed at ${dst} - " . $error) }`;
 }
 
 /* ── Portal file fetch: uses pre-computed $hsdir variable and reports
-   exactly which file failed by name, so silent failures are visible.
-   filename is the short name shown in WARN output.  ── */
+   exactly which file failed by name and resolved destination, so silent
+   failures are visible. Each path variable is unique because RouterOS local
+   variables share the surrounding script scope. ── */
 function portalFetch(url: string, subpath: string, filename: string): string {
-  return `:do { /tool fetch url="${url}" dst-path=($hsdir . "/${subpath}") mode=https check-certificate=no } on-error={ :put "  WARN: ${filename} failed" }`;
+  const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  return `:local ${variableName} ($hsdir . "/${subpath}")
+:do {
+    /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`$${variableName}`, filename)}
+  } on-error={ :put ("  WARN: ${filename} failed at " . $${variableName} . " - " . $error) }`;
 }
 
 /* ── Safe remove: converts "/MENU remove [find COND]" into
@@ -483,18 +505,22 @@ function buildMainhotspotRsc(
   const openVpnSelection = routerVpnUrl
     ? `:set openVpnUrl "${safeRouterVpnUrl}"`
     : `:if ($majorVersion = 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
-  const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => `:if (!$vpnConfigured) do={
+  const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
+    const tempFileName = `${fileName}.download`;
+    return `:if (!$vpnConfigured) do={
     :do {
         :global ocholaVpnChildError
         :set ocholaVpnChildError ""
         $pg 1 "vpn-${protocol}" "downloading" ""
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
-        :do { /file remove [find name="${fileName}"] } on-error={}
-        /tool fetch url=$${urlVariable} dst-path="${fileName}" mode=https check-certificate=no
+        :do { /file remove [find name="${tempFileName}"] } on-error={}
+        /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes mode=https check-certificate=no
+        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
         :delay 2s
-        /import "${fileName}"
+        /import "${tempFileName}"
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="${fileName}"] } on-error={}
+        /file set [find name="${tempFileName}"] name="${fileName}"
         :set vpnConfigured true
         :set vpnProtocol "${protocol}"
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
@@ -508,9 +534,10 @@ function buildMainhotspotRsc(
         :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
         $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
-        :do { /file set [find name="${fileName}"] name="failed-${fileName}" } on-error={}
+        :do { /file set [find name="${tempFileName}"] name="failed-${fileName}" } on-error={}
     }
 }`;
+  };
   const wireGuardAttempt = routerWireGuardUrl
     ? `:if ($majorVersion = 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n} else={ :put "      WIREGUARD skipped: RouterOS 7 or newer is required." }`
     : `:put "      WIREGUARD skipped: server-side WireGuard fallback is not configured."`;
@@ -532,7 +559,7 @@ function buildMainhotspotRsc(
 #   7. syncfull.rsc     -> syncfull.rsc       (required)
 #   8. logpush.rsc and seclogpush.rsc are optional diagnostics.
 # Hotspot portal files are downloaded by the per-router configuration script
-# into the selected flash/hotspot or disk1/hotspot directory.
+# into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
 
@@ -585,100 +612,110 @@ ${ipsecAttempt}
 :do {
     $pg 2 "hotspot" "downloading" ""
     :put "[2/7] Downloading hotspot configuration..."
-    :do { /file remove [find name=hotspotsetup.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https check-certificate=no
+    :do { /file remove [find name="hotspotsetup.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path="hotspotsetup.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"hotspotsetup.rsc.download"`, "hotspotsetup.rsc.download")}
     :delay 2s
     :put "      Applying hotspot configuration..."
-    /import hotspotsetup.rsc
-    :do { /file remove hotspotsetup.rsc } on-error={}
-    :put "      Hotspot configuration applied."
+    /import "hotspotsetup.rsc.download"
+    :do { /file remove [find name="hotspotsetup.rsc"] } on-error={}
+    /file set [find name="hotspotsetup.rsc.download"] name="hotspotsetup.rsc"
+    :put "      Hotspot configuration applied; saved as hotspotsetup.rsc."
     $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
     $pg 2 "hotspot" "failed" $error
     :do { /file remove [find name=failed-hotspotsetup.rsc] } on-error={}
-    :do { /file set [find name=hotspotsetup.rsc] name=failed-hotspotsetup.rsc } on-error={}
+    :do { /file set [find name=hotspotsetup.rsc.download] name=failed-hotspotsetup.rsc } on-error={}
 }
 
 # --- PPPoE configuration ------------------------------------------------------
 :do {
     $pg 3 "pppoe" "downloading" ""
     :put "[3/7] Downloading PPPoE configuration..."
-    :do { /file remove [find name=pppoesetup.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https check-certificate=no
+    :do { /file remove [find name="pppoesetup.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path="pppoesetup.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"pppoesetup.rsc.download"`, "pppoesetup.rsc.download")}
     :delay 2s
     :put "      Applying PPPoE configuration..."
-    /import pppoesetup.rsc
-    :do { /file remove pppoesetup.rsc } on-error={}
-    :put "      PPPoE configuration applied."
+    /import "pppoesetup.rsc.download"
+    :do { /file remove [find name="pppoesetup.rsc"] } on-error={}
+    /file set [find name="pppoesetup.rsc.download"] name="pppoesetup.rsc"
+    :put "      PPPoE configuration applied; saved as pppoesetup.rsc."
     $pg 3 "pppoe" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
     $pg 3 "pppoe" "failed" $error
     :do { /file remove [find name=failed-pppoesetup.rsc] } on-error={}
-    :do { /file set [find name=pppoesetup.rsc] name=failed-pppoesetup.rsc } on-error={}
+    :do { /file set [find name=pppoesetup.rsc.download] name=failed-pppoesetup.rsc } on-error={}
 }
 
 # --- Users configuration ------------------------------------------------------
 :do {
     $pg 4 "users" "downloading" ""
     :put "[4/7] Downloading users configuration..."
-    :do { /file remove [find name=users.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/users.rsc" dst-path=users.rsc mode=https check-certificate=no
+    :do { /file remove [find name="users.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/users.rsc" dst-path="users.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"users.rsc.download"`, "users.rsc.download")}
     :delay 2s
     :put "      Applying users configuration..."
-    /import users.rsc
-    :do { /file remove users.rsc } on-error={}
-    :put "      Users configuration applied."
+    /import "users.rsc.download"
+    :do { /file remove [find name="users.rsc"] } on-error={}
+    /file set [find name="users.rsc.download"] name="users.rsc"
+    :put "      Users configuration applied; saved as users.rsc."
     $pg 4 "users" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [users.rsc] FAILED: " . $error)
     $pg 4 "users" "failed" $error
     :do { /file remove [find name=failed-users.rsc] } on-error={}
-    :do { /file set [find name=users.rsc] name=failed-users.rsc } on-error={}
+    :do { /file set [find name=users.rsc.download] name=failed-users.rsc } on-error={}
 }
 
 # --- Sync-users firewalls -----------------------------------------------------
 :do {
     $pg 5 "syncusers" "downloading" ""
     :put "[5/7] Downloading sync-users firewalls..."
-    :do { /file remove [find name=syncusers.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path=syncusers.rsc mode=https check-certificate=no
+    :do { /file remove [find name="syncusers.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path="syncusers.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"syncusers.rsc.download"`, "syncusers.rsc.download")}
     :delay 2s
     :put "      Applying sync-users firewalls..."
-    /import syncusers.rsc
-    :do { /file remove syncusers.rsc } on-error={}
-    :put "      Sync-users firewalls applied."
+    /import "syncusers.rsc.download"
+    :do { /file remove [find name="syncusers.rsc"] } on-error={}
+    /file set [find name="syncusers.rsc.download"] name="syncusers.rsc"
+    :put "      Sync-users firewalls applied; saved as syncusers.rsc."
     $pg 5 "syncusers" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [syncusers.rsc] FAILED: " . $error)
     $pg 5 "syncusers" "failed" $error
     :do { /file remove [find name=failed-syncusers.rsc] } on-error={}
-    :do { /file set [find name=syncusers.rsc] name=failed-syncusers.rsc } on-error={}
+    :do { /file set [find name=syncusers.rsc.download] name=failed-syncusers.rsc } on-error={}
 }
 
 # --- Heartbeat firewalls ------------------------------------------------------
 :do {
     $pg 6 "heartbeat" "downloading" ""
     :put "[6/7] Downloading heartbeat firewalls..."
-    :do { /file remove [find name=heartbeat.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path=heartbeat.rsc mode=https check-certificate=no
+    :do { /file remove [find name="heartbeat.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path="heartbeat.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"heartbeat.rsc.download"`, "heartbeat.rsc.download")}
     :delay 2s
     :put "      Applying heartbeat firewalls..."
-    /import heartbeat.rsc
-    :do { /file remove heartbeat.rsc } on-error={}
-    :put "      Heartbeat firewalls applied."
+    /import "heartbeat.rsc.download"
+    :do { /file remove [find name="heartbeat.rsc"] } on-error={}
+    /file set [find name="heartbeat.rsc.download"] name="heartbeat.rsc"
+    :put "      Heartbeat firewalls applied; saved as heartbeat.rsc."
     $pg 6 "heartbeat" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
     $pg 6 "heartbeat" "failed" $error
     :do { /file remove [find name=failed-heartbeat.rsc] } on-error={}
-    :do { /file set [find name=heartbeat.rsc] name=failed-heartbeat.rsc } on-error={}
+    :do { /file set [find name=heartbeat.rsc.download] name=failed-heartbeat.rsc } on-error={}
 }
 
 # --- Router-specific heartbeat endpoint ---------------------------------------
@@ -699,20 +736,22 @@ ${safeHeartbeatUrl ? `:do {
 :do {
     $pg 7 "syncfull" "downloading" ""
     :put "[7/7] Downloading sync-full script..."
-    :do { /file remove [find name=syncfull.rsc] } on-error={}
-    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path=syncfull.rsc mode=https check-certificate=no
+    :do { /file remove [find name="syncfull.rsc.download"] } on-error={}
+    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path="syncfull.rsc.download" keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"syncfull.rsc.download"`, "syncfull.rsc.download")}
     :delay 2s
     :put "      Applying sync-full script..."
-    /import syncfull.rsc
-    :do { /file remove syncfull.rsc } on-error={}
-    :put "      Sync-full script applied."
+    /import "syncfull.rsc.download"
+    :do { /file remove [find name="syncfull.rsc"] } on-error={}
+    /file set [find name="syncfull.rsc.download"] name="syncfull.rsc"
+    :put "      Sync-full script applied; saved as syncfull.rsc."
     $pg 7 "syncfull" "applied" ""
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [syncfull.rsc] FAILED: " . $error)
     $pg 7 "syncfull" "failed" $error
     :do { /file remove [find name=failed-syncfull.rsc] } on-error={}
-    :do { /file set [find name=syncfull.rsc] name=failed-syncfull.rsc } on-error={}
+    :do { /file set [find name=syncfull.rsc.download] name=failed-syncfull.rsc } on-error={}
 }
 
 # --- Preserve the personalized installer on daily updates ---------------------
@@ -729,20 +768,22 @@ ${safeInstallerUrl ? `:do {
 # --- Optional diagnostic logging ----------------------------------------------
 :do {
     :put "Downloading diagnostic log-push script..."
-    /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"logpush.rsc"`, "logpush.rsc")}
     :delay 2s
     /import logpush.rsc
-    :do { /file remove logpush.rsc } on-error={}
-} on-error={ :put "Diagnostic log-push install skipped (non-fatal)" }
+    :put "Diagnostic log-push installed; saved as logpush.rsc."
+} on-error={ :put ("Diagnostic log-push install skipped; check logpush.rsc - " . $error) }
 
 # --- Optional API hardening ----------------------------------------------------
 :do {
     :put "Downloading API security script..."
-    /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc keep-result=yes mode=https check-certificate=no
+    ${verifyFetchedFile(`"seclogpush.rsc"`, "seclogpush.rsc")}
     :delay 2s
     /import seclogpush.rsc
-    :do { /file remove seclogpush.rsc } on-error={}
-} on-error={ :put "API security install skipped (non-fatal)" }
+    :put "API security script installed; saved as seclogpush.rsc."
+} on-error={ :put ("API security install skipped; check seclogpush.rsc - " . $error) }
 
 # --- DNS flush scheduler ------------------------------------------------------
 :do {
@@ -1474,9 +1515,15 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 
 :put "  [hotspot] Setting up hotspot service..."
 
-# Detect storage
-:local storage "flash"
+# Detect storage. Some RouterOS devices have neither a flash nor disk1
+# directory; on those devices the Files root is the correct storage path.
+:local storage ""
 :if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }
+:if ($storage = "") do={ :if ([:len [/file find name="flash" type=directory]] > 0) do={ :set storage "flash" } }
+:local hsdir "hotspot"
+:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/hotspot") }
+:do { /file add name=$hsdir type=directory } on-error={}
+:do { /file make-dir $hsdir } on-error={}
 
 # Default bridge – the per-router script will reconfigure with the
 # correct bridge name and IP for the specific installation.
@@ -1496,7 +1543,7 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 
 # Hotspot profile
 :do { /ip hotspot profile remove [find name=default-hs] } on-error={}
-:do { /ip hotspot profile add name=default-hs hotspot-address=192.168.88.1 dns-name=wifi.local login-by=http-chap,http-pap html-directory=($storage . "/hotspot") } on-error={ :put "  WARN: hotspot profile add failed" }
+:do { /ip hotspot profile add name=default-hs hotspot-address=192.168.88.1 dns-name=wifi.local login-by=http-chap,http-pap html-directory=$hsdir } on-error={ :put "  WARN: hotspot profile add failed" }
 
 # Hotspot service
 :do { /ip hotspot remove [find interface="hotspot-bridge"] } on-error={}
@@ -2014,14 +2061,17 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put "======================================================"`,
       ``,
       `# === Detect RouterOS version & storage path ===`,
-      `# $storage: flash (NAND/internal) or disk1 (CHR / USB primary)`,
+      `# $storage: flash, disk1, or empty for the router's root storage`,
       `# $rosMajor: 6 or 7 — controls version-specific behaviour`,
-      `:local storage "flash"`,
+      `:local storage ""`,
       `:local rosMajor 6`,
       `:local rosVer "unknown"`,
       `:do { :set rosVer [/system package get [find name=routeros] version] } on-error={}`,
       `:do { :if ([:pick $rosVer 0 1] = "7") do={ :set rosMajor 7 } } on-error={}`,
       `:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }`,
+      `:if ($storage = "") do={ :if ([:len [/file find name="flash" type=directory]] > 0) do={ :set storage "flash" } }`,
+      `:local hsdir "hotspot"`,
+      `:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/hotspot") }`,
       `:put ("      RouterOS v" . $rosVer . " | Storage: " . $storage)`,
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
@@ -2068,17 +2118,14 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# === Hotspot Profile & Service ===`,
       `:put "[4/8] Starting hotspot service..."`,
       safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
-      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=($storage . "/hotspot")`, "hotspot profile add"),
+      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=$hsdir`, "hotspot profile add"),
       safeRos(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`, "hotspot add"),
       `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       `:delay 3s`,
       ``,
       `# === Hotspot Portal Files ===`,
-      `# $hsdir is a pre-computed scalar (not an inline expression) so it`,
-      `# works reliably on all RouterOS versions including very old builds.`,
-      `:local hsdir ($storage . "/hotspot")`,
-      `:if ($storage = "flash") do={ :set hsdir "flash/hotspot" }`,
-      `:if ($storage = "disk1") do={ :set hsdir "disk1/hotspot" }`,
+      `# $hsdir is computed once above and is either hotspot, flash/hotspot,`,
+      `# or disk1/hotspot depending on the directories present on this router.`,
       `:put ("[5/8] Downloading hotspot portal files to " . $hsdir . "...")`,
       `# Each portalFetch handles its own errors and prints a per-file WARN on failure,`,
       `# so one bad download does not block the others. Scan the output above for any`,
