@@ -42,6 +42,13 @@ function normalizeMacAddress(value: string): string {
   return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
 }
 
+function normalizeClientIp(value: string): string {
+  const trimmed = value.trim();
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed)) return "";
+  const octets = trimmed.split(".").map(Number);
+  return octets.every(octet => octet >= 0 && octet <= 255) ? trimmed : "";
+}
+
 const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", light: "#667eea" },
   { bg: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", light: "#f093fb" },
@@ -86,7 +93,7 @@ export default function HotspotLogin() {
       const params = new URLSearchParams(window.location.search);
       return {
         mac: normalizeMacAddress(params.get("mac") ?? params.get("mac-address") ?? ""),
-        ip: params.get("ip")?.trim() ?? "",
+        ip: normalizeClientIp(params.get("ip") ?? ""),
         linkLogin: params.get("link-login-only") ?? params.get("link-login") ?? "",
         linkOrig: params.get("link-orig") ?? "",
       };

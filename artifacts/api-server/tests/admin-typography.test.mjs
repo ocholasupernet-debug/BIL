@@ -52,8 +52,9 @@ test("dashboard financial visibility is persisted per ISP", () => {
 
 test("router portal gets the RouterOS MAC and synchronized typography asset", () => {
   assert.match(portal, /var ROUTER_MAC="\$\(mac\)"/);
+  assert.match(portal, /var ROUTER_IP="\$\(ip\)"/);
   assert.match(portal, /var DEVICE_MAC=normaliseMac\(ROUTER_MAC\)/);
-  assert.match(portal, /mac_address:DEVICE_MAC/);
+  assert.match(portal, /checkout\.client_ip=DEVICE_IP/);
   assert.match(portal, /fetch\("typography\.json"/);
   assert.match(portal, /applyPortalTypography/);
   assert.match(portal, /data\.accentColor/);
@@ -62,6 +63,7 @@ test("router portal gets the RouterOS MAC and synchronized typography asset", ()
 
 test("React portal does not fall back to manual MAC collection", () => {
   assert.doesNotMatch(portalPage, /id="device-mac-address"/);
-  assert.match(portalPage, /disabled=\{payLoading \|\| !deviceMacAddress\}/);
+  assert.match(portalPage, /disabled=\{payLoading\}/);
+  assert.match(portalPage, /client_ip: portalContext\.ip/);
   assert.match(portalPage, /mac_address: macAddress/);
 });

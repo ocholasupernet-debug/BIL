@@ -803,13 +803,13 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id } = req.body as {
     phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number;
   };
-  const mac = readMacAddress(mac_address);
+  const requestedMac = readMacAddress(mac_address);
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
     return;
   }
-  if (mac.invalid) {
+  if (requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
@@ -828,6 +828,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const requestedPlanId = Number(plan_id);
   const requestedCustomerId = Number(customer_id);
   const intent = typeof paymentIntent === "string" ? validatePaymentIntent(paymentIntent) : null;
+  const mac = requestedMac.value ? requestedMac : readMacAddress(intent?.macAddress);
   const adminAuth = validateToken(extractToken(req));
   const hasAdminSession = !!adminAuth && adminAuth.type === "a" &&
     (adminAuth.uid === "superadmin" || Number(adminAuth.uid) === scopedAdminId);
@@ -1063,10 +1064,10 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const adminId = Number(req.body?.adminId);
-  const mac = readMacAddress(req.body?.mac_address);
+  const requestedMac = readMacAddress(req.body?.mac_address);
 
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || !mac.value) {
-    res.status(400).json({ ok: false, error: "A paid checkout, ISP context, and a valid device MAC address are required." });
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
+    res.status(400).json({ ok: false, error: "A paid checkout and ISP context are required." });
     return;
   }
 
@@ -1087,7 +1088,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     res.status(409).json({ ok: false, error: "Payment is not confirmed yet. Keep this page open while we verify it." });
     return;
   }
-  if (normaliseMacAddress(transaction.mac_address) !== mac.value) {
+  const transactionMac = normaliseMacAddress(transaction.mac_address);
+  const mac = requestedMac.value || transactionMac;
+  if (!mac || (requestedMac.value && transactionMac !== requestedMac.value)) {
     res.status(400).json({ ok: false, error: "This device MAC address does not match the paid checkout." });
     return;
   }
@@ -1172,16 +1175,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
   try {
     await addHotspotIpBinding(credentials, {
-      macAddress: mac.value,
+      macAddress: mac,
       comment: `OcholaSupernet paid ${checkoutId}`,
       expiresInSeconds,
     });
     await sbUpdate("isp_transactions", `id=eq.${transaction.id}`, {
       notes: `M-Pesa payment verified; MAC hotspot access granted on ${routerRow.name}.`,
     });
-    res.json({ ok: true, access: "mac-bypassed", router: routerRow.name, mac_address: mac.value });
+    res.json({ ok: true, access: "mac-bypassed", router: routerRow.name, mac_address: mac });
   } catch (error) {
-    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac: mac.value }, "[mpesa/hotspot-mac-access] binding failed");
+    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] binding failed");
     res.status(503).json({ ok: false, error: "Payment is confirmed, but the hotspot router could not be updated. Please retry connection." });
   }
 });
