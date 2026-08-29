@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
