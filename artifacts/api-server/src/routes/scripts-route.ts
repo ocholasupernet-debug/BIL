@@ -18,6 +18,11 @@ import {
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
 import {
+  ISRG_ROOT_X1_PEM,
+  ROUTER_HTTPS_CERTIFICATE_FILE,
+  ROUTER_HTTPS_CERTIFICATE_NAME,
+} from "../lib/router-https-trust.js";
+import {
   generatedRouterVpnChildScript,
   provisionRouterManagementVpn,
   routerFallbackMaterial,
@@ -285,12 +290,37 @@ function verifyFetchedFile(pathExpression: string, label: string): string {
 :if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }`;
 }
 
+const ROUTER_HTTPS_FETCH_OPTIONS =
+  `mode=https check-certificate=yes certificate=${ROUTER_HTTPS_CERTIFICATE_NAME}`;
+
+function routerHttpsTrustBootstrap(scriptsBase: string): string {
+  const caUrl = `${scriptsBase}/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
+  return `# Install the public CA used by the VPS HTTPS certificate before verified fetches.
+# The CA certificate is public; no private certificate key is downloaded.
+:do {
+    :local caFile "${ROUTER_HTTPS_CERTIFICATE_FILE}"
+    :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
+    :if ([:len $caCert] = 0) do={
+        :do { /file remove [find name="$caFile"] } on-error={}
+        /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+        /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}" trusted=yes
+        :do { /file remove [find name="$caFile"] } on-error={}
+    }
+    :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
+    :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
+    /certificate set $caCert trusted=yes
+    :put "      HTTPS certificate trust configured for verified downloads."
+} on-error={
+    :put ("  WARN: HTTPS certificate trust setup failed - " . $error)
+}`;
+}
+
 /* ── Safe fetch (static path): wraps /tool fetch in :do {} on-error={}.
    The destination is kept on the router and verified so a pasted installer
    leaves a visible copy in Files instead of silently discarding failures. ── */
 function safeFetch(url: string, dst: string): string {
   return `:do {
-    /tool fetch url="${url}" dst-path="${dst}" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${url}" dst-path="${dst}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"${dst}"`, dst)}
   } on-error={ :put ("  WARN: ${dst} download failed at ${dst} - " . $error) }`;
 }
@@ -303,7 +333,7 @@ function portalFetch(url: string, subpath: string, filename: string): string {
   const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
   return `:local ${variableName} ($hsdir . "/${subpath}")
 :do {
-    /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`$${variableName}`, filename)}
   } on-error={ :put ("  WARN: ${filename} failed at " . $${variableName} . " - " . $error) }`;
 }
@@ -531,7 +561,7 @@ function buildMainhotspotRsc(
     :global IPRname
     :local body ("step=" . [:tostr $1] . "&name=" . [:tostr $2] . "&phase=" . [:tostr $3] . "&err=" . [:tostr $4] . "&rname=" . $IPRname)
     :do {
-        /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no mode=https check-certificate=no
+        /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     } on-error={}
 }`
     : `:global pg do={}`;
@@ -548,7 +578,7 @@ function buildMainhotspotRsc(
         $pg 1 "vpn-${protocol}" "downloading" ""
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${tempFileName}"] } on-error={}
-        /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes mode=https check-certificate=no
+        /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
         ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
         :delay 2s
         /import "${tempFileName}"
@@ -596,6 +626,9 @@ function buildMainhotspotRsc(
 # into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
+
+# Bootstrap the public CA before any HTTPS download is verified.
+${routerHttpsTrustBootstrap(scriptsBase)}
 
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
@@ -649,7 +682,7 @@ ${ipsecAttempt}
     $pg 2 "hotspot" "downloading" ""
     :put "[2/7] Downloading hotspot configuration..."
     :do { /file remove [find name="hotspotsetup.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path="hotspotsetup.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path="hotspotsetup.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"hotspotsetup.rsc.download"`, "hotspotsetup.rsc.download")}
     :delay 2s
     :put "      Applying hotspot configuration..."
@@ -671,7 +704,7 @@ ${ipsecAttempt}
     $pg 3 "pppoe" "downloading" ""
     :put "[3/7] Downloading PPPoE configuration..."
     :do { /file remove [find name="pppoesetup.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path="pppoesetup.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path="pppoesetup.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"pppoesetup.rsc.download"`, "pppoesetup.rsc.download")}
     :delay 2s
     :put "      Applying PPPoE configuration..."
@@ -693,7 +726,7 @@ ${ipsecAttempt}
     $pg 4 "users" "downloading" ""
     :put "[4/7] Downloading users configuration..."
     :do { /file remove [find name="users.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/users.rsc" dst-path="users.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/users.rsc" dst-path="users.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"users.rsc.download"`, "users.rsc.download")}
     :delay 2s
     :put "      Applying users configuration..."
@@ -715,7 +748,7 @@ ${ipsecAttempt}
     $pg 5 "syncusers" "downloading" ""
     :put "[5/7] Downloading sync-users firewalls..."
     :do { /file remove [find name="syncusers.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path="syncusers.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path="syncusers.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"syncusers.rsc.download"`, "syncusers.rsc.download")}
     :delay 2s
     :put "      Applying sync-users firewalls..."
@@ -737,7 +770,7 @@ ${ipsecAttempt}
     $pg 6 "heartbeat" "downloading" ""
     :put "[6/7] Downloading heartbeat firewalls..."
     :do { /file remove [find name="heartbeat.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path="heartbeat.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path="heartbeat.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"heartbeat.rsc.download"`, "heartbeat.rsc.download")}
     :delay 2s
     :put "      Applying heartbeat firewalls..."
@@ -761,7 +794,7 @@ ${ipsecAttempt}
 ${safeHeartbeatUrl ? `:do {
     /system script remove [find name=ochola-heartbeat-script]
     /system scheduler remove [find name=ochola-heartbeat]
-    /system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${safeHeartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+    /system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${safeHeartbeatUrl}?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
     /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${safeCompanyName} heartbeat"
     /system script run ochola-heartbeat-script
     :put "      Authenticated heartbeat installed and sent."
@@ -773,7 +806,7 @@ ${safeHeartbeatUrl ? `:do {
     $pg 7 "syncfull" "downloading" ""
     :put "[7/7] Downloading sync-full script..."
     :do { /file remove [find name="syncfull.rsc.download"] } on-error={}
-    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path="syncfull.rsc.download" keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path="syncfull.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"syncfull.rsc.download"`, "syncfull.rsc.download")}
     :delay 2s
     :put "      Applying sync-full script..."
@@ -796,7 +829,7 @@ ${safeHeartbeatUrl ? `:do {
 # downloads must remain tokenless and unable to report as a saved router.
 ${safeInstallerUrl ? `:do {
     /system scheduler remove [find name=ochola-autoupdate]
-    /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${safeInstallerUrl}\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" comment="${safeCompanyName} personalized auto-update"
+    /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${safeInstallerUrl}\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" comment="${safeCompanyName} personalized auto-update"
     :put "      Personalized auto-update scheduler installed."
 } on-error={ :put "  WARN [auto-update] personalized scheduler install failed" }
 ` : `# Generic installers intentionally retain the tokenless update scheduler.`}
@@ -804,7 +837,7 @@ ${safeInstallerUrl ? `:do {
 # --- Optional diagnostic logging ----------------------------------------------
 :do {
     :put "Downloading diagnostic log-push script..."
-    /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"logpush.rsc"`, "logpush.rsc")}
     :delay 2s
     /import logpush.rsc
@@ -814,7 +847,7 @@ ${safeInstallerUrl ? `:do {
 # --- Optional API hardening ----------------------------------------------------
 :do {
     :put "Downloading API security script..."
-    /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc keep-result=yes mode=https check-certificate=no
+    /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"seclogpush.rsc"`, "seclogpush.rsc")}
     :delay 2s
     /import seclogpush.rsc
@@ -858,7 +891,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :do { :set ri [/system identity get name] } on-error={}
     :do { :set rv [/system package get [find name=routeros] version] } on-error={}
     :do {
-        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) mode=https check-certificate=no dst-path=router-register.tmp
+        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=router-register.tmp
         :do { /file remove router-register.tmp } on-error={}
         :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
     } on-error={ :put "Router registration report failed (ignored)" }
@@ -885,11 +918,19 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :global IPProgUrl
     :global IPRname
     :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname) keep-result=no mode=https check-certificate=no
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     }
 } on-error={}
 `;
 }
+
+router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
+  res
+    .status(200)
+    .type("application/x-pem-file")
+    .set("Cache-Control", "public, max-age=31536000, immutable")
+    .send(ISRG_ROOT_X1_PEM);
+});
 
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
@@ -1275,7 +1316,7 @@ function buildVlanpppoeRsc(origin: string): string {
 :log info "PPPoE VLAN: fetching login.html from ${origin}/hotspot/login.html";
 :do { /file add name=pppoe type=directory } on-error={};
 :do { /file make-dir pppoe } on-error={};
-/tool fetch url="${origin}/hotspot/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
+/tool fetch url="${origin}/hotspot/login.html" ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path="pppoe/login.html"
 
 # === PPPoE (VLAN) — hotspot-bridge, VLAN ID 200, interface pppoe-vlan ===
 
@@ -1505,7 +1546,7 @@ function buildNormalpppoeRsc(origin: string): string {
 :log info "PPPoE NORMAL: fetching login.html from ${origin}/hotspot/login.html";
 :do { /file add name=pppoe type=directory } on-error={};
 :do { /file make-dir pppoe } on-error={};
-/tool fetch url="${origin}/hotspot/login.html" mode=https check-certificate=no dst-path="pppoe/login.html"
+/tool fetch url="${origin}/hotspot/login.html" ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path="pppoe/login.html"
 
 :if ([:len [/interface bridge find where name="pppoe_bridge"]] = 0) do={ /interface bridge add name=pppoe_bridge protocol-mode=rstp comment="PPPoE bridge" }
 :if ([:len [/ip address find where interface="pppoe_bridge" and address="192.168.178.1/24"]] = 0) do={ /ip address add address=192.168.178.1/24 interface=pppoe_bridge comment="PPPoE gateway" }
@@ -1817,7 +1858,7 @@ function buildHeartbeatRsc(origin: string): string {
   /system script add \\
     name=ochola-heartbeat-script \\
     policy=read,write,test \\
-    source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${origin}/api/isp/router/heartbeat/pending?hs=\\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
+  source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${origin}/api/isp/router/heartbeat/pending?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
 } on-error={ :put "  WARN: heartbeat script add failed" }
 
 :do {
@@ -1864,7 +1905,7 @@ function buildSyncfullRsc(origin: string): string {
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\\"${origin}/api/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc mode=https check-certificate=no; /import mainhotspot.rsc" \\
+    on-event="/tool fetch url=\\"${origin}/api/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
     comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
@@ -2376,15 +2417,15 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
       `:foreach x in=[/certificate find name~"vpn-ca"]        do={ :do { /certificate remove $x } on-error={} }`,
       `# 3) Download + import CA cert (used to verify server - optional with verify-server-certificate=no)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") mode=https check-certificate=no } on-error={ :put "  WARN: CA cert fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: CA cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/vpn-ca.crt") passphrase="" } on-error={ :put "  WARN: CA cert import failed" }`,
       `:do { /file remove [find name=($storage . "/vpn-ca.crt")] } on-error={}`,
       `# 4) Download + import client certificate`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") mode=https check-certificate=no } on-error={ :put "  WARN: client cert fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.crt") passphrase="" } on-error={ :put "  WARN: client cert import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.crt")] } on-error={}`,
       `# 5) Download + import client private key (auto-matches to cert by public key fingerprint)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") mode=https check-certificate=no } on-error={ :put "  WARN: client key fetch failed" }`,
+      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client key fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.key") passphrase="" } on-error={ :put "  WARN: client key import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.key")] } on-error={}`,
       `# 6) Mark cert as trusted and wait for RouterOS to finalise key binding`,
@@ -2418,7 +2459,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set rm [/system routerboard get model] } on-error={}`,
       `:do { :set ri [/system identity get name] } on-error={}`,
       `:do { :set rv [/system package get [find name=routeros] version] } on-error={}`,
-      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv . "&ip=${routerVpnIp}") mode=https check-certificate=no dst-path=reg.tmp } on-error={}`,
+      `:do { /tool fetch url=("${registerUrl}?model=" . $rm . "&ver=" . $rv . "&ip=${routerVpnIp}") ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=reg.tmp } on-error={}`,
       `:do { /file remove [find name=reg.tmp] } on-error={}`,
       ``,
       `# === Heartbeat Script + Scheduler ===`,
@@ -2426,13 +2467,13 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# billing server. ?hs=1 means the service is active (users can connect) and`,
       `# lights the green indicator in the admin dashboard. ?hs=0 turns it yellow.`,
       safeRm(`/system script remove [find name=ochola-heartbeat-script]`),
-      safeRos(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) mode=https check-certificate=no dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`, "heartbeat script add"),
+      safeRos(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`, "heartbeat script add"),
       safeRm(`/system scheduler remove [find name=ochola-heartbeat]`),
       safeRos(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${companyName} heartbeat"`, "heartbeat scheduler add"),
       ``,
       `# === Config Auto-Update Scheduler (daily) ===`,
       safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
-      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc mode=https check-certificate=no; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
+      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
       `:put "      Heartbeat every 5 min, auto-update daily at 00:05  OK"`,
       ``,
       `:put ""`,

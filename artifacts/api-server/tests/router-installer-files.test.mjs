@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const httpsTrust = await readFile("src/lib/router-https-trust.ts", "utf8");
+const pppoeRoute = await readFile("src/routes/pppoe-script-route.ts", "utf8");
 
 test("installer selects an available storage directory, including router root", () => {
   assert.match(scriptsRoute, /:local storage ""/);
@@ -64,4 +66,24 @@ test("portal files use explicit per-file paths and remain available after fetch"
   assert.match(scriptsRoute, /dst-path=\$\$\{variableName\}/);
   assert.match(scriptsRoute, /verifyFetchedFile\(`\$\$\{variableName\}`, filename\)/);
   assert.doesNotMatch(scriptsRoute, /portalFetch[\s\S]{0,1000}\/file remove/);
+});
+
+test("installer bootstraps the public CA and validates managed HTTPS fetches", () => {
+  assert.match(scriptsRoute, /ISRG_ROOT_X1_PEM/);
+  assert.match(httpsTrust, /ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1"/);
+  assert.match(httpsTrust, /-----BEGIN CERTIFICATE-----/);
+  assert.match(scriptsRoute, /\/certificate import file-name="\$caFile" name="\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}" trusted=yes/);
+  assert.match(scriptsRoute, /ROUTER_HTTPS_FETCH_OPTIONS/);
+  assert.match(scriptsRoute, /check-certificate=yes certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
+
+  const unverifiedFetches = scriptsRoute.match(/mode=https check-certificate=no/g) ?? [];
+  assert.equal(unverifiedFetches.length, 1, "only the one-time public CA bootstrap may skip certificate validation");
+});
+
+test("PPPoE installers use the same verified HTTPS policy", () => {
+  assert.match(pppoeRoute, /pppoeHttpsTrustBootstrap/);
+  assert.match(pppoeRoute, /ROUTER_HTTPS_FETCH_OPTIONS[\s\S]*check-certificate=yes certificate=\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}/);
+
+  const unverifiedFetches = pppoeRoute.match(/mode=https check-certificate=no/g) ?? [];
+  assert.equal(unverifiedFetches.length, 1, "PPPoE bootstrap should be the only unverified fetch");
 });

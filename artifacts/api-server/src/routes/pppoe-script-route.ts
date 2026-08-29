@@ -1,4 +1,9 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import {
+  ROUTER_HTTPS_CERTIFICATE_FILE,
+  ROUTER_HTTPS_CERTIFICATE_NAME,
+  ROUTER_HTTPS_CERTIFICATE_PATH,
+} from "../lib/router-https-trust.js";
 
 const router: IRouter = Router();
 
@@ -12,6 +17,27 @@ function resolveSupabaseUrl(): string {
 const SUPABASE_URL = resolveSupabaseUrl();
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
 const BASE_DOMAIN  = "isplatty.org";
+const ROUTER_HTTPS_FETCH_OPTIONS =
+  `mode=https check-certificate=yes certificate=${ROUTER_HTTPS_CERTIFICATE_NAME}`;
+
+function pppoeHttpsTrustBootstrap(adminSubdomain: string): string {
+  const caUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api${ROUTER_HTTPS_CERTIFICATE_PATH}`;
+  return `# Install the public CA used by the billing server HTTPS certificate.
+:do {
+  :local caFile "${ROUTER_HTTPS_CERTIFICATE_FILE}"
+  :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
+  :if ([:len $caCert] = 0) do={
+    :do { /file remove [find name="$caFile"] } on-error={}
+    /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+    /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}" trusted=yes
+    :do { /file remove [find name="$caFile"] } on-error={}
+  }
+  :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
+  :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
+  /certificate set $caCert trusted=yes
+} on-error={ :put ("  WARN: HTTPS certificate trust setup failed - " . $error) }
+`;
+}
 
 /* ── Auto-upsert an IP pool record for a router ──
    Called every time a PPPoE script is served so the pool always appears
@@ -161,6 +187,8 @@ function genPPPoEOnly(
 :put " ${co} PPPoE Setup — ${router.name}"
 :put "======================================================"
 
+${pppoeHttpsTrustBootstrap(adminSubdomain)}
+
 # === Detect RouterOS version ===
 :local rosVer "unknown"
 :do { :set rosVer [/system package get [find name=routeros] version] } on-error={}
@@ -234,13 +262,13 @@ function genPPPoEOnly(
 # 13. Heartbeat scheduler — updates online/offline indicator in the dashboard
 :put "[7] Setting up heartbeat..."
 :do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
-:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
+:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
 :do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
 :do { /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${co} heartbeat" } on-error={}
 
 # 14. Config auto-update (daily)
 :do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
-:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} mode=https check-certificate=no; /import ${configFile}" comment="${co} auto-update" } on-error={}
+:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${configFile}" comment="${co} auto-update" } on-error={}
 
 :log info "${co} PPPoE-Only applied"
 :put "======================================================"
@@ -287,6 +315,8 @@ function genPPPoEOverHotspot(
 :put "======================================================"
 :put " ${co} PPPoE-over-Hotspot Setup — ${router.name}"
 :put "======================================================"
+
+${pppoeHttpsTrustBootstrap(adminSubdomain)}
 
 # === Detect RouterOS version ===
 :local rosVer "unknown"
@@ -381,13 +411,13 @@ function genPPPoEOverHotspot(
 # 16. Heartbeat scheduler
 :put "[8] Setting up heartbeat..."
 :do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
-:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
+:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
 :do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
 :do { /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${co} heartbeat" } on-error={}
 
 # 17. Config auto-update (daily)
 :do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
-:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} mode=https check-certificate=no; /import ${configFile}" comment="${co} auto-update" } on-error={}
+:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${configFile}" comment="${co} auto-update" } on-error={}
 
 :log info "${co} PPPoE-over-Hotspot applied"
 :put "======================================================"
@@ -444,6 +474,8 @@ export function genPPPoEVlan(
 :put " ${co} PPPoE VLAN Setup — ${router.name}"
 :put " VLAN ${vlanId} on ${baseBridge}"
 :put "======================================================"
+
+${pppoeHttpsTrustBootstrap(adminSubdomain)}
 
 :local rosVer "unknown"
 :do { :set rosVer [/system package get [find name=routeros] version] } on-error={}
@@ -502,13 +534,13 @@ export function genPPPoEVlan(
 # 12. Heartbeat scheduler
 :put "[7] Setting up heartbeat..."
 :do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
-:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" mode=https check-certificate=no dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
+:do { /system script add name=ochola-heartbeat-script policy=read,write,test source=":do { /tool fetch url=\\"${heartbeatUrl}\\" ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}" } on-error={}
 :do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
 :do { /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${co} heartbeat" } on-error={}
 
 # 13. Config auto-update (daily)
 :do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
-:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} mode=https check-certificate=no; /import ${configFile}" comment="${co} auto-update" } on-error={}
+:do { /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBase}\\" dst-path=${configFile} ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${configFile}" comment="${co} auto-update" } on-error={}
 
 :log info "${co} PPPoE-VLAN${vlanId} applied"
 :put "======================================================"

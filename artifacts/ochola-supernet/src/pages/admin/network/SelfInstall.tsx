@@ -309,7 +309,8 @@ export default function SelfInstall() {
 
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
   const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}`;
-  const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc mode=https check-certificate=no`;
+  const caUrl = `${window.location.origin}/api/scripts/ochola-isrg-root-x1.pem`;
+  const fetchCommand = `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes certificate=ochola-isrg-root-x1`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;
@@ -537,7 +538,7 @@ export default function SelfInstall() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: ".65rem" }}>
                 <div>
-                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>1. Download configuration</div>
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>1. Install HTTPS trust and download configuration</div>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
                     <code style={{ color: "#7dd3fc", fontSize: ".7rem", lineHeight: 1.55, wordBreak: "break-all", flex: 1 }}>{fetchCommand}</code>
                     <CopyButton text={fetchCommand} />
