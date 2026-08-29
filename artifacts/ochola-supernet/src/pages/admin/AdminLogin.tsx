@@ -152,11 +152,10 @@ export default function AdminLogin() {
 
          <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
            <img
-             src="/logo.jpg"
+             src="/ocholasupernet-logo.png"
              alt="OcholaSuperNet"
              style={{
                width: 194, height: 108, objectFit: "contain", display: "block",
-               borderRadius: 12, background: "#fff", padding: 6, boxSizing: "border-box",
              }}
            />
          </div>
@@ -206,12 +205,10 @@ export default function AdminLogin() {
 
            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 9, marginBottom: 30 }}>
              <img
-               src="/logo.jpg"
+               src="/ocholasupernet-logo.png"
                alt="OcholaSuperNet"
                style={{
                  width: 224, height: 138, objectFit: "contain", display: "block",
-                 borderRadius: 14, background: "#fff", padding: 8, boxSizing: "border-box",
-                 boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
                }}
              />
              <div style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", fontWeight: 600 }}>
