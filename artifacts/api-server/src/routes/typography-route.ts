@@ -19,6 +19,7 @@ const FONT_FAMILIES = new Set([
 ]);
 const FONT_STYLES = new Set(["normal", "italic", "oblique"]);
 const FONT_WEIGHTS = new Set([400, 500, 600, 700, 800]);
+const DEFAULT_PORTAL_ACCENT = "#d96835";
 
 interface TypographyRow {
   id?: number;
@@ -41,6 +42,12 @@ export function normalizeTypography(row?: TypographyRow | null) {
     fontSize: typeof row?.font_size === "number" && Number.isInteger(row.font_size) && row.font_size >= 12 && row.font_size <= 24
       ? row.font_size : TYPOGRAPHY_DEFAULTS.fontSize,
   };
+}
+
+function normalizeAccent(value: unknown): string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase()
+    : DEFAULT_PORTAL_ACCENT;
 }
 
 function adminId(req: Request): number {
@@ -74,6 +81,18 @@ async function readTypography(id: number) {
   };
 }
 
+async function readPortalAccent(id: number): Promise<string> {
+  try {
+    const rows = await sbSelect<{ accent_color?: string | null }>(
+      "isp_dashboard_preferences",
+      `admin_id=eq.${id}&select=accent_color&limit=1`,
+    );
+    return normalizeAccent(rows[0]?.accent_color);
+  } catch {
+    return DEFAULT_PORTAL_ACCENT;
+  }
+}
+
 /* Public by design: these values contain no account or credential data and are
    needed by router-served captive portals before a customer can sign in. */
 router.get("/public/typography", async (req: Request, res: Response): Promise<void> => {
@@ -83,9 +102,12 @@ router.get("/public/typography", async (req: Request, res: Response): Promise<vo
     return;
   }
   try {
-    const result = await readTypography(id);
+    const [result, accentColor] = await Promise.all([
+      readTypography(id),
+      readPortalAccent(id),
+    ]);
     res.set("Cache-Control", "no-store");
-    res.json({ ok: true, adminId: id, ...result.preferences, apiBase: apiBase(req, result.subdomain) });
+    res.json({ ok: true, adminId: id, ...result.preferences, accentColor, apiBase: apiBase(req, result.subdomain) });
   } catch {
     res.status(503).json({ ok: false, error: "Typography preferences are temporarily unavailable." });
   }

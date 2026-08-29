@@ -9,12 +9,14 @@
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{
       --accent:#c026d3; --accent2:#7c3aed;
+      --portal-accent:#d96835; --portal-accent-dark:#9e3f1f;
+      --portal-accent-soft:#d968351f; --portal-accent-border:#d9683555;
       --bg:#0d0415; --surface:rgba(255,255,255,.04);
       --border:rgba(255,255,255,.08); --border-hover:rgba(255,255,255,.16);
     }
     html{scroll-behavior:smooth}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,#2d0d45 0%,#0d0415 55%);min-height:100vh;color:white}
-    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0d0415}::-webkit-scrollbar-thumb{background:rgba(192,38,211,.4);border-radius:3px}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,#0d0415 55%);min-height:100vh;color:white}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0d0415}::-webkit-scrollbar-thumb{background:var(--portal-accent-border);border-radius:3px}
 
     @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
@@ -32,7 +34,7 @@
 
     .inp{width:100%;padding:.75rem 1rem;border-radius:.625rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:white;font-size:.875rem;font-family:inherit;outline:none;transition:border-color .2s,box-shadow .2s}
     .inp::placeholder{color:rgba(255,255,255,.28)}
-    .inp:focus{border-color:rgba(192,38,211,.5);box-shadow:0 0 0 3px rgba(192,38,211,.12)}
+    .inp:focus{border-color:var(--portal-accent-border);box-shadow:0 0 0 3px var(--portal-accent-soft)}
     .inp-amber:focus{border-color:rgba(245,158,11,.5);box-shadow:0 0 0 3px rgba(245,158,11,.1)}
     .inp-green:focus{border-color:rgba(16,185,129,.5);box-shadow:0 0 0 3px rgba(16,185,129,.1)}
     textarea.inp{resize:none}
@@ -40,8 +42,8 @@
     .btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;padding:.75rem 1.25rem;border-radius:.625rem;font-weight:700;font-size:.875rem;font-family:inherit;border:none;cursor:pointer;transition:transform .15s,opacity .15s,box-shadow .15s;letter-spacing:.01em}
     .btn:hover{transform:translateY(-1px)}
     .btn:active{transform:translateY(0)}
-    .btn-purple{background:linear-gradient(135deg,#a21caf,#7c3aed);color:white;box-shadow:0 4px 15px rgba(162,28,175,.35)}
-    .btn-purple:hover{box-shadow:0 6px 20px rgba(162,28,175,.5)}
+    .btn-purple{background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));color:white;box-shadow:0 4px 15px var(--portal-accent-border)}
+    .btn-purple:hover{box-shadow:0 6px 20px var(--portal-accent-border)}
     .btn-amber{background:linear-gradient(135deg,#d97706,#b45309);color:white;box-shadow:0 4px 15px rgba(217,119,6,.3)}
     .btn-amber:hover{box-shadow:0 6px 20px rgba(217,119,6,.45)}
     .btn-green{background:linear-gradient(135deg,#059669,#0891b2);color:white;box-shadow:0 4px 15px rgba(5,150,105,.3)}
@@ -83,7 +85,7 @@
 <header class="hdr">
   <div class="hdr-inner">
     <div style="display:flex;align-items:center;gap:.875rem">
-      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#e879f9,#9333ea);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(147,51,234,.4)">
+      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px var(--portal-accent-border)">
         <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
       </div>
       <div>
@@ -117,7 +119,7 @@
       <div style="position:relative" class="anim-float">
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.3);transform:scale(1.6)"></div>
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.15);transform:scale(2.2);animation-delay:.5s"></div>
-        <div style="position:relative;width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 12px 40px rgba(147,51,234,.5)">
+        <div style="position:relative;width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));display:flex;align-items:center;justify-content:center;box-shadow:0 12px 40px var(--portal-accent-border)">
           <svg width="34" height="34" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
         </div>
       </div>
@@ -125,7 +127,7 @@
 
     <h1 style="font-size:clamp(2.125rem,5vw,3.25rem);font-weight:900;line-height:1.08;letter-spacing:-.03em;margin-bottom:1rem">
       Fast &amp; Reliable<br>
-      <span style="background:linear-gradient(90deg,#e879f9 20%,#a78bfa 60%,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
+      <span style="background:linear-gradient(90deg,var(--portal-accent) 20%,#a78bfa 60%,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
         Internet Access
       </span>
     </h1>
@@ -381,6 +383,7 @@ var COLORS=[
 var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0;
 var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="";
 var ROUTER_MAC="$(mac)";
+var PORTAL_ACCENT="#d96835";
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 
 function normaliseMac(value){
@@ -390,8 +393,22 @@ function normaliseMac(value){
   return compact.toUpperCase().match(/.{2}/g).join(":");
 }
 var DEVICE_MAC=normaliseMac(ROUTER_MAC);
+function darkenHex(value){
+  var hex=value.replace("#","");
+  var r=Math.max(0,parseInt(hex.slice(0,2),16)-45);
+  var g=Math.max(0,parseInt(hex.slice(2,4),16)-45);
+  var b=Math.max(0,parseInt(hex.slice(4,6),16)-45);
+  return "#"+[r,g,b].map(function(part){return part.toString(16).padStart(2,"0");}).join("");
+}
 function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
 function applyPortalTypography(data){
+  if(data&&typeof data.accentColor==="string"&&/^#[0-9a-f]{6}$/i.test(data.accentColor)){
+    PORTAL_ACCENT=data.accentColor.toLowerCase();
+    document.documentElement.style.setProperty("--portal-accent",PORTAL_ACCENT);
+    document.documentElement.style.setProperty("--portal-accent-dark",darkenHex(PORTAL_ACCENT));
+    document.documentElement.style.setProperty("--portal-accent-soft",PORTAL_ACCENT+"1f");
+    document.documentElement.style.setProperty("--portal-accent-border",PORTAL_ACCENT+"55");
+  }
   if(!data||!SAFE_FONT_FAMILIES.includes(data.fontFamily))return;
   var style=data.fontStyle==="italic"||data.fontStyle==="oblique"?data.fontStyle:"normal";
   var weight=[400,500,600,700,800].indexOf(Number(data.fontWeight))>=0?Number(data.fontWeight):500;
@@ -445,7 +462,7 @@ function renderPlans(){
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
       '</div>'+
-      '<button onclick="openModal('+i+')" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,'+c.from+','+c.to+');border:none;cursor:pointer;font-family:inherit;transition:opacity .15s" onmouseover="this.style.opacity=\'.88\'" onmouseout="this.style.opacity=\'1\'">'+
+      '<button onclick="openModal('+i+')" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:pointer;font-family:inherit;transition:opacity .15s" onmouseover="this.style.opacity=\'.88\'" onmouseout="this.style.opacity=\'1\'">'+
       'Connect Now</button></div>';
   }).join("");
 }

@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 const migration = await readFile("migrations/2026_admin_typography.sql", "utf8");
 const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
 const route = await readFile("src/routes/typography-route.ts", "utf8");
+const dashboardRoute = await readFile("src/routes/dashboard-preferences-route.ts", "utf8");
+const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const portal = await readFile("../ochola-supernet/public/hotspot/login.html", "utf8");
 const portalPage = await readFile("../ochola-supernet/src/pages/portal/HotspotLogin.tsx", "utf8");
 
@@ -25,7 +27,18 @@ test("typography API exposes only curated values and protects writes", () => {
   assert.match(route, /FONT_STYLES/);
   assert.match(route, /FONT_WEIGHTS/);
   assert.match(route, /fontSize < 12 \|\| fontSize > 24/);
+  assert.match(route, /readPortalAccent/);
+  assert.match(route, /accentColor/);
   assert.doesNotMatch(route, /return `http:\/\/localhost/);
+});
+
+test("dashboard colors stay scoped to the authenticated ISP account", () => {
+  assert.match(dashboardRoute, /router\.get\("\/admin\/dashboard-preferences", requireAdmin\(\)/);
+  assert.match(dashboardRoute, /router\.put\("\/admin\/dashboard-preferences", requireAdmin\(\)/);
+  assert.match(dashboardRoute, /const id = Number\(req\.authUser\?\.uid\)/);
+  assert.match(dashboardRoute, /admin_id=eq\.\$\{id\}/);
+  assert.match(dashboardRoute, /admin_id: adminId\(req\)/);
+  assert.match(scriptsRoute, /typography\?adminId=\$\{adminId\}/);
 });
 
 test("router portal gets the RouterOS MAC and synchronized typography asset", () => {
@@ -34,6 +47,8 @@ test("router portal gets the RouterOS MAC and synchronized typography asset", ()
   assert.match(portal, /mac_address:DEVICE_MAC/);
   assert.match(portal, /fetch\("typography\.json"/);
   assert.match(portal, /applyPortalTypography/);
+  assert.match(portal, /data\.accentColor/);
+  assert.match(portal, /var\(--portal-accent/);
 });
 
 test("React portal does not fall back to manual MAC collection", () => {

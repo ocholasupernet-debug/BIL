@@ -19,6 +19,13 @@ export const DASHBOARD_COLOR_PRESETS = [
   { name: "Emerald", value: "#168c78" },
   { name: "Violet", value: "#7c5cc4" },
   { name: "Rose", value: "#d55372" },
+  { name: "Sky", value: "#0284c7" },
+  { name: "Teal", value: "#0d9488" },
+  { name: "Lime", value: "#65a30d" },
+  { name: "Amber", value: "#d97706" },
+  { name: "Red", value: "#dc2626" },
+  { name: "Fuchsia", value: "#c026d3" },
+  { name: "Slate", value: "#475569" },
 ] as const;
 
 export const DASHBOARD_LAYOUT_OPTIONS: Array<{

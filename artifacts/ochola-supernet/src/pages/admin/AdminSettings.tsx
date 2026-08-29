@@ -1141,14 +1141,14 @@ function DashboardBuilderTab() {
 
   return (
     <>
-      <Card title="Dashboard Page Builder" desc="Personalize the ISP dashboard without changing its live data or access controls.">
+      <Card title="Dashboard Page Builder" desc="Personalize your ISP dashboard and captive portal without changing live data or access controls.">
         <div className="dashboard-builder-grid">
           <div className="dashboard-builder-controls">
             <div className="dashboard-builder-control-group">
               <div className="dashboard-builder-control-heading">
                 <div>
                   <p>Accent color</p>
-                  <span>Used for live status, links, highlights, and dashboard actions.</span>
+                   <span>Used for live status, links, highlights, dashboard actions, and this ISP's captive portal.</span>
                 </div>
                 <label className="dashboard-color-input" style={{ background: draft.accentColor }}>
                   <input
@@ -1273,11 +1273,11 @@ function DashboardBuilderTab() {
         </div>
       </Card>
 
-      <Card title="What this changes" desc="Your dashboard builder only controls presentation.">
+      <Card title="What this changes" desc="Your dashboard builder only controls presentation for this ISP.">
         <div className="dashboard-builder-notes">
-          <div><Palette size={16} /><span><strong>Brand-aware</strong><small>Appearance is saved to this ISP account and works with the existing brand theme.</small></span></div>
+          <div><Palette size={16} /><span><strong>Brand-aware</strong><small>Appearance is saved to this ISP account and copied only to this ISP's captive portal.</small></span></div>
           <div><LayoutDashboard size={16} /><span><strong>Data stays live</strong><small>Router health, customer counts, charts, transactions, and loading states are unchanged.</small></span></div>
-          <div><Shield size={16} /><span><strong>Safe fallback</strong><small>Dashboard remains available as the primary landing page even when other pages are hidden.</small></span></div>
+          <div><Shield size={16} /><span><strong>Tenant-isolated</strong><small>Other ISP administrators and their users never receive this account's dashboard or portal colors.</small></span></div>
         </div>
       </Card>
     </>
