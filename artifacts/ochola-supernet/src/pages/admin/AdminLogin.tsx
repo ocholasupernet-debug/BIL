@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Zap } from "lucide-react";
+import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken, supabase } from "@/lib/supabase";
 import { getHostSubdomain } from "@/lib/subdomain";
 
@@ -150,23 +150,16 @@ export default function AdminLogin() {
           background: "var(--isp-accent-glow)",
         }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: 10,
-            background: "var(--isp-accent)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <Zap size={20} style={{ color: "white" }} />
-          </div>
-          <div>
-            <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "#F1F5F9", letterSpacing: "-0.02em" }}>
-              ISPlatty
-            </div>
-             <div style={{ fontSize: "0.78rem", color: "#475569", fontWeight: 500 }}>
-              ISP Management Platform
-            </div>
-          </div>
-        </div>
+         <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
+           <img
+             src="/logo.jpg"
+             alt="OcholaSuperNet"
+             style={{
+               width: 194, height: 108, objectFit: "contain", display: "block",
+               borderRadius: 12, background: "#fff", padding: 6, boxSizing: "border-box",
+             }}
+           />
+         </div>
 
         <div style={{ position: "relative" }}>
           <h2 style={{
@@ -211,23 +204,20 @@ export default function AdminLogin() {
       }}>
         <div style={{ width: "100%", maxWidth: 420 }}>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 9,
-              background: "var(--isp-accent)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              <Zap size={18} style={{ color: "white" }} />
-            </div>
-            <div>
-               <div style={{ fontSize: "1rem", fontWeight: 800, color: "var(--isp-text)", letterSpacing: "-0.02em" }}>
-                {displayName}
-              </div>
-               <div style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
-                {displayDomain}
-              </div>
-            </div>
-          </div>
+           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 9, marginBottom: 30 }}>
+             <img
+               src="/logo.jpg"
+               alt="OcholaSuperNet"
+               style={{
+                 width: 224, height: 138, objectFit: "contain", display: "block",
+                 borderRadius: 14, background: "#fff", padding: 8, boxSizing: "border-box",
+                 boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+               }}
+             />
+             <div style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", fontWeight: 600 }}>
+               {displayName} · {displayDomain}
+             </div>
+           </div>
 
           <h1 style={{
              fontSize: "1.9rem", fontWeight: 800, color: "var(--isp-text)",
