@@ -86,7 +86,7 @@ function RouterCard({ r }: { r: DbRouter }) {
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1.5"><Key size={11} /> Access Details</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             {[
-              { label: "VPN Tunnel IP", value: r.bridge_ip || "—" },
+              { label: "Management VPN IP", value: r.vpn_ip || "—" },
               { label: "Public WAN IP", value: r.host || "—" },
               { label: "Username", value: r.router_username || "admin" },
               { label: "Model", value: r.model || "—" },
@@ -104,7 +104,7 @@ function RouterCard({ r }: { r: DbRouter }) {
           </div>
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 mt-2">
             <p className="font-semibold mb-1 flex items-center gap-1"><ShieldCheck size={12} /> VPN Required</p>
-            <p>Connect via the VPN tunnel before using Winbox or WebFig. The VPN IP (<span className="font-mono">{r.bridge_ip}</span>) is only reachable through the tunnel.</p>
+            <p>Connect via the router-management VPN before using Winbox or WebFig. The management VPN IP (<span className="font-mono">{r.vpn_ip || "—"}</span>) is only reachable through that tunnel.</p>
           </div>
         </div>
       )}

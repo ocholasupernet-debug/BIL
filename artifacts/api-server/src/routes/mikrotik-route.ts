@@ -161,7 +161,7 @@ interface SbRouter {
  *
  * Connection strategy (priority order):
  *   1. creds.host    — should be public IP or VPN-reachable hostname
- *   2. creds.bridgeIp — VPN tunnel IP, used as automatic fallback
+ *   2. creds.bridgeIp — dedicated management VPN IP, used as automatic fallback
  *
  * Port / SSL:
  *   - Default: 8728 (plain API)
@@ -169,7 +169,8 @@ interface SbRouter {
  *   - Remote connections should use 8729 SSL when possible
  */
 function rowToCreds(row: SbRouter): RouterCredentials {
-  /* Prefer host (should be public IP); bridge_ip is VPN fallback */
+  /* Prefer host (normally the public IP); only the dedicated vpn_ip is a
+     tunnel fallback. bridge_ip is the router's local LAN/hotspot gateway. */
   const primaryHost = row.host?.trim() || "";
   const vpnFallback = row.vpn_ip?.trim()
     || (isVpnTunnelIp(row.bridge_ip ?? "") ? row.bridge_ip?.trim() : undefined);
@@ -230,7 +231,7 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
       ?? vpnIpFor(row.name, vpnClients);
     if (autoVpnIp) {
       logger.info({ routerId: id, host: creds.host, vpnIp: autoVpnIp },
-        "VPN IP auto-discovered from OpenVPN status — injecting as bridgeIp");
+        "Management VPN IP auto-discovered from OpenVPN status");
       creds.bridgeIp = autoVpnIp;
     }
   }
@@ -267,7 +268,7 @@ function routerErrorResponse(res: import("express").Response, err: unknown): voi
       detail:   msg,
       hint:     "Ensure the router's public IP is set, API port 8728/8729 is open, " +
                 "and the VPS IP is allowed in the router's firewall. " +
-                "If behind NAT, configure VPN tunnel and set bridge_ip.",
+                 "If behind NAT, configure the router-management VPN and set vpn_ip.",
     });
   } else {
     res.status(500).json({ error: "MikroTik API error", detail: msg });
@@ -343,12 +344,12 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
     warnings.push(
       `Host ${row.host} is a private/local IP. The cloud API server cannot ` +
       `reach this address unless it is on the same network. ` +
-      `Set the router's public IP or enable VPN and use bridge_ip as a tunnel address.`
+      `Set the router's public IP or enable the router-management VPN and use vpn_ip as the tunnel address.`
     );
   }
-  if (!row.host && row.bridge_ip) {
+  if (!row.host && row.vpn_ip) {
     warnings.push(
-      `No public host configured — connecting via VPN tunnel IP ${row.bridge_ip}. ` +
+      `No public host configured — connecting via management VPN IP ${row.vpn_ip}. ` +
       `For reliable remote access, set the router's public IP as the primary host.`
     );
   }
@@ -358,7 +359,7 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
     routerId: id,
     routerName: row.name,
     configuredHost: row.host,
-    vpnFallbackIp: row.bridge_ip,
+    vpnFallbackIp: row.vpn_ip,
     ...result,
     warnings: [...warnings, ...result.warnings],
   });

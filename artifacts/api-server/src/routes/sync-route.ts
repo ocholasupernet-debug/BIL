@@ -3,6 +3,7 @@ import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
+import { isRouterVpnIp } from "../lib/router-vpn-ip.js";
 
 const router: IRouter = Router();
 
@@ -58,16 +59,17 @@ function makeConn(host: string, username: string, password: string): RouterOSAPI
   return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 6, keepalive: false });
 }
 
-/* ─── Connect with optional bridgeIp fallback ─── */
+/* ─── Connect with optional management VPN fallback ─── */
 async function connectWithFallback(
   host: string,
-  bridgeIp: string | undefined,
+  vpnIp: string | undefined,
   username: string,
   password: string,
   log: (msg: string) => void,
 ): Promise<{ conn: RouterOSAPI; via: string }> {
-  const primary = host || bridgeIp || "";
-  if (!primary) throw new Error("No host or bridge IP provided");
+  const validVpnIp = vpnIp && isRouterVpnIp(vpnIp) ? vpnIp : undefined;
+  const primary = host || validVpnIp || "";
+  if (!primary) throw new Error("No public host or management VPN IP provided");
 
   log(`▶ Connecting to ${primary}:8728 as '${username || "admin"}'...`);
   const conn = makeConn(primary, username, password);
@@ -76,12 +78,12 @@ async function connectWithFallback(
     log(`✓ Connected via ${primary}`);
     return { conn, via: primary };
   } catch (firstErr) {
-    const fallback = bridgeIp && bridgeIp !== primary ? bridgeIp : null;
+    const fallback = validVpnIp && validVpnIp !== primary ? validVpnIp : null;
     if (!fallback) throw firstErr;
-    log(`⚠ ${primary} unreachable, trying VPN bridge ${fallback}...`);
+    log(`⚠ ${primary} unreachable, trying management VPN ${fallback}...`);
     const conn2 = makeConn(fallback, username, password);
     await withTimeout(conn2.connect(), 12000);
-    log(`✓ Connected via VPN bridge ${fallback}`);
+    log(`✓ Connected via management VPN ${fallback}`);
     return { conn: conn2, via: fallback };
   }
 }
@@ -511,15 +513,18 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
       return;
     }
     const rows = await sbSelect<{
-      host: string; bridge_ip: string | null; router_username: string | null; router_secret: string | null;
-    }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=host,bridge_ip,router_username,router_secret&limit=1`);
+      host: string; bridge_ip: string | null; vpn_ip: string | null;
+      router_username: string | null; router_secret: string | null;
+    }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
     const routerRow = rows[0];
     if (!routerRow) {
       res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
       return;
     }
     host = routerRow.host || "";
-    bridgeIp = routerRow.bridge_ip || undefined;
+    /* bridge_ip is the router LAN/hotspot gateway. Use only the dedicated
+       persistent management address for a server-side RouterOS fallback. */
+    bridgeIp = routerRow.vpn_ip || undefined;
     username = routerRow.router_username || "admin";
     password = routerRow.router_secret || "";
   }
@@ -1119,30 +1124,34 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
   /* ── Build list of IPs to try in order ──────────────────────
      1. host       (WAN or direct IP stored in Supabase)
-     2. bridgeIp   (explicit VPN bridge IP if set and different)
+     2. bridgeIp   (legacy request field; accepted only when it is the
+                     dedicated 10.8.5.x management VPN IP)
      3. vpnIp      (auto-looked up from OpenVPN server status file by WAN IP)
      4. cnVpnIp    (looked up by router VPN certificate CN — fallback when
                     host is empty, e.g. brand-new router whose host was never set)
      ─────────────────────────────────────────────────────────── */
   const vpnClients = readVpnClients();
-  const autoVpnIp  = host ? vpnIpFor(host, vpnClients) : null;   /* e.g. 10.8.0.6 */
-  const cnVpnIp    = routerCn ? vpnIpFor(routerCn, vpnClients) : null;
+  const configuredVpnIp = isRouterVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : null;
+  const discoveredByHost = host ? vpnIpFor(host, vpnClients) : null;
+  const discoveredByCn = routerCn ? vpnIpFor(routerCn, vpnClients) : null;
+  const autoVpnIp = discoveredByHost && isRouterVpnIp(discoveredByHost) ? discoveredByHost : null;
+  const cnVpnIp = discoveredByCn && isRouterVpnIp(discoveredByCn) ? discoveredByCn : null;
 
   /* Require at least one usable address */
-  if (!host && !bridgeIp && !autoVpnIp && !cnVpnIp) {
-    res.status(400).json({ ok: false, error: "host is required" });
+  if (!host && !configuredVpnIp && !autoVpnIp && !cnVpnIp) {
+    res.status(400).json({ ok: false, error: "A public host or 10.8.5.x management VPN IP is required" });
     return;
   }
 
   /* Fast-fail only when ALL candidates are LAN-only with no VPN alternative */
-  const candidates = [host, bridgeIp, autoVpnIp, cnVpnIp].filter(Boolean) as string[];
+  const candidates = [host, configuredVpnIp, autoVpnIp, cnVpnIp].filter(Boolean) as string[];
   const hasReachableCandidate = candidates.some(ip => !isLanOnlyIp(ip));
   if (!hasReachableCandidate) {
     const detail = (autoVpnIp || cnVpnIp)
       ? ""
       : bridgeIp && bridgeIp === host
-        ? `Bridge IP is set to the same LAN address (${bridgeIp}).`
-        : `No VPN tunnel IP found. Set the router's VPN IP in Bridge IP or ensure OpenVPN is running.`;
+        ? `The configured address is a LAN address (${bridgeIp}), not a management VPN address.`
+        : `No 10.8.5.x management VPN address found. Ensure the router-management OpenVPN is running.`;
     res.json({
       ok: false,
       error: `Router host ${host || "(none)"} is a private LAN address — the server cannot reach it directly. ${detail}`.trim(),
@@ -1157,8 +1166,8 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
   const toTry: Array<{ ip: string; label: string }> = [];
   if (host && !isLanOnlyIp(host)) toTry.push({ ip: host, label: host });
-  if (bridgeIp && bridgeIp !== host && !isLanOnlyIp(bridgeIp))
-    toTry.push({ ip: bridgeIp, label: `${bridgeIp} (bridge)` });
+  if (configuredVpnIp && configuredVpnIp !== host)
+    toTry.push({ ip: configuredVpnIp, label: `${configuredVpnIp} (management VPN)` });
   if (autoVpnIp && !toTry.find(t => t.ip === autoVpnIp))
     toTry.push({ ip: autoVpnIp, label: `${autoVpnIp} (VPN tunnel)` });
   if (cnVpnIp && !toTry.find(t => t.ip === cnVpnIp))
@@ -1175,18 +1184,19 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
       const HB_KEY = hbKey();
       if (HB_URL && HB_KEY) {
         if (ip === autoVpnIp && host) {
-          /* Found VPN IP by matching WAN host → save as bridge_ip */
+          /* Found management VPN IP by matching WAN host → save as vpn_ip */
           fetch(
             `${HB_URL}/rest/v1/isp_routers?host=eq.${encodeURIComponent(host)}`,
             { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ bridge_ip: ip }) }
+              body: JSON.stringify({ vpn_ip: ip }) }
           ).catch(() => {});
         } else if (ip === cnVpnIp && routerId) {
-          /* Found VPN IP by CN (host was empty) → save as both host and bridge_ip using router ID */
+          /* Found management VPN IP by CN (host was empty) → save it in the
+             dedicated VPN column; host remains the public/WAN field. */
           fetch(
             `${HB_URL}/rest/v1/isp_routers?id=eq.${routerId}`,
             { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ host: ip, bridge_ip: ip }) }
+              body: JSON.stringify({ vpn_ip: ip }) }
           ).catch(() => {});
         }
       }

@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 
 interface DbRouterMin {
-  id: number; name: string; host: string; bridge_ip: string | null; status: string;
+  id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null; status: string;
   router_username: string; router_secret: string | null;
 }
 
@@ -424,15 +424,15 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
       </div>
 
       {/* Warnings */}
-      {selectedRouter && !selectedRouter.host && !selectedRouter.bridge_ip && (
+      {selectedRouter && !selectedRouter.host && !selectedRouter.vpn_ip && (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8, fontSize: "0.75rem", color: "#fbbf24" }}>
           <AlertTriangle size={13} />
           <span>No IP found for this router. Go to <strong>Routers</strong> to save its IP or wait for a heartbeat.</span>
         </div>
       )}
-      {selectedRouter && !selectedRouter.host && selectedRouter.bridge_ip && (
+      {selectedRouter && !selectedRouter.host && selectedRouter.vpn_ip && (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, fontSize: "0.75rem", color: "var(--isp-accent)" }}>
-          <span>Using VPN tunnel IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.bridge_ip}</strong></span>
+          <span>Using management VPN IP <strong style={{ fontFamily: "monospace" }}>{selectedRouter.vpn_ip}</strong></span>
         </div>
       )}
 
