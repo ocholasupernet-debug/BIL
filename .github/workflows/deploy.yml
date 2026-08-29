@@ -22,7 +22,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,WILDCARD_CERT_B64,WILDCARD_CERT_KEY_B64
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -51,10 +51,7 @@ jobs:
             upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
 
-            if [ -n "${NAMECHEAP_API_KEY:-}" ] && [ -n "${NAMECHEAP_API_USER:-}" ]; then
-              export NAMECHEAP_API_USER NAMECHEAP_API_KEY NAMECHEAP_USERNAME NAMECHEAP_CLIENT_IP CERTBOT_EMAIL
-              sudo -E bash deploy/configure-nginx.sh
-            fi
+            sudo -E bash deploy/configure-nginx.sh
 
             bash deploy/deploy.sh
             echo "=== Deploy finished at $(date) ==="
@@ -64,8 +61,5 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-          NAMECHEAP_API_USER: ${{ secrets.NAMECHEAP_API_USER }}
-          NAMECHEAP_API_KEY: ${{ secrets.NAMECHEAP_API_KEY }}
-          NAMECHEAP_USERNAME: ${{ secrets.NAMECHEAP_USERNAME }}
-          NAMECHEAP_CLIENT_IP: 102.203.116.204
-          CERTBOT_EMAIL: admin@isplatty.org
+          WILDCARD_CERT_B64: ${{ secrets.WILDCARD_CERT_B64 }}
+          WILDCARD_CERT_KEY_B64: ${{ secrets.WILDCARD_CERT_KEY_B64 }}

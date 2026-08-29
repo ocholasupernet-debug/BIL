@@ -91,7 +91,7 @@ then
   sudo rm -f /etc/nginx/sites-enabled/default
   sudo nginx -t && sudo systemctl reload nginx
 else
-  echo "    Wildcard certificate not found; run configure-nginx.sh with Namecheap DNS credentials."
+  echo "    Wildcard certificate not found; configure the deployment certificate secrets first."
 fi
 
 # Open ports (SSH must be first to avoid locking yourself out)

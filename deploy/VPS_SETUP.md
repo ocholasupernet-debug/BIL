@@ -71,10 +71,16 @@ pm2 save
 pm2 startup            # follow the printed command to enable on reboot
 ```
 
-### HTTPS with Let's Encrypt
+### HTTPS with a supplied wildcard certificate
 
 ```bash
-sudo certbot --nginx -d YOUR_DOMAIN -d www.YOUR_DOMAIN
+# The automated deployment installs the certificate from these GitHub Actions
+# secrets; do not commit either file to the repository:
+#   WILDCARD_CERT_B64      = base64 -w0 fullchain.pem
+#   WILDCARD_CERT_KEY_B64  = base64 -w0 privkey.pem
+
+# The certificate must contain both isplatty.org and *.isplatty.org.
+# After the secrets are configured, run the Deploy to VPS workflow.
 ```
 
 ---
