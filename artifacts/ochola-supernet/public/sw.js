@@ -1,10 +1,10 @@
-const CACHE_NAME = "ocholasupernet-shell-v1";
+const CACHE_NAME = "ocholasupernet-shell-v2-full-logo";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
-  "/ocholasupernet-app-icon-192.png",
-  "/ocholasupernet-app-icon-512.png",
-  "/ocholasupernet-app-icon-maskable-512.png",
+  "/ocholasupernet-app-icon-full-192.png",
+  "/ocholasupernet-app-icon-full-512.png",
+  "/ocholasupernet-app-icon-full-maskable-512.png",
 ];
 
 self.addEventListener("install", (event) => {

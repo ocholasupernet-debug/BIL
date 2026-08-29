@@ -11,19 +11,19 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/ocholasupernet-app-icon-192.png",
+      "src": "/ocholasupernet-app-icon-full-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/ocholasupernet-app-icon-512.png",
+      "src": "/ocholasupernet-app-icon-full-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/ocholasupernet-app-icon-maskable-512.png",
+      "src": "/ocholasupernet-app-icon-full-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
