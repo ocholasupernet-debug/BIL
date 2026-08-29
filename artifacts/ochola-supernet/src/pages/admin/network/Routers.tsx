@@ -753,7 +753,7 @@ export default function Routers() {
           host:     r.host,
           username: r.router_username || "admin",
           password: r.router_secret   || "",
-          bridgeIp: r.bridge_ip       || undefined,
+          bridgeIp: r.vpn_ip          || undefined,
         }),
       });
       const json = await res.json() as { ok: boolean; message?: string; error?: string };
@@ -1054,9 +1054,9 @@ export default function Routers() {
                           {r.host || r.ip_address || "—"}
                         </td>
 
-                        {/* VPN IP (Tunnel) */}
+                        {/* MANAGEMENT VPN IP (Tunnel) */}
                         <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
-                          {r.bridge_ip || "—"}
+                          {r.vpn_ip || "—"}
                         </td>
 
                         {/* PROXY (Backup) */}
@@ -1132,7 +1132,7 @@ export default function Routers() {
                             : pingSt === "online"
                                ? <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
                                    <StatusDot online={true} />
-                                   {(pingRes.via === "vpn" || (r.last_connected_host && r.bridge_ip === r.last_connected_host)) && (
+                                   {(pingRes.via === "vpn" || (r.last_connected_host && r.vpn_ip === r.last_connected_host)) && (
                                      <span style={{ fontSize: "0.65rem", color: "#4ade80", whiteSpace: "nowrap" }}>API via VPN</span>
                                    )}
                                  </span>
@@ -1148,7 +1148,7 @@ export default function Routers() {
                                 : online
                                    ? <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
                                        <StatusDot online={true} />
-                                       {r.last_connected_host && r.bridge_ip === r.last_connected_host && (
+                                       {r.last_connected_host && r.vpn_ip === r.last_connected_host && (
                                          <span style={{ fontSize: "0.65rem", color: "#4ade80", whiteSpace: "nowrap" }}>API via VPN</span>
                                        )}
                                      </span>

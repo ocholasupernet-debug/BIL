@@ -57,13 +57,17 @@ function discoverVpnIp(
   configuredVpnIp?: string | null,
 ): string | undefined {
   const clients = readVpnClients();
+  const managementIp = (value: string | null | undefined): string | undefined => {
+    const ip = value?.trim() ?? "";
+    return /^10\.8\.5\.\d+$/.test(ip) ? ip : undefined;
+  };
   /* The persisted management address is authoritative. A live status-file
      match is useful for older records, but must not replace a configured
-     10.8.5.x address with a legacy/customer tunnel address. */
-  return configuredVpnIp?.trim()
-    || vpnIpFor(name, clients)
-    || vpnIpFor(cleanRouterHost(host), clients)
-    || configuredIp?.trim()
+     10.8.5.x address with a legacy/customer tunnel address or LAN gateway. */
+  return managementIp(configuredVpnIp)
+    || managementIp(vpnIpFor(name, clients))
+    || managementIp(vpnIpFor(cleanRouterHost(host), clients))
+    || managementIp(configuredIp)
     || undefined;
 }
 

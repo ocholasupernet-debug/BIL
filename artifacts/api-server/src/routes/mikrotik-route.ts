@@ -172,8 +172,9 @@ function rowToCreds(row: SbRouter): RouterCredentials {
   /* Prefer host (normally the public IP); only the dedicated vpn_ip is a
      tunnel fallback. bridge_ip is the router's local LAN/hotspot gateway. */
   const primaryHost = row.host?.trim() || "";
-  const vpnFallback = row.vpn_ip?.trim()
-    || (isVpnTunnelIp(row.bridge_ip ?? "") ? row.bridge_ip?.trim() : undefined);
+  const vpnFallback = isManagementVpnIp(row.vpn_ip ?? "")
+    ? row.vpn_ip?.trim()
+    : (isManagementVpnIp(row.bridge_ip ?? "") ? row.bridge_ip?.trim() : undefined);
 
   /* Auto-detect SSL: if host contains :8729 pattern or is explicitly set */
   const useSSL = false; /* Can be extended via Supabase column later */
@@ -189,9 +190,9 @@ function rowToCreds(row: SbRouter): RouterCredentials {
   };
 }
 
-/* ── VPN IP helper: true if IP is a VPN tunnel IP (10.8–11.x.x) ─────────── */
-function isVpnTunnelIp(ip: string): boolean {
-  return /^10\.(8|9|10|11)\.\d+\.\d+$/.test(ip);
+/* ── Management VPN helper: persistent router addresses are 10.8.5.x ───── */
+function isManagementVpnIp(ip: string): boolean {
+  return /^10\.8\.5\.\d+$/.test(ip);
 }
 
 /* ── True if IP is a LAN-only address unreachable from VPS ──────────────── */
@@ -212,17 +213,17 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
     `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
   );
   const row = rows[0];
-  if (!row || (!row.host?.trim() && !row.bridge_ip?.trim() && !row.vpn_ip?.trim())) return null;
+  if (!row || (!row.host?.trim() && !isManagementVpnIp(row.vpn_ip ?? "") && !isManagementVpnIp(row.bridge_ip ?? ""))) return null;
 
   const creds = rowToCreds(row);
 
   /* ── VPN IP auto-injection ──────────────────────────────────────────────
-     If bridge_ip is missing or is a LAN-only IP (unreachable from the VPS),
-     look up the router's VPN tunnel IP from the OpenVPN server status file.
+     If a management VPN IP is missing, or the legacy bridge_ip value is
+     only a LAN address, look up the router's tunnel IP from OpenVPN status.
      This lets the backend connect via the VPN tunnel without any firewall
      rule changes on the router's WAN interface.
   ── */
-  const bridgeIpUsable = creds.bridgeIp && isVpnTunnelIp(creds.bridgeIp);
+  const bridgeIpUsable = creds.bridgeIp && isManagementVpnIp(creds.bridgeIp);
   if (!bridgeIpUsable && creds.host) {
     const vpnClients = readVpnClients();
     /* Match by WAN IP (real IP seen by VPN server) */
@@ -531,7 +532,7 @@ router.get("/router/:id/probe", async (req, res): Promise<void> => {
 
   const found = await getRouterCreds(id);
   if (!found) {
-    res.status(404).json({ error: "Router not found or has no host/bridge_ip configured" });
+    res.status(404).json({ error: "Router not found or has no public host/management VPN IP configured" });
     return;
   }
 
@@ -801,10 +802,11 @@ router.get("/router/:id/vpn-setup-script", async (req, res): Promise<void> => {
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
   const { row } = found;
-  /* Prefer the stored public host; fall back to bridge_ip if no public host */
+  /* Prefer the stored public host; a LAN gateway is not a router-management
+     VPN endpoint and must not be emitted as one. */
   const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
     ? row.host.trim()
-    : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+    : (row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
   const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
   const vpnPassword = managedVpnPassword(row);
   if (!vpnPassword) {
@@ -859,7 +861,7 @@ router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
   const { row } = found;
   const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
     ? row.host.trim()
-    : (row.bridge_ip?.trim() || row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
+    : (row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
   const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
   const vpnPassword = managedVpnPassword(row);
   if (!vpnPassword) {
