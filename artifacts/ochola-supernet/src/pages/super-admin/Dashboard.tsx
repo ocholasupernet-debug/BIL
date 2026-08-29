@@ -1,276 +1,388 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { useTheme } from "@/hooks/use-theme";
 import { supabase } from "@/lib/supabase";
 import {
-  Users, Router, BarChart3, Activity, CheckCircle2, XCircle,
-  TrendingUp, Globe, Loader2,
+  Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
+  Database, Gauge, Globe, Loader2, RefreshCw, Router, ShieldAlert,
+  Users, XCircle,
 } from "lucide-react";
 
-/* ── Theme tokens for page content ──────────────────────────── */
-const DARK_C = {
-  card:   "rgba(255,255,255,0.04)",
-  border: "var(--isp-accent-glow)",
-  text:   "white",
-  muted:  "#64748b",
-  sub:    "#94a3b8",
-  accent: "var(--isp-accent)",
-  rowHover: "rgba(255,255,255,0.02)",
-  rowBorder: "rgba(255,255,255,0.04)",
-};
-const LIGHT_C = {
-  card:   "#ffffff",
-  border: "var(--isp-accent-glow)",
-  text:   "#0f172a",
-  muted:  "#64748b",
-  sub:    "#475569",
-  accent: "var(--isp-accent)",
-  rowHover: "rgba(0,0,0,0.02)",
-  rowBorder: "rgba(0,0,0,0.05)",
-};
+interface AdminRecord {
+  id: number;
+  name: string | null;
+  username: string | null;
+  email: string | null;
+  is_active: boolean | null;
+  subdomain: string | null;
+  role: string | null;
+}
+interface RouterRecord {
+  id: number;
+  name: string | null;
+  host: string | null;
+  status: string | null;
+  admin_id: number | null;
+}
+interface CustomerRecord {
+  id: number;
+  admin_id: number | null;
+  is_active: boolean | null;
+}
+interface PlanRecord {
+  id: number;
+  admin_id: number | null;
+  type: string | null;
+}
 
-/* ── Stat Card ───────────────────────────────────────────────── */
-function StatCard({ label, value, sub, color, icon: Icon, loading, C }: {
-  label: string; value: string | number; sub?: string;
-  color: string; icon: React.ElementType; loading?: boolean;
-  C: typeof DARK_C;
+function isRouterOnline(status: string | null): boolean {
+  const normalized = status?.trim().toLowerCase();
+  return normalized === "online" || normalized === "active";
+}
+
+function StatusBadge({ active, label }: { active: boolean; label?: string }) {
+  return (
+    <span className={`sa-status ${active ? "is-good" : "is-bad"}`}>
+      {active ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
+      {label || (active ? "Active" : "Inactive")}
+    </span>
+  );
+}
+
+function MetricCard({
+  label, value, detail, tone, icon: Icon, loading,
+}: {
+  label: string;
+  value: string | number;
+  detail: React.ReactNode;
+  tone: "accent" | "green" | "amber" | "teal";
+  icon: React.ElementType;
+  loading?: boolean;
 }) {
   return (
-    <div style={{
-      background: C.card,
-      border: `1px solid ${C.border}`,
-      borderRadius: 16, padding: "20px 24px",
-      boxShadow: C.card === "#ffffff" ? "0 1px 4px rgba(0,0,0,0.06)" : "none",
-    }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div>
-          <p style={{ fontSize: "0.68rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", margin: 0 }}>{label}</p>
-          <p style={{ fontSize: "1.75rem", fontWeight: 800, color: C.text, margin: "6px 0 0", lineHeight: 1 }}>
-            {loading ? <Loader2 size={22} className="animate-spin" style={{ color }} /> : value}
-          </p>
-          {sub && <p style={{ fontSize: "0.7rem", color: C.sub, margin: "4px 0 0" }}>{sub}</p>}
-        </div>
-        <div style={{ width: 40, height: 40, borderRadius: 10, background: `${color}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-          <Icon size={18} style={{ color }} />
-        </div>
+    <div className="sa-metric-card" data-tone={tone}>
+      <div className="sa-metric-top">
+        <p className="sa-metric-label">{label}</p>
+        <div className="sa-metric-icon"><Icon size={16} /></div>
       </div>
+      <p className="sa-metric-value">
+        {loading ? <Loader2 size={22} className="animate-spin" /> : value}
+      </p>
+      <p className="sa-metric-sub">{detail}</p>
     </div>
   );
 }
 
-/* ── Status Badge ────────────────────────────────────────────── */
-function StatusBadge({ active }: { active: boolean }) {
-  return active ? (
-    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-green-400/10 text-green-500 border border-green-400/25">
-      <CheckCircle2 size={10} /> Active
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.68rem] font-bold bg-red-400/10 text-red-500 border border-red-400/25">
-      <XCircle size={10} /> Inactive
-    </span>
+function CardHeading({
+  icon: Icon, title, description, count,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description?: string;
+  count?: number;
+}) {
+  return (
+    <div className="sa-card-head">
+      <div className="sa-card-head-icon"><Icon size={14} /></div>
+      <div>
+        <h2>{title}</h2>
+        {description && <p>{description}</p>}
+      </div>
+      {count !== undefined && <span className="sa-card-head-count">{count}</span>}
+    </div>
   );
 }
 
-/* ── Main Page ───────────────────────────────────────────────── */
 export default function SuperAdminDashboard() {
-  const { isDark } = useTheme();
-  const C = isDark ? DARK_C : LIGHT_C;
+  const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
 
-  const { data: admins = [], isLoading: loadingAdmins } = useQuery({
+  const adminsQuery = useQuery<AdminRecord[]>({
     queryKey: ["sa_all_admins"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_admins").select("id,name,username,email,is_active,subdomain,role,created_at").order("id");
+      const { data, error } = await supabase
+        .from("isp_admins")
+        .select("id,name,username,email,is_active,subdomain,role,created_at")
+        .order("id");
+      if (error) throw error;
       return data ?? [];
     },
   });
-
-  const { data: routers = [], isLoading: loadingRouters } = useQuery({
+  const routersQuery = useQuery<RouterRecord[]>({
     queryKey: ["sa_all_routers"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host,status,admin_id").order("id");
+      const { data, error } = await supabase
+        .from("isp_routers")
+        .select("id,name,host,status,admin_id")
+        .order("id");
+      if (error) throw error;
       return data ?? [];
     },
   });
-
-  const { data: customers = [], isLoading: loadingCustomers } = useQuery({
+  const customersQuery = useQuery<CustomerRecord[]>({
     queryKey: ["sa_all_customers"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_customers").select("id,admin_id,is_active").order("id");
+      const { data, error } = await supabase
+        .from("isp_customers")
+        .select("id,admin_id,is_active")
+        .order("id");
+      if (error) throw error;
       return data ?? [];
     },
   });
-
-  const { data: plans = [], isLoading: loadingPlans } = useQuery({
+  const plansQuery = useQuery<PlanRecord[]>({
     queryKey: ["sa_all_plans"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_plans").select("id,admin_id,type").order("id");
+      const { data, error } = await supabase
+        .from("isp_plans")
+        .select("id,admin_id,type")
+        .order("id");
+      if (error) throw error;
       return data ?? [];
     },
   });
 
-  const topAdmins       = admins.slice(0, 8);
-  const onlineRouters   = routers.filter(r => r.status === "online" || r.status === "active").length;
-  const activeAdmins    = admins.filter(a => a.is_active).length;
-  const activeCustomers = customers.filter(c => c.is_active !== false).length;
+  const admins = adminsQuery.data ?? [];
+  const routers = routersQuery.data ?? [];
+  const customers = customersQuery.data ?? [];
+  const plans = plansQuery.data ?? [];
+  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError;
 
-  const healthItems = [
-    { label: "Database",   value: "Healthy"    },
-    { label: "API Server", value: "Running"    },
-    { label: "RADIUS",     value: "Active"     },
-    { label: "Backups",    value: "Up to date" },
-  ];
+  const activeAdmins = admins.filter((admin) => admin.is_active !== false).length;
+  const inactiveAdmins = admins.filter((admin) => admin.is_active === false);
+  const onlineRouters = routers.filter((router) => isRouterOnline(router.status)).length;
+  const offlineRouters = routers.filter((router) => !isRouterOnline(router.status));
+  const activeCustomers = customers.filter((customer) => customer.is_active !== false).length;
+  const routerAvailability = routers.length ? `${Math.round((onlineRouters / routers.length) * 100)}%` : "—";
+  const planOwners = new Set(
+    plans.map((plan) => plan.admin_id).filter((adminId): adminId is number => adminId !== null),
+  ).size;
 
-  const cardStyle = {
-    background: C.card,
-    border: `1px solid ${C.border}`,
-    borderRadius: 16,
-    boxShadow: !isDark ? "0 1px 4px rgba(0,0,0,0.06)" : "none",
+  const adminCustomerCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    customers.forEach((customer) => {
+      if (customer.admin_id !== null) counts.set(customer.admin_id, (counts.get(customer.admin_id) || 0) + 1);
+    });
+    return counts;
+  }, [customers]);
+
+  const adminRouterCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    routers.forEach((router) => {
+      if (router.admin_id !== null) counts.set(router.admin_id, (counts.get(router.admin_id) || 0) + 1);
+    });
+    return counts;
+  }, [routers]);
+
+  const visibleAdmins = useMemo(() => {
+    return [...admins]
+      .sort((a, b) => Number(a.is_active !== false) - Number(b.is_active !== false) || a.id - b.id)
+      .slice(0, 8);
+  }, [admins]);
+
+  const retryAll = () => {
+    void Promise.all([
+      adminsQuery.refetch(),
+      routersQuery.refetch(),
+      customersQuery.refetch(),
+      plansQuery.refetch(),
+    ]).then(() => setLastRefresh(new Date()));
   };
 
   return (
     <SuperAdminLayout>
-      <div style={{ maxWidth: 1200 }}>
-
-        {/* ── Header ── */}
-        <div style={{ marginBottom: 28 }}>
-          <h1 style={{ fontSize: "1.5rem", fontWeight: 800, color: C.text, margin: 0 }}>Platform Overview</h1>
-          <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.85rem" }}>
-            Real-time view of all ISPs, routers, and customers on the platform.
-          </p>
+      <div className="sa-dashboard">
+        <div className="sa-page-head">
+          <div>
+            <p className="sa-eyebrow"><span className="sa-eyebrow-mark" /> Control room</p>
+            <h1>Platform overview</h1>
+            <p>One view across tenants, network infrastructure, and the customer base. Counts below are read directly from the platform tables.</p>
+          </div>
+          <div className="sa-snapshot" title="Time this dashboard last requested its data">
+            <Database size={12} />
+            <span>Snapshot {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <button onClick={retryAll} aria-label="Refresh dashboard data" title="Refresh dashboard data" style={{ display: "inline-flex", border: 0, padding: 0, color: "inherit", background: "transparent", cursor: "pointer" }}>
+              <RefreshCw size={12} />
+            </button>
+          </div>
         </div>
 
-        {/* ── Stat Cards ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16, marginBottom: 28 }}>
-          <StatCard C={C} label="Total ISP Admins" value={admins.length}    sub={`${activeAdmins} active`}    color="var(--isp-accent)" icon={Users}    loading={loadingAdmins}    />
-          <StatCard C={C} label="Total Routers"    value={routers.length}   sub={`${onlineRouters} online`}   color="var(--isp-accent)" icon={Router}   loading={loadingRouters}   />
-          <StatCard C={C} label="Total Customers"  value={customers.length} sub={`${activeCustomers} active`} color="var(--isp-accent)" icon={Globe}    loading={loadingCustomers} />
-          <StatCard C={C} label="Total Plans"      value={plans.length}     sub="across all ISPs"             color="#f59e0b" icon={BarChart3} loading={loadingPlans}     />
+        {hasError && (
+          <div className="dashboard-error" role="alert">
+            <AlertTriangle size={15} />
+            <span>Some platform data could not be read. Existing values may be incomplete.</span>
+            <button className="dashboard-error-retry" onClick={retryAll}>Retry</button>
+          </div>
+        )}
+
+        <div className="sa-command-grid">
+          <MetricCard
+            label="ISP admins"
+            value={adminsQuery.isError ? "—" : admins.length}
+            detail={adminsQuery.isError ? "Data unavailable" : <><strong>{activeAdmins}</strong> active · {inactiveAdmins.length} inactive</>}
+            tone="accent"
+            icon={Users}
+            loading={adminsQuery.isLoading}
+          />
+          <MetricCard
+            label="Routers"
+            value={routersQuery.isError ? "—" : routers.length}
+            detail={routersQuery.isError ? "Data unavailable" : <><strong>{onlineRouters}</strong> online · {offlineRouters.length} not online</>}
+            tone="green"
+            icon={Router}
+            loading={routersQuery.isLoading}
+          />
+          <MetricCard
+            label="Customers"
+            value={customersQuery.isError ? "—" : customers.length}
+            detail={customersQuery.isError ? "Data unavailable" : <><strong>{activeCustomers}</strong> active records</>}
+            tone="teal"
+            icon={Globe}
+            loading={customersQuery.isLoading}
+          />
+          <MetricCard
+            label="Plans"
+            value={plansQuery.isError ? "—" : plans.length}
+            detail={plansQuery.isError ? "Data unavailable" : <><strong>{planOwners}</strong> ISP admins with plans</>}
+            tone="amber"
+            icon={BarChart3}
+            loading={plansQuery.isLoading}
+          />
         </div>
 
-        {/* ── Two-column body ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
-
-          {/* ── Admins Table ── */}
-          <div style={{ ...cardStyle, overflow: "hidden" }}>
-            <div style={{ padding: "18px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
-              <Users size={16} color={C.accent} />
-              <span style={{ fontWeight: 700, color: C.text, fontSize: "0.9rem" }}>Registered ISP Admins</span>
-              <span style={{ marginLeft: "auto", background: "var(--isp-accent-glow)", color: C.accent, fontSize: "0.7rem", fontWeight: 700, padding: "2px 8px", borderRadius: 12 }}>
-                {admins.length}
-              </span>
+        <div className="sa-attention">
+          <div className={`sa-attention-item${inactiveAdmins.length ? " is-alert" : ""}`}>
+            <div className="sa-attention-icon">
+              {inactiveAdmins.length ? <ShieldAlert size={15} /> : <CheckCircle2 size={15} />}
             </div>
+            <div className="sa-attention-copy">
+              <p className="sa-attention-label">Admin attention</p>
+              <p className="sa-attention-value">{adminsQuery.isError ? "Admin data unavailable" : inactiveAdmins.length ? `${inactiveAdmins.length} inactive admin${inactiveAdmins.length === 1 ? "" : "s"}` : "No inactive admins recorded"}</p>
+            </div>
+          </div>
+          <div className={`sa-attention-item${offlineRouters.length ? " is-alert" : ""}`}>
+            <div className="sa-attention-icon">
+              {offlineRouters.length ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+            </div>
+            <div className="sa-attention-copy">
+              <p className="sa-attention-label">Router attention</p>
+              <p className="sa-attention-value">{routersQuery.isError ? "Router data unavailable" : offlineRouters.length ? `${offlineRouters.length} router${offlineRouters.length === 1 ? "" : "s"} not online` : "All recorded routers are online"}</p>
+            </div>
+          </div>
+        </div>
 
-            {loadingAdmins ? (
-              <div style={{ padding: 40, textAlign: "center", color: C.muted }}>
-                <Loader2 size={24} className="animate-spin mx-auto mb-2" />
-                <p style={{ margin: 0, fontSize: "0.8rem" }}>Loading admins…</p>
+        <div className="sa-columns">
+          <section className="sa-card">
+            <CardHeading icon={Users} title="ISP admin register" description="Tenant owners and observed resource counts" count={admins.length} />
+            {adminsQuery.isLoading ? (
+              <div aria-label="Loading admins">
+                {[1, 2, 3, 4].map((item) => <div className="sa-skeleton" key={item} />)}
               </div>
-            ) : topAdmins.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: C.muted, fontSize: "0.85rem" }}>No admins registered yet.</div>
+            ) : visibleAdmins.length === 0 ? (
+              <div className="sa-empty">No ISP admin records are available.</div>
             ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+              <div className="sa-table-wrap">
+                <table className="sa-table">
                   <thead>
-                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                      {["Name", "Username", "Subdomain", "Role", "Status"].map(h => (
-                        <th key={h} style={{ textAlign: "left", padding: "10px 16px", color: C.muted, fontWeight: 600, fontSize: "0.65rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</th>
-                      ))}
+                    <tr>
+                      <th>Admin</th>
+                      <th>Tenant</th>
+                      <th>Resources</th>
+                      <th>Status</th>
+                      <th aria-label="Open admin management" />
                     </tr>
                   </thead>
                   <tbody>
-                    {topAdmins.map(a => (
-                      <tr key={a.id} style={{ borderBottom: `1px solid ${C.rowBorder}` }}
-                        onMouseEnter={e => (e.currentTarget.style.background = C.rowHover)}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                      >
-                        <td style={{ padding: "12px 16px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg,var(--isp-accent),var(--isp-accent))", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              <span style={{ fontSize: "0.65rem", fontWeight: 800, color: "white" }}>{(a.name || a.username || "?")[0].toUpperCase()}</span>
+                    {visibleAdmins.map((admin) => (
+                      <tr key={admin.id}>
+                        <td>
+                          <div className="sa-admin-cell">
+                            <div className="sa-admin-mark">{(admin.name || admin.username || "?")[0].toUpperCase()}</div>
+                            <div>
+                              <div className="sa-admin-name">{admin.name || admin.username || "Unnamed admin"}</div>
+                              <div className="sa-mono">{admin.username || "no username"}</div>
                             </div>
-                            <span style={{ fontWeight: 700, color: C.text }}>{a.name || a.username}</span>
                           </div>
                         </td>
-                        <td style={{ padding: "12px 16px", color: C.sub, fontFamily: "monospace" }}>{a.username}</td>
-                        <td style={{ padding: "12px 16px" }}>
-                          {a.subdomain
-                            ? <span style={{ fontFamily: "monospace", fontSize: "0.72rem", color: C.accent }}>{a.subdomain}.isplatty.org</span>
-                            : <span style={{ color: C.muted, fontSize: "0.72rem" }}>—</span>
-                          }
-                        </td>
-                        <td style={{ padding: "12px 16px" }}>
-                          <span style={{ background: "var(--isp-accent-glow)", color: "var(--isp-accent)", padding: "2px 8px", borderRadius: 12, fontSize: "0.68rem", fontWeight: 700 }}>
-                            {a.role || "admin"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "12px 16px" }}><StatusBadge active={a.is_active !== false} /></td>
+                        <td className="sa-mono">{admin.subdomain ? `${admin.subdomain}.isplatty.org` : "—"}</td>
+                        <td className="sa-mono">{adminCustomerCounts.get(admin.id) || 0} customers · {adminRouterCounts.get(admin.id) || 0} routers</td>
+                        <td><StatusBadge active={admin.is_active !== false} /></td>
+                        <td><Link className="sa-table-link" href="/super-admin/admins">Manage <ArrowUpRight size={12} /></Link></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
-          </div>
-
-          {/* ── Right Column ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-            {/* Router Status */}
-            <div style={{ ...cardStyle, padding: "18px 20px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-                <Router size={15} color={C.accent} />
-                <span style={{ fontWeight: 700, color: C.text, fontSize: "0.85rem" }}>Router Status</span>
+            {admins.length > visibleAdmins.length && (
+              <div style={{ padding: "12px 17px", borderTop: "1px solid var(--sa-line)", textAlign: "right" }}>
+                <Link className="sa-table-link" href="/super-admin/admins">View all {admins.length} admins <ArrowUpRight size={12} /></Link>
               </div>
-              {loadingRouters ? (
-                <p style={{ color: C.muted, fontSize: "0.8rem", textAlign: "center" }}>Loading…</p>
+            )}
+          </section>
+
+          <div className="sa-side-stack">
+            <section className="sa-card">
+              <CardHeading icon={Router} title="Router watch" description="Status values reported by router records" count={routers.length} />
+              {routersQuery.isLoading ? (
+                <div aria-label="Loading routers">{[1, 2, 3].map((item) => <div className="sa-skeleton" key={item} />)}</div>
               ) : routers.length === 0 ? (
-                <p style={{ color: C.muted, fontSize: "0.8rem", textAlign: "center" }}>No routers found.</p>
+                <div className="sa-empty">No router records are available.</div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {routers.slice(0, 6).map(r => {
-                    const isOnline = r.status === "online" || r.status === "active";
+                <div className="sa-list">
+                  {[...offlineRouters, ...routers.filter((router) => isRouterOnline(router.status))].slice(0, 6).map((router) => {
+                    const online = isRouterOnline(router.status);
                     return (
-                      <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: "0.78rem", color: C.sub, fontFamily: "monospace" }}>{r.name}</span>
-                        <span style={{
-                          fontSize: "0.65rem", fontWeight: 700, padding: "2px 8px", borderRadius: 10,
-                          background: isOnline ? "rgba(74,222,128,0.12)" : "var(--isp-accent-glow)",
-                          color: isOnline ? "#16a34a" : C.accent,
-                        }}>
-                          {r.status || "unknown"}
-                        </span>
+                      <div className="sa-list-row" key={router.id}>
+                        <div className="sa-list-main">
+                          <span className={`sa-list-dot${online ? " is-good" : ""}`} />
+                          <div>
+                            <p className="sa-list-name">{router.name || router.host || `Router ${router.id}`}</p>
+                            <p className="sa-list-meta">{router.host || "Host not recorded"}</p>
+                          </div>
+                        </div>
+                        <span className="sa-list-state">{router.status || "unknown"}</span>
                       </div>
                     );
                   })}
                 </div>
               )}
-            </div>
+              <div style={{ padding: "0 17px 16px", textAlign: "right" }}>
+                <Link className="sa-table-link" href="/super-admin/routers">Open router management <ArrowUpRight size={12} /></Link>
+              </div>
+            </section>
 
-            {/* Platform Health */}
-            <div style={{ ...cardStyle, padding: "18px 20px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-                <Activity size={15} color={C.accent} />
-                <span style={{ fontWeight: 700, color: C.text, fontSize: "0.85rem" }}>Platform Health</span>
+            <section className="sa-card">
+              <CardHeading icon={Activity} title="Observed signals" description="Measurable records available in this view" />
+              <div className="sa-list">
+                <div className="sa-list-row">
+                  <div className="sa-list-main"><Gauge size={14} color="var(--isp-accent)" /><p className="sa-list-name">Router availability</p></div>
+                  <span className="sa-list-state">{routersQuery.isError ? "unavailable" : routerAvailability}</span>
+                </div>
+                <div className="sa-list-row">
+                  <div className="sa-list-main"><Users size={14} color="var(--isp-accent)" /><p className="sa-list-name">Active admin share</p></div>
+                  <span className="sa-list-state">{adminsQuery.isError ? "unavailable" : admins.length ? `${Math.round((activeAdmins / admins.length) * 100)}%` : "—"}</span>
+                </div>
+                <div className="sa-list-row">
+                  <div className="sa-list-main"><Globe size={14} color="var(--isp-accent)" /><p className="sa-list-name">Active customer share</p></div>
+                  <span className="sa-list-state">{customersQuery.isError ? "unavailable" : customers.length ? `${Math.round((activeCustomers / customers.length) * 100)}%` : "—"}</span>
+                </div>
               </div>
-              <div>
-                {healthItems.map((item, i) => (
-                  <div key={item.label} style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    paddingBottom: 10, marginBottom: i < healthItems.length - 1 ? 10 : 0,
-                    borderBottom: i < healthItems.length - 1 ? `1px solid ${C.rowBorder}` : "none",
-                  }}>
-                    <span style={{ fontSize: "0.78rem", color: C.sub }}>{item.label}</span>
-                    <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#16a34a" }}>{item.value}</span>
-                  </div>
-                ))}
+              <div className="sa-health-note">
+                <Activity size={13} />
+                <span>This dashboard reports database records and router status values. It does not run separate API, RADIUS, or backup health checks.</span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12 }}>
-                <TrendingUp size={13} color="#16a34a" />
-                <span style={{ fontSize: "0.72rem", color: "#16a34a", fontWeight: 600 }}>All systems operational</span>
-              </div>
-            </div>
+            </section>
 
+            <section className="sa-card">
+              <CardHeading icon={ArrowUpRight} title="Jump to service" description="Open the existing management surfaces" />
+              <div className="sa-quick-links">
+                <Link className="sa-quick-link" href="/super-admin/admins"><Users size={14} /> ISP admins</Link>
+                <Link className="sa-quick-link" href="/super-admin/routers"><Router size={14} /> Routers</Link>
+                <Link className="sa-quick-link" href="/super-admin/payment-packages"><BarChart3 size={14} /> Packages</Link>
+                <Link className="sa-quick-link" href="/super-admin/reports"><Database size={14} /> Reports</Link>
+              </div>
+            </section>
           </div>
         </div>
       </div>
