@@ -162,7 +162,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    font-size: 18px;
+    font-size: var(--isp-font-size, 18px);
   }
 
   body {
@@ -171,6 +171,9 @@
     background: var(--isp-bg);
     color: var(--isp-text);
     font-size: 1rem;
+    font-family: var(--isp-font-family, 'DM Sans', system-ui, sans-serif);
+    font-style: var(--isp-font-style, normal);
+    font-weight: var(--isp-font-weight, 500);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -180,6 +183,13 @@
     color: var(--isp-text);
     line-height: 1.2;
   }
+}
+
+/* ISP admins can choose typography once and have it apply consistently to
+   the control panel, including components that use inline styles. */
+body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
+  font-family: var(--isp-font-family, 'DM Sans', system-ui, sans-serif) !important;
+  font-style: var(--isp-font-style, normal);
 }
 
 /* ═══════════════════════════════════════════════════════════════════

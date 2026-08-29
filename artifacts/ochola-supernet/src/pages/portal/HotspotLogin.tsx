@@ -987,26 +987,9 @@ export default function HotspotLogin() {
                                         {deviceMacAddress && <span className="hp-device-state"><CheckCircle2 size={12} /> Detected</span>}
                                       </div>
                                       {!deviceMacAddress && (
-                                        <div className="hp-input-group">
-                                          <label className="hp-label" htmlFor="device-mac-address">Device MAC address</label>
-                                          <div className="hp-input-wrap">
-                                            <Wifi size={15} className="hp-input-icon" />
-                                            <input
-                                              id="device-mac-address"
-                                              className="hp-input hp-input-left"
-                                              type="text"
-                                              inputMode="text"
-                                              autoComplete="off"
-                                              maxLength={17}
-                                              placeholder="AA:BB:CC:DD:EE:FF"
-                                              required
-                                              value={deviceMacAddress}
-                                              onChange={e => setDeviceMacAddress(e.target.value.toUpperCase().replace(/[^0-9A-F:-]/g, ""))}
-                                            />
-                                          </div>
-                                          <p style={{ fontSize: 10, color: "rgba(255,255,255,0.3)", marginTop: 6 }}>
-                                            This is normally filled automatically by the MikroTik captive portal.
-                                          </p>
+                                        <div className="hp-error" role="alert">
+                                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                                          This device was not identified by the MikroTik login prompt. Reopen the Wi-Fi sign-in page to continue; a MAC address cannot be safely collected by browser JavaScript.
                                         </div>
                                       )}
                                       <div className="hp-input-group">
@@ -1025,7 +1008,7 @@ export default function HotspotLogin() {
                                         </div>
                                       )}
 
-                                      <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
+                                       <button type="submit" disabled={payLoading || !deviceMacAddress} className="hp-btn hp-btn-mpesa">
                                         {payLoading ? (
                                           <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                         ) : (

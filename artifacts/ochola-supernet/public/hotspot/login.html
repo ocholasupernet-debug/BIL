@@ -67,6 +67,9 @@
 
     .dot-live{width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.2)}
     .dot-live-anim{animation:pulse 2s ease-in-out infinite}
+
+    html{font-size:var(--portal-font-size,16px)}
+    body,button,input,select,textarea{font-family:var(--portal-font-family,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif);font-style:var(--portal-font-style,normal);font-weight:var(--portal-font-weight,400)}
   </style>
 </head>
 <body>
@@ -375,11 +378,47 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
-var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", pollTimer=null, pollCount=0;
+var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0;
+var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="";
+var ROUTER_MAC="$(mac)";
+var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
+
+function normaliseMac(value){
+  var raw=String(value||"").trim();
+  if(!/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(raw)&&!/^[0-9a-f]{12}$/i.test(raw))return "";
+  var compact=raw.replace(/[:-]/g,"");
+  return compact.toUpperCase().match(/.{2}/g).join(":");
+}
+var DEVICE_MAC=normaliseMac(ROUTER_MAC);
+function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
+function applyPortalTypography(data){
+  if(!data||!SAFE_FONT_FAMILIES.includes(data.fontFamily))return;
+  var style=data.fontStyle==="italic"||data.fontStyle==="oblique"?data.fontStyle:"normal";
+  var weight=[400,500,600,700,800].indexOf(Number(data.fontWeight))>=0?Number(data.fontWeight):500;
+  var size=Number(data.fontSize);
+  if(!Number.isInteger(size)||size<12||size>24)size=18;
+  document.documentElement.style.setProperty("--portal-font-family",'"'+data.fontFamily+'",system-ui,sans-serif');
+  document.documentElement.style.setProperty("--portal-font-style",style);
+  document.documentElement.style.setProperty("--portal-font-weight",String(weight));
+  document.documentElement.style.setProperty("--portal-font-size",size+"px");
+  if(typeof data.apiBase==="string"&&/^https?:\/\//i.test(data.apiBase))PORTAL_API_BASE=data.apiBase.replace(/\/$/,"");
+}
+
+function loadPortalTypography(done){
+  fetch("typography.json",{cache:"no-store"})
+    .then(function(r){return r.ok?r.json():null;})
+    .then(function(data){
+      if(data&&Number.isSafeInteger(Number(data.adminId)))PORTAL_ADMIN_ID=Number(data.adminId);
+      applyPortalTypography(data);
+    })
+    .catch(function(){})
+    .then(done);
+}
 
 /* ── Load plans from API (fallback to hardcoded) ── */
 function loadPlans(){
-  fetch("/api/plans?type=hotspot")
+  var query=PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
+  fetch(apiUrl("/api/plans?type=hotspot"+query))
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
       if(data&&data.length){
@@ -439,10 +478,13 @@ function renderModal(){
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
       '<p style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
+      '<div style="border-radius:.625rem;padding:.75rem 1rem;margin-bottom:1.25rem;background:'+(DEVICE_MAC?'rgba(16,185,129,.08)':'rgba(245,158,11,.08)')+';border:1px solid '+(DEVICE_MAC?'rgba(16,185,129,.22)':'rgba(245,158,11,.22)')+';color:'+(DEVICE_MAC?'#a7f3d0':'#fde68a')+';font-size:.75rem;line-height:1.5">'+
+      (DEVICE_MAC?'This device was detected automatically: <strong>'+DEVICE_MAC+'</strong>':'This Wi-Fi login did not provide a device MAC address. Reopen the captive-portal sign-in page to continue.')+
+      '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
       '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
-      '<button onclick="sendStk()" class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem">'+
+      '<button onclick="sendStk()" '+(DEVICE_MAC&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(DEVICE_MAC&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
       'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
       '</button>';
   }else if(stkState==="loading"){
@@ -469,7 +511,7 @@ function renderModal(){
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(239,68,68,.12);border:2px solid rgba(239,68,68,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#f87171" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></div>'+
       '<p style="font-size:1.0625rem;font-weight:800;color:#f87171;margin-bottom:.5rem">Payment Failed</p>'+
-      '<p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.5rem">Something went wrong. Please try again.</p>'+
+       '<p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.5rem">'+(stkError||"Something went wrong. Please try again.")+'</p>'+
       '<button onclick="stkState=\'idle\';renderModal()" class="btn btn-purple btn-full">Try Again</button></div>';
   }else if(stkState==="confirmed"){
     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
@@ -484,35 +526,39 @@ function renderModal(){
 function sendStk(){
   var phone=document.getElementById("stkPhoneInput")?document.getElementById("stkPhoneInput").value:"";
   if(!phone.trim())return;
-  stkPhone=phone; stkState="loading"; renderModal();
-  /* Call billing API to trigger STK push */
-  fetch("/api/mpesa/stk",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:selectedPlan?selectedPlan.price:0})})
-    .then(function(r){return r.ok?r.json():{error:"Failed"};})
-    .catch(function(){return{error:"Network error"};})
+  if(!DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="The captive portal could not identify this device. Reopen the Wi-Fi login page and try again.";stkState="error";renderModal();return;}
+  stkPhone=phone; stkError=""; stkState="loading"; renderModal();
+  var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID,mac_address:DEVICE_MAC};
+  fetch(apiUrl("/api/mpesa/intent"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(checkout)})
+    .then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
+    .catch(function(){return{ok:false,data:{error:"Network error"}};})
     .then(function(data){
-      if(data.error){
-        /* Still show sent UI for UX — real apps can refine this */
-        stkState="sent"; renderModal(); pollCount=0;
-        pollTimer=setInterval(function(){
-          pollCount++;
-          var el=document.getElementById("pollCounter");
-          if(el)el.textContent="Verifying payment… ("+pollCount+"/12)";
-          if(pollCount>=12){clearInterval(pollTimer);stkState="error";renderModal();}
-        },5000);
-      }else{
-        stkState="sent"; renderModal(); pollCount=0;
-        pollTimer=setInterval(function(){
-          pollCount++;
-          var el=document.getElementById("pollCounter");
-          if(el)el.textContent="Verifying payment… ("+pollCount+"/12)";
-          /* Check payment status */
-          fetch("/api/mpesa/status?checkout_id="+(data.CheckoutRequestID||""))
-            .then(function(r){return r.ok?r.json():{};})
-            .then(function(s){if(s.paid){clearInterval(pollTimer);stkState="confirmed";renderModal();}})
-            .catch(function(){});
-          if(pollCount>=12){clearInterval(pollTimer);stkState="error";renderModal();}
-        },5000);
+      if(!data.ok||!data.data||!data.data.paymentIntent){
+        stkError=(data.data&&data.data.error)||"Could not start a secure payment checkout.";
+        stkState="error";renderModal();return;
       }
+      var intentData=data.data;
+      return fetch(apiUrl("/api/mpesa/stk"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:intentData.amount,adminId:PORTAL_ADMIN_ID,
+        account_ref:"Hotspot",paymentIntent:intentData.paymentIntent,mac_address:DEVICE_MAC
+      })}).then(function(r){return r.json().then(function(response){return{ok:r.ok,data:response};});});
+    })
+    .catch(function(){return{ok:false,data:{error:"Network error"}};})
+    .then(function(result){
+      if(!result)return;
+      var data=result.data||{};
+      if(!result.ok||data.error){stkError=data.error||"Failed to send the M-Pesa prompt.";stkState="error";renderModal();return;}
+      stkState="sent"; renderModal(); pollCount=0;
+      pollTimer=setInterval(function(){
+        pollCount++;
+        var el=document.getElementById("pollCounter");
+        if(el)el.textContent="Verifying payment… ("+pollCount+"/12)";
+        fetch(apiUrl("/api/mpesa/status?checkout_id="+encodeURIComponent(data.CheckoutRequestID||"")))
+          .then(function(r){return r.ok?r.json():{};})
+          .then(function(s){if(s.paid){clearInterval(pollTimer);stkState="confirmed";renderModal();}})
+          .catch(function(){});
+        if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
+      },5000);
     });
 }
 
@@ -561,7 +607,7 @@ function submitMpesa(){
 
 function checkWidth(){document.getElementById("alreadyPaidBtn").style.display=window.innerWidth>=640?"block":"none";}
 window.addEventListener("resize",checkWidth); checkWidth();
-loadPlans();
+loadPortalTypography(loadPlans);
 </script>
 </body>
 </html>

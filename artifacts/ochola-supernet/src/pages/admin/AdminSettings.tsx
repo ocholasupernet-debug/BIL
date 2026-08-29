@@ -3,6 +3,13 @@ import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
+import { useTypography } from "@/context/TypographyContext";
+import {
+  FONT_FAMILY_OPTIONS,
+  FONT_STYLE_OPTIONS,
+  FONT_WEIGHT_OPTIONS,
+  type TypographyPreferences,
+} from "@/lib/typography";
 import {
   DASHBOARD_COLOR_PRESETS,
   DASHBOARD_LAYOUT_OPTIONS,
@@ -16,6 +23,7 @@ import {
   LogOut, Monitor, ChevronDown, ChevronUp, Smartphone, Mail, Puzzle,
   Send, MessageCircle, Phone, Palette, LayoutDashboard,
   MapPin, Clock, Users, Zap, Wallet, Landmark, Banknote, BarChart3, ReceiptText, TrendingUp,
+  Type,
 } from "lucide-react";
 
 // ─── shared primitives ───────────────────────────────────────────────────────
@@ -1905,11 +1913,164 @@ function PaymentGatewaysTab() {
   );
 }
 
+function TypographyTab() {
+  const current = useTypography();
+  const [draft, setDraft] = useState<TypographyPreferences>({
+    fontFamily: current.fontFamily,
+    fontStyle: current.fontStyle,
+    fontWeight: current.fontWeight,
+    fontSize: current.fontSize,
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!current.loading) {
+      setDraft({
+        fontFamily: current.fontFamily,
+        fontStyle: current.fontStyle,
+        fontWeight: current.fontWeight,
+        fontSize: current.fontSize,
+      });
+    }
+  }, [current.loading, current.fontFamily, current.fontStyle, current.fontWeight, current.fontSize]);
+
+  const update = <K extends keyof TypographyPreferences>(key: K, value: TypographyPreferences[K]) => {
+    setSaved(false);
+    setError("");
+    setDraft(previous => ({ ...previous, [key]: value }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/typography", {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ preferences: draft }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Typography preferences could not be saved.");
+      setSaved(true);
+      window.dispatchEvent(new Event("isp-typography-change"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Typography preferences could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <Card
+        title="Desired Font"
+        desc="Choose the typography used throughout this ISP's admin panel and captive portals."
+      >
+        {current.loading ? (
+          <p style={{ color: C.muted, fontSize: "0.8rem", margin: 0 }}>Loading typography preferences…</p>
+        ) : (
+          <>
+            <Grid2>
+              <Field label="Font family" hint="The selected family is used wherever the interface allows inherited typography.">
+                <Select
+                  value={draft.fontFamily}
+                  onChange={event => update("fontFamily", event.target.value)}
+                  style={{ fontFamily: `"${draft.fontFamily}", system-ui, sans-serif` }}
+                >
+                  {FONT_FAMILY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Font style">
+                <Select
+                  value={draft.fontStyle}
+                  onChange={event => update("fontStyle", event.target.value as TypographyPreferences["fontStyle"])}
+                >
+                  {FONT_STYLE_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Font weight">
+                <Select
+                  value={String(draft.fontWeight)}
+                  onChange={event => update("fontWeight", Number(event.target.value))}
+                >
+                  {FONT_WEIGHT_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label} ({option.value})</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Base font size" hint="Applies from 12px to 24px and keeps the setting readable on smaller screens.">
+                <Input
+                  type="number"
+                  min={12}
+                  max={24}
+                  step={1}
+                  value={draft.fontSize}
+                  onChange={event => update("fontSize", Number(event.target.value))}
+                />
+              </Field>
+            </Grid2>
+
+            <div style={{
+              marginTop: 8,
+              padding: "18px 20px",
+              border: `1px solid ${C.border}`,
+              borderRadius: 10,
+              background: C.input,
+              fontFamily: `"${draft.fontFamily}", system-ui, sans-serif`,
+              fontSize: `${draft.fontSize}px`,
+              fontStyle: draft.fontStyle,
+              fontWeight: draft.fontWeight,
+            }}>
+              <div style={{ fontSize: "0.7em", color: C.cyan, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>Live preview</div>
+              <div style={{ marginTop: 6, color: C.text, lineHeight: 1.25 }}>Network operations at a glance</div>
+              <div style={{ marginTop: 5, fontSize: "0.75em", color: C.muted }}>Payments, customers, and routers in one control room.</div>
+            </div>
+
+            {error && <p role="alert" style={{ color: "#ef4444", fontSize: "0.75rem", margin: "14px 0 0" }}>{error}</p>}
+            {saved && <p role="status" style={{ color: "#10b981", fontSize: "0.75rem", margin: "14px 0 0" }}>Typography saved for this ISP and queued for the next router portal sync.</p>}
+            <Row>
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saving || draft.fontSize < 12 || draft.fontSize > 24 || !Number.isInteger(draft.fontSize)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer",
+                  color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem",
+                  borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.65 : 1,
+                }}
+              >
+                <Save size={13} /> {saving ? "Saving…" : saved ? "Saved" : "Save Typography"}
+              </button>
+            </Row>
+          </>
+        )}
+      </Card>
+
+      <Card title="Where it applies" desc="Typography is scoped to the signed-in ISP account.">
+        <div className="dashboard-builder-notes">
+          <div><Type size={16} /><span><strong>Admin section</strong><small>Navigation, forms, tables, dashboards, and settings inherit your saved choice.</small></span></div>
+          <div><Wifi size={16} /><span><strong>Captive portals</strong><small>New or refreshed MikroTik portal files download the same typography settings.</small></span></div>
+          <div><Shield size={16} /><span><strong>Safe fallback</strong><small>Only curated font families, styles, weights, and readable sizes can be saved.</small></span></div>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 const TABS = [
   { id: "profile",       label: "ISP Profile",       icon: Building2    },
   { id: "billing",       label: "Billing & M-Pesa",  icon: CreditCard   },
   { id: "gateways",      label: "Payment Gateways",  icon: Wallet       },
   { id: "dashboard",     label: "Dashboard Page Builder", icon: LayoutDashboard },
+  { id: "typography",    label: "Desired Font",           icon: Type          },
   { id: "sms",           label: "SMS & Email",        icon: MessageSquare},
   { id: "network",       label: "Network",            icon: Radio        },
   { id: "hotspot",       label: "Hotspot",            icon: Wifi         },
@@ -1966,6 +2127,7 @@ export default function AdminSettings() {
           {tab === "billing"       && <BillingTab />}
           {tab === "gateways"      && <PaymentGatewaysTab />}
           {tab === "dashboard"     && <DashboardBuilderTab />}
+          {tab === "typography"    && <TypographyTab />}
           {tab === "sms"           && <SmsEmailTab />}
           {tab === "network"       && <NetworkTab />}
           {tab === "hotspot"       && <HotspotTab />}

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { BrandProvider } from "@/context/BrandContext";
+import { TypographyProvider } from "@/context/TypographyContext";
 import { AdminPageVisibilityProvider, useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
@@ -214,16 +215,18 @@ function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <BrandProvider>
-          <AdminPageVisibilityProvider>
-            <DashboardPreferencesProvider>
-              <TooltipProvider>
-                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                  <Router />
-                </WouterRouter>
-                <Toaster />
-              </TooltipProvider>
-            </DashboardPreferencesProvider>
-          </AdminPageVisibilityProvider>
+          <TypographyProvider>
+            <AdminPageVisibilityProvider>
+              <DashboardPreferencesProvider>
+                <TooltipProvider>
+                  <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                    <Router />
+                  </WouterRouter>
+                  <Toaster />
+                </TooltipProvider>
+              </DashboardPreferencesProvider>
+            </AdminPageVisibilityProvider>
+          </TypographyProvider>
         </BrandProvider>
       </QueryClientProvider>
     </ThemeProvider>

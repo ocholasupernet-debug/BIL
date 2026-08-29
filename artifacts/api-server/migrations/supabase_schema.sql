@@ -80,6 +80,11 @@ create table if not exists isp_admins (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+alter table public.isp_admins
+  add column if not exists font_family text not null default 'DM Sans',
+  add column if not exists font_style text not null default 'normal',
+  add column if not exists font_weight integer not null default 500,
+  add column if not exists font_size integer not null default 18;
 create unique index if not exists isp_admins_subdomain_username_key
   on isp_admins(subdomain, username)
   where username is not null;

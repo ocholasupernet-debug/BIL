@@ -2285,6 +2285,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       portalFetch(`${portalBase}/hotspot/error.html`,    `error.html`,    `error.html`),
       portalFetch(`${portalBase}/hotspot/errors.txt`,    `errors.txt`,    `errors.txt`),
       portalFetch(`${portalBase}/hotspot/api.json`,      `api.json`,      `api.json`),
+      portalFetch(`${portalBase}/api/public/typography?adminId=${adminId}`, `typography.json`, `typography.json`),
       portalFetch(`${portalBase}/hotspot/xml/login.html`,   `xml/login.html`,   `xml/login.html`),
       portalFetch(`${portalBase}/hotspot/xml/alogin.html`,  `xml/alogin.html`,  `xml/alogin.html`),
       portalFetch(`${portalBase}/hotspot/xml/logout.html`,  `xml/logout.html`,  `xml/logout.html`),
