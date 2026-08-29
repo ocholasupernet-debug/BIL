@@ -71,10 +71,25 @@ pm2 save
 pm2 startup            # follow the printed command to enable on reboot
 ```
 
-### HTTPS with Let's Encrypt
+### HTTPS with Cloudflare DNS-01
 
 ```bash
-sudo certbot --nginx -d YOUR_DOMAIN -d www.YOUR_DOMAIN
+# Keep the domain registered at Namecheap, but change its nameservers to the
+# two nameservers Cloudflare assigns to the isplatty.org zone. Copy every
+# existing DNS record before changing nameservers, including mail records.
+#
+# Create a Cloudflare API token with:
+#   - Zone:Read
+#   - Zone:DNS:Edit
+#   - restricted to the isplatty.org zone
+#
+# Add the token as the encrypted GitHub Actions secret CLOUDFLARE_API_TOKEN.
+# CLOUDFLARE_ZONE_ID is optional; the deployment discovers it by zone name.
+# The deployment stores the token only on the VPS at
+# /etc/letsencrypt/cloudflare-api-token with root-only permissions so the
+# system Certbot renewal timer can renew the certificate without a deploy.
+# The deployment then obtains and renews a certificate for:
+#   isplatty.org, www.isplatty.org, and *.isplatty.org
 ```
 
 ---
