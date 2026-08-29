@@ -10,13 +10,15 @@
     :root{
       --accent:#c026d3; --accent2:#7c3aed;
       --portal-accent:#d96835; --portal-accent-dark:#9e3f1f;
-      --portal-accent-soft:#d968351f; --portal-accent-border:#d9683555;
+       --portal-accent-soft:#d968351f; --portal-accent-border:#d9683555;
+       --portal-bg:#0d0415; --portal-bg2:#1a0735; --portal-card:#1a0f2e;
+       --portal-input:#000; --portal-text:#fff;
       --bg:#0d0415; --surface:rgba(255,255,255,.04);
       --border:rgba(255,255,255,.08); --border-hover:rgba(255,255,255,.16);
     }
     html{scroll-behavior:smooth}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,#0d0415 55%);min-height:100vh;color:white}
-    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0d0415}::-webkit-scrollbar-thumb{background:var(--portal-accent-border);border-radius:3px}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,var(--portal-bg) 55%);min-height:100vh;color:var(--portal-text)}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--portal-bg)}::-webkit-scrollbar-thumb{background:var(--portal-accent-border);border-radius:3px}
 
     @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
@@ -85,19 +87,19 @@
 <header class="hdr">
   <div class="hdr-inner">
     <div style="display:flex;align-items:center;gap:.875rem">
-      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px var(--portal-accent-border)">
+      <div id="portalLogoIcon" style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px var(--portal-accent-border);overflow:hidden">
         <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
       </div>
       <div>
-        <p style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">$(login-title)</p>
+        <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">$(login-title)</p>
         <p style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
       <button onclick="scrollToLogin()" id="alreadyPaidBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(216,180,254,.75);background:none;border:none;cursor:pointer;letter-spacing:.01em">Already Paid? →</button>
-      <a href="tel:0791941974" style="display:flex;align-items:center;gap:.375rem;background:rgba(192,38,211,.15);border:1px solid rgba(192,38,211,.3);color:rgba(240,171,252,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
+      <a id="portalHeaderPhone" href="tel:0791941974" style="display:flex;align-items:center;gap:.375rem;background:rgba(192,38,211,.15);border:1px solid rgba(192,38,211,.3);color:rgba(240,171,252,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>
-        0791941974
+         <span id="portalHeaderPhoneText">0791941974</span>
       </a>
     </div>
   </div>
@@ -125,13 +127,13 @@
       </div>
     </div>
 
-    <h1 style="font-size:clamp(2.125rem,5vw,3.25rem);font-weight:900;line-height:1.08;letter-spacing:-.03em;margin-bottom:1rem">
+    <h1 id="portalHeroTitle" style="font-size:clamp(2.125rem,5vw,3.25rem);font-weight:900;line-height:1.08;letter-spacing:-.03em;margin-bottom:1rem">
       Fast &amp; Reliable<br>
       <span style="background:linear-gradient(90deg,var(--portal-accent) 20%,#a78bfa 60%,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">
         Internet Access
       </span>
     </h1>
-    <p style="color:rgba(216,180,254,.65);font-size:1rem;line-height:1.65;max-width:30rem;margin:0 auto 2.5rem">
+    <p id="portalTagline" style="color:rgba(216,180,254,.65);font-size:1rem;line-height:1.65;max-width:30rem;margin:0 auto 2.5rem">
       Pick a plan below and connect in seconds — pay securely via <strong style="color:rgba(240,171,252,.85);font-weight:600">M-Pesa</strong>.
       No contracts. Instant activation.
     </p>
@@ -153,18 +155,23 @@
   </div>
 </section>
 
+<!-- Optional tenant announcement / maintenance message -->
+<section id="portalAnnouncement" style="display:none;max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 1.25rem">
+  <div id="portalAnnouncementText" style="border-radius:.875rem;padding:.875rem 1.25rem;background:rgba(217,105,53,.12);border:1px solid rgba(217,105,53,.28);color:rgba(255,237,213,.9);font-size:.8375rem;line-height:1.5;text-align:center"></div>
+</section>
+
 <!-- M-Pesa Banner -->
 <div style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
   <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
     <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(52,211,153,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
       <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
     </div>
-    <span style="color:rgba(110,231,183,.9);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — click any plan to pay instantly and get connected</span>
+     <span id="mpesaMessage" style="color:rgba(110,231,183,.9);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — click any plan to pay instantly and get connected</span>
   </div>
 </div>
 
 <!-- Pricing -->
-<section style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
+<section id="plansSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
   <div style="text-align:center;margin-bottom:2.5rem">
     <p style="font-size:.6875rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(192,38,211,.7);margin-bottom:.625rem">Our Packages</p>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">Choose Your Plan</h2>
@@ -238,7 +245,7 @@
 </section>
 
 <!-- Voucher Section -->
-<section style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
+<section id="voucherSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(180,83,9,.25),rgba(146,64,14,.25))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(253,186,116,.65);margin-bottom:.625rem">
@@ -319,19 +326,41 @@
   </div>
 </section>
 
+<!-- Optional trust content -->
+<section id="communitySection" style="display:none;max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem">
+    <div id="testimonialCard" class="sec-card" style="display:none;max-width:none;background:rgba(255,255,255,.035)">
+      <div class="sec-body" style="text-align:center">
+        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.65);margin-bottom:.75rem">Customer feedback</p>
+        <p id="testimonialText" style="color:rgba(255,255,255,.72);font-size:.9375rem;line-height:1.6"></p>
+      </div>
+    </div>
+    <div id="faqCard" class="sec-card" style="display:none;max-width:none;background:rgba(255,255,255,.035)">
+      <div class="sec-body">
+        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.7);margin-bottom:.75rem">Help</p>
+        <div id="faqText" style="color:rgba(255,255,255,.62);font-size:.8125rem;line-height:1.7;white-space:pre-line"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- Footer -->
 <footer style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.25)">
   <div style="display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:.875rem">
     <div style="width:28px;height:28px;border-radius:.5rem;background:linear-gradient(135deg,#a855f7,#7c3aed);display:flex;align-items:center;justify-content:center">
       <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
     </div>
-    <span style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">$(login-title)</span>
+     <span id="portalNameFooter" style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">$(login-title)</span>
   </div>
   <div style="display:flex;align-items:center;justify-content:center;gap:1.25rem;flex-wrap:wrap;margin-bottom:.625rem">
-    <a href="tel:0791941974" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">0791941974</a>
-    <span style="color:rgba(255,255,255,.15)">·</span>
-    <a href="mailto:support@isplatty.org" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">support@isplatty.org</a>
-    <span style="color:rgba(255,255,255,.15)">·</span>
+     <a id="portalFooterPhone" href="tel:0791941974" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">0791941974</a>
+     <span id="portalFooterPhoneDivider" style="color:rgba(255,255,255,.15)">·</span>
+     <a id="portalFooterEmail" href="mailto:support@isplatty.org" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">support@isplatty.org</a>
+     <span id="portalFooterEmailDivider" style="color:rgba(255,255,255,.15)">·</span>
+     <a id="portalTerms" href="#" target="_blank" rel="noreferrer" style="display:none;color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none">Terms</a>
+     <span id="portalTermsDivider" style="display:none;color:rgba(255,255,255,.15)">·</span>
+     <a id="portalPrivacy" href="#" target="_blank" rel="noreferrer" style="display:none;color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none">Privacy</a>
+     <span id="portalPrivacyDivider" style="display:none;color:rgba(255,255,255,.15)">·</span>
     <a href="$(link-status)" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">My Session</a>
   </div>
   <p style="color:rgba(255,255,255,.2);font-size:.75rem">© 2026 OcholaSupernet. Reliable Internet, Always.</p>
@@ -381,7 +410,8 @@ var COLORS=[
 ];
 
 var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0;
-var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="";
+var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_MAC="$(mac)";
 var PORTAL_ACCENT="#d96835";
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
@@ -401,6 +431,107 @@ function darkenHex(value){
   return "#"+[r,g,b].map(function(part){return part.toString(16).padStart(2,"0");}).join("");
 }
 function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
+function setPortalText(id,value){
+  var element=document.getElementById(id);
+  if(element&&typeof value==="string")element.textContent=value;
+}
+function safePublicApiBase(value){
+  try{
+    var url=new URL(String(value||""));
+    if(url.protocol!=="https:"||/^(localhost|127\.|0\.0\.0\.0)$/i.test(url.hostname))return "";
+    return url.origin;
+  }catch(e){return "";}
+}
+function applyPortalConfig(data){
+  if(!data||typeof data!=="object")return;
+  var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
+  var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
+  var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
+  hexKeys.forEach(function(key){
+    if(typeof colors[key]==="string"&&/^#[0-9a-f]{6}$/i.test(colors[key]))document.documentElement.style.setProperty(cssNames[key],colors[key]);
+  });
+  if(typeof colors.primaryColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.primaryColor)){
+    PORTAL_ACCENT=colors.primaryColor.toLowerCase();
+    document.documentElement.style.setProperty("--portal-accent",PORTAL_ACCENT);
+    document.documentElement.style.setProperty("--portal-accent-dark",darkenHex(PORTAL_ACCENT));
+    document.documentElement.style.setProperty("--portal-accent-soft",PORTAL_ACCENT+"1f");
+    document.documentElement.style.setProperty("--portal-accent-border",PORTAL_ACCENT+"55");
+  }
+  if(typeof colors.bgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.bgColor)){
+    var lowerBackground=typeof colors.bgColor2==="string"&&/^#[0-9a-f]{6}$/i.test(colors.bgColor2)?colors.bgColor2:colors.bgColor;
+    document.body.style.background="radial-gradient(ellipse 120% 80% at 50% -10%,"+lowerBackground+" 0%,"+colors.bgColor+" 55%)";
+  }
+  if(typeof colors.cardColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.cardColor))document.querySelectorAll(".sec-card").forEach(function(element){element.style.background=colors.cardColor;});
+  if(typeof colors.inputBgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.inputBgColor))document.querySelectorAll(".inp").forEach(function(element){element.style.background=colors.inputBgColor;});
+  if(typeof data.apiBase==="string"){
+    var publicBase=safePublicApiBase(data.apiBase);
+    if(publicBase)PORTAL_API_BASE=publicBase;
+  }
+  if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
+  var name=typeof data.ispName==="string"&&data.ispName.trim()?data.ispName.trim():"$(login-title)";
+  setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
+  setPortalText("portalHeroTitle","Connect with "+name);
+  setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
+  document.title=name+" — Hotspot Portal";
+  var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
+  var phoneHref=supportPhone.replace(/[^\d+]/g,"");
+  ["portalHeaderPhone","portalFooterPhone"].forEach(function(id){
+    var element=document.getElementById(id);
+    if(element){
+      element.style.display=supportPhone?"":"none";
+      if(phoneHref)element.setAttribute("href","tel:"+phoneHref);
+    }
+  });
+  setPortalText("portalHeaderPhoneText",supportPhone);
+  setPortalText("portalFooterPhone",supportPhone);
+  if(!supportPhone){["portalFooterPhoneDivider"].forEach(function(id){var e=document.getElementById(id);if(e)e.style.display="none";})}
+  var email=typeof data.supportEmail==="string"?data.supportEmail.trim():"";
+  var emailLink=document.getElementById("portalFooterEmail");
+  if(emailLink){emailLink.style.display=email?"":"none";if(email)emailLink.setAttribute("href","mailto:"+email);emailLink.textContent=email;}
+  if(!email){var emailDivider=document.getElementById("portalFooterEmailDivider");if(emailDivider)emailDivider.style.display="none";}
+  var wa=document.querySelector(".wa-btn");
+  var waNumber=typeof data.whatsappNumber==="string"?data.whatsappNumber.replace(/\D/g,""):"";
+  if(wa){wa.style.display=waNumber?"flex":"none";if(waNumber)wa.setAttribute("href","https://wa.me/"+waNumber);}
+  var logo=typeof data.logoUrl==="string"?data.logoUrl:"";
+  var logoIcon=document.getElementById("portalLogoIcon");
+  if(logoIcon&&logo){
+    var image=document.createElement("img");image.src=logo;image.alt=name+" logo";image.style.cssText="width:100%;height:100%;object-fit:contain";
+    logoIcon.replaceChildren(image);
+  }
+  var announce=typeof data.announcement==="string"?data.announcement.trim():"";
+  var maintenance=Boolean(data.maintenanceMode);
+  var announceSection=document.getElementById("portalAnnouncement");
+  var announceText=document.getElementById("portalAnnouncementText");
+  if(announceSection&&announceText&&(announce||maintenance)){
+    announceText.textContent=maintenance?(data.maintenanceMessage||"Service updates are in progress."):announce;
+    announceSection.style.display="";
+    if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
+  }
+  var plansSection=document.getElementById("plansSection");
+  if(plansSection&&maintenance)plansSection.style.display="none";
+  var voucherSection=document.getElementById("voucherSection");
+  if(voucherSection&&data.vouchersEnabled===false)voucherSection.style.display="none";
+  var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
+  PORTAL_PAYMENT_INSTRUCTIONS=paymentInstructions;
+  if(paymentInstructions)setPortalText("mpesaMessage",paymentInstructions);
+  if(paymentInstructions)setPortalText("paymentInstructionText",paymentInstructions);
+  var terms=document.getElementById("portalTerms"),privacy=document.getElementById("portalPrivacy");
+  if(terms&&typeof data.termsUrl==="string"&&/^https:\/\//i.test(data.termsUrl)){terms.style.display="";terms.href=data.termsUrl;document.getElementById("portalTermsDivider").style.display="";}
+  if(privacy&&typeof data.privacyUrl==="string"&&/^https:\/\//i.test(data.privacyUrl)){privacy.style.display="";privacy.href=data.privacyUrl;document.getElementById("portalPrivacyDivider").style.display="";}
+  var advertUrl=typeof data.advertUrl==="string"?data.advertUrl:"";
+  if(data.advertEnabled===true&&advertUrl){
+    var advert=document.getElementById("portalAdvertSection");
+    if(!advert){advert=document.createElement("section");advert.id="portalAdvertSection";advert.style.cssText="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem";var imageWrap=document.createElement("div");imageWrap.style.cssText="border-radius:.875rem;overflow:hidden;border:1px solid var(--portal-accent-border);background:rgba(255,255,255,.04)";var advertImage=document.createElement("img");advertImage.id="portalAdvertImage";advertImage.style.cssText="display:block;width:100%;max-height:220px;object-fit:cover";imageWrap.appendChild(advertImage);advert.appendChild(imageWrap);}
+    var advertImage=document.getElementById("portalAdvertImage");if(advertImage)advertImage.src=advertUrl;
+    var anchor=document.getElementById(data.advertPosition==="Top"?"portalAnnouncement":"plansSection");
+    if(data.advertPosition==="Bottom")document.body.insertBefore(advert,document.querySelector("footer"));
+    else if(anchor&&anchor.parentNode)anchor.parentNode.insertBefore(advert,anchor);
+  }
+  var community=document.getElementById("communitySection"),testimonial=document.getElementById("testimonialCard"),faq=document.getElementById("faqCard");
+  if(community&&testimonial&&data.testimonialsEnabled===true){testimonial.style.display="";setPortalText("testimonialText",String(data.testimonialText||""));}
+  if(community&&faq&&data.faqEnabled===true){faq.style.display="";setPortalText("faqText",String(data.faqText||""));}
+  if(community&&((testimonial&&testimonial.style.display!=="none")||(faq&&faq.style.display!=="none"))){community.style.display="";}
+}
 function applyPortalTypography(data){
   if(data&&typeof data.accentColor==="string"&&/^#[0-9a-f]{6}$/i.test(data.accentColor)){
     PORTAL_ACCENT=data.accentColor.toLowerCase();
@@ -418,7 +549,8 @@ function applyPortalTypography(data){
   document.documentElement.style.setProperty("--portal-font-style",style);
   document.documentElement.style.setProperty("--portal-font-weight",String(weight));
   document.documentElement.style.setProperty("--portal-font-size",size+"px");
-  if(typeof data.apiBase==="string"&&/^https?:\/\//i.test(data.apiBase))PORTAL_API_BASE=data.apiBase.replace(/\/$/,"");
+   var publicBase=safePublicApiBase(data.apiBase);
+   if(publicBase)PORTAL_API_BASE=publicBase;
 }
 
 function loadPortalTypography(done){
@@ -427,6 +559,7 @@ function loadPortalTypography(done){
     .then(function(data){
       if(data&&Number.isSafeInteger(Number(data.adminId)))PORTAL_ADMIN_ID=Number(data.adminId);
       applyPortalTypography(data);
+      applyPortalConfig(EMBEDDED_CONFIG);
     })
     .catch(function(){})
     .then(done);
@@ -493,7 +626,7 @@ function renderModal(){
   var b=document.getElementById("modalBody");
   if(stkState==="idle"){
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
-      '<p style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
+       '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
       '<div style="border-radius:.625rem;padding:.75rem 1rem;margin-bottom:1.25rem;background:'+(DEVICE_MAC?'rgba(16,185,129,.08)':'rgba(245,158,11,.08)')+';border:1px solid '+(DEVICE_MAC?'rgba(16,185,129,.22)':'rgba(245,158,11,.22)')+';color:'+(DEVICE_MAC?'#a7f3d0':'#fde68a')+';font-size:.75rem;line-height:1.5">'+
       (DEVICE_MAC?'This device was detected automatically: <strong>'+DEVICE_MAC+'</strong>':'This Wi-Fi login did not provide a device MAC address. Reopen the captive-portal sign-in page to continue.')+
@@ -504,6 +637,10 @@ function renderModal(){
       '<button onclick="sendStk()" '+(DEVICE_MAC&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(DEVICE_MAC&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
       'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
       '</button>';
+     if(PORTAL_PAYMENT_INSTRUCTIONS){
+       var instruction=document.getElementById("paymentInstructionText");
+       if(instruction)instruction.textContent=PORTAL_PAYMENT_INSTRUCTIONS;
+     }
   }else if(stkState==="loading"){
     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -614,7 +751,7 @@ function submitMpesa(){
   var msg=document.getElementById("mpesaMsg").value.trim();
   if(!msg)return;
   /* Post to billing API */
-  fetch("/api/mpesa/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg})})
+   fetch(apiUrl("/api/mpesa/verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg})})
     .catch(function(){})
     .finally(function(){
       document.getElementById("mpesaMsgWrap").style.display="none";
@@ -624,6 +761,7 @@ function submitMpesa(){
 
 function checkWidth(){document.getElementById("alreadyPaidBtn").style.display=window.innerWidth>=640?"block":"none";}
 window.addEventListener("resize",checkWidth); checkWidth();
+applyPortalConfig(EMBEDDED_CONFIG);
 loadPortalTypography(loadPlans);
 </script>
 </body>

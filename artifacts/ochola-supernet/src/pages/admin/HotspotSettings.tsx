@@ -1,497 +1,838 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase } from "@/lib/supabase";
+import { useBrand } from "@/context/BrandContext";
+import { supabase, ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId } from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
 import {
-  Wifi, Upload, Eye, Save, Palette, Image,
-  Info, ChevronDown, X, Loader2, Check,
+  AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye,
+  Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
+  Save, ShieldCheck, Smartphone, Sparkles, Upload, Wifi, X,
 } from "lucide-react";
 
-const ADMIN_ID = Number(localStorage.getItem("isp_admin_id") || "5");
+const ADMIN_ID = getSelectedTenantId() ?? AUTH_ADMIN_ID;
 const STORAGE_KEY = `hotspot_settings_${ADMIN_ID}`;
+const PUBLIC_BASE_DOMAIN = "isplatty.org";
 
-/* ─── Defaults ─── */
 const DEFAULT_COLORS = {
-  bgColor:      "#0d0415",
-  bgColor2:     "#1a0735",
+  bgColor: "#0d0415",
+  bgColor2: "#1a0735",
   primaryColor: "#8b5cf6",
-  accentColor:  "#d946ef",
-  cardColor:    "#1a0f2e",
-  buttonColor:  "#10b981",
-  textColor:    "#ffffff",
+  accentColor: "#d946ef",
+  cardColor: "#1a0f2e",
+  buttonColor: "#10b981",
+  textColor: "#ffffff",
   inputBgColor: "#000000",
 };
 
+type ColorSettings = typeof DEFAULT_COLORS;
+
 interface HSettings {
-  ispName:       string;
-  freeTrial:     string;
-  vouchers:      string;
-  tagline:       string;
-  routerId:      string;
-  advertPos:     string;
-  enableAdvert:  string;
-  testimonials:  string;
-  faqSection:    string;
-  logoUrl:       string;
-  advertUrl:     string;
-  colors:        typeof DEFAULT_COLORS;
+  ispName: string;
+  freeTrial: string;
+  vouchers: string;
+  tagline: string;
+  routerId: string;
+  advertPos: string;
+  enableAdvert: string;
+  testimonials: string;
+  faqSection: string;
+  logoUrl: string;
+  advertUrl: string;
+  announcement: string;
+  paymentInstructions: string;
+  supportPhone: string;
+  supportEmail: string;
+  whatsappNumber: string;
+  termsUrl: string;
+  privacyUrl: string;
+  maintenanceMode: string;
+  maintenanceMessage: string;
+  testimonialText: string;
+  faqText: string;
+  colors: ColorSettings;
 }
+
+const DEFAULT_SETTINGS: HSettings = {
+  ispName: "OCHOLASUPERNET",
+  freeTrial: "Disable",
+  vouchers: "Yes",
+  tagline: "Fast & Reliable Internet",
+  routerId: "",
+  advertPos: "Bottom",
+  enableAdvert: "Disable",
+  testimonials: "Disable",
+  faqSection: "Disable",
+  logoUrl: "",
+  advertUrl: "",
+  announcement: "",
+  paymentInstructions: "Enter your M-Pesa number and approve the prompt to connect instantly.",
+  supportPhone: "",
+  supportEmail: "",
+  whatsappNumber: "",
+  termsUrl: "",
+  privacyUrl: "",
+  maintenanceMode: "Online",
+  maintenanceMessage: "We are making a few improvements. Please check back shortly.",
+  testimonialText: "Fast, reliable Wi-Fi whenever I need it.",
+  faqText: "How do I connect?\nChoose a package, complete payment, then sign in with the credentials you receive.",
+  colors: DEFAULT_COLORS,
+};
 
 function loadSettings(): HSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...defaultSettings(), ...JSON.parse(raw) };
-  } catch (_) {}
-  return defaultSettings();
+    if (!raw) return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_COLORS } };
+    const parsed = JSON.parse(raw) as Partial<HSettings>;
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      colors: { ...DEFAULT_COLORS, ...(parsed.colors ?? {}) },
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_COLORS } };
+  }
 }
-function defaultSettings(): HSettings {
+
+function safeText(value: string, fallback = ""): string {
+  return value.trim() || fallback;
+}
+
+function isValidPublicOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      !!url.hostname &&
+      !/^(localhost|127\.|0\.0\.0\.0)/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function portalOriginFromBrand(domain: string): string {
+  const value = domain.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  if (!value) return `https://${PUBLIC_BASE_DOMAIN}`;
+  const hostname = value.toLowerCase();
+  if (hostname === PUBLIC_BASE_DOMAIN || hostname.endsWith(`.${PUBLIC_BASE_DOMAIN}`)) {
+    return `https://${hostname}`;
+  }
+  if (hostname === "admin") return `https://${PUBLIC_BASE_DOMAIN}`;
+  if (/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname)) {
+    return `https://${hostname}.${PUBLIC_BASE_DOMAIN}`;
+  }
+  const candidate = `https://${value}`;
+  return isValidPublicOrigin(candidate) ? candidate : `https://${PUBLIC_BASE_DOMAIN}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[character] ?? character));
+}
+
+function safeEmbeddedJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function validateSettings(settings: HSettings): string | null {
+  if (!safeText(settings.ispName)) return "Enter an ISP name before exporting the portal.";
+  if (!safeText(settings.tagline)) return "Enter a short tagline before exporting the portal.";
+  for (const [label, value] of [
+    ["Terms URL", settings.termsUrl],
+    ["Privacy URL", settings.privacyUrl],
+  ] as const) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:") return `${label} must use HTTPS.`;
+    } catch {
+      return `${label} must be a valid HTTPS link.`;
+    }
+  }
+  return null;
+}
+
+type ExportConfig = {
+  adminId: number;
+  apiBase: string;
+  ispName: string;
+  tagline: string;
+  logoUrl: string;
+  advertUrl: string;
+  advertEnabled: boolean;
+  advertPosition: string;
+  vouchersEnabled: boolean;
+  freeTrialEnabled: boolean;
+  announcement: string;
+  paymentInstructions: string;
+  supportPhone: string;
+  supportEmail: string;
+  whatsappNumber: string;
+  termsUrl: string;
+  privacyUrl: string;
+  maintenanceMode: boolean;
+  maintenanceMessage: string;
+  testimonialsEnabled: boolean;
+  testimonialText: string;
+  faqEnabled: boolean;
+  faqText: string;
+  colors: ColorSettings;
+};
+
+function makeExportConfig(settings: HSettings, apiBase: string): ExportConfig {
   return {
-    ispName:      "OCHOLASUPERNET",
-    freeTrial:    "Disable",
-    vouchers:     "Yes",
-    tagline:      "Fast & Reliable Internet",
-    routerId:     "",
-    advertPos:    "Bottom",
-    enableAdvert: "Disable",
-    testimonials: "Disable",
-    faqSection:   "Disable",
-    logoUrl:      "",
-    advertUrl:    "",
-    colors:       DEFAULT_COLORS,
+    adminId: ADMIN_ID,
+    apiBase,
+    ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
+    tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
+    logoUrl: settings.logoUrl,
+    advertUrl: settings.advertUrl,
+    advertEnabled: settings.enableAdvert === "Enable" && !!settings.advertUrl,
+    advertPosition: settings.advertPos,
+    vouchersEnabled: settings.vouchers === "Yes",
+    freeTrialEnabled: settings.freeTrial === "Enable",
+    announcement: settings.announcement.trim(),
+    paymentInstructions: safeText(settings.paymentInstructions, DEFAULT_SETTINGS.paymentInstructions),
+    supportPhone: settings.supportPhone.trim(),
+    supportEmail: settings.supportEmail.trim(),
+    whatsappNumber: settings.whatsappNumber.trim(),
+    termsUrl: settings.termsUrl.trim(),
+    privacyUrl: settings.privacyUrl.trim(),
+    maintenanceMode: settings.maintenanceMode === "Maintenance",
+    maintenanceMessage: safeText(settings.maintenanceMessage, DEFAULT_SETTINGS.maintenanceMessage),
+    testimonialsEnabled: settings.testimonials === "Enable",
+    testimonialText: safeText(settings.testimonialText, DEFAULT_SETTINGS.testimonialText),
+    faqEnabled: settings.faqSection === "Enable",
+    faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
+    colors: { ...DEFAULT_COLORS, ...settings.colors },
   };
 }
 
-/* ─── Sub-components ─── */
-const LABEL: React.CSSProperties = {
-  fontSize: 13, fontWeight: 700, color: "#94a3b8",
-  marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
-};
-const INPUT: React.CSSProperties = {
-  width: "100%", background: "rgba(0,0,0,0.3)",
-  border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
-  padding: "10px 14px", color: "#f1f5f9", fontSize: 14, outline: "none",
-  boxSizing: "border-box",
-};
-const SELECT: React.CSSProperties = { ...INPUT, appearance: "none", cursor: "pointer" };
-const ROW: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "200px 1fr",
-  gap: "12px 32px", alignItems: "flex-start",
-  padding: "20px 0", borderBottom: "1px solid rgba(255,255,255,0.06)",
-};
-const HINT: React.CSSProperties = { fontSize: 11, color: "#475569", marginTop: 6 };
-
-function FieldRow({ label, hint, icon, children }: {
-  label: string; hint?: string; icon?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    <div style={ROW}>
-      <div style={{ paddingTop: 10 }}>
-        <div style={LABEL}>{icon}{label}</div>
-        {hint && <p style={HINT}>{hint}</p>}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
+async function resolvePortalApiBase(domain: string): Promise<string> {
+  try {
+    const response = await fetch(`/api/public/typography?adminId=${encodeURIComponent(String(ADMIN_ID))}`, {
+      cache: "no-store",
+    });
+    if (response.ok) {
+      const data = await response.json() as { apiBase?: unknown };
+      if (typeof data.apiBase === "string" && isValidPublicOrigin(data.apiBase)) {
+        return data.apiBase.replace(/\/$/, "");
+      }
+    }
+  } catch {
+    /* The tenant-derived public origin below remains deterministic offline. */
+  }
+  return portalOriginFromBrand(domain);
 }
 
-function SelectField({ value, onChange, options }: {
-  value: string; onChange: (v: string) => void; options: string[];
-}) {
-  return (
-    <div style={{ position: "relative" }}>
-      <select value={value} onChange={e => onChange(e.target.value)} style={SELECT}>
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-      <ChevronDown size={14} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
-    </div>
-  );
+async function buildPortalHtml(settings: HSettings, domain: string): Promise<string> {
+  const response = await fetch("/hotspot/login.html", { cache: "no-store" });
+  if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
+  const template = await response.text();
+  const apiBase = await resolvePortalApiBase(domain);
+  const config = makeExportConfig(settings, apiBase);
+  const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
+  const configuredTitle = escapeHtml(config.ispName);
+  return template
+    .replace("</head>", `${bootstrap}\n</head>`)
+    .replace(/\$\(login-title\)/g, configuredTitle);
 }
 
-function ColorPicker({ label, value, onChange }: {
-  label: string; value: string; onChange: (v: string) => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
-      <div style={{ position: "relative", width: 56, height: 56 }}>
-        <input
-          type="color" value={value} onChange={e => onChange(e.target.value)}
-          style={{ width: "100%", height: "100%", border: "none", borderRadius: 10, cursor: "pointer", padding: 2, background: "rgba(0,0,0,0.3)" }}
-        />
-      </div>
-      <p style={{ fontSize: 10, color: "#64748b", textAlign: "center", maxWidth: 64, lineHeight: 1.3 }}>{label}</p>
-      <p style={{ fontSize: 9, color: "#475569", fontFamily: "monospace" }}>{value}</p>
-    </div>
-  );
-}
+const STYLES = `
+  .hs-page { max-width: 1220px; margin: 0 auto; padding: 30px 34px 56px; }
+  .hs-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:26px; }
+  .hs-eyebrow { display:flex; align-items:center; gap:8px; color:var(--isp-accent); font-size:.68rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:8px; }
+  .hs-title { margin:0; color:var(--isp-text); font-size:1.65rem; line-height:1.15; font-weight:850; letter-spacing:-.04em; }
+  .hs-subtitle { margin:8px 0 0; color:var(--isp-text-muted); font-size:.85rem; max-width:590px; line-height:1.55; }
+  .hs-actions { display:flex; align-items:center; justify-content:flex-end; gap:9px; flex-wrap:wrap; }
+  .hs-btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:8px 14px; border-radius:9px; border:1px solid transparent; font:600 .78rem inherit; cursor:pointer; transition:all .16s ease; white-space:nowrap; }
+  .hs-btn:disabled { cursor:not-allowed; opacity:.55; }
+  .hs-btn-primary { background:var(--isp-accent); border-color:var(--isp-accent); color:#fff; box-shadow:0 4px 13px var(--isp-accent-glow); }
+  .hs-btn-primary:hover:not(:disabled) { background:var(--isp-accent-strong); transform:translateY(-1px); }
+  .hs-btn-soft { background:var(--isp-accent-glow); border-color:var(--isp-accent-border); color:var(--isp-accent-strong); }
+  .hs-btn-soft:hover:not(:disabled) { background:var(--isp-accent-border); }
+  .hs-btn-quiet { background:var(--isp-input-bg); border-color:var(--isp-border); color:var(--isp-text-muted); }
+  .hs-btn-quiet:hover:not(:disabled) { color:var(--isp-text); background:var(--isp-hover); }
+  .hs-grid { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(280px,.75fr); gap:18px; align-items:start; }
+  .hs-stack { display:flex; flex-direction:column; gap:18px; }
+  .hs-card { background:var(--isp-section); border:1px solid var(--isp-border); border-radius:15px; box-shadow:var(--shadow-card); overflow:hidden; }
+  .hs-card-head { display:flex; align-items:flex-start; gap:12px; padding:17px 20px 15px; border-bottom:1px solid var(--isp-border-subtle); }
+  .hs-card-icon { display:flex; align-items:center; justify-content:center; flex:0 0 32px; width:32px; height:32px; border-radius:9px; color:var(--isp-accent); background:var(--isp-accent-glow); border:1px solid var(--isp-accent-border); }
+  .hs-card-title { margin:0; color:var(--isp-text); font-size:.92rem; font-weight:800; }
+  .hs-card-desc { margin:3px 0 0; color:var(--isp-text-muted); font-size:.72rem; line-height:1.45; }
+  .hs-card-body { padding:4px 20px 8px; }
+  .hs-field { display:grid; grid-template-columns:minmax(150px,.62fr) minmax(0,1.38fr); gap:20px; padding:17px 0; border-bottom:1px solid var(--isp-border-subtle); }
+  .hs-field:last-child { border-bottom:0; }
+  .hs-label { display:block; color:var(--isp-text); font-size:.78rem; font-weight:750; line-height:1.3; }
+  .hs-help { margin:5px 0 0; color:var(--isp-text-sub); font-size:.68rem; line-height:1.45; }
+  .hs-control { min-width:0; }
+  .hs-input, .hs-select, .hs-textarea { width:100%; color:var(--isp-text); background:var(--isp-input-bg); border:1px solid var(--isp-input-border); border-radius:8px; padding:10px 12px; font:500 .78rem inherit; outline:none; transition:border-color .15s, box-shadow .15s; }
+  .hs-input:focus, .hs-select:focus, .hs-textarea:focus { border-color:var(--isp-accent); box-shadow:0 0 0 3px var(--isp-accent-glow); }
+  .hs-input::placeholder, .hs-textarea::placeholder { color:var(--isp-text-sub); }
+  .hs-textarea { min-height:80px; resize:vertical; line-height:1.5; }
+  .hs-select-wrap { position:relative; }
+  .hs-select { appearance:none; padding-right:34px; cursor:pointer; }
+  .hs-select-wrap svg { position:absolute; right:11px; top:50%; transform:translateY(-50%); pointer-events:none; color:var(--isp-text-sub); }
+  .hs-upload { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .hs-file { display:none; }
+  .hs-file-preview { display:flex; align-items:center; gap:8px; color:var(--isp-text-muted); font-size:.7rem; }
+  .hs-file-preview img { width:42px; height:32px; border-radius:6px; border:1px solid var(--isp-border); object-fit:contain; background:#061416; }
+  .hs-status { display:flex; align-items:flex-start; gap:9px; padding:11px 13px; border-radius:9px; font-size:.74rem; line-height:1.45; }
+  .hs-status-error { color:#fca5a5; background:rgba(239,68,68,.09); border:1px solid rgba(239,68,68,.22); }
+  .hs-status-success { color:#86efac; background:rgba(34,197,94,.09); border:1px solid rgba(34,197,94,.2); }
+  .hs-status-info { color:var(--isp-text-muted); background:var(--isp-input-bg); border:1px solid var(--isp-border); }
+  .hs-status strong { color:inherit; }
+  .hs-color-grid { display:grid; grid-template-columns:repeat(4,minmax(68px,1fr)); gap:16px 12px; padding:19px 0 8px; }
+  .hs-color { text-align:center; min-width:0; }
+  .hs-color input { display:block; width:100%; height:42px; padding:3px; border:1px solid var(--isp-border); border-radius:8px; background:var(--isp-input-bg); cursor:pointer; }
+  .hs-color label { display:block; margin-top:6px; color:var(--isp-text-muted); font-size:.63rem; line-height:1.25; }
+  .hs-color code { display:block; margin-top:3px; color:var(--isp-text-sub); font-size:.58rem; }
+  .hs-presets { display:flex; gap:8px; flex-wrap:wrap; padding:15px 0 8px; border-top:1px solid var(--isp-border-subtle); }
+  .hs-preset { display:flex; align-items:center; gap:7px; padding:7px 9px; border:1px solid var(--isp-border); border-radius:8px; background:var(--isp-input-bg); color:var(--isp-text-muted); font:600 .67rem inherit; cursor:pointer; }
+  .hs-preset:hover { color:var(--isp-text); border-color:var(--isp-accent-border); }
+  .hs-swatches { display:flex; gap:3px; }
+  .hs-swatches i { display:block; width:11px; height:11px; border-radius:3px; }
+  .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
+  .hs-side-body { padding:17px 18px 19px; }
+  .hs-preview-screen { min-height:270px; overflow:hidden; border-radius:11px; border:1px solid var(--isp-border); background:linear-gradient(145deg,#081018,#122137); position:relative; }
+  .hs-preview-screen::before { content:""; position:absolute; inset:0; opacity:.35; background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px); background-size:26px 26px; }
+  .hs-mini-content { position:relative; padding:17px 14px; text-align:center; color:#fff; }
+  .hs-mini-logo { width:34px; height:34px; margin:0 auto 10px; border-radius:10px; display:flex; align-items:center; justify-content:center; overflow:hidden; background:linear-gradient(135deg,var(--mini-primary),var(--mini-accent)); }
+  .hs-mini-logo img { width:100%; height:100%; object-fit:contain; }
+  .hs-mini-content h3 { color:#fff; margin:0; font-size:1rem; font-weight:850; }
+  .hs-mini-content p { color:rgba(255,255,255,.55); margin:5px auto 16px; font-size:.65rem; line-height:1.4; }
+  .hs-mini-plans { display:grid; grid-template-columns:repeat(2,1fr); gap:7px; text-align:left; }
+  .hs-mini-plan { padding:9px; border-radius:8px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.1); }
+  .hs-mini-plan b { display:block; color:#fff; font-size:.66rem; }
+  .hs-mini-plan span { display:block; color:var(--mini-primary); margin-top:5px; font-size:.62rem; font-weight:700; }
+  .hs-mini-button { margin-top:12px; padding:9px; border-radius:8px; background:var(--mini-button); color:#fff; font-size:.65rem; font-weight:800; }
+  .hs-side-note { display:flex; align-items:flex-start; gap:8px; margin-top:13px; color:var(--isp-text-muted); font-size:.69rem; line-height:1.45; }
+  .hs-checklist { display:flex; flex-direction:column; gap:10px; margin:0; padding:0; list-style:none; }
+  .hs-checklist li { display:flex; align-items:flex-start; gap:8px; color:var(--isp-text-muted); font-size:.72rem; line-height:1.4; }
+  .hs-checklist svg { flex:0 0 auto; margin-top:1px; color:var(--isp-green); }
+  .hs-foot-actions { display:flex; align-items:center; justify-content:flex-end; gap:9px; padding-top:4px; }
+  .hs-modal-backdrop { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:22px; background:rgba(1,7,9,.82); backdrop-filter:blur(8px); }
+  .hs-modal { width:min(1180px,96vw); height:min(88vh,820px); display:flex; flex-direction:column; overflow:hidden; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:#081416; box-shadow:0 30px 100px rgba(0,0,0,.55); }
+  .hs-modal-head { display:flex; align-items:center; justify-content:space-between; gap:15px; padding:13px 16px; border-bottom:1px solid rgba(255,255,255,.1); background:#102426; }
+  .hs-modal-title { display:flex; align-items:center; gap:9px; color:#e7efea; font-size:.82rem; font-weight:800; }
+  .hs-modal-copy { color:#8da09d; font-size:.67rem; margin:3px 0 0; }
+  .hs-modal-close { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; border:1px solid rgba(248,113,113,.25); background:rgba(248,113,113,.08); color:#fca5a5; font:700 .68rem inherit; cursor:pointer; }
+  .hs-modal-frame { flex:1; min-height:0; border:0; background:#02090f; }
+  @media (max-width: 900px) { .hs-grid { grid-template-columns:1fr; } .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }
+  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
+`;
 
-/* ─── Live preview modal — hotspot login ─── */
-function HotspotPreviewModal({
-  onClose, settings, colors,
+function Section({
+  icon, title, description, children, className = "",
 }: {
-  onClose: () => void;
-  settings: HSettings;
-  colors: typeof DEFAULT_COLORS;
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  className?: string;
 }) {
-  const [tab, setTab] = useState<"plans" | "login" | "voucher">("plans");
-
-  const bg = `linear-gradient(135deg, ${colors.bgColor} 0%, ${colors.bgColor2} 100%)`;
-  const btnStyle: React.CSSProperties = {
-    padding: "12px 0", borderRadius: 10, color: "#fff",
-    fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer", width: "100%",
-    background: colors.buttonColor,
-  };
-  const cardStyle: React.CSSProperties = {
-    background: colors.cardColor, border: `1px solid ${colors.primaryColor}33`,
-    borderRadius: 16, padding: "20px 24px",
-  };
-  const tabBtnBase: React.CSSProperties = {
-    padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
-    border: "none", cursor: "pointer", transition: "all 0.15s",
-  };
-
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
-      backdropFilter: "blur(6px)", zIndex: 9999,
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{ width: "min(900px,95vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", borderRadius: 20, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
-
-        {/* Modal toolbar */}
-        <div style={{ background: "#0f172a", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Eye size={16} style={{ color: colors.primaryColor }} />
-            <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 14 }}>Hotspot Login Page Preview</span>
-            <span style={{ fontSize: 11, color: "#64748b", background: "rgba(255,255,255,0.06)", padding: "2px 8px", borderRadius: 6 }}>Live preview — changes not yet saved</span>
-          </div>
-          <button onClick={onClose} style={{ background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 8, padding: "6px 12px", color: "#f87171", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <X size={13} /> Close Preview
-          </button>
+    <section className={`hs-card ${className}`}>
+      <div className="hs-card-head">
+        <div className="hs-card-icon">{icon}</div>
+        <div>
+          <h2 className="hs-card-title">{title}</h2>
+          <p className="hs-card-desc">{description}</p>
         </div>
+      </div>
+      <div className="hs-card-body">{children}</div>
+    </section>
+  );
+}
 
-        {/* Scrollable preview area */}
-        <div style={{ flex: 1, overflowY: "auto", background: bg, color: colors.textColor }}>
-          {/* Header */}
-          <div style={{ padding: "16px 32px", borderBottom: `1px solid ${colors.primaryColor}22`, background: `${colors.bgColor}CC`, backdropFilter: "blur(10px)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {settings.logoUrl ? (
-                <img src={settings.logoUrl} alt="logo" style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 8 }} />
-              ) : (
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg,${colors.primaryColor},${colors.accentColor})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Wifi size={18} color="#fff" />
-                </div>
-              )}
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>{settings.ispName}</div>
-                <div style={{ fontSize: 10, color: colors.primaryColor }}>Hotspot Portal</div>
-              </div>
-            </div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", borderRadius: 99, padding: "4px 12px" }}>● Network Online</div>
-          </div>
+function Field({
+  label, help, children,
+}: {
+  label: string;
+  help?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="hs-field">
+      <div>
+        <label className="hs-label">{label}</label>
+        {help && <p className="hs-help">{help}</p>}
+      </div>
+      <div className="hs-control">{children}</div>
+    </div>
+  );
+}
 
-          {/* Hero */}
-          <div style={{ textAlign: "center", padding: "40px 32px 24px" }}>
-            <h2 style={{ fontSize: 28, fontWeight: 900, margin: 0, marginBottom: 10 }}>
-              Connect to{" "}
-              <span style={{ background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-                Fast Internet
-              </span>
-            </h2>
-            <p style={{ color: `${colors.textColor}99`, fontSize: 13, margin: 0 }}>{settings.tagline}</p>
-          </div>
+function SelectField({
+  value, onChange, options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+}) {
+  return (
+    <div className="hs-select-wrap">
+      <select className="hs-select" value={value} onChange={event => onChange(event.target.value)}>
+        {options.map(option => <option key={option} value={option}>{option}</option>)}
+      </select>
+      <ChevronDown size={14} />
+    </div>
+  );
+}
 
-          {/* Tabs */}
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
-            <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 12, padding: 4, display: "inline-flex", gap: 2 }}>
-              {(["plans", "login", "voucher"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} style={{
-                  ...tabBtnBase,
-                  background: tab === t ? colors.primaryColor : "transparent",
-                  color: tab === t ? "#fff" : `${colors.textColor}88`,
-                }}>
-                  {t === "plans" ? "Buy Package" : t === "login" ? "Member Login" : "Redeem Voucher"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Tab content */}
-          <div style={{ maxWidth: 480, margin: "0 auto", padding: "0 24px 40px" }}>
-            {tab === "plans" && (
-              <div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-                  {[["1 Hour", "Ksh 20"], ["24 Hours", "Ksh 50"], ["7 Days", "Ksh 250"], ["30 Days", "Ksh 800"]].map(([n, p]) => (
-                    <div key={n} style={{ ...cardStyle, cursor: "pointer" }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{n}</div>
-                      <div style={{ fontSize: 22, fontWeight: 900, margin: "6px 0" }}>{p}</div>
-                      <div style={{ fontSize: 10, color: colors.primaryColor }}>⚡ Unlimited</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={cardStyle}>
-                  <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>📱 Pay with M-Pesa</div>
-                  <input placeholder="07XX XXX XXX" style={{ ...INPUT, background: colors.inputBgColor, marginBottom: 10 }} readOnly />
-                  <button style={{ ...btnStyle, background: `linear-gradient(90deg,${colors.buttonColor},${colors.accentColor})` }}>Send STK Push</button>
-                </div>
-              </div>
-            )}
-            {tab === "login" && (
-              <div style={cardStyle}>
-                <div style={{ fontWeight: 700, textAlign: "center", fontSize: 18, marginBottom: 16 }}>Welcome Back</div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: colors.primaryColor, display: "block", marginBottom: 6 }}>USERNAME</label>
-                <input style={{ ...INPUT, background: colors.inputBgColor, marginBottom: 12 }} readOnly />
-                <label style={{ fontSize: 11, fontWeight: 700, color: colors.primaryColor, display: "block", marginBottom: 6 }}>PASSWORD</label>
-                <input type="password" style={{ ...INPUT, background: colors.inputBgColor, marginBottom: 16 }} readOnly />
-                <button style={{ ...btnStyle, background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})` }}>Connect</button>
-              </div>
-            )}
-            {tab === "voucher" && (
-              <div style={cardStyle}>
-                <div style={{ textAlign: "center", marginBottom: 16 }}>
-                  <div style={{ fontWeight: 700, fontSize: 18 }}>🎟 Redeem Voucher</div>
-                  <div style={{ fontSize: 12, color: `${colors.textColor}88`, marginTop: 6 }}>Enter your printed code to get online</div>
-                </div>
-                <input placeholder="XXXX-XXXX-XXXX" style={{ ...INPUT, background: colors.inputBgColor, textAlign: "center", fontFamily: "monospace", fontSize: 16, marginBottom: 12 }} readOnly />
-                <button style={{ ...btnStyle, background: "linear-gradient(90deg,#f59e0b,#ea580c)" }}>Activate Voucher</button>
-              </div>
-            )}
-          </div>
-        </div>
+function FilePicker({
+  label, value, accept, onSelect,
+}: {
+  label: string;
+  value: string;
+  accept: string;
+  onSelect: (file: File) => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <div className="hs-upload">
+      <button type="button" className="hs-btn hs-btn-quiet" onClick={() => ref.current?.click()}>
+        <Upload size={14} /> {label}
+      </button>
+      <input
+        ref={ref}
+        className="hs-file"
+        type="file"
+        accept={accept}
+        onChange={event => {
+          const file = event.target.files?.[0];
+          if (file) onSelect(file);
+          event.currentTarget.value = "";
+        }}
+      />
+      <div className="hs-file-preview">
+        {value && <img src={value} alt="" />}
+        <span>{value ? "Image ready" : "No image selected"}</span>
       </div>
     </div>
   );
 }
 
-/* ─── Main page ─── */
-export default function HotspotSettings() {
-  const [s, setS] = useState<HSettings>(loadSettings);
-  const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
-  const logoRef  = useRef<HTMLInputElement>(null);
-  const advertRef = useRef<HTMLInputElement>(null);
+function ColorPicker({
+  label, value, onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="hs-color">
+      <input aria-label={label} type="color" value={value} onChange={event => onChange(event.target.value)} />
+      <label>{label}</label>
+      <code>{value}</code>
+    </div>
+  );
+}
 
-  const { data: routers = [] } = useQuery<DbRouter[]>({
-    queryKey: ["routers_for_hsettings"],
+function PreviewModal({
+  url, loading, onClose,
+}: {
+  url: string | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="hs-modal-backdrop" role="dialog" aria-modal="true" aria-label="Hotspot portal preview">
+      <div className="hs-modal">
+        <div className="hs-modal-head">
+          <div>
+            <div className="hs-modal-title"><Eye size={15} /> Captive-portal preview</div>
+            <p className="hs-modal-copy">This is the exact generated HTML that the download action produces.</p>
+          </div>
+          <button type="button" className="hs-modal-close" onClick={onClose}><X size={13} /> Close</button>
+        </div>
+        {loading && (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#a3b5af", gap: 9 }}>
+            <Loader2 size={18} className="animate-spin" /> Preparing preview…
+          </div>
+        )}
+        {!loading && url && (
+          <iframe className="hs-modal-frame" title="Generated hotspot portal" src={url} sandbox="allow-forms allow-modals allow-scripts allow-same-origin" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function HotspotSettings() {
+  const brand = useBrand();
+  const [settings, setSettings] = useState<HSettings>(loadSettings);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [notice, setNotice] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+
+  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
+    queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host").eq("admin_id", ADMIN_ID).order("name");
+      const { data, error } = await supabase
+        .from("isp_routers")
+        .select("id,name,host,admin_id")
+        .eq("admin_id", ADMIN_ID)
+        .order("name");
+      if (error) throw error;
       return (data ?? []) as DbRouter[];
     },
   });
 
-  const upd = (key: keyof HSettings, val: string) => setS(p => ({ ...p, [key]: val }));
-  const updColor = (key: keyof typeof DEFAULT_COLORS, val: string) =>
-    setS(p => ({ ...p, colors: { ...p.colors, [key]: val } }));
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
-  function handleFile(ref: React.RefObject<HTMLInputElement | null>, key: "logoUrl" | "advertUrl") {
-    const file = ref.current?.files?.[0];
-    if (!file) return;
+  const update = <K extends keyof HSettings>(key: K, value: HSettings[K]) => {
+    setSettings(previous => ({ ...previous, [key]: value }));
+    setNotice(null);
+  };
+  const updateColor = (key: keyof ColorSettings, value: string) => {
+    setSettings(previous => ({ ...previous, colors: { ...previous.colors, [key]: value } }));
+    setNotice(null);
+  };
+
+  const handleFile = (key: "logoUrl" | "advertUrl", file: File) => {
+    const limit = key === "advertUrl" ? 500 * 1024 : 2 * 1024 * 1024;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setNotice({ type: "error", text: "Use a PNG, JPG, or WebP image for portal branding." });
+      return;
+    }
+    if (file.size > limit) {
+      setNotice({ type: "error", text: `${key === "advertUrl" ? "Advert" : "Logo"} images must be smaller than ${key === "advertUrl" ? "500 KB" : "2 MB"}.` });
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = e => setS(p => ({ ...p, [key]: e.target?.result as string }));
+    reader.onload = event => {
+      const value = event.target?.result;
+      if (typeof value === "string") update(key, value);
+    };
+    reader.onerror = () => setNotice({ type: "error", text: "That image could not be read. Choose it again." });
     reader.readAsDataURL(file);
-  }
+  };
 
-  function handleSave() {
+  const handleSave = () => {
+    const error = validateSettings(settings);
+    if (error) {
+      setNotice({ type: "error", text: error });
+      return;
+    }
     setSaving(true);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    setTimeout(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500); }, 600);
-  }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      window.setTimeout(() => {
+        setSaving(false);
+        setSaved(true);
+        setNotice({ type: "success", text: "Hotspot settings saved on this admin workspace." });
+        window.setTimeout(() => setSaved(false), 2500);
+      }, 350);
+    } catch {
+      setSaving(false);
+      setNotice({ type: "error", text: "Settings could not be saved in this browser. Check available storage and try again." });
+    }
+  };
 
-  const SECTION: React.CSSProperties = {
-    background: "rgba(255,255,255,0.025)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 14, overflow: "hidden", marginBottom: 24,
+  const createExport = async () => {
+    const error = validateSettings(settings);
+    if (error) {
+      setNotice({ type: "error", text: error });
+      return null;
+    }
+    return buildPortalHtml(settings, brand.domain);
   };
-  const SECTION_HEAD: React.CSSProperties = {
-    padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.06)",
-    display: "flex", alignItems: "center", gap: 8,
-    color: "#f1f5f9", fontWeight: 700, fontSize: 15,
-    background: "rgba(255,255,255,0.02)",
+
+  const handleDownload = async () => {
+    setExporting(true);
+    setNotice(null);
+    try {
+      const html = await createExport();
+      if (!html) return;
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const slug = safeText(settings.ispName, "hotspot-portal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hotspot-portal";
+      anchor.href = url;
+      anchor.download = `${slug}-hotspot-login.html`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice({ type: "success", text: "Your tenant-branded login.html is ready to upload to the router hotspot folder." });
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal HTML could not be generated." });
+    } finally {
+      setExporting(false);
+    }
   };
-  const SECTION_BODY: React.CSSProperties = { padding: "0 24px" };
+
+  const handlePreview = async () => {
+    setShowPreview(true);
+    setPreviewLoading(true);
+    setNotice(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    try {
+      const html = await createExport();
+      if (!html) {
+        setShowPreview(false);
+        return;
+      }
+      setPreviewUrl(URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })));
+    } catch (error) {
+      setShowPreview(false);
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal preview could not be generated." });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    setShowPreview(false);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+  };
+
+  const presets = [
+    { name: "Signal Orange", colors: { bgColor: "#081416", bgColor2: "#173638", primaryColor: "#d96835", accentColor: "#f09562", cardColor: "#12292b", buttonColor: "#168c78", textColor: "#ffffff", inputBgColor: "#0b1d1f" } },
+    { name: "Purple Night", colors: DEFAULT_COLORS },
+    { name: "Ocean Blue", colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#2563eb", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
+    { name: "Forest Green", colors: { bgColor: "#051a0e", bgColor2: "#0d2e1a", primaryColor: "#22c55e", accentColor: "#4ade80", cardColor: "#0d2e1a", buttonColor: "#f59e0b", textColor: "#ffffff", inputBgColor: "#040d07" } },
+  ];
+
+  const previewStyle = {
+    "--mini-primary": settings.colors.primaryColor,
+    "--mini-accent": settings.colors.accentColor,
+    "--mini-button": settings.colors.buttonColor,
+  } as React.CSSProperties;
 
   return (
     <AdminLayout>
-      {showPreview && (
-        <HotspotPreviewModal colors={s.colors} settings={s} onClose={() => setShowPreview(false)} />
-      )}
-
-      <div style={{ padding: "32px 40px", maxWidth: 940, margin: "0 auto" }}>
-        {/* Page header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
+      <style>{STYLES}</style>
+      {showPreview && <PreviewModal url={previewUrl} loading={previewLoading} onClose={closePreview} />}
+      <div className="hs-page">
+        <header className="hs-hero">
           <div>
-            <h1 style={{ color: "#f1f5f9", fontWeight: 800, fontSize: 24, margin: 0 }}>Hotspot Settings</h1>
-            <p style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>General configuration &amp; login page appearance</p>
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={() => setShowPreview(true)}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
-            >
-              <Eye size={14} /> Preview Login Page
-            </button>
-            <button
-              onClick={handleSave}
-              style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 18px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-              {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
-            </button>
-          </div>
-        </div>
-
-        {/* General Settings */}
-        <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "var(--isp-accent)" }} /> General Settings</div>
-          <div style={SECTION_BODY}>
-            <FieldRow label="Hotspot Page Title" icon={<span style={{ fontSize: 12 }}>H</span>}
-              hint="Your ISP company name — appears as the main title on the hotspot page.">
-              <input value={s.ispName} onChange={e => upd("ispName", e.target.value)} style={INPUT} />
-            </FieldRow>
-
-            <FieldRow label="Free Trial" hint='Select to enable or disable the free trial feature. Default is "Disable".'>
-              <SelectField value={s.freeTrial} onChange={v => upd("freeTrial", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-
-            <FieldRow label="Enable Vouchers" hint='Select to enable or disable voucher activation and reconnection forms. Default is "Yes".'>
-              <SelectField value={s.vouchers} onChange={v => upd("vouchers", v)} options={["Yes", "No"]} />
-            </FieldRow>
-
-            <FieldRow label="Brief Description / Tagline" hint="A short description or tagline displayed under the ISP name.">
-              <input value={s.tagline} onChange={e => upd("tagline", e.target.value)} style={INPUT} />
-            </FieldRow>
-
-            <FieldRow label="Router" icon={<Wifi size={12} />}
-              hint="Select the router this hotspot page is linked to.">
-              <div style={{ position: "relative" }}>
-                <select value={s.routerId} onChange={e => upd("routerId", e.target.value)} style={SELECT}>
-                  <option value="">— Select router —</option>
-                  {routers.map(r => <option key={r.id} value={String(r.id)}>{r.name}{r.host ? ` (${r.host})` : ""}</option>)}
-                </select>
-                <ChevronDown size={14} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
-              </div>
-            </FieldRow>
-
-            <FieldRow label="Upload Logo" icon={<Image size={12} />}
-              hint="Logo auto-resized. Only .png, .jpg, or .jpeg allowed.">
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <button
-                  onClick={() => logoRef.current?.click()}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}
-                >
-                  <Upload size={13} /> Choose File
-                </button>
-                <span style={{ fontSize: 12, color: "#64748b" }}>{s.logoUrl ? "Logo uploaded" : "No file chosen"}</span>
-                <input ref={logoRef} type="file" accept=".png,.jpg,.jpeg" style={{ display: "none" }} onChange={() => handleFile(logoRef, "logoUrl")} />
-                {s.logoUrl && (
-                  <div style={{ textAlign: "center" }}>
-                    <img src={s.logoUrl} alt="logo" style={{ height: 48, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)" }} />
-                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Logo Preview</div>
-                  </div>
-                )}
-              </div>
-            </FieldRow>
-
-            <FieldRow label="Upload Advert Banner" icon={<Image size={12} />}
-              hint="Only one advert image allowed. Rectangular/landscape banner, max 500KB.">
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <button
-                  onClick={() => advertRef.current?.click()}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}
-                >
-                  <Upload size={13} /> Choose File
-                </button>
-                <span style={{ fontSize: 12, color: "#64748b" }}>{s.advertUrl ? "Banner uploaded" : "No file chosen"}</span>
-                <input ref={advertRef} type="file" accept=".png,.jpg,.jpeg" style={{ display: "none" }} onChange={() => handleFile(advertRef, "advertUrl")} />
-                {s.advertUrl && (
-                  <div style={{ textAlign: "center" }}>
-                    <img src={s.advertUrl} alt="advert" style={{ height: 48, maxWidth: 200, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", objectFit: "cover" }} />
-                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Advert Preview</div>
-                  </div>
-                )}
-              </div>
-            </FieldRow>
-
-            <FieldRow label="Advert Position" hint="Where the advert banner appears on the page.">
-              <SelectField value={s.advertPos} onChange={v => upd("advertPos", v)} options={["Bottom", "Top", "Middle"]} />
-            </FieldRow>
-
-            <FieldRow label="Enable Advert" hint='If set to "Enable", your advert banner will appear.'>
-              <SelectField value={s.enableAdvert} onChange={v => upd("enableAdvert", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-
-            <FieldRow label="Testimonials" hint="Display customer testimonials on the login page.">
-              <SelectField value={s.testimonials} onChange={v => upd("testimonials", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-
-            <FieldRow label="FAQ Section" hint="Display a Frequently Asked Questions section on the login page.">
-              <SelectField value={s.faqSection} onChange={v => upd("faqSection", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-          </div>
-        </div>
-
-        {/* Color Scheme */}
-        <div style={SECTION}>
-          <div style={SECTION_HEAD}><Palette size={16} style={{ color: "var(--isp-accent)" }} /> Colour Scheme</div>
-          <div style={{ padding: "24px" }}>
-            <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20 }}>
-              Customise the colours of your hotspot login page. Click <strong style={{ color: "var(--isp-accent)" }}>Preview Login Page</strong> above to see changes live before saving.
+            <div className="hs-eyebrow"><Wifi size={13} /> Customer access experience</div>
+            <h1 className="hs-title">Hotspot portal</h1>
+            <p className="hs-subtitle">
+              Shape what customers see when they join your Wi-Fi, then export one ready-to-upload
+              <strong> login.html</strong> with the same payment and RouterOS behavior.
             </p>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-              <ColorPicker label="Background (Top)"    value={s.colors.bgColor}     onChange={v => updColor("bgColor", v)} />
-              <ColorPicker label="Background (Bottom)" value={s.colors.bgColor2}    onChange={v => updColor("bgColor2", v)} />
-              <ColorPicker label="Primary / Accent"    value={s.colors.primaryColor} onChange={v => updColor("primaryColor", v)} />
-              <ColorPicker label="Secondary Accent"    value={s.colors.accentColor}  onChange={v => updColor("accentColor", v)} />
-              <ColorPicker label="Card Background"     value={s.colors.cardColor}    onChange={v => updColor("cardColor", v)} />
-              <ColorPicker label="Pay Button"          value={s.colors.buttonColor}  onChange={v => updColor("buttonColor", v)} />
-              <ColorPicker label="Text Color"          value={s.colors.textColor}    onChange={v => updColor("textColor", v)} />
-              <ColorPicker label="Input Background"    value={s.colors.inputBgColor} onChange={v => updColor("inputBgColor", v)} />
-            </div>
+          </div>
+          <div className="hs-actions">
+            <button type="button" className="hs-btn hs-btn-quiet" onClick={handlePreview} disabled={previewLoading}>
+              {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
+            </button>
+            <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting}>
+              {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
+            </button>
+            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
+              {saving ? "Saving…" : saved ? "Saved" : "Save settings"}
+            </button>
+          </div>
+        </header>
 
-            {/* Quick presets */}
-            <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-              <p style={{ fontSize: 12, color: "#64748b", fontWeight: 600, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Presets</p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {[
-                  { name: "Purple Night", colors: { bgColor: "#0d0415", bgColor2: "#1a0735", primaryColor: "#8b5cf6", accentColor: "#d946ef", cardColor: "#1a0f2e", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#000000" } },
-                  { name: "Ocean Blue",   colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#2563EB", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
-                  { name: "Forest Green", colors: { bgColor: "#051a0e", bgColor2: "#0d2e1a", primaryColor: "#22c55e", accentColor: "#4ade80", cardColor: "#0d2e1a", buttonColor: "#f59e0b", textColor: "#ffffff", inputBgColor: "#040d07" } },
-                  { name: "Sunset Red",   colors: { bgColor: "#1a0508", bgColor2: "#2e0d14", primaryColor: "#f43f5e", accentColor: "#fb923c", cardColor: "#2e0d14", buttonColor: "#8b5cf6", textColor: "#ffffff", inputBgColor: "#0d0205" } },
-                  { name: "Midnight Dark",colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#2563EB", accentColor: "#1D4ED8", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
-                ].map(p => (
-                  <button
-                    key={p.name}
-                    onClick={() => setS(prev => ({ ...prev, colors: p.colors as typeof DEFAULT_COLORS }))}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "8px 14px", borderRadius: 8,
-                      background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                      color: "#e2e8f0", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                    }}
-                  >
-                    <span style={{ display: "flex", gap: 3 }}>
-                      {[p.colors.bgColor, p.colors.primaryColor, p.colors.accentColor, p.colors.buttonColor].map((c, i) => (
-                        <span key={i} style={{ width: 12, height: 12, borderRadius: 3, background: c, display: "inline-block" }} />
+        {notice && (
+          <div className={`hs-status hs-status-${notice.type}`} style={{ marginBottom: 18 }}>
+            {notice.type === "error" ? <AlertCircle size={16} /> : notice.type === "success" ? <Check size={16} /> : <Info size={16} />}
+            <span>{notice.text}</span>
+          </div>
+        )}
+
+        <div className="hs-grid">
+          <main className="hs-stack">
+            <Section icon={<LayoutTemplate size={16} />} title="Portal identity" description="Set the first impression customers get when they join your hotspot.">
+              <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
+                <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
+              </Field>
+              <Field label="Tagline" help="A short promise shown below the portal title.">
+                <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
+              </Field>
+              <Field label="Linked router" help="Keeps this workspace’s hotspot export associated with the selected router.">
+                {routersLoading ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
+                  <div className="hs-select-wrap">
+                    <select className="hs-select" value={settings.routerId} onChange={event => update("routerId", event.target.value)}>
+                      <option value="">Choose a router (optional)</option>
+                      {routers.map(router => (
+                        <option key={router.id} value={router.id}>
+                          {router.name}{router.host ? ` — ${router.host}` : ""}
+                        </option>
                       ))}
+                    </select>
+                    <ChevronDown size={14} />
+                  </div>
+                )}
+              </Field>
+              <Field label="Portal status" help="Maintenance mode keeps the page available while replacing purchases with your message.">
+                <SelectField value={settings.maintenanceMode} onChange={value => update("maintenanceMode", value)} options={["Online", "Maintenance"]} />
+              </Field>
+              {settings.maintenanceMode === "Maintenance" && (
+                <Field label="Maintenance message" help="Shown to visitors while new purchases are paused.">
+                  <textarea className="hs-textarea" value={settings.maintenanceMessage} maxLength={240} onChange={event => update("maintenanceMessage", event.target.value)} />
+                </Field>
+              )}
+              <Field label="Logo" help="PNG, JPG, or WebP. The file is embedded in the exported HTML.">
+                <FilePicker label="Choose logo" value={settings.logoUrl} accept=".png,.jpg,.jpeg,.webp" onSelect={file => handleFile("logoUrl", file)} />
+              </Field>
+            </Section>
+
+            <Section icon={<Palette size={16} />} title="Visual system" description="Use a consistent palette across plans, checkout, forms, and support content.">
+              <div className="hs-color-grid">
+                <ColorPicker label="Top background" value={settings.colors.bgColor} onChange={value => updateColor("bgColor", value)} />
+                <ColorPicker label="Bottom background" value={settings.colors.bgColor2} onChange={value => updateColor("bgColor2", value)} />
+                <ColorPicker label="Primary" value={settings.colors.primaryColor} onChange={value => updateColor("primaryColor", value)} />
+                <ColorPicker label="Secondary" value={settings.colors.accentColor} onChange={value => updateColor("accentColor", value)} />
+                <ColorPicker label="Cards" value={settings.colors.cardColor} onChange={value => updateColor("cardColor", value)} />
+                <ColorPicker label="Action button" value={settings.colors.buttonColor} onChange={value => updateColor("buttonColor", value)} />
+                <ColorPicker label="Text" value={settings.colors.textColor} onChange={value => updateColor("textColor", value)} />
+                <ColorPicker label="Inputs" value={settings.colors.inputBgColor} onChange={value => updateColor("inputBgColor", value)} />
+              </div>
+              <div className="hs-presets">
+                {presets.map(preset => (
+                  <button key={preset.name} type="button" className="hs-preset" onClick={() => update("colors", { ...preset.colors })}>
+                    <span className="hs-swatches">
+                      {[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor, preset.colors.buttonColor].map(color => <i key={color} style={{ background: color }} />)}
                     </span>
-                    {p.name}
+                    {preset.name}
                   </button>
                 ))}
               </div>
-            </div>
-          </div>
-        </div>
+            </Section>
 
-        {/* Bottom save */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button onClick={() => setShowPreview(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            <Eye size={14} /> Preview Login Page
-          </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
-            {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
-          </button>
+            <Section icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
+              <Field label="Free trial" help="Keep the existing free-trial setting available to the portal installer.">
+                <SelectField value={settings.freeTrial} onChange={value => update("freeTrial", value)} options={["Disable", "Enable"]} />
+              </Field>
+              <Field label="Voucher redemption" help="Show or hide voucher access without changing RouterOS login forms.">
+                <SelectField value={settings.vouchers} onChange={value => update("vouchers", value)} options={["Yes", "No"]} />
+              </Field>
+              <Field label="Payment instructions" help="Shown in the M-Pesa checkout dialog before a customer approves the prompt.">
+                <textarea className="hs-textarea" value={settings.paymentInstructions} maxLength={240} onChange={event => update("paymentInstructions", event.target.value)} />
+              </Field>
+              <Field label="Announcement" help="Optional notice for outages, promotions, or location-specific guidance.">
+                <textarea className="hs-textarea" value={settings.announcement} maxLength={240} onChange={event => update("announcement", event.target.value)} placeholder="e.g. Weekend offer: get 2 hours for Ksh 20." />
+              </Field>
+              <Field label="Advert banner" help="Optional banner embedded in the page. Maximum 500 KB.">
+                <FilePicker label="Choose banner" value={settings.advertUrl} accept=".png,.jpg,.jpeg,.webp" onSelect={file => handleFile("advertUrl", file)} />
+              </Field>
+              <Field label="Advert display" help="Control whether the banner is shown and where it appears.">
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <SelectField value={settings.enableAdvert} onChange={value => update("enableAdvert", value)} options={["Disable", "Enable"]} />
+                  <SelectField value={settings.advertPos} onChange={value => update("advertPos", value)} options={["Top", "Middle", "Bottom"]} />
+                </div>
+              </Field>
+            </Section>
+
+            <Section icon={<CircleHelp size={16} />} title="Trust & support" description="Give customers a clear way to get help and understand your service.">
+              <Field label="Support phone" help="Shown as a call-to-action in the portal header and footer.">
+                <div style={{ position: "relative" }}><Phone size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} value={settings.supportPhone} maxLength={30} onChange={event => update("supportPhone", event.target.value)} placeholder="07XX XXX XXX" /></div>
+              </Field>
+              <Field label="Support email" help="Optional support mailbox for the portal footer.">
+                <div style={{ position: "relative" }}><Mail size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} type="email" value={settings.supportEmail} maxLength={120} onChange={event => update("supportEmail", event.target.value)} placeholder="support@example.com" /></div>
+              </Field>
+              <Field label="WhatsApp number" help="Digits only or a country-code number; used for the floating support button.">
+                <div style={{ position: "relative" }}><Smartphone size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} value={settings.whatsappNumber} maxLength={20} onChange={event => update("whatsappNumber", event.target.value)} placeholder="2547XXXXXXXX" /></div>
+              </Field>
+              <Field label="Terms link" help="Optional HTTPS link displayed in the footer.">
+                <div style={{ position: "relative" }}><Link2 size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} type="url" value={settings.termsUrl} maxLength={300} onChange={event => update("termsUrl", event.target.value)} placeholder="https://example.com/terms" /></div>
+              </Field>
+              <Field label="Privacy link" help="Optional HTTPS link displayed in the footer.">
+                <div style={{ position: "relative" }}><ShieldCheck size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} type="url" value={settings.privacyUrl} maxLength={300} onChange={event => update("privacyUrl", event.target.value)} placeholder="https://example.com/privacy" /></div>
+              </Field>
+              <Field label="Testimonials" help="Add a short customer quote below the access options.">
+                <SelectField value={settings.testimonials} onChange={value => update("testimonials", value)} options={["Disable", "Enable"]} />
+              </Field>
+              {settings.testimonials === "Enable" && (
+                <Field label="Customer quote">
+                  <textarea className="hs-textarea" value={settings.testimonialText} maxLength={300} onChange={event => update("testimonialText", event.target.value)} />
+                </Field>
+              )}
+              <Field label="FAQ section" help="Answer a common connection question without sending visitors away.">
+                <SelectField value={settings.faqSection} onChange={value => update("faqSection", value)} options={["Disable", "Enable"]} />
+              </Field>
+              {settings.faqSection === "Enable" && (
+                <Field label="FAQ content" help="Use a new line between the question and answer.">
+                  <textarea className="hs-textarea" value={settings.faqText} maxLength={700} onChange={event => update("faqText", event.target.value)} />
+                </Field>
+              )}
+            </Section>
+
+            <div className="hs-foot-actions">
+              <button type="button" className="hs-btn hs-btn-quiet" onClick={handlePreview} disabled={previewLoading}><Eye size={14} /> Preview portal</button>
+              <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? "Saving…" : "Save settings"}</button>
+            </div>
+          </main>
+
+          <aside className="hs-stack hs-side">
+            <section className="hs-card hs-side-card">
+              <div className="hs-card-head">
+                <div className="hs-card-icon"><Sparkles size={16} /></div>
+                <div><h2 className="hs-card-title">Live design snapshot</h2><p className="hs-card-desc">A quick look at your current identity.</p></div>
+              </div>
+              <div className="hs-side-body">
+                <div className="hs-preview-screen" style={previewStyle}>
+                  <div className="hs-mini-content">
+                    <div className="hs-mini-logo">
+                      {settings.logoUrl ? <img src={settings.logoUrl} alt="" /> : <Wifi size={18} color="#fff" />}
+                    </div>
+                    <h3>{safeText(settings.ispName, "Your ISP")}</h3>
+                    <p>{safeText(settings.tagline, "Fast and reliable internet")}</p>
+                    <div className="hs-mini-plans">
+                      <div className="hs-mini-plan"><b>Hourly</b><span>From Ksh 20</span></div>
+                      <div className="hs-mini-plan"><b>Daily</b><span>Instant access</span></div>
+                    </div>
+                    <div className="hs-mini-button">Connect with M-Pesa</div>
+                  </div>
+                </div>
+                <div className="hs-side-note"><Info size={14} /> Preview and download use the same generated portal template, including the configured tenant API origin.</div>
+              </div>
+            </section>
+
+            <section className="hs-card hs-side-card">
+              <div className="hs-card-head">
+                <div className="hs-card-icon"><ArrowDownToLine size={16} /></div>
+                <div><h2 className="hs-card-title">Export checklist</h2><p className="hs-card-desc">What the HTML export keeps intact.</p></div>
+              </div>
+              <div className="hs-side-body">
+                <ul className="hs-checklist">
+                  <li><Check size={14} /> RouterOS redirect variables and login form conventions</li>
+                  <li><Check size={14} /> Tenant-scoped plan loading and M-Pesa status polling</li>
+                  <li><Check size={14} /> Paid-device MAC access, voucher, and member login paths</li>
+                  <li><Check size={14} /> Branding and content embedded safely in the downloaded file</li>
+                  <li><Check size={14} /> No router credentials, payment secrets, or VPN keys</li>
+                </ul>
+              </div>
+            </section>
+
+            <section className="hs-card">
+              <div className="hs-card-head">
+                <div className="hs-card-icon"><ShieldCheck size={16} /></div>
+                <div><h2 className="hs-card-title">Safe publishing</h2><p className="hs-card-desc">Keep the write boundary clear.</p></div>
+              </div>
+              <div className="hs-side-body">
+                <div className="hs-status hs-status-info">
+                  <Info size={15} />
+                  <span>Download creates a local <strong>login.html</strong> only. It does not overwrite router files or change payment settings.</span>
+                </div>
+              </div>
+            </section>
+          </aside>
         </div>
       </div>
     </AdminLayout>
