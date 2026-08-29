@@ -8,6 +8,7 @@ const DEFAULT_PREFERENCES = {
   accentColor: "#d96835",
   layout: "balanced",
   cardShape: "rounded",
+  hideAmounts: false,
 } as const;
 
 const LAYOUTS = new Set(["balanced", "focus", "compact"]);
@@ -18,6 +19,7 @@ interface DashboardPreferenceRow {
   accent_color: string;
   layout: string;
   card_shape: string;
+  hide_amounts: boolean;
 }
 
 function adminId(req: Request): number {
@@ -34,13 +36,14 @@ function normalizePreferences(row?: Partial<DashboardPreferenceRow> | null) {
     accentColor,
     layout: typeof row?.layout === "string" && LAYOUTS.has(row.layout) ? row.layout : DEFAULT_PREFERENCES.layout,
     cardShape: typeof row?.card_shape === "string" && CARD_SHAPES.has(row.card_shape) ? row.card_shape : DEFAULT_PREFERENCES.cardShape,
+    hideAmounts: typeof row?.hide_amounts === "boolean" ? row.hide_amounts : DEFAULT_PREFERENCES.hideAmounts,
   };
 }
 
 async function readPreferences(id: number) {
   const rows = await sbSelect<DashboardPreferenceRow>(
     "isp_dashboard_preferences",
-    `admin_id=eq.${id}&select=accent_color,layout,card_shape&limit=1`,
+    `admin_id=eq.${id}&select=accent_color,layout,card_shape,hide_amounts&limit=1`,
   );
   return normalizePreferences(rows[0]);
 }
@@ -62,7 +65,7 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
     return;
   }
 
-  const { accentColor, layout, cardShape } = input as Record<string, unknown>;
+  const { accentColor, layout, cardShape, hideAmounts } = input as Record<string, unknown>;
   if (typeof accentColor !== "string" || !/^#[0-9a-f]{6}$/i.test(accentColor)) {
     res.status(400).json({ ok: false, error: "Choose a valid six-digit dashboard color." });
     return;
@@ -73,6 +76,10 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
   }
   if (typeof cardShape !== "string" || !CARD_SHAPES.has(cardShape)) {
     res.status(400).json({ ok: false, error: "Choose a supported dashboard card shape." });
+    return;
+  }
+  if (typeof hideAmounts !== "boolean") {
+    res.status(400).json({ ok: false, error: "Choose whether financial amounts should be visible." });
     return;
   }
 
@@ -86,6 +93,7 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
         accent_color: accentColor.toLowerCase(),
         layout,
         card_shape: cardShape,
+        hide_amounts: hideAmounts,
         updated_at: new Date().toISOString(),
       },
     );

@@ -38,11 +38,16 @@ import {
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 
-async function fetchLiveCount(routerId: number): Promise<number> {
+type LiveCounts = { hotspot: number; pppoe: number };
+
+async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
   const res = await fetch(`/api/router/${routerId}/live`);
-  if (!res.ok) return 0;
+  if (!res.ok) return { hotspot: 0, pppoe: 0 };
   const data = await res.json();
-  return (data.hotspotUsers?.length ?? 0) + (data.pppoeUsers?.length ?? 0);
+  return {
+    hotspot: data.hotspotUsers?.length ?? 0,
+    pppoe: data.pppoeUsers?.length ?? 0,
+  };
 }
 
 function routerOnline(router: DbRouter): boolean {
@@ -317,7 +322,10 @@ export default function Dashboard() {
       retry: false,
     })),
   });
-  const totalOnlineNow = liveCountResults.reduce((sum, result) => sum + (result.data ?? 0), 0);
+  const onlineHotspotUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.hotspot ?? 0), 0);
+  const onlinePppoeUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.pppoe ?? 0), 0);
+  const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
+  const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineStaticUsers;
   const liveCountLoading = liveCountResults.some((result) => result.isLoading);
 
   const monthlyData = useMemo(() => MONTHS.map((month, index) => ({
@@ -389,17 +397,17 @@ export default function Dashboard() {
           <span>Updated from live payment activity</span>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
-          <KpiCard label="Income today" value={txLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
-          <KpiCard label="Income this month" value={txLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
+          <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
+          <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
           <KpiCard label="Total transactions" value={txLoading ? "…" : String(transactions.length)} icon={<ReceiptText size={19} />} tone="amber" />
-          <KpiCard label="Total revenue" value={txLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
+          <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
         </section>
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
-          <StatMiniCard label="Online now" value={liveCountLoading && totalOnlineNow === 0 ? "…" : String(totalOnlineNow)} href="/admin/customers" icon={<Users size={16} />} tone="green" />
-          <StatMiniCard label="Vouchers left" value="0" href="/admin/vouchers" icon={<Ticket size={16} />} tone="accent" />
-          <StatMiniCard label="Support tickets" value="0" href="/admin/support" icon={<MessageSquare size={16} />} tone="teal" />
-          <StatMiniCard label="Routers online" value={routersLoading ? "…" : String(onlineRouters)} href="/admin/network" icon={<Signal size={16} />} tone="amber" />
+          <StatMiniCard label="Total online users" value={liveCountLoading && totalOnlineNow === 0 ? "…" : String(totalOnlineNow)} href="/admin/customers" icon={<Users size={16} />} tone="green" />
+          <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="accent" />
+          <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
+          <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
         </section>
 
         <section className="gateway-strip" aria-label="Payment gateway status">

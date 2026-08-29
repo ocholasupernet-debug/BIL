@@ -5,12 +5,14 @@ export interface DashboardPreferences {
   accentColor: string;
   layout: DashboardLayout;
   cardShape: DashboardCardShape;
+  hideAmounts: boolean;
 }
 
 export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   accentColor: "#d96835",
   layout: "balanced",
   cardShape: "rounded",
+  hideAmounts: false,
 };
 
 export const DASHBOARD_COLOR_PRESETS = [
@@ -69,5 +71,8 @@ export function normalizeDashboardPreferences(
       : DEFAULT_DASHBOARD_PREFERENCES.accentColor,
     layout: isDashboardLayout(input?.layout) ? input.layout : DEFAULT_DASHBOARD_PREFERENCES.layout,
     cardShape: isDashboardCardShape(input?.cardShape) ? input.cardShape : DEFAULT_DASHBOARD_PREFERENCES.cardShape,
+    hideAmounts: typeof input?.hideAmounts === "boolean"
+      ? input.hideAmounts
+      : DEFAULT_DASHBOARD_PREFERENCES.hideAmounts,
   };
 }

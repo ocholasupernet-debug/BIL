@@ -105,6 +105,7 @@ create table if not exists isp_dashboard_preferences (
     check (layout in ('balanced', 'focus', 'compact')),
   card_shape   text not null default 'rounded'
     check (card_shape in ('rounded', 'soft-square', 'compact')),
+  hide_amounts boolean not null default false,
   updated_at   timestamptz not null default now()
 );
 alter table isp_dashboard_preferences enable row level security;

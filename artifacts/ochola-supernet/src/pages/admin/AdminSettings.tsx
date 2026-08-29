@@ -49,9 +49,9 @@ function adminApiHeaders(): Record<string, string> {
   };
 }
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ on, onChange, label = "Toggle setting" }: { on: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
-    <button onClick={() => onChange(!on)} style={{
+    <button type="button" aria-label={label} aria-pressed={on} onClick={() => onChange(!on)} style={{
       position: "relative", display: "inline-flex", width: 44, height: 24,
       borderRadius: 12, background: on ? C.cyan : "rgba(255,255,255,0.12)",
       border: "none", cursor: "pointer", padding: 0, flexShrink: 0, transition: "background 0.2s",
@@ -1223,6 +1223,16 @@ function DashboardBuilderTab() {
               </div>
             </div>
 
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Financial amounts</p>
+                  <span>Hide income and revenue figures on the dashboard while keeping transaction counts visible.</span>
+                </div>
+                <Toggle label="Hide financial amounts" on={draft.hideAmounts} onChange={(hideAmounts) => updateDraft({ hideAmounts })} />
+              </div>
+            </div>
+
             {error && <p className="dashboard-builder-message dashboard-builder-message--error" role="alert">{error}</p>}
             {saved && <p className="dashboard-builder-message dashboard-builder-message--success" role="status">Dashboard appearance saved for this ISP.</p>}
             <Row>
@@ -1247,15 +1257,15 @@ function DashboardBuilderTab() {
               <div className="dashboard-preview-section-label"><i>01</i><span>Financial pulse</span><small>Live payment activity</small></div>
               <div className="dashboard-preview-kpis">
                 {[
-                  { label: "Income today", value: "Ksh 48,200", tone: "dashboard-preview-kpi--accent", icon: <Banknote size={10} /> },
-                  { label: "Income this month", value: "Ksh 412,800", tone: "dashboard-preview-kpi--green", icon: <TrendingUp size={10} /> },
+                   { label: "Income today", value: draft.hideAmounts ? "••••" : "Ksh 48,200", tone: "dashboard-preview-kpi--accent", icon: <Banknote size={10} /> },
+                   { label: "Income this month", value: draft.hideAmounts ? "••••" : "Ksh 412,800", tone: "dashboard-preview-kpi--green", icon: <TrendingUp size={10} /> },
                   { label: "Total transactions", value: "1,248", tone: "dashboard-preview-kpi--amber", icon: <ReceiptText size={10} /> },
-                  { label: "Total revenue", value: "Ksh 1.8M", tone: "dashboard-preview-kpi--plum", icon: <BarChart3 size={10} /> },
+                   { label: "Total revenue", value: draft.hideAmounts ? "••••" : "Ksh 1.8M", tone: "dashboard-preview-kpi--plum", icon: <BarChart3 size={10} /> },
                 ].map(({ label, value, tone, icon }) => (
                   <div key={label} className={`dashboard-preview-kpi ${tone}`}><span className="dashboard-preview-icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span></div>
                 ))}
               </div>
-              <div className="dashboard-preview-stats">{["Active plans", "Hotspot", "PPPoE", "Routers online"].map(label => <span key={label}><i />{label}</span>)}</div>
+               <div className="dashboard-preview-stats">{["Total online users", "PPPoE online", "Hotspot online", "Static online"].map(label => <span key={label}><i />{label}</span>)}</div>
               <div className="dashboard-preview-section-label"><i>02</i><span>Network health</span><small>Heartbeat window</small></div>
               <div className="dashboard-preview-network">
                 {["Core Router", "Westlands POP", "Ruiru Edge"].map((label, index) => (

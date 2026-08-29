@@ -7,6 +7,7 @@ const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8")
 const route = await readFile("src/routes/typography-route.ts", "utf8");
 const dashboardRoute = await readFile("src/routes/dashboard-preferences-route.ts", "utf8");
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const dashboardMigration = await readFile("migrations/2026_dashboard_amount_visibility.sql", "utf8");
 const portal = await readFile("../ochola-supernet/public/hotspot/login.html", "utf8");
 const portalPage = await readFile("../ochola-supernet/src/pages/portal/HotspotLogin.tsx", "utf8");
 
@@ -39,6 +40,14 @@ test("dashboard colors stay scoped to the authenticated ISP account", () => {
   assert.match(dashboardRoute, /admin_id=eq\.\$\{id\}/);
   assert.match(dashboardRoute, /admin_id: adminId\(req\)/);
   assert.match(scriptsRoute, /typography\?adminId=\$\{adminId\}/);
+});
+
+test("dashboard financial visibility is persisted per ISP", () => {
+  assert.match(dashboardMigration, /add column if not exists hide_amounts boolean not null default false/i);
+  assert.match(dashboardRoute, /hide_amounts/);
+  assert.match(dashboardRoute, /hideAmounts/);
+  assert.match(dashboardRoute, /typeof hideAmounts !== "boolean"/);
+  assert.match(dashboardRoute, /hide_amounts: hideAmounts/);
 });
 
 test("router portal gets the RouterOS MAC and synchronized typography asset", () => {
