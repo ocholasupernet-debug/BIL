@@ -1,515 +1,480 @@
-import React, { useState, useRef } from "react";
+import React, { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase } from "@/lib/supabase";
-import type { DbRouter } from "@/lib/supabase";
 import {
-  Sliders, Upload, Eye, Save, Palette, Image,
-  Info, ChevronDown, X, Loader2, Check, Wifi,
+  AlertCircle, Check, ChevronDown, Eye, HelpCircle, Image as ImageIcon,
+  Info, LifeBuoy, Link2, Loader2, Megaphone, Palette, Phone, Save,
+  ShieldCheck, Ticket, Upload, UserRound, Wifi, X,
 } from "lucide-react";
+import { AdminLayout } from "@/components/layout/AdminLayout";
+import { supabase, ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId, type DbRouter } from "@/lib/supabase";
+import {
+  DEFAULT_PPPOE_COLORS, PPPoELogin, type PppoePortalSettings,
+} from "@/pages/portal/PPPoELogin";
 
-const ADMIN_ID = Number(localStorage.getItem("isp_admin_id") || "5");
+const ADMIN_ID = getSelectedTenantId() ?? AUTH_ADMIN_ID;
 const STORAGE_KEY = `pppoe_settings_${ADMIN_ID}`;
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+const MAX_ADVERT_BYTES = 500 * 1024;
 
-const DEFAULT_COLORS = {
-  bgColor:      "#020b18",
-  bgColor2:     "#051e38",
-  primaryColor: "#2563EB",
-  accentColor:  "#2563EB",
-  cardColor:    "#0c2340",
-  buttonColor:  "#10b981",
-  textColor:    "#ffffff",
-  inputBgColor: "#020b18",
-};
-
-interface PSettings {
-  ispName:       string;
-  tagline:       string;
-  routerId:      string;
-  enableVouchers:string;
-  advertPos:     string;
-  enableAdvert:  string;
-  testimonials:  string;
-  faqSection:    string;
-  supportPhone:  string;
-  supportEmail:  string;
-  logoUrl:       string;
-  advertUrl:     string;
-  colors:        typeof DEFAULT_COLORS;
+function safeImageSource(value: unknown): string {
+  return typeof value === "string" && /^data:image\/(?:png|jpe?g|webp);base64,/i.test(value) ? value : "";
 }
 
-function loadSettings(): PSettings {
+const DEFAULT_SETTINGS: PppoePortalSettings = {
+  ispName: "OCHOLASUPERNET",
+  tagline: "Fast PPPoE broadband, built for every day.",
+  routerId: "",
+  enableVouchers: "No",
+  advertPos: "Bottom",
+  enableAdvert: "Disable",
+  testimonials: "Disable",
+  faqSection: "Disable",
+  supportPhone: "",
+  supportEmail: "",
+  whatsappNumber: "",
+  logoUrl: "",
+  advertUrl: "",
+  announcement: "",
+  maintenanceMode: "Online",
+  maintenanceMessage: "We are making a few improvements. Please check back shortly.",
+  testimonialText: "Stable speeds and quick support whenever I need it.",
+  faqText: "How do I connect?\nUse your PPPoE username and password, then sign in below.",
+  termsUrl: "",
+  privacyUrl: "",
+  colors: DEFAULT_PPPOE_COLORS,
+};
+
+function loadSettings(): PppoePortalSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...defaults(), ...JSON.parse(raw) };
-  } catch (_) {}
-  return defaults();
-}
-function defaults(): PSettings {
-  return {
-    ispName:        "OCHOLASUPERNET",
-    tagline:        "Fast PPPoE Broadband",
-    routerId:       "",
-    enableVouchers: "No",
-    advertPos:      "Bottom",
-    enableAdvert:   "Disable",
-    testimonials:   "Disable",
-    faqSection:     "Disable",
-    supportPhone:   "",
-    supportEmail:   "",
-    logoUrl:        "",
-    advertUrl:      "",
-    colors:         DEFAULT_COLORS,
-  };
+    const parsed = raw ? JSON.parse(raw) as Partial<PppoePortalSettings> : {};
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      logoUrl: safeImageSource(parsed.logoUrl),
+      advertUrl: safeImageSource(parsed.advertUrl),
+      colors: { ...DEFAULT_PPPOE_COLORS, ...(parsed.colors ?? {}) },
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_PPPOE_COLORS } };
+  }
 }
 
-/* ─── Shared styles ─── */
-const INPUT: React.CSSProperties = {
-  width: "100%", background: "rgba(0,0,0,0.3)",
-  border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
-  padding: "10px 14px", color: "#f1f5f9", fontSize: 14, outline: "none",
-  boxSizing: "border-box",
-};
-const SELECT: React.CSSProperties = { ...INPUT, appearance: "none", cursor: "pointer" };
-const ROW: React.CSSProperties = {
-  display: "grid", gridTemplateColumns: "200px 1fr",
-  gap: "12px 32px", alignItems: "flex-start",
-  padding: "20px 0", borderBottom: "1px solid rgba(255,255,255,0.06)",
-};
-const HINT: React.CSSProperties = { fontSize: 11, color: "#475569", marginTop: 6 };
-const LABEL: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: "#94a3b8", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 };
+const ADMIN_CSS = `
+  .pppoe-settings-page { max-width:1180px; margin:0 auto; padding:32px 34px 52px; color:#e7efea; }
+  .pppoe-settings-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:27px; }
+  .pppoe-settings-kicker { display:flex; align-items:center; gap:7px; color:var(--isp-accent); font-size:.68rem; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }
+  .pppoe-settings-header h1 { margin:7px 0 5px; color:#e7efea; font-size:1.7rem; font-weight:850; letter-spacing:-.035em; }
+  .pppoe-settings-header p { margin:0; color:#839893; font-size:.84rem; line-height:1.55; }
+  .pppoe-settings-actions { display:flex; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+  .pppoe-settings-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:9px 14px; border-radius:8px; font-size:.76rem; font-weight:750; cursor:pointer; transition:transform .15s,background .15s; }
+  .pppoe-settings-button:hover { transform:translateY(-1px); }
+  .pppoe-settings-button.preview { color:#75cfe5; border:1px solid rgba(117,207,229,.28); background:rgba(117,207,229,.08); }
+  .pppoe-settings-button.save { color:#fff; border:1px solid var(--isp-accent); background:var(--isp-accent); box-shadow:0 5px 14px rgba(217,105,53,.2); }
+  .pppoe-settings-button.save.saved { color:#b8f2da; border-color:#168c78; background:rgba(22,140,120,.18); }
+  .pppoe-settings-layout { display:grid; grid-template-columns:minmax(0,1fr) 285px; gap:18px; align-items:start; }
+  .pppoe-settings-section { margin-bottom:17px; overflow:hidden; border:1px solid rgba(185,210,201,.14); border-radius:13px; background:#102426; box-shadow:0 4px 16px rgba(0,0,0,.12); }
+  .pppoe-settings-section-head { display:flex; align-items:flex-start; gap:11px; padding:17px 20px; border-bottom:1px solid rgba(185,210,201,.1); background:rgba(255,255,255,.025); }
+  .pppoe-settings-section-icon { width:31px; height:31px; display:grid; place-items:center; flex:none; border-radius:9px; color:#f09562; background:rgba(217,105,53,.12); }
+  .pppoe-settings-section-head h2 { margin:1px 0 4px; color:#e7efea; font-size:.91rem; font-weight:800; }
+  .pppoe-settings-section-head p { margin:0; color:#718681; font-size:.72rem; line-height:1.45; }
+  .pppoe-settings-body { padding:0 20px; }
+  .pppoe-settings-row { display:grid; grid-template-columns:175px minmax(0,1fr); gap:20px; align-items:start; padding:17px 0; border-bottom:1px solid rgba(185,210,201,.08); }
+  .pppoe-settings-row:last-child { border-bottom:0; }
+  .pppoe-settings-row-label { padding-top:2px; }
+  .pppoe-settings-row-label strong { display:flex; align-items:center; gap:5px; color:#a9bbb5; font-size:.75rem; font-weight:750; }
+  .pppoe-settings-row-label span { display:block; margin-top:5px; color:#637a74; font-size:.67rem; line-height:1.45; }
+  .pppoe-settings-input, .pppoe-settings-select, .pppoe-settings-textarea { width:100%; border:1px solid rgba(185,210,201,.17); border-radius:8px; outline:none; color:#e7efea; background:rgba(0,0,0,.22); font-size:.78rem; transition:border-color .15s,box-shadow .15s; }
+  .pppoe-settings-input, .pppoe-settings-select { min-height:39px; padding:9px 11px; }
+  .pppoe-settings-textarea { min-height:78px; padding:10px 11px; resize:vertical; line-height:1.5; }
+  .pppoe-settings-input:focus, .pppoe-settings-select:focus, .pppoe-settings-textarea:focus { border-color:var(--isp-accent); box-shadow:0 0 0 3px rgba(217,105,53,.11); }
+  .pppoe-settings-input::placeholder, .pppoe-settings-textarea::placeholder { color:#566e68; }
+  .pppoe-settings-select { appearance:none; cursor:pointer; }
+  .pppoe-settings-select-wrap { position:relative; }
+  .pppoe-settings-select-wrap svg { position:absolute; right:11px; top:50%; transform:translateY(-50%); pointer-events:none; color:#718681; }
+  .pppoe-settings-field-note { margin:6px 0 0; color:#617872; font-size:.67rem; line-height:1.4; }
+  .pppoe-settings-two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .pppoe-settings-file { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pppoe-settings-upload { display:inline-flex; align-items:center; gap:6px; min-height:35px; padding:8px 11px; color:#b6c6c0; border:1px solid rgba(185,210,201,.16); border-radius:8px; background:rgba(255,255,255,.045); font-size:.73rem; font-weight:700; cursor:pointer; }
+  .pppoe-settings-upload:hover { background:rgba(255,255,255,.08); }
+  .pppoe-settings-file-name { color:#738982; font-size:.7rem; }
+  .pppoe-settings-image-preview { width:62px; height:40px; object-fit:contain; border:1px solid rgba(185,210,201,.16); border-radius:6px; background:#0b1d1f; }
+  .pppoe-settings-remove { display:inline-flex; align-items:center; gap:4px; border:0; padding:0; color:#d7826a; background:transparent; font-size:.68rem; cursor:pointer; }
+  .pppoe-settings-check { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:39px; padding:9px 11px; border:1px solid rgba(185,210,201,.12); border-radius:8px; background:rgba(255,255,255,.025); }
+  .pppoe-settings-check span { color:#adc0b9; font-size:.74rem; }
+  .pppoe-settings-toggle { display:inline-flex; align-items:center; padding:3px; width:40px; height:22px; border:0; border-radius:999px; background:#1d3739; cursor:pointer; }
+  .pppoe-settings-toggle.on { justify-content:flex-end; background:var(--isp-accent); }
+  .pppoe-settings-toggle i { display:block; width:16px; height:16px; border-radius:50%; background:#dce8e3; }
+  .pppoe-settings-colors { display:grid; grid-template-columns:repeat(4,minmax(70px,1fr)); gap:15px; }
+  .pppoe-settings-color { text-align:center; }
+  .pppoe-settings-color input { display:block; width:100%; height:42px; padding:2px; border:1px solid rgba(185,210,201,.15); border-radius:8px; background:#0b1d1f; cursor:pointer; }
+  .pppoe-settings-color label { display:block; margin-top:6px; color:#819790; font-size:.63rem; line-height:1.3; }
+  .pppoe-settings-color code { display:block; margin-top:3px; color:#526a64; font-size:.59rem; }
+  .pppoe-settings-presets { display:flex; flex-wrap:wrap; gap:7px; padding-top:16px; margin-top:18px; border-top:1px solid rgba(185,210,201,.08); }
+  .pppoe-settings-preset { display:inline-flex; align-items:center; gap:6px; min-height:31px; padding:6px 9px; color:#9cb0a9; border:1px solid rgba(185,210,201,.13); border-radius:7px; background:rgba(255,255,255,.035); font-size:.65rem; font-weight:700; cursor:pointer; }
+  .pppoe-settings-preset:hover { border-color:var(--isp-accent); color:#e7efea; }
+  .pppoe-settings-swatch { display:flex; gap:2px; }
+  .pppoe-settings-swatch i { width:10px; height:10px; border-radius:3px; }
+  .pppoe-settings-aside { position:sticky; top:20px; }
+  .pppoe-settings-aside-card { padding:18px; margin-bottom:15px; border:1px solid rgba(185,210,201,.14); border-radius:13px; background:#0b1d1f; }
+  .pppoe-settings-aside-card h3 { display:flex; align-items:center; gap:8px; margin:0 0 7px; color:#dbe8e1; font-size:.82rem; font-weight:800; }
+  .pppoe-settings-aside-card h3 svg { color:var(--isp-accent); }
+  .pppoe-settings-aside-card p { margin:0 0 15px; color:#718681; font-size:.7rem; line-height:1.55; }
+  .pppoe-settings-preview-card { overflow:hidden; border:1px solid rgba(185,210,201,.14); border-radius:13px; background:#102426; }
+  .pppoe-settings-preview-head { display:flex; align-items:center; justify-content:space-between; gap:7px; padding:13px 14px; border-bottom:1px solid rgba(185,210,201,.1); }
+  .pppoe-settings-preview-head strong { color:#cbdad3; font-size:.75rem; }
+  .pppoe-settings-preview-head span { color:#6e827c; font-size:.6rem; }
+  .pppoe-settings-preview-body { padding:14px; }
+  .pppoe-settings-preview-brand { display:flex; align-items:center; gap:8px; padding-bottom:13px; border-bottom:1px solid rgba(185,210,201,.08); }
+  .pppoe-settings-preview-logo { display:grid; place-items:center; width:29px; height:29px; overflow:hidden; border-radius:8px; color:#fff; background:linear-gradient(135deg,var(--isp-accent),#f09562); }
+  .pppoe-settings-preview-logo img { width:100%; height:100%; object-fit:contain; }
+  .pppoe-settings-preview-brand strong { display:block; color:#dce8e1; font-size:.71rem; }
+  .pppoe-settings-preview-brand span { display:block; margin-top:2px; color:#718681; font-size:.58rem; }
+  .pppoe-settings-preview-stat { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin:13px 0; }
+  .pppoe-settings-preview-stat div { height:41px; border:1px solid rgba(185,210,201,.09); border-radius:6px; background:rgba(255,255,255,.025); }
+  .pppoe-settings-preview-stat div:nth-child(2) { background:rgba(217,105,53,.12); }
+  .pppoe-settings-preview-line { height:8px; width:72%; margin-bottom:8px; border-radius:4px; background:rgba(185,210,201,.13); }
+  .pppoe-settings-preview-line.short { width:45%; background:rgba(185,210,201,.08); }
+  .pppoe-settings-preview-button { height:29px; margin-top:7px; border-radius:6px; background:var(--isp-accent); }
+  .pppoe-settings-status { display:flex; align-items:flex-start; gap:8px; margin-bottom:17px; padding:11px 13px; border:1px solid rgba(22,140,120,.3); border-radius:9px; color:#b7ddcf; background:rgba(22,140,120,.1); font-size:.72rem; line-height:1.4; }
+  .pppoe-settings-error { display:flex; align-items:flex-start; gap:8px; margin-bottom:17px; padding:11px 13px; border:1px solid rgba(239,116,94,.3); border-radius:9px; color:#f2b2a4; background:rgba(239,116,94,.1); font-size:.72rem; line-height:1.4; }
+  .pppoe-settings-bottom-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:4px; }
+  .pppoe-preview-modal { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(4,12,14,.84); backdrop-filter:blur(6px); }
+  .pppoe-preview-window { display:flex; flex-direction:column; width:min(1080px,100%); height:min(900px,94vh); overflow:hidden; border:1px solid rgba(185,210,201,.18); border-radius:14px; background:#0b1d1f; box-shadow:0 25px 80px rgba(0,0,0,.4); }
+  .pppoe-preview-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 15px; border-bottom:1px solid rgba(185,210,201,.12); background:#102426; }
+  .pppoe-preview-toolbar strong { color:#e7efea; font-size:.77rem; }
+  .pppoe-preview-toolbar span { margin-left:7px; color:#6f847c; font-size:.63rem; }
+  .pppoe-preview-close { display:inline-flex; align-items:center; gap:5px; padding:6px 9px; color:#e9a494; border:1px solid rgba(239,116,94,.25); border-radius:6px; background:rgba(239,116,94,.08); font-size:.65rem; cursor:pointer; }
+  .pppoe-preview-content { flex:1; overflow:auto; }
+  @media (max-width: 960px) { .pppoe-settings-layout { grid-template-columns:1fr; } .pppoe-settings-aside { position:static; display:grid; grid-template-columns:1fr 1fr; gap:15px; } .pppoe-settings-aside-card,.pppoe-settings-preview-card { margin:0; } }
+  @media (max-width: 640px) { .pppoe-settings-page { padding:24px 16px 40px; } .pppoe-settings-header { display:block; } .pppoe-settings-actions { justify-content:flex-start; margin-top:18px; } .pppoe-settings-row { grid-template-columns:1fr; gap:9px; } .pppoe-settings-row-label { padding:0; } .pppoe-settings-two-col { grid-template-columns:1fr; } .pppoe-settings-colors { grid-template-columns:repeat(2,minmax(75px,1fr)); } .pppoe-settings-aside { display:block; } .pppoe-settings-aside-card { margin-bottom:15px; } .pppoe-preview-modal { padding:0; } .pppoe-preview-window { height:100vh; border-radius:0; } }
+`;
 
-function FieldRow({ label, hint, icon, children }: { label: string; hint?: string; icon?: React.ReactNode; children: React.ReactNode }) {
+function FieldRow({ label, hint, children, icon }: {
+  label: string; hint?: string; children: React.ReactNode; icon?: React.ReactNode;
+}) {
   return (
-    <div style={ROW}>
-      <div style={{ paddingTop: 10 }}>
-        <div style={LABEL}>{icon}{label}</div>
-        {hint && <p style={HINT}>{hint}</p>}
+    <div className="pppoe-settings-row">
+      <div className="pppoe-settings-row-label">
+        <strong>{icon}{label}</strong>
+        {hint && <span>{hint}</span>}
       </div>
       <div>{children}</div>
     </div>
   );
 }
 
-function SelectField({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
-  return (
-    <div style={{ position: "relative" }}>
-      <select value={value} onChange={e => onChange(e.target.value)} style={SELECT}>
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-      <ChevronDown size={14} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
-    </div>
-  );
-}
-
-function ColorPicker({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
-      <input type="color" value={value} onChange={e => onChange(e.target.value)}
-        style={{ width: 56, height: 56, border: "none", borderRadius: 10, cursor: "pointer", padding: 2, background: "rgba(0,0,0,0.3)" }} />
-      <p style={{ fontSize: 10, color: "#64748b", textAlign: "center", maxWidth: 64, lineHeight: 1.3 }}>{label}</p>
-      <p style={{ fontSize: 9, color: "#475569", fontFamily: "monospace" }}>{value}</p>
-    </div>
-  );
-}
-
-/* ─── PPPoE Login Preview Modal — mirrors actual PPPoELogin.tsx ─── */
-function PPPoEPreviewModal({ onClose, settings, colors }: {
-  onClose: () => void; settings: PSettings; colors: typeof DEFAULT_COLORS;
+function SelectField({ value, options, onChange }: {
+  value: string;
+  options: Array<string | { value: string; label: string }>;
+  onChange: (value: string) => void;
 }) {
-  const [tab, setTab] = useState<"login" | "forgot" | "voucher">("login");
-
-  const bg = `linear-gradient(160deg, ${colors.bgColor} 0%, ${colors.bgColor2} 100%)`;
-  const card: React.CSSProperties = {
-    background: colors.cardColor,
-    border: `1px solid ${colors.primaryColor}33`,
-    borderRadius: 20, padding: "24px 28px",
-  };
-  const mainBtn: React.CSSProperties = {
-    width: "100%", padding: "14px 0", borderRadius: 12, border: "none",
-    fontWeight: 700, fontSize: 14, color: "#fff", cursor: "pointer",
-    background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})`,
-  };
-  const inp: React.CSSProperties = {
-    width: "100%", boxSizing: "border-box",
-    background: colors.inputBgColor,
-    border: `1px solid ${colors.primaryColor}22`,
-    borderRadius: 10, padding: "12px 14px",
-    color: colors.textColor, fontSize: 13, outline: "none", marginBottom: 12,
-  };
-  const lbl: React.CSSProperties = {
-    display: "block", fontSize: 10, fontWeight: 700,
-    color: colors.primaryColor, letterSpacing: "0.08em",
-    marginBottom: 6, textTransform: "uppercase" as const,
-  };
-  const tabBtn = (active: boolean): React.CSSProperties => ({
-    padding: "9px 16px", borderRadius: 9, border: "none", cursor: "pointer",
-    fontSize: 12, fontWeight: 700,
-    background: active ? colors.primaryColor : "transparent",
-    color: active ? "#fff" : `${colors.textColor}88`,
-  });
-
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(6px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ width: "min(920px,96vw)", maxHeight: "93vh", display: "flex", flexDirection: "column", borderRadius: 20, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
+    <div className="pppoe-settings-select-wrap">
+      <select className="pppoe-settings-select" value={value} onChange={event => onChange(event.target.value)}>
+        {options.map(option => {
+          const item = typeof option === "string" ? { value: option, label: option } : option;
+          return <option key={item.value} value={item.value}>{item.label || "— Select router —"}</option>;
+        })}
+      </select>
+      <ChevronDown size={14} />
+    </div>
+  );
+}
 
-        {/* toolbar */}
-        <div style={{ background: "#0f172a", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Eye size={16} style={{ color: colors.primaryColor }} />
-            <span style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 14 }}>PPPoE Login Page Preview</span>
-            <span style={{ fontSize: 11, color: "#64748b", background: "rgba(255,255,255,0.06)", padding: "2px 8px", borderRadius: 6 }}>Live preview — changes not yet saved</span>
-          </div>
-          <button onClick={onClose} style={{ background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 8, padding: "6px 12px", color: "#f87171", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <X size={13} /> Close Preview
-          </button>
+function FilePicker({
+  value, label, accept, maxBytes, onChange, onRemove,
+}: {
+  value: string; label: string; accept: string; maxBytes: number;
+  onChange: (value: string) => void; onRemove: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState("");
+  function readFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setError("Choose a PNG, JPG, or WebP image.");
+      return;
+    }
+    if (file.size > maxBytes) {
+      setError(`Image is too large. Maximum size is ${Math.round(maxBytes / 1024)}KB.`);
+      return;
+    }
+    setError("");
+    const reader = new FileReader();
+    reader.onload = loadEvent => {
+      if (typeof loadEvent.target?.result === "string") onChange(loadEvent.target.result);
+    };
+    reader.readAsDataURL(file);
+  }
+  return (
+    <div>
+      <div className="pppoe-settings-file">
+        <button type="button" className="pppoe-settings-upload" onClick={() => inputRef.current?.click()}><Upload size={13} /> {label}</button>
+        <input ref={inputRef} type="file" accept={accept} hidden onChange={readFile} />
+        <span className="pppoe-settings-file-name">{value ? "Image selected" : "No file chosen"}</span>
+        {value && <img className="pppoe-settings-image-preview" src={value} alt="Selected preview" />}
+        {value && <button type="button" className="pppoe-settings-remove" onClick={onRemove}><X size={12} /> Remove</button>}
+      </div>
+      {error && <p className="pppoe-settings-field-note" style={{ color: "#ef9a87" }}>{error}</p>}
+    </div>
+  );
+}
+
+function PreviewModal({ settings, onClose }: { settings: PppoePortalSettings; onClose: () => void }) {
+  return (
+    <div className="pppoe-preview-modal" role="dialog" aria-modal="true" aria-label="PPPoE portal preview">
+      <div className="pppoe-preview-window">
+        <div className="pppoe-preview-toolbar">
+          <div><strong>Customer portal preview</strong><span>Unsaved settings · interactions are simulated</span></div>
+          <button type="button" className="pppoe-preview-close" onClick={onClose}><X size={13} /> Close</button>
         </div>
-
-        {/* page body */}
-        <div style={{ flex: 1, overflowY: "auto", background: bg, color: colors.textColor, fontFamily: "sans-serif" }}>
-
-          {/* ── Header ── */}
-          <div style={{ padding: "16px 40px", borderBottom: `1px solid ${colors.primaryColor}1a`, background: `${colors.bgColor}cc`, backdropFilter: "blur(12px)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {settings.logoUrl ? (
-                <img src={settings.logoUrl} alt="logo" style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 8 }} />
-              ) : (
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg,${colors.primaryColor},${colors.accentColor})`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Sliders size={18} color="#fff" />
-                </div>
-              )}
-              <div>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>{settings.ispName}</div>
-                <div style={{ fontSize: 10, color: colors.primaryColor }}>PPPoE Client Portal · {settings.ispName.toLowerCase()}.net</div>
-              </div>
-            </div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", borderRadius: 99, padding: "4px 12px" }}>● Service Active</div>
-          </div>
-
-          {/* ── Hero ── */}
-          <div style={{ textAlign: "center", padding: "36px 32px 20px" }}>
-            <h2 style={{ fontSize: 30, fontWeight: 900, margin: "0 0 10px" }}>
-              Your{" "}
-              <span style={{ background: `linear-gradient(90deg,${colors.primaryColor},${colors.accentColor})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-                Broadband Portal
-              </span>
-            </h2>
-            <p style={{ color: `${colors.textColor}88`, fontSize: 13, margin: 0 }}>
-              {settings.tagline || "Manage your PPPoE account, track usage and renew your subscription."}
-            </p>
-          </div>
-
-          {/* ── Stats bar ── */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, maxWidth: 520, margin: "0 auto 28px", padding: "0 24px" }}>
-            {[
-              { icon: "⚡", label: "Speed",   value: "Up to 100 Mbps" },
-              { icon: "✅", label: "Uptime",  value: "99.9%" },
-              { icon: "🛠", label: "Support", value: "24/7" },
-            ].map(s => (
-              <div key={s.label} style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 10px", textAlign: "center" }}>
-                <div style={{ fontSize: 18, marginBottom: 4 }}>{s.icon}</div>
-                <div style={{ fontWeight: 800, fontSize: 14 }}>{s.value}</div>
-                <div style={{ fontSize: 10, color: `${colors.primaryColor}aa`, marginTop: 2 }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* ── Tabs ── */}
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 22 }}>
-            <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 14, padding: 4, display: "inline-flex", gap: 2 }}>
-              {(["login", "forgot", "voucher"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} style={tabBtn(tab === t)}>
-                  {t === "login" ? "Member Login" : t === "forgot" ? "Forgot Password" : "Redeem Voucher"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Tab content ── */}
-          <div style={{ maxWidth: 440, margin: "0 auto", padding: "0 24px 48px" }}>
-
-            {tab === "login" && (
-              <div style={card}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: `${colors.primaryColor}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>👤</div>
-                  <div style={{ fontWeight: 700, fontSize: 17 }}>Member Login</div>
-                </div>
-                <label style={lbl}>Username</label>
-                <input style={inp} readOnly placeholder="your_username" />
-                <label style={lbl}>Password</label>
-                <input type="password" style={{ ...inp, marginBottom: 20 }} readOnly placeholder="••••••••" />
-                <button style={mainBtn}>Login</button>
-                <p style={{ textAlign: "center", fontSize: 11, color: `${colors.textColor}55`, marginTop: 14 }}>
-                  Forgot your credentials?{" "}
-                  <span onClick={() => setTab("forgot")} style={{ color: colors.primaryColor, fontWeight: 700, cursor: "pointer" }}>Reset here</span>
-                </p>
-                {settings.supportPhone && (
-                  <p style={{ textAlign: "center", fontSize: 11, color: `${colors.textColor}44`, marginTop: 8 }}>
-                    Need help? Call <strong style={{ color: colors.primaryColor }}>{settings.supportPhone}</strong>
-                  </p>
-                )}
-              </div>
-            )}
-
-            {tab === "forgot" && (
-              <div style={{ ...card, borderColor: `#f59e0b33` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(245,158,11,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🔑</div>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 17 }}>Reset Password</div>
-                    <div style={{ fontSize: 11, color: `${colors.textColor}66` }}>Enter your registered phone number</div>
-                  </div>
-                </div>
-                <div style={{ marginTop: 16 }}>
-                  <label style={{ ...lbl, color: "#f59e0b" }}>Phone Number</label>
-                  <input placeholder="07XX XXX XXX" style={{ ...inp, borderColor: "rgba(245,158,11,0.2)" }} readOnly />
-                </div>
-                <button style={{ ...mainBtn, marginTop: 4, background: "linear-gradient(90deg,#f59e0b,#ea580c)" }}>Request Reset</button>
-              </div>
-            )}
-
-            {tab === "voucher" && (
-              <div style={{ ...card, borderColor: `${colors.primaryColor}22` }}>
-                <div style={{ textAlign: "center", marginBottom: 20 }}>
-                  <div style={{ width: 48, height: 48, borderRadius: "50%", background: `${colors.primaryColor}22`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px", fontSize: 22 }}>🎟</div>
-                  <div style={{ fontWeight: 700, fontSize: 17 }}>Redeem Voucher</div>
-                  <div style={{ fontSize: 12, color: `${colors.textColor}66`, marginTop: 4 }}>Enter your voucher code to renew your PPPoE subscription</div>
-                </div>
-                <input
-                  placeholder="XXXX-XXXX-XXXX"
-                  style={{ ...inp, textAlign: "center", fontFamily: "monospace", fontSize: 17, letterSpacing: "0.15em", color: colors.primaryColor, borderColor: `${colors.primaryColor}33`, marginBottom: 16 }}
-                  readOnly
-                />
-                <button style={mainBtn}>Activate Voucher</button>
-              </div>
-            )}
-
-          </div>
-
-          {/* ── Footer ── */}
-          <div style={{ textAlign: "center", padding: "16px 0 28px", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: 11, color: `${colors.textColor}33` }}>
-            &copy; {new Date().getFullYear()} {settings.ispName} — PPPoE Client Portal
-          </div>
-        </div>
+        <div className="pppoe-preview-content"><PPPoELogin previewSettings={settings} embedded /></div>
       </div>
     </div>
   );
 }
 
-/* ─── Main page ─── */
 export default function PPPoESettings() {
-  const [s, setS] = useState<PSettings>(loadSettings);
+  const [settings, setSettings] = useState<PppoePortalSettings>(loadSettings);
   const [saving, setSaving] = useState(false);
-  const [saved,  setSaved]  = useState(false);
+  const [saved, setSaved] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const logoRef  = useRef<HTMLInputElement>(null);
-  const advertRef = useRef<HTMLInputElement>(null);
+  const [saveError, setSaveError] = useState("");
 
-  const { data: routers = [] } = useQuery<DbRouter[]>({
-    queryKey: ["routers_for_pppoe_settings"],
+  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
+    queryKey: ["routers_for_pppoe_settings", ADMIN_ID],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host").eq("admin_id", ADMIN_ID).order("name");
+      const { data, error } = await supabase
+        .from("isp_routers")
+        .select("id,name,host,admin_id")
+        .eq("admin_id", ADMIN_ID)
+        .order("name");
+      if (error) throw error;
       return (data ?? []) as DbRouter[];
     },
   });
 
-  const upd = (key: keyof PSettings, val: string) => setS(p => ({ ...p, [key]: val }));
-  const updColor = (key: keyof typeof DEFAULT_COLORS, val: string) =>
-    setS(p => ({ ...p, colors: { ...p.colors, [key]: val } }));
-
-  function handleFile(ref: React.RefObject<HTMLInputElement | null>, key: "logoUrl" | "advertUrl") {
-    const file = ref.current?.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => setS(p => ({ ...p, [key]: e.target?.result as string }));
-    reader.readAsDataURL(file);
+  function update<K extends keyof PppoePortalSettings>(key: K, value: PppoePortalSettings[K]) {
+    setSettings(previous => ({ ...previous, [key]: value }));
+    setSaved(false);
+    setSaveError("");
   }
-
-  function handleSave() {
+  function updateColor(key: keyof typeof DEFAULT_PPPOE_COLORS, value: string) {
+    setSettings(previous => ({ ...previous, colors: { ...previous.colors, [key]: value } }));
+    setSaved(false);
+    setSaveError("");
+  }
+  function validate(): string {
+    if (!settings.ispName.trim()) return "Add an ISP name before saving.";
+    if (settings.ispName.trim().length > 80) return "ISP name must be 80 characters or fewer.";
+    if (settings.tagline.length > 180) return "Tagline must be 180 characters or fewer.";
+    if (settings.supportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(settings.supportEmail.trim())) return "Enter a valid support email address.";
+    for (const [label, value] of [["Terms of service", settings.termsUrl], ["Privacy policy", settings.privacyUrl]]) {
+      if (value && !/^https:\/\//i.test(value.trim())) return `${label} must use an https:// URL.`;
+    }
+    return "";
+  }
+  function saveSettings() {
+    const error = validate();
+    if (error) { setSaveError(error); return; }
     setSaving(true);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-    setTimeout(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500); }, 600);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      window.setTimeout(() => { setSaving(false); setSaved(true); }, 450);
+    } catch {
+      setSaving(false);
+      setSaveError("Settings could not be saved in this browser. Check available storage and try again.");
+    }
   }
 
-  const SECTION: React.CSSProperties = {
-    background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-    borderRadius: 14, overflow: "hidden", marginBottom: 24,
-  };
-  const SECTION_HEAD: React.CSSProperties = {
-    padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.06)",
-    display: "flex", alignItems: "center", gap: 8,
-    color: "#f1f5f9", fontWeight: 700, fontSize: 15,
-    background: "rgba(255,255,255,0.02)",
-  };
-  const SECTION_BODY: React.CSSProperties = { padding: "0 24px" };
-
-  const actBtnBase: React.CSSProperties = {
-    display: "flex", alignItems: "center", gap: 7,
-    padding: "10px 18px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer",
-  };
+  const presets = [
+    { name: "Signal", colors: { ...DEFAULT_PPPOE_COLORS } },
+    { name: "Ocean", colors: { bgColor: "#061421", bgColor2: "#0d2d46", primaryColor: "#0ea5e9", accentColor: "#67e8f9", cardColor: "#103653", buttonColor: "#14b8a6", textColor: "#f0f9ff", inputBgColor: "#071d31" } },
+    { name: "Purple", colors: { bgColor: "#10081f", bgColor2: "#24133c", primaryColor: "#8b5cf6", accentColor: "#d8b4fe", cardColor: "#27183d", buttonColor: "#14b8a6", textColor: "#faf5ff", inputBgColor: "#160c28" } },
+    { name: "Forest", colors: { bgColor: "#06140f", bgColor2: "#0d2d1d", primaryColor: "#22c55e", accentColor: "#86efac", cardColor: "#123623", buttonColor: "#f59e0b", textColor: "#f0fdf4", inputBgColor: "#071e12" } },
+  ];
 
   return (
     <AdminLayout>
-      {showPreview && (
-        <PPPoEPreviewModal colors={s.colors} settings={s} onClose={() => setShowPreview(false)} />
-      )}
-
-      <div style={{ padding: "32px 40px", maxWidth: 940, margin: "0 auto" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28 }}>
+      <style>{ADMIN_CSS}</style>
+      {showPreview && <PreviewModal settings={settings} onClose={() => setShowPreview(false)} />}
+      <div className="pppoe-settings-page">
+        <header className="pppoe-settings-header">
           <div>
-            <h1 style={{ color: "#f1f5f9", fontWeight: 800, fontSize: 24, margin: 0 }}>PPPoE Settings</h1>
-            <p style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>General configuration &amp; login page appearance</p>
+            <div className="pppoe-settings-kicker"><Wifi size={13} /> Customer experience</div>
+            <h1>PPPoE portal settings</h1>
+            <p>Shape the sign-in experience customers see when they manage their broadband account.</p>
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={() => setShowPreview(true)} style={{ ...actBtnBase, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
-              <Eye size={14} /> Preview Login Page
-            </button>
-            <button onClick={handleSave} style={{ ...actBtnBase, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB" }}>
+          <div className="pppoe-settings-actions">
+            <button type="button" className="pppoe-settings-button preview" onClick={() => setShowPreview(true)}><Eye size={14} /> Preview portal</button>
+            <button type="button" className={`pppoe-settings-button save ${saved ? "saved" : ""}`} onClick={saveSettings} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-              {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
+              {saving ? "Saving…" : saved ? "Saved" : "Save settings"}
             </button>
           </div>
-        </div>
+        </header>
 
-        {/* General Settings */}
-        <div style={SECTION}>
-          <div style={SECTION_HEAD}><Info size={16} style={{ color: "var(--isp-accent)" }} /> General Settings</div>
-          <div style={SECTION_BODY}>
-            <FieldRow label="PPPoE Page Title" hint="Your ISP name — displayed as the main heading on the PPPoE login page.">
-              <input value={s.ispName} onChange={e => upd("ispName", e.target.value)} style={INPUT} />
-            </FieldRow>
+        {saveError && <div className="pppoe-settings-error"><AlertCircle size={15} /><span>{saveError}</span></div>}
+        {saved && !saveError && <div className="pppoe-settings-status"><Check size={15} /><span>Portal settings saved for this tenant. Open the preview to review the customer-facing result.</span></div>}
 
-            <FieldRow label="Tagline" hint="A short description displayed under the ISP name.">
-              <input value={s.tagline} onChange={e => upd("tagline", e.target.value)} style={INPUT} />
-            </FieldRow>
-
-            <FieldRow label="Router" icon={<Wifi size={12} />} hint="Select the router this PPPoE login page is linked to.">
-              <div style={{ position: "relative" }}>
-                <select value={s.routerId} onChange={e => upd("routerId", e.target.value)} style={SELECT}>
-                  <option value="">— Select router —</option>
-                  {routers.map(r => <option key={r.id} value={String(r.id)}>{r.name}{r.host ? ` (${r.host})` : ""}</option>)}
-                </select>
-                <ChevronDown size={14} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
+        <div className="pppoe-settings-layout">
+          <div>
+            <section className="pppoe-settings-section">
+              <div className="pppoe-settings-section-head">
+                <div className="pppoe-settings-section-icon"><UserRound size={16} /></div>
+                <div><h2>Identity & connection</h2><p>Set the essentials customers need to recognise and use their PPPoE portal.</p></div>
               </div>
-            </FieldRow>
+              <div className="pppoe-settings-body">
+                <FieldRow label="ISP name" hint="Shown in the portal header and footer.">
+                  <input className="pppoe-settings-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
+                </FieldRow>
+                <FieldRow label="Portal tagline" hint="A short promise beneath the main heading.">
+                  <input className="pppoe-settings-input" value={settings.tagline} maxLength={180} onChange={event => update("tagline", event.target.value)} placeholder="Fast, reliable broadband for every day" />
+                </FieldRow>
+                <FieldRow label="Linked router" icon={<Wifi size={12} />} hint="Stored as the router ID; the name and host are shown for clarity.">
+                  <SelectField
+                    value={settings.routerId}
+                    onChange={value => update("routerId", value)}
+                    options={[
+                      { value: "", label: "— Select router —" },
+                      ...routers.map(router => ({ value: String(router.id), label: `${router.name}${router.host ? ` · ${router.host}` : ""}` })),
+                    ]}
+                  />
+                  {settings.routerId && <p className="pppoe-settings-field-note">{routers.find(router => String(router.id) === settings.routerId)?.name ?? "Selected router"}{routers.find(router => String(router.id) === settings.routerId)?.host ? ` · ${routers.find(router => String(router.id) === settings.routerId)?.host}` : ""}</p>}
+                  {!settings.routerId && <p className="pppoe-settings-field-note">{routersLoading ? "Loading tenant routers…" : routers.length ? "Choose the router associated with PPPoE access." : "No routers are available for this tenant yet."}</p>}
+                </FieldRow>
+                <FieldRow label="Portal logo" icon={<ImageIcon size={12} />} hint="PNG, JPG, or WebP. Maximum 2MB.">
+                  <FilePicker value={settings.logoUrl} label="Choose logo" accept=".png,.jpg,.jpeg,.webp" maxBytes={MAX_LOGO_BYTES} onChange={value => update("logoUrl", value)} onRemove={() => update("logoUrl", "")} />
+                </FieldRow>
+              </div>
+            </section>
 
-            <FieldRow label="Enable Vouchers" hint="Allow users to redeem voucher codes on the PPPoE login page.">
-              <SelectField value={s.enableVouchers} onChange={v => upd("enableVouchers", v)} options={["No", "Yes"]} />
-            </FieldRow>
-
-            <FieldRow label="Support Phone" hint="Optional support number displayed on the login page.">
-              <input value={s.supportPhone} onChange={e => upd("supportPhone", e.target.value)} style={INPUT} placeholder="e.g. 0712 345 678" />
-            </FieldRow>
-
-            <FieldRow label="Support Email" hint="Optional support email displayed on the login page.">
-              <input value={s.supportEmail} onChange={e => upd("supportEmail", e.target.value)} style={INPUT} placeholder="e.g. support@example.com" />
-            </FieldRow>
-
-            <FieldRow label="Upload Logo" icon={<Image size={12} />} hint="Only .png, .jpg, .jpeg allowed.">
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <button onClick={() => logoRef.current?.click()} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}>
-                  <Upload size={13} /> Choose File
-                </button>
-                <span style={{ fontSize: 12, color: "#64748b" }}>{s.logoUrl ? "Logo uploaded" : "No file chosen"}</span>
-                <input ref={logoRef} type="file" accept=".png,.jpg,.jpeg" style={{ display: "none" }} onChange={() => handleFile(logoRef, "logoUrl")} />
-                {s.logoUrl && (
-                  <div style={{ textAlign: "center" }}>
-                    <img src={s.logoUrl} alt="logo" style={{ height: 48, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)" }} />
-                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Logo Preview</div>
+            <section className="pppoe-settings-section">
+              <div className="pppoe-settings-section-head">
+                <div className="pppoe-settings-section-icon"><Palette size={16} /></div>
+                <div><h2>Visual system</h2><p>Make the portal feel like your network while keeping controls legible and accessible.</p></div>
+              </div>
+              <div className="pppoe-settings-body">
+                <FieldRow label="Portal colours" hint="Preview changes before saving.">
+                  <div className="pppoe-settings-colors">
+                    {([
+                      ["bgColor", "Background"],
+                      ["bgColor2", "Background 2"],
+                      ["primaryColor", "Primary"],
+                      ["accentColor", "Accent"],
+                      ["cardColor", "Cards"],
+                      ["buttonColor", "Buttons"],
+                      ["textColor", "Text"],
+                      ["inputBgColor", "Inputs"],
+                    ] as const).map(([key, label]) => (
+                      <div className="pppoe-settings-color" key={key}>
+                        <input type="color" aria-label={label} value={settings.colors[key]} onChange={event => updateColor(key, event.target.value)} />
+                        <label>{label}</label>
+                        <code>{settings.colors[key]}</code>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            </FieldRow>
-
-            <FieldRow label="Upload Advert Banner" icon={<Image size={12} />} hint="Rectangular/landscape banner, max 500KB.">
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <button onClick={() => advertRef.current?.click()} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "#f1f5f9", fontSize: 13, cursor: "pointer" }}>
-                  <Upload size={13} /> Choose File
-                </button>
-                <span style={{ fontSize: 12, color: "#64748b" }}>{s.advertUrl ? "Banner uploaded" : "No file chosen"}</span>
-                <input ref={advertRef} type="file" accept=".png,.jpg,.jpeg" style={{ display: "none" }} onChange={() => handleFile(advertRef, "advertUrl")} />
-                {s.advertUrl && (
-                  <div style={{ textAlign: "center" }}>
-                    <img src={s.advertUrl} alt="advert" style={{ height: 48, maxWidth: 200, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", objectFit: "cover" }} />
-                    <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Advert Preview</div>
+                  <div className="pppoe-settings-presets">
+                    {presets.map(preset => (
+                      <button type="button" className="pppoe-settings-preset" key={preset.name} onClick={() => update("colors", preset.colors)}>
+                        <span className="pppoe-settings-swatch">{[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor].map(color => <i key={color} style={{ background: color }} />)}</span>
+                        {preset.name}
+                      </button>
+                    ))}
                   </div>
-                )}
+                </FieldRow>
               </div>
-            </FieldRow>
+            </section>
 
-            <FieldRow label="Advert Position" hint="Where the advert banner appears on the page.">
-              <SelectField value={s.advertPos} onChange={v => upd("advertPos", v)} options={["Bottom", "Top", "Middle"]} />
-            </FieldRow>
+            <section className="pppoe-settings-section">
+              <div className="pppoe-settings-section-head">
+                <div className="pppoe-settings-section-icon"><Ticket size={16} /></div>
+                <div><h2>Access & announcements</h2><p>Control the actions and notices available to PPPoE customers.</p></div>
+              </div>
+              <div className="pppoe-settings-body">
+                <FieldRow label="Voucher redemption" hint="Show the voucher tab for prepaid renewals.">
+                  <div className="pppoe-settings-check"><span>Allow customers to redeem vouchers</span><button type="button" aria-label="Toggle voucher redemption" className={`pppoe-settings-toggle ${settings.enableVouchers === "Yes" ? "on" : ""}`} onClick={() => update("enableVouchers", settings.enableVouchers === "Yes" ? "No" : "Yes")}><i /></button></div>
+                </FieldRow>
+                <FieldRow label="Service status" hint="Show an attention notice when planned maintenance is active.">
+                  <SelectField value={settings.maintenanceMode} onChange={value => update("maintenanceMode", value)} options={["Online", "Maintenance"]} />
+                </FieldRow>
+                {settings.maintenanceMode === "Maintenance" && <FieldRow label="Maintenance message" hint="Keep customers informed about the interruption."><textarea className="pppoe-settings-textarea" value={settings.maintenanceMessage} maxLength={240} onChange={event => update("maintenanceMessage", event.target.value)} /></FieldRow>}
+                <FieldRow label="Announcement" icon={<Megaphone size={12} />} hint="Optional message shown above account access.">
+                  <textarea className="pppoe-settings-textarea" value={settings.announcement} maxLength={240} onChange={event => update("announcement", event.target.value)} placeholder="e.g. New plans are now available…" />
+                </FieldRow>
+                <FieldRow label="Advert banner" hint="PNG, JPG, or WebP. Maximum 500KB.">
+                  <FilePicker value={settings.advertUrl} label="Choose banner" accept=".png,.jpg,.jpeg,.webp" maxBytes={MAX_ADVERT_BYTES} onChange={value => update("advertUrl", value)} onRemove={() => update("advertUrl", "")} />
+                </FieldRow>
+                <FieldRow label="Advert display" hint="Choose whether the uploaded banner is visible.">
+                  <div className="pppoe-settings-two-col">
+                    <SelectField value={settings.enableAdvert} onChange={value => update("enableAdvert", value)} options={["Disable", "Enable"]} />
+                    <SelectField value={settings.advertPos} onChange={value => update("advertPos", value)} options={["Top", "Middle", "Bottom"]} />
+                  </div>
+                </FieldRow>
+              </div>
+            </section>
 
-            <FieldRow label="Enable Advert" hint='If set to "Enable", your advert banner will appear.'>
-              <SelectField value={s.enableAdvert} onChange={v => upd("enableAdvert", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
+            <section className="pppoe-settings-section">
+              <div className="pppoe-settings-section-head">
+                <div className="pppoe-settings-section-icon"><LifeBuoy size={16} /></div>
+                <div><h2>Support & helpful content</h2><p>Give customers direct ways to reach you and answer common questions.</p></div>
+              </div>
+              <div className="pppoe-settings-body">
+                <FieldRow label="Support contacts" hint="Displayed on the portal only when provided.">
+                  <div className="pppoe-settings-two-col">
+                    <input className="pppoe-settings-input" type="tel" value={settings.supportPhone} onChange={event => update("supportPhone", event.target.value)} placeholder="Support phone" />
+                    <input className="pppoe-settings-input" type="email" value={settings.supportEmail} onChange={event => update("supportEmail", event.target.value)} placeholder="support@example.com" />
+                  </div>
+                  <input className="pppoe-settings-input" style={{ marginTop: 10 }} type="tel" value={settings.whatsappNumber} onChange={event => update("whatsappNumber", event.target.value)} placeholder="WhatsApp number (optional)" />
+                </FieldRow>
+                <FieldRow label="Testimonials" hint="Show one short customer quote in the portal.">
+                  <SelectField value={settings.testimonials} onChange={value => update("testimonials", value)} options={["Disable", "Enable"]} />
+                  {settings.testimonials === "Enable" && <textarea className="pppoe-settings-textarea" style={{ marginTop: 10 }} value={settings.testimonialText} maxLength={240} onChange={event => update("testimonialText", event.target.value)} placeholder="A customer quote" />}
+                </FieldRow>
+                <FieldRow label="FAQ section" icon={<HelpCircle size={12} />} hint="Add a concise answer to common connection questions.">
+                  <SelectField value={settings.faqSection} onChange={value => update("faqSection", value)} options={["Disable", "Enable"]} />
+                  {settings.faqSection === "Enable" && <textarea className="pppoe-settings-textarea" style={{ marginTop: 10 }} value={settings.faqText} maxLength={600} onChange={event => update("faqText", event.target.value)} placeholder={"How do I connect?\\nUse your PPPoE username and password."} />}
+                </FieldRow>
+                <FieldRow label="Legal links" icon={<Link2 size={12} />} hint="Optional HTTPS links shown in the portal footer.">
+                  <div className="pppoe-settings-two-col">
+                    <input className="pppoe-settings-input" type="url" value={settings.termsUrl} onChange={event => update("termsUrl", event.target.value)} placeholder="https://…/terms" />
+                    <input className="pppoe-settings-input" type="url" value={settings.privacyUrl} onChange={event => update("privacyUrl", event.target.value)} placeholder="https://…/privacy" />
+                  </div>
+                </FieldRow>
+              </div>
+            </section>
 
-            <FieldRow label="Testimonials" hint="Show customer testimonials on the PPPoE login page.">
-              <SelectField value={s.testimonials} onChange={v => upd("testimonials", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-
-            <FieldRow label="FAQ Section" hint="Show a FAQ section on the PPPoE login page.">
-              <SelectField value={s.faqSection} onChange={v => upd("faqSection", v)} options={["Disable", "Enable"]} />
-            </FieldRow>
-          </div>
-        </div>
-
-        {/* Colour Scheme */}
-        <div style={SECTION}>
-          <div style={SECTION_HEAD}><Palette size={16} style={{ color: "#38bdf8" }} /> Colour Scheme</div>
-          <div style={{ padding: "24px" }}>
-            <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20 }}>
-              Customise the colours of your PPPoE login page. Click <strong style={{ color: "#38bdf8" }}>Preview Login Page</strong> above to see changes live before saving.
-            </p>
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-              <ColorPicker label="Background (Top)"    value={s.colors.bgColor}      onChange={v => updColor("bgColor", v)} />
-              <ColorPicker label="Background (Bottom)" value={s.colors.bgColor2}     onChange={v => updColor("bgColor2", v)} />
-              <ColorPicker label="Primary / Accent"    value={s.colors.primaryColor} onChange={v => updColor("primaryColor", v)} />
-              <ColorPicker label="Secondary Accent"    value={s.colors.accentColor}  onChange={v => updColor("accentColor", v)} />
-              <ColorPicker label="Card Background"     value={s.colors.cardColor}    onChange={v => updColor("cardColor", v)} />
-              <ColorPicker label="Button Color"        value={s.colors.buttonColor}  onChange={v => updColor("buttonColor", v)} />
-              <ColorPicker label="Text Color"          value={s.colors.textColor}    onChange={v => updColor("textColor", v)} />
-              <ColorPicker label="Input Background"    value={s.colors.inputBgColor} onChange={v => updColor("inputBgColor", v)} />
+            <div className="pppoe-settings-bottom-actions">
+              <button type="button" className="pppoe-settings-button preview" onClick={() => setShowPreview(true)}><Eye size={14} /> Review portal</button>
+              <button type="button" className={`pppoe-settings-button save ${saved ? "saved" : ""}`} onClick={saveSettings} disabled={saving}><Save size={14} /> {saved ? "Saved" : "Save settings"}</button>
             </div>
+          </div>
 
-            {/* Presets */}
-            <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-              <p style={{ fontSize: 12, color: "#64748b", fontWeight: 600, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.06em" }}>Quick Presets</p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {[
-                  { name: "Ocean Blue",    colors: { bgColor: "#020b18", bgColor2: "#051e38", primaryColor: "#0ea5e9", accentColor: "#2563EB", cardColor: "#0c2340", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#020b18" } },
-                  { name: "Purple Night",  colors: { bgColor: "#0d0415", bgColor2: "#1a0735", primaryColor: "#8b5cf6", accentColor: "#d946ef", cardColor: "#1a0f2e", buttonColor: "#10b981", textColor: "#ffffff", inputBgColor: "#000000" } },
-                  { name: "Forest Green",  colors: { bgColor: "#051a0e", bgColor2: "#0d2e1a", primaryColor: "#22c55e", accentColor: "#4ade80", cardColor: "#0d2e1a", buttonColor: "#f59e0b", textColor: "#ffffff", inputBgColor: "#040d07" } },
-                  { name: "Corporate",     colors: { bgColor: "#0f172a", bgColor2: "#1e293b", primaryColor: "#3b82f6", accentColor: "#2563eb", cardColor: "#1e293b", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#0f172a" } },
-                  { name: "Midnight Dark", colors: { bgColor: "#090909", bgColor2: "#141414", primaryColor: "#2563EB", accentColor: "#1D4ED8", cardColor: "#1a1a1a", buttonColor: "#22c55e", textColor: "#ffffff", inputBgColor: "#000000" } },
-                ].map(p => (
-                  <button key={p.name}
-                    onClick={() => setS(prev => ({ ...prev, colors: p.colors as typeof DEFAULT_COLORS }))}
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: "#e2e8f0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-                  >
-                    <span style={{ display: "flex", gap: 3 }}>
-                      {[p.colors.bgColor, p.colors.primaryColor, p.colors.accentColor, p.colors.buttonColor].map((c, i) => (
-                        <span key={i} style={{ width: 12, height: 12, borderRadius: 3, background: c, display: "inline-block" }} />
-                      ))}
-                    </span>
-                    {p.name}
-                  </button>
-                ))}
+          <aside className="pppoe-settings-aside">
+            <div className="pppoe-settings-aside-card">
+              <h3><ShieldCheck size={15} /> Keep access trustworthy</h3>
+              <p>Customer-facing copy is rendered as text. This page stores only portal preferences and image data in this tenant’s browser storage — never router credentials or payment secrets.</p>
+              <button type="button" className="pppoe-settings-button preview" style={{ width: "100%" }} onClick={() => setShowPreview(true)}><Eye size={14} /> Open live preview</button>
+            </div>
+            <div className="pppoe-settings-preview-card">
+              <div className="pppoe-settings-preview-head"><strong>Portal at a glance</strong><span>Unsaved changes included</span></div>
+              <div className="pppoe-settings-preview-body">
+                <div className="pppoe-settings-preview-brand">
+                  <div className="pppoe-settings-preview-logo">{settings.logoUrl ? <img src={settings.logoUrl} alt="" /> : <Wifi size={14} />}</div>
+                  <div><strong>{settings.ispName || "Your ISP"}</strong><span>PPPoE customer portal</span></div>
+                </div>
+                <div className="pppoe-settings-preview-stat"><div /><div /><div /></div>
+                <div className="pppoe-settings-preview-line" /><div className="pppoe-settings-preview-line short" /><div className="pppoe-settings-preview-button" style={{ background: settings.colors.primaryColor }} />
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Bottom save */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button onClick={() => setShowPreview(true)} style={{ ...{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer" }, background: "rgba(14,165,233,0.1)", border: "1px solid rgba(14,165,233,0.35)", color: "#38bdf8" }}>
-            <Eye size={14} /> Preview Login Page
-          </button>
-          <button onClick={handleSave} style={{ display: "flex", alignItems: "center", gap: 7, padding: "11px 22px", borderRadius: 10, background: saved ? "rgba(74,222,128,0.15)" : "var(--isp-accent-glow)", border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--isp-accent-border)"}`, color: saved ? "#4ade80" : "#2563EB", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            {saving ? <Loader2 size={14} /> : saved ? <Check size={14} /> : <Save size={14} />}
-            {saving ? "Saving…" : saved ? "Saved!" : "Save Settings"}
-          </button>
+            <div className="pppoe-settings-aside-card">
+              <h3><Info size={15} /> Before you publish</h3>
+              <p>Use Preview portal to check the customer view on narrow screens. Save only after reviewing your colours, support contacts, and maintenance state.</p>
+            </div>
+          </aside>
         </div>
       </div>
     </AdminLayout>
