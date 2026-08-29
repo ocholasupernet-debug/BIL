@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { createHmac } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import express from "express";
@@ -38,6 +39,27 @@ const server = await new Promise(resolve => {
   const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
 });
 const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+function request(pathname, host) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(`${baseUrl}${pathname}`, {
+      headers: { Host: host },
+    }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          status: response.statusCode,
+          headers: response.headers,
+          json: () => JSON.parse(body),
+        });
+      });
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
 
 let customerStatus = "expired";
 globalThis.fetch = async input => {
@@ -114,36 +136,27 @@ test("the access endpoint enforces tenant, router, and live subscription status"
     adminId: 7,
     routerId: 42,
   });
-  const allowed = await realFetch(`${baseUrl}/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, {
-    headers: { host: "tenant.isplatty.org" },
-  });
+  const allowed = await request(`/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, "tenant.isplatty.org");
   assert.equal(allowed.status, 200);
-  assert.equal((await allowed.json()).customer.status, "expired");
+  assert.equal(allowed.json().customer.status, "expired");
 
   customerStatus = "active";
-  const active = await realFetch(`${baseUrl}/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, {
-    headers: { host: "tenant.isplatty.org" },
-  });
+  const active = await request(`/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, "tenant.isplatty.org");
   assert.equal(active.status, 404);
 
   customerStatus = "paused";
-  const wrongTenant = await realFetch(`${baseUrl}/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, {
-    headers: { host: "another.isplatty.org" },
-  });
+  const wrongTenant = await request(`/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, "another.isplatty.org");
   assert.equal(wrongTenant.status, 404);
 });
 
 test("the router handoff keeps router credentials out of the customer redirect", async () => {
   customerStatus = "paused";
-  const handoff = await realFetch(
-    `${baseUrl}/public/pppoe-portal/handoff/42?token=${encodeURIComponent("router-secret")}&username=subscriber`,
-    {
-      headers: { host: "tenant.isplatty.org" },
-      redirect: "manual",
-    },
+  const handoff = await request(
+    `/public/pppoe-portal/handoff/42?token=${encodeURIComponent("router-secret")}&username=subscriber`,
+    "tenant.isplatty.org",
   );
   assert.equal(handoff.status, 302);
-  const location = handoff.headers.get("location");
+  const location = handoff.headers.location;
   assert.match(location, /\/pppoe-login\?ref=/);
   assert.doesNotMatch(location, /router-secret|subscriber/);
 });

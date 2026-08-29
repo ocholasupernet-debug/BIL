@@ -62,7 +62,7 @@ async function tenantOwnsAdmin(req: Request, adminId: number): Promise<boolean> 
     "isp_admins",
     `id=eq.${adminId}&subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&select=id,subdomain&limit=1`,
   );
-  return admins[0]?.id === adminId;
+  return admins[0]?.id === adminId && admins[0]?.subdomain === subdomain;
 }
 
 async function findPppoeCustomer(adminId: number, username: string): Promise<CustomerRecord | null> {
