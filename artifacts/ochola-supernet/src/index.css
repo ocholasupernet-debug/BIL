@@ -38,10 +38,11 @@
   --background:            42 30% 96%;
   --foreground:            195 28% 15%;
   --sidebar:               195 32% 14%;
-  --card:                  48 25% 99%;
-  --card-foreground:       195 28% 15%;
-  --popover:               48 25% 99%;
-  --popover-foreground:    195 28% 15%;
+  /* Cards intentionally keep the dark control-room treatment in both themes. */
+  --card:                  195 27% 12%;
+  --card-foreground:       48 25% 96%;
+  --popover:               195 27% 12%;
+  --popover-foreground:    48 25% 96%;
   --primary:               17 70% 51%;
   --primary-foreground:    48 25% 99%;
   --secondary:             44 22% 91%;
@@ -60,20 +61,20 @@
   --isp-bg:            #f3f6f2;
   --isp-header:        #fbfcf8;
   --isp-sidebar:       #172b2d;
-  --isp-section:       #fbfcf8;
-  --isp-card:          #fffefa;
-  --isp-inner-card:    #f4f7f2;
-  --isp-border:        #dce5de;
-  --isp-border-subtle: #e9eee8;
+   --isp-section:       #102426;
+   --isp-card:          #12292b;
+   --isp-inner-card:    #0b1d1f;
+   --isp-border:        rgba(185,210,201,0.15);
+   --isp-border-subtle: rgba(185,210,201,0.08);
   --isp-text:          #193033;
   --isp-text-muted:    #657878;
   --isp-text-sub:      #8da09d;
   --isp-nav-text:      #bdcbc7;
-  --isp-input-bg:      #fffefa;
-  --isp-input-border:  #d5e0d9;
-  --isp-hover:         #edf3ed;
-  --isp-table-bg:      #fffefa;
-  --isp-table-border:  #e9eee8;
+   --isp-input-bg:      rgba(255,255,255,0.04);
+   --isp-input-border:  rgba(185,210,201,0.17);
+   --isp-hover:         rgba(255,255,255,0.06);
+   --isp-table-bg:      #0e2224;
+   --isp-table-border:  rgba(185,210,201,0.08);
 
   /* Signal orange is the memorable network-operations accent. */
   --isp-accent:        #d96835;
@@ -390,6 +391,33 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   background: var(--isp-inner-card);
   border: 1px solid var(--isp-border);
   border-radius: 10px;
+}
+
+/* Dark card skin: page chrome may switch theme, card content does not. */
+:is(
+  .section-card,
+  .inner-card,
+  .dashboard-kpi,
+  .dashboard-stat,
+  .gateway-strip,
+  .router-filter-bar,
+  .router-card,
+  .dashboard-builder-preview-wrap,
+  .dashboard-builder-preview,
+  [style*="var(--isp-card)"],
+  [style*="var(--isp-section)"],
+  [style*="var(--isp-inner-card)"]
+) {
+  --isp-text: #e7efea;
+  --isp-text-muted: #a3b5af;
+  --isp-text-sub: #708680;
+  --isp-border: rgba(185,210,201,0.15);
+  --isp-border-subtle: rgba(185,210,201,0.08);
+  --isp-input-bg: rgba(255,255,255,0.04);
+  --isp-input-border: rgba(185,210,201,0.17);
+  --isp-hover: rgba(255,255,255,0.06);
+  --isp-table-bg: #0e2224;
+  --isp-table-border: rgba(185,210,201,0.08);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1010,7 +1038,7 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
 .settings-mobile-nav { display: none; }
 .dashboard-builder-preview-wrap { min-width: 0; padding: 14px; background: var(--isp-section); border: 1px solid var(--isp-border); border-radius: 14px; }
 .dashboard-builder-preview-label { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--isp-text-muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
-.dashboard-builder-preview { display: flex; flex-direction: column; gap: 9px; min-height: 346px; padding: 15px; color: var(--isp-text); background: var(--isp-bg); border: 1px solid var(--isp-border); border-radius: 12px; box-sizing: border-box; }
+.dashboard-builder-preview { --isp-card: #182136; --isp-section: #121a2c; --isp-inner-card: #1d2942; --isp-border: rgba(148,163,184,0.17); --isp-border-subtle: rgba(148,163,184,0.1); --isp-text: #edf2ff; --isp-text-muted: #9eacc5; --isp-text-sub: #70809d; display: flex; flex-direction: column; gap: 9px; min-height: 346px; padding: 15px; color: var(--isp-text); background: #0e1525; border: 1px solid var(--isp-border); border-radius: 12px; box-sizing: border-box; }
 .dashboard-preview-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--isp-border); }
 .dashboard-preview-hero > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .dashboard-preview-eyebrow { color: var(--dashboard-accent); font-size: 0.58rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -1463,8 +1491,8 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   padding: 16px;
   background:
     radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--dashboard-accent) 15%, transparent), transparent 30%),
-    var(--isp-bg);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--isp-text) 7%, transparent);
+    #0b131f;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
 }
 .dashboard-preview-hero {
   min-height: 57px;
