@@ -13,6 +13,7 @@ import { clearAdminAuth, getAdminName } from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
+import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
 
 interface NavChild {
   name: string;
@@ -426,6 +427,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               <span className="live-label">LIVE</span>
             </div>
 
+            <AdminInstallButton />
+
             <button className="header-btn" onClick={toggle} title={isDark ? "Switch to light" : "Switch to dark"} aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}>
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
@@ -819,6 +822,88 @@ const adminLayoutStyles = `
   color: var(--isp-text);
   letter-spacing: -0.01em;
   flex-shrink: 0;
+}
+
+.admin-install-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.admin-install-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--isp-accent-border);
+  border-radius: 8px;
+  background: var(--isp-accent-glow);
+  color: var(--isp-accent);
+  cursor: pointer;
+  font: 600 0.72rem/1 'DM Sans', system-ui, sans-serif;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.admin-install-button:hover {
+  background: var(--isp-accent);
+  border-color: var(--isp-accent);
+  color: white;
+}
+.admin-install-button--installed {
+  color: var(--isp-green);
+  border-color: rgba(34,197,94,0.25);
+  background: var(--isp-green-glow);
+  cursor: default;
+}
+.admin-install-button--installed:hover {
+  color: var(--isp-green);
+  border-color: rgba(34,197,94,0.25);
+  background: var(--isp-green-glow);
+}
+.admin-install-help {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 60;
+  width: 260px;
+  padding: 13px 14px;
+  border: 1px solid var(--isp-border);
+  border-radius: 11px;
+  background: var(--isp-card);
+  color: var(--isp-text-muted);
+  box-shadow: 0 14px 35px rgba(0,0,0,0.22);
+}
+.admin-install-help-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 18px;
+  color: var(--isp-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.admin-install-help-title svg { color: var(--isp-accent); flex-shrink: 0; }
+.admin-install-help p {
+  margin: 7px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+.admin-install-help-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--isp-text-sub);
+  cursor: pointer;
+}
+.admin-install-help-close:hover { color: var(--isp-text); }
+@media (max-width: 720px) {
+  .admin-install-label { display: none; }
+  .admin-install-button { width: 34px; padding: 0; }
 }
 
 .header-search {
