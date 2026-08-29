@@ -30,6 +30,17 @@ function normalizePrivateKey(value: string): string {
   let key = value.trim();
   if (!key) return "";
 
+  /* A base64-wrapped key avoids line-break corruption in secrets UIs or
+     terminal copy operations. The prefix makes the encoding explicit. */
+  if (key.startsWith("base64:")) {
+    const encoded = key.slice("base64:".length).replace(/\s+/g, "");
+    try {
+      key = Buffer.from(encoded, "base64").toString("utf8").trim();
+    } catch {
+      return "";
+    }
+  }
+
   /* Secrets are sometimes pasted with literal "\\n" sequences or Windows
      line endings. ssh reads the temporary file literally, so normalize both
      forms before trying the connection. */
