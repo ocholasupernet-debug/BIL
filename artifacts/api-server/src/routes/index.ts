@@ -26,6 +26,7 @@ import vpnManagementRouter from "./vpn-management-route.js";
 import adminPageVisibilityRouter from "./admin-page-visibility-route.js";
 import dashboardPreferencesRouter from "./dashboard-preferences-route.js";
 import typographyRouter from "./typography-route.js";
+import pppoePortalRouter from "./pppoe-portal-route.js";
 
 const router: IRouter = Router();
 
@@ -56,5 +57,6 @@ router.use(vpnManagementRouter);
 router.use(adminPageVisibilityRouter);
 router.use(dashboardPreferencesRouter);
   router.use(typographyRouter);
+  router.use(pppoePortalRouter);
 
 export default router;

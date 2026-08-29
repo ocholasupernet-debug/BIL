@@ -17,6 +17,8 @@ const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const PASSWORD_SETUP_TOKEN_TTL_MS = 15 * 60 * 1000;
 const MAX_CLOCK_SKEW_S = 300;
 const PAYMENT_INTENT_TTL_MS = 5 * 60 * 1000;
+export const PPPOE_PORTAL_REFERENCE_TTL_MS = 10 * 60 * 1000;
+const PPPOE_PORTAL_REFERENCE_PURPOSE = "pppoe-expired-portal";
 
 export type ApiTokenType = "a" | "c" | "p";
 
@@ -32,6 +34,15 @@ export interface PaymentIntentPayload {
   amount: number;
   phone: string;
   macAddress?: string;
+  issuedAt: number;
+  nonce: string;
+}
+
+export interface PppoePortalReferencePayload {
+  purpose: typeof PPPOE_PORTAL_REFERENCE_PURPOSE;
+  customerId: number;
+  adminId: number;
+  routerId: number;
   issuedAt: number;
   nonce: string;
 }
@@ -104,6 +115,70 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
         Date.now() - payload.issuedAt > PAYMENT_INTENT_TTL_MS ||
         payload.issuedAt > Date.now() + MAX_CLOCK_SKEW_S * 1000) return null;
     return payload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A portal reference is deliberately separate from a customer session token.
+ * It is short-lived, purpose-bound, and contains only identifiers; it never
+ * carries a password or a client-supplied subscription status.
+ */
+export function generatePppoePortalReference(
+  payload: Omit<PppoePortalReferencePayload, "purpose" | "issuedAt" | "nonce">,
+): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  const body: PppoePortalReferencePayload = {
+    purpose: PPPOE_PORTAL_REFERENCE_PURPOSE,
+    ...payload,
+    issuedAt: Date.now(),
+    nonce: randomBytes(16).toString("base64url"),
+  };
+  const encoded = Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  const signature = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("hex");
+  return `${encoded}.${signature}`;
+}
+
+export function validatePppoePortalReference(token: string): PppoePortalReferencePayload | null {
+  if (!TOKEN_SIGNING_SECRET || !token) return null;
+  const [encoded, signature, ...extra] = token.split(".");
+  if (!encoded || !signature || extra.length > 0) return null;
+
+  const expected = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("hex");
+  const receivedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    receivedBuffer.length !== expectedBuffer.length
+    || !timingSafeEqual(receivedBuffer, expectedBuffer)
+  ) return null;
+
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<PppoePortalReferencePayload>;
+    const customerId = payload.customerId;
+    const adminId = payload.adminId;
+    const routerId = payload.routerId;
+    const issuedAt = payload.issuedAt;
+    if (payload.purpose !== PPPOE_PORTAL_REFERENCE_PURPOSE || !payload.nonce) return null;
+    if (
+      !Number.isSafeInteger(customerId)
+      || !Number.isSafeInteger(adminId)
+      || !Number.isSafeInteger(routerId)
+      || !Number.isFinite(issuedAt)
+    ) return null;
+    const safeCustomerId = customerId as number;
+    const safeAdminId = adminId as number;
+    const safeRouterId = routerId as number;
+    const safeIssuedAt = issuedAt as number;
+    if (
+      safeCustomerId <= 0
+      || safeAdminId <= 0
+      || safeRouterId <= 0
+      || Date.now() - safeIssuedAt > PPPOE_PORTAL_REFERENCE_TTL_MS
+      || safeIssuedAt > Date.now() + MAX_CLOCK_SKEW_S * 1000
+    ) return null;
+
+    return payload as PppoePortalReferencePayload;
   } catch {
     return null;
   }

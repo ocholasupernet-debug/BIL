@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ArrowRight, Check, CheckCircle2, ChevronRight, Eye, EyeOff, HelpCircle,
   KeyRound, LifeBuoy, LockKeyhole, Mail, MessageCircle, Router, Send,
@@ -136,6 +136,67 @@ function ResultState({
   );
 }
 
+type PortalAccessState = "checking" | "allowed" | "denied";
+
+function PortalAccessGate({
+  ispName,
+  state,
+}: {
+  ispName: string;
+  state: Exclude<PortalAccessState, "allowed">;
+}) {
+  const checking = state === "checking";
+  return (
+    <div
+      className="pppoe-portal"
+      style={{
+        "--pppoe-bg": DEFAULT_PPPOE_COLORS.bgColor,
+        "--pppoe-bg-2": DEFAULT_PPPOE_COLORS.bgColor2,
+        "--pppoe-primary": DEFAULT_PPPOE_COLORS.primaryColor,
+        "--pppoe-accent": DEFAULT_PPPOE_COLORS.accentColor,
+        "--pppoe-card": DEFAULT_PPPOE_COLORS.cardColor,
+        "--pppoe-button": DEFAULT_PPPOE_COLORS.buttonColor,
+        "--pppoe-text": DEFAULT_PPPOE_COLORS.textColor,
+        "--pppoe-input": DEFAULT_PPPOE_COLORS.inputBgColor,
+      } as React.CSSProperties}
+    >
+      <style>{PORTAL_CSS}</style>
+      <header className="pppoe-header pppoe-shell">
+        <div className="pppoe-brand">
+          <div className="pppoe-brand-mark"><Wifi size={18} color="#fff" /></div>
+          <div>
+            <div className="pppoe-brand-name">{ispName}</div>
+            <div className="pppoe-brand-meta">Secure access</div>
+          </div>
+        </div>
+        <div className="pppoe-header-status">
+          <span className={`pppoe-live-dot ${checking ? "pppoe-live-dot-checking" : ""}`} />
+          {checking ? "Checking access" : "Access restricted"}
+        </div>
+      </header>
+      <main className="pppoe-main pppoe-gate-main">
+        <div className="pppoe-card pppoe-gate-card">
+          <div className="pppoe-result">
+            <div className="pppoe-result-icon">
+              {checking ? <LockKeyhole size={28} /> : <ShieldCheck size={28} />}
+            </div>
+            <span className="pppoe-eyebrow">{checking ? "Verifying link" : "Private portal"}</span>
+            <h2>{checking ? "Checking your access…" : "This portal link is not available"}</h2>
+            <p>
+              {checking
+                ? "Please wait while we verify your router-provided access link."
+                : "Open this page from your ISP router using a valid PPPoE recovery link. If you still need help, contact your ISP directly."}
+            </p>
+          </div>
+        </div>
+      </main>
+      <footer className="pppoe-footer">
+        <p>Secure PPPoE customer access</p>
+      </footer>
+    </div>
+  );
+}
+
 const PORTAL_CSS = `
   .pppoe-portal {
     --pppoe-bg: #061416;
@@ -214,6 +275,9 @@ const PORTAL_CSS = `
   .pppoe-result h2 { margin:10px 0 8px; color:var(--pppoe-text); font-size:1.28rem; font-weight:850; }
   .pppoe-result p { max-width:330px; margin:0 auto 22px; color:rgba(244,248,245,.55); font-size:.8rem; line-height:1.6; }
   .pppoe-result .pppoe-button { width:auto; min-width:150px; }
+  .pppoe-gate-main { display:flex; align-items:center; justify-content:center; }
+  .pppoe-gate-card { width:min(520px,100%); }
+  .pppoe-live-dot-checking { background:#fbbf24; box-shadow:0 0 0 4px rgba(251,191,36,.12); }
   .pppoe-side-stack { display:flex; flex-direction:column; gap:18px; }
   .pppoe-side-card { padding:19px; }
   .pppoe-side-card h3 { display:flex; align-items:center; gap:8px; margin:0 0 13px; color:var(--pppoe-text); font-size:.83rem; font-weight:800; }
@@ -241,6 +305,7 @@ export function PPPoELogin({
   embedded?: boolean;
 }) {
   const brand = useBrand();
+  const [portalAccess, setPortalAccess] = useState<PortalAccessState>(previewSettings ? "allowed" : "checking");
   const [storedSettings] = useState(loadSettings);
   const settings = previewSettings ?? storedSettings;
   const [tab, setTab] = useState<"login" | "forgot" | "voucher">("login");
@@ -287,11 +352,52 @@ export function PPPoELogin({
     if (!embedded) document.title = `${ispName} — PPPoE Portal`;
   }, [embedded, ispName]);
 
-  const tabs = useMemo(() => [
+  useEffect(() => {
+    if (previewSettings) {
+      setPortalAccess("allowed");
+      return;
+    }
+
+    const reference = new URLSearchParams(window.location.search).get("ref")?.trim();
+    if (!reference) {
+      setPortalAccess("denied");
+      return;
+    }
+
+    const controller = new AbortController();
+    setPortalAccess("checking");
+    fetch(`/api/public/pppoe-portal/access?ref=${encodeURIComponent(reference)}`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(response => {
+        if (!response.ok) throw new Error("Portal access was denied.");
+        return response.json() as Promise<{ ok?: boolean }>;
+      })
+      .then(result => {
+        if (!result.ok) throw new Error("Portal access was denied.");
+        setPortalAccess("allowed");
+        const cleanUrl = `${window.location.pathname}${window.location.hash}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setPortalAccess("denied");
+      });
+
+    return () => controller.abort();
+  }, [previewSettings]);
+
+  const tabs = [
     { id: "login" as const, label: "Sign in" },
     { id: "forgot" as const, label: "Reset access" },
     ...(showVoucher ? [{ id: "voucher" as const, label: "Voucher" }] : []),
-  ], [showVoucher]);
+  ];
+
+  if (portalAccess !== "allowed") {
+    return <PortalAccessGate ispName={brand.ispName || "Your ISP"} state={portalAccess} />;
+  }
 
   function handleLogin(event: React.FormEvent) {
     event.preventDefault();
