@@ -38,6 +38,7 @@ import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
+import { routerManagementOvpnCredentials } from "../lib/router-management-vpn";
 
 const router: IRouter = Router();
 
@@ -627,8 +628,7 @@ router.get("/probe", async (req, res): Promise<void> => {
  * Query params:
  *   vpsIp           — VPS public IP (defaults to VPS_HOST)
  *   vpnPort         — OVPN server port (default 1196; legacy end-user VPN remains on 1194)
- *   vpnUsername     — VPN user (default "router-<id>")
- *   vpnPassword     — VPN password (defaults to the router's install secret)
+ *   VPN credentials are derived from the configured router name.
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
@@ -649,23 +649,15 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     return;
   }
 
-  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
-  const vpnPassword = managedVpnPassword(found.row);
-  if (!vpnPassword) {
-    res.status(409).json({
-      error: "Router install secret is not available",
-      detail: "Run the router registration/setup flow first so the VPN client can use a unique credential.",
-    });
-    return;
-  }
+  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
     vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
-    vpnUsername,
-    vpnPassword,
+    vpnUsername: openVpnCredentials.username,
+    vpnPassword: openVpnCredentials.password,
     tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
   });
@@ -692,8 +684,7 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
  * Query params:
  *   vpsIp           — VPS public IP (default VPS_HOST)
  *   vpnPort         — OVPN port (default 1196; legacy end-user VPN remains on 1194)
- *   vpnUsername     — router VPN user (default "router-<id>")
- *   vpnPassword     — router VPN password (defaults to the router's install secret)
+ *   VPN credentials are derived from the configured router name.
  *   tunnelRouterIp  — static IP to assign to router
  */
 router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
@@ -712,23 +703,15 @@ router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
     return;
   }
 
-  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
-  const vpnPassword = managedVpnPassword(found.row);
-  if (!vpnPassword) {
-    res.status(409).json({
-      error: "Router install secret is not available",
-      detail: "Run the router registration/setup flow first so the VPS and router scripts share a unique credential.",
-    });
-    return;
-  }
+  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateVpsOvpnSetupScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
     vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
-    vpnUsername,
-    vpnPassword,
+    vpnUsername: openVpnCredentials.username,
+    vpnPassword: openVpnCredentials.password,
     tunnelBase:     String(req.query.tunnelBase     ?? "10.8.5"),
     routerTunnelIp: tunnelRouterIp,
   });
@@ -755,11 +738,12 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
+  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
   const info = describeVpnArchitecture({
     vpsPublicIp:    vpsIp || "SET_VPS_HOST_OR_QUERY_PARAM",
     routerId:       id,
     vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : 1196,
-    vpnUsername:    String(req.query.vpnUsername   ?? `router-${id}`),
+    vpnUsername:    openVpnCredentials.username,
     routerTunnelIp: tunnelRouterIp,
   });
 

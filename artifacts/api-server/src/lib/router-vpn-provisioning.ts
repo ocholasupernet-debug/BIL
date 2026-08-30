@@ -1,7 +1,10 @@
 import { randomBytes } from "crypto";
 import { generateRouterIpsecClientScript, generateRouterWireGuardClientScript } from "./mikrotik.js";
 import { generateWireGuardKeyPair } from "./vpn-management-service.js";
-import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import {
+  ROUTER_MANAGEMENT_VPN,
+  routerManagementOvpnCredentials,
+} from "./router-management-vpn.js";
 import { encryptVpnSecret, decryptVpnSecret, type EncryptedSecret } from "./vpn-crypto.js";
 import { runVpsScript, vpsSshConfigured } from "./vps-ssh.js";
 import { generateVpsOvpnSetupScript } from "./vpn-utils.js";
@@ -326,7 +329,7 @@ export interface RouterVpnProvisioningResult {
 }
 
 async function reconcileRouterVpn(
-  input: { adminId: number; routerId: number; routerIp: string; routerPassword: string },
+  input: { adminId: number; routerId: number; routerName: string; routerIp: string },
 ): Promise<RouterVpnProvisioningResult> {
   if (!validRouterIp(input.routerIp)) throw new Error(`Router VPN address is outside the isolated ${ROUTER_MANAGEMENT_VPN.network} pool.`);
   if (!vpsSshConfigured()) throw new Error("VPS SSH deployment is not configured; set VPS_HOST, VPS_USER, and a VPS deployment key.");
@@ -381,6 +384,7 @@ async function reconcileRouterVpn(
   });
   await upsertSecret(ipsec.id, "psk", ipsecPsk);
 
+  const openVpnCredentials = routerManagementOvpnCredentials(input.routerName);
   const script = generateVpsReconciliationScript({
     routerId: input.routerId,
     routerIp: input.routerIp,
@@ -388,8 +392,8 @@ async function reconcileRouterVpn(
     wireGuardPort: wgPort,
     wireGuardClientPublicKey: wgPublic,
     ipsecPsk,
-    openVpnUsername: `router-${input.routerId}`,
-    openVpnPassword: input.routerPassword,
+    openVpnUsername: openVpnCredentials.username,
+    openVpnPassword: openVpnCredentials.password,
   });
   const result = await runVpsScript(script, { timeoutMs: 180_000 });
   const serverPublicKey = result.stdout.match(/^OCHOLA_WG_SERVER_PUBLIC_KEY=([A-Za-z0-9+/=]+)$/m)?.[1] ?? null;
@@ -399,7 +403,7 @@ async function reconcileRouterVpn(
     const markerFailure = result.ok
       ? `VPS command completed without readiness markers (wireguard=${serverPublicKey ? "present" : "missing"}, vpn=${readyMarker ? "present" : "missing"}).`
       : "";
-    const error = markerFailure || safeFailure(result, [input.routerPassword, wgPrivate, ipsecPsk]);
+    const error = markerFailure || safeFailure(result, [openVpnCredentials.password, wgPrivate, ipsecPsk]);
     await Promise.all([
       updateFallback(wg.id, { status: "failed", last_error: error, status_json: { stage: "vps-reconciliation" } }),
       updateFallback(ipsec.id, { status: "failed", last_error: error, status_json: { stage: "vps-reconciliation" } }),
@@ -432,13 +436,72 @@ async function reconcileRouterVpn(
 export async function provisionRouterManagementVpn(input: {
   adminId: number;
   routerId: number;
+  routerName: string;
   routerIp: string;
-  routerPassword: string;
 }): Promise<RouterVpnProvisioningResult> {
   const existing = locks.get(input.routerId);
   if (existing) return existing;
   const operation = reconcileRouterVpn(input).finally(() => locks.delete(input.routerId));
   locks.set(input.routerId, operation);
+  return operation;
+}
+
+const openVpnLocks = new Map<number, Promise<{
+  ready: true;
+  endpoint: string;
+  assignedIp: string;
+  username: string;
+}>>();
+
+/**
+ * Reconcile only the dedicated router-management OpenVPN service.
+ * This intentionally avoids changing any other VPN technology.
+ */
+export async function provisionRouterManagementOpenVpn(input: {
+  routerId: number;
+  routerName: string;
+  routerIp: string;
+}): Promise<{
+  ready: true;
+  endpoint: string;
+  assignedIp: string;
+  username: string;
+}> {
+  const existing = openVpnLocks.get(input.routerId);
+  if (existing) return existing;
+
+  const operation = (async () => {
+    if (!validRouterIp(input.routerIp)) {
+      throw new Error(`Router VPN address is outside the isolated ${ROUTER_MANAGEMENT_VPN.network} pool.`);
+    }
+    if (!vpsSshConfigured()) {
+      throw new Error("VPS SSH deployment is not configured; set VPS_HOST, VPS_USER, and a VPS deployment key.");
+    }
+
+    const endpoint = endpointHost();
+    const credentials = routerManagementOvpnCredentials(input.routerName);
+    const script = generateVpsOvpnSetupScript({
+      vpsPublicIp: endpoint,
+      vpnPort: ROUTER_MANAGEMENT_VPN.port,
+      vpnUsername: credentials.username,
+      vpnPassword: credentials.password,
+      tunnelBase: ROUTER_MANAGEMENT_VPN.tunnelBase,
+      routerTunnelIp: input.routerIp,
+      routerId: input.routerId,
+    });
+    const result = await runVpsScript(script, { timeoutMs: 180_000 });
+    if (!result.ok) {
+      throw new Error(`VPS router-management OpenVPN provisioning failed: ${safeFailure(result, [credentials.password])}`);
+    }
+    return {
+      ready: true as const,
+      endpoint,
+      assignedIp: input.routerIp,
+      username: credentials.username,
+    };
+  })().finally(() => openVpnLocks.delete(input.routerId));
+
+  openVpnLocks.set(input.routerId, operation);
   return operation;
 }
 

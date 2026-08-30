@@ -1,7 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
 import path from "path";
-import { ensureClientCert } from "./vpn-route.js";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
 import {
@@ -14,6 +13,7 @@ import { readIppEntries } from "../lib/vpn-status.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
   ROUTER_MANAGEMENT_VPN,
+  routerManagementOvpnCredentials,
   routerManagementVpnPort,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
@@ -24,7 +24,7 @@ import {
 } from "../lib/router-https-trust.js";
 import {
   generatedRouterVpnChildScript,
-  provisionRouterManagementVpn,
+  provisionRouterManagementOpenVpn,
   routerFallbackMaterial,
 } from "../lib/router-vpn-provisioning.js";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
@@ -643,8 +643,8 @@ async function ensureVpnUser(adminId: number, username: string, password: string
         apikey:          SUPABASE_KEY,
         Authorization:   `Bearer ${SUPABASE_KEY}`,
         "Content-Type":  "application/json",
-        /* Upsert: ignore conflict on (admin_id, username) */
-        Prefer:          "resolution=ignore-duplicates,return=minimal",
+        /* Upsert: refresh the exact credential on (admin_id, username). */
+        Prefer:          "resolution=merge-duplicates,return=minimal",
       },
       body: JSON.stringify({
         admin_id:  adminId,
@@ -1452,6 +1452,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       );
       const currentRouter = routers[0];
       if (currentRouter) {
+        const openVpnCredentials = routerManagementOvpnCredentials(currentRouter.name);
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
         resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         if (!resolvedToken) throw new Error("Router install secret is not available.");
@@ -1460,8 +1461,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
            VPS SSH channel is temporarily unavailable; the VPN child script
            will fail visibly and the dashboard will keep showing recovery. */
         resolvedRouterName = currentRouter.name;
-        updateRouterVpnAssignment(`router-${rid}`, assignedIp);
-        updateVpnCredentials(`router-${rid}`, resolvedToken);
+        updateRouterVpnAssignment(openVpnCredentials.username, assignedIp);
+        updateVpnCredentials(openVpnCredentials.username, openVpnCredentials.password);
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
         /* A dashboard installer grant is intentionally short-lived. Do not
@@ -1475,13 +1476,12 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
           `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
 
         try {
-          const provisioning = await provisionRouterManagementVpn({
-            adminId: Number(currentRouter.admin_id),
+          const provisioning = await provisionRouterManagementOpenVpn({
             routerId: Number(rid),
+            routerName: currentRouter.name,
             routerIp: assignedIp,
-            routerPassword: resolvedToken,
           });
-          const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
+          const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.ready });
           if (!readiness.ready) {
             throw new Error(`Router-management VPN is not ready: ${readiness.missing.join(", ")}`);
           }
@@ -1581,25 +1581,19 @@ router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Pr
 
     const provisioningRouter = rows[0];
     const currentIp = await ensurePersistentRouterTunnelIp(routerId, provisioningRouter.vpn_ip);
-    const identitySecret = provisioningRouter.router_secret || provisioningRouter.token || "";
-    if (!identitySecret) {
-      res.status(503).json({ ok: false, ready: false, error: "Router install secret is not available." });
-      return;
-    }
-    let provisioning: Awaited<ReturnType<typeof provisionRouterManagementVpn>>;
+    let provisioning: Awaited<ReturnType<typeof provisionRouterManagementOpenVpn>>;
     try {
-      provisioning = await provisionRouterManagementVpn({
-        adminId: provisioningRouter.admin_id,
+      provisioning = await provisionRouterManagementOpenVpn({
         routerId,
+        routerName: provisioningRouter.name,
         routerIp: currentIp,
-        routerPassword: identitySecret,
       });
     } catch (error) {
       res.status(503).type("text/plain").send(`# Router-management VPN provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
 
-    const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.openvpn.ready });
+    const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.ready });
     const requestHost = String(req.headers.host ?? "");
     const endpoint = routerVpnEndpointHost(requestOrigin(req));
     const message = readiness.ready
@@ -1615,9 +1609,7 @@ router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Pr
       port: readiness.port,
       network: readiness.network,
       provisioning: {
-        openvpn: provisioning.openvpn.ready ? "ready" : "failed",
-        wireguard: provisioning.wireguard.ready ? "ready" : "failed",
-        ipsec: provisioning.ipsec.ready ? "ready" : "failed",
+        openvpn: provisioning.ready ? "ready" : "failed",
       },
     });
   } catch (error) {
@@ -1714,6 +1706,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
     let script: string;
 
     if (protocol === "openvpn") {
+      const openVpnCredentials = routerManagementOvpnCredentials(rows[0].name);
       const readiness = routerManagementVpnReadiness();
       if (!readiness.endpointConfigured) {
         res.status(503).type("text/plain").send(
@@ -1739,8 +1732,8 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       script = generateRouterAsClientScript({
         vpsPublicIp: vpsHost,
         vpnPort,
-        vpnUsername: `router-${routerId}`,
-        vpnPassword: token,
+        vpnUsername: openVpnCredentials.username,
+        vpnPassword: openVpnCredentials.password,
         tunnelRouterIp,
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
@@ -2702,7 +2695,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
                 admin_id:         adminId,
                 name:             autoName,
                 host:             "",
-                router_username:  "admin",
+                router_username:  autoName,
                 router_secret:    autoSecret,
                 token:            autoSecret,  /* NOT NULL column */
                 bridge_interface: "hotspot-bridge",
@@ -2760,11 +2753,12 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     /* ── Step 4: Derive config values ── */
     const routerName  = router_row.name;
     const routerSlug  = slug === "mainhotspot" || slug === "main-hotspot" ? slugify(routerName) : slug;
+    const openVpnCredentials = routerManagementOvpnCredentials(routerName);
     const bridgeIface = router_row.bridge_interface  || "hotspot-bridge";
     const hotspotDns  = router_row.hotspot_dns_name  || `wifi.${routerSlug}.local`;
     const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";
     const routerVpnIp = await ensurePersistentRouterTunnelIp(router_row.id, router_row.vpn_ip);
-    updateRouterVpnAssignment(routerSlug, routerVpnIp);
+    updateRouterVpnAssignment(openVpnCredentials.username, routerVpnIp);
 
     const ipBase      = bridgeIp.replace(/\.\d+$/, "");
     const ipMask      = `${bridgeIp}/24`;
@@ -2813,23 +2807,21 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     }
     const heartbeatUrl = `${publicAppOrigin}/api/isp/router/heartbeat/${routerSecret}`;
     const registerUrl  = `${publicAppOrigin}/api/isp/router/register/${routerSecret}`;
-    const routerVpnPassword = routerSecret ?? "";
-
-    /* Ensure this router has a TLS client certificate ready on the server.
-       Also keeps the dedicated router-management auth file in sync. */
-    ensureClientCert(routerSlug);
-    updateVpnCredentials(routerSlug, routerVpnPassword);
+    /* Keep the password-only management OpenVPN identity in sync. */
+    updateVpnCredentials(openVpnCredentials.username, openVpnCredentials.password);
 
     /* Mirror the same credential into isp_vpn_users so the admin UI
        can see / audit / manage the VPN login that this router uses.
        Fire-and-forget: the helper internally swallows network errors and
-       Supabase upsert is configured with resolution=ignore-duplicates on
-       (admin_id, username), so re-running the install for the same router
-       is a no-op rather than a duplicate row or a 4xx. The username is the
-       router slug (e.g. "come1") to match what is configured on the
-       MikroTik OVPN client and in the VPS auth file — keeping all three
-       sources of truth in sync. */
-    void ensureVpnUser(adminId, routerSlug, routerVpnPassword, routerName);
+       Supabase upsert refreshes the exact (admin_id, username) credential
+       so re-running the install repairs stale passwords without creating a
+       duplicate row. */
+    void ensureVpnUser(
+      adminId,
+      openVpnCredentials.username,
+      openVpnCredentials.password,
+      routerName,
+    );
 
     /* ── Step 5: Build the .rsc content ── */
     const lines: string[] = [

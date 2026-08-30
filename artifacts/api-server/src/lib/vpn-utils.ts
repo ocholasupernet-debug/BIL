@@ -147,6 +147,19 @@ if [ -z "$CA_FILE" ] || [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
   echo "ERROR: OpenVPN CA/cert/key paths are unavailable."
   exit 1
 fi
+OPENVPN_VERSION="$(openvpn --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
+OPENVPN_MAJOR="$(printf '%s' "$OPENVPN_VERSION" | cut -d. -f1)"
+OPENVPN_MINOR="$(printf '%s' "$OPENVPN_VERSION" | cut -d. -f2)"
+printf '%s' "$OPENVPN_MAJOR" | grep -Eq '^[0-9]+$' || OPENVPN_MAJOR=0
+printf '%s' "$OPENVPN_MINOR" | grep -Eq '^[0-9]+$' || OPENVPN_MINOR=0
+OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT=false
+OPENVPN_SUPPORTS_DATA_CIPHERS=false
+if [ "$OPENVPN_MAJOR" -gt 2 ] || { [ "$OPENVPN_MAJOR" -eq 2 ] && [ "$OPENVPN_MINOR" -ge 4 ]; }; then
+  OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT=true
+fi
+if [ "$OPENVPN_MAJOR" -gt 2 ] || { [ "$OPENVPN_MAJOR" -eq 2 ] && [ "$OPENVPN_MINOR" -ge 5 ]; }; then
+  OPENVPN_SUPPORTS_DATA_CIPHERS=true
+fi
 {
   echo "port ${vpnPort}"
   echo "proto tcp-server"
@@ -168,7 +181,7 @@ fi
    # 2.4+ calls this verify-client-cert; older releases use the legacy
    # client-cert-not-required spelling. Do not emit both: unknown directives
    # prevent the dedicated service from starting.
-   if openvpn --help 2>&1 | grep -q -- "--verify-client-cert"; then
+   if [ "$OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT" = true ]; then
      echo "verify-client-cert none"
    else
      echo "client-cert-not-required"
@@ -176,11 +189,11 @@ fi
   echo "auth-user-pass-verify $AUTHSCRIPT via-env"
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
-  if openvpn --help 2>&1 | grep -q -- "--data-ciphers"; then
+   if [ "$OPENVPN_SUPPORTS_DATA_CIPHERS" = true ]; then
     echo "data-ciphers AES-128-CBC"
     echo "data-ciphers-fallback AES-128-CBC"
   else
-    echo "    OpenVPN does not support data-ciphers; using legacy cipher only."
+     echo "# OpenVPN does not support data-ciphers; using legacy cipher only."
   fi
   echo "auth SHA1"
   echo "status ${ROUTER_MANAGEMENT_VPN.statusPath}"
@@ -207,7 +220,7 @@ PASSFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}"
 username="\${username:-\${1:-}}"
 password="\${password:-\${2:-}}"
 [ -f "$PASSFILE" ] || exit 1
-grep -qF "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
+grep -Fqx "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
 

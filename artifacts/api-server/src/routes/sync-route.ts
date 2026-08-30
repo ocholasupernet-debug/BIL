@@ -4,6 +4,7 @@ import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
 import { isRouterVpnIp } from "../lib/router-vpn-ip.js";
+import { routerManagementOvpnCredentials } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -2159,11 +2160,19 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     }>;
     const row = updated[0];
     const routerName = row?.name ?? existingName ?? rname ?? "unknown";
-    if (row?.id && bridgeIp && /^10\.8\.5\./.test(bridgeIp)) {
-      const liveClient = readVpnClients().find(client =>
-        client.cn === `router-${row.id}` && client.vpnIp === bridgeIp,
+    let openVpnCredentials: ReturnType<typeof routerManagementOvpnCredentials> | null = null;
+    try {
+      openVpnCredentials = routerManagementOvpnCredentials(routerName);
+    } catch (error) {
+      console.warn(
+        `[register] management OpenVPN identity skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
-      if (liveClient) syncIppEntry(`router-${row.id}`, liveClient.vpnIp);
+    }
+    if (openVpnCredentials && row?.id && bridgeIp && /^10\.8\.5\./.test(bridgeIp)) {
+      const liveClient = readVpnClients().find(client =>
+        client.cn === openVpnCredentials.username && client.vpnIp === bridgeIp,
+      );
+      if (liveClient) syncIppEntry(openVpnCredentials.username, liveClient.vpnIp);
     }
     console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
     res.json({ ok: true, ts, router: routerName, model, version: ver });
@@ -2181,25 +2190,24 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
        Remote Access → VPN Users immediately after installation,
        without requiring the admin to create it manually. ── */
     const adminId = existingAdminId ?? (row as Record<string, unknown> | undefined)?.admin_id as number | undefined;
-    if (adminId && routerName !== "unknown") {
-      const vpnUsername = routerName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (openVpnCredentials && adminId && routerName !== "unknown") {
       fetch(`${REG_URL}/rest/v1/isp_vpn_users`, {
         method: "POST",
         headers: {
           apikey:         REG_KEY,
           Authorization:  `Bearer ${REG_KEY}`,
           "Content-Type": "application/json",
-          Prefer:         "resolution=ignore-duplicates,return=minimal",
+          Prefer:         "resolution=merge-duplicates,return=minimal",
         },
         body: JSON.stringify({
           admin_id:  adminId,
-          username:  vpnUsername,
-          password:  "ocholasupernet",
+          username:  openVpnCredentials.username,
+          password:  openVpnCredentials.password,
           notes:     `Auto — router: ${routerName}`,
           is_active: true,
         }),
       })
-        .then(() => console.log(`[register] VPN user '${vpnUsername}' ensured for ${routerName}`))
+        .then(() => console.log(`[register] VPN user '${openVpnCredentials.username}' ensured for ${routerName}`))
         .catch((e: unknown) => console.warn(`[register] VPN user upsert failed: ${e instanceof Error ? e.message : e}`));
     }
 

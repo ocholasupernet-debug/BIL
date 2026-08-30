@@ -27,6 +27,31 @@ export const ROUTER_MANAGEMENT_VPN = {
   ],
 } as const;
 
+export interface RouterManagementOvpnCredentials {
+  username: string;
+  password: string;
+}
+
+/**
+ * Keep the configured router name as the one OpenVPN identity used by the
+ * MikroTik client, VPS password file, CCD entry, and live status matching.
+ *
+ * OpenVPN's auth file uses ":" as a delimiter and the username is also used
+ * as a CCD filename, so reject unsafe names instead of silently changing them.
+ */
+export function routerManagementOvpnCredentials(routerName: string): RouterManagementOvpnCredentials {
+  const username = String(routerName ?? "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(username)) {
+    throw new Error(
+      "Router name must be 1-63 characters and contain only letters, numbers, dot, underscore, or hyphen for OpenVPN.",
+    );
+  }
+  return {
+    username,
+    password: `${username}00`,
+  };
+}
+
 export function routerManagementVpnPort(): number {
   const raw = process.env.ROUTER_OPENVPN_PORT?.trim();
   if (!raw) return ROUTER_MANAGEMENT_VPN.port;

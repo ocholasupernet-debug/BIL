@@ -30,6 +30,24 @@ const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 
+test("management OpenVPN credentials use the configured router name", () => {
+  assert.deepEqual(
+    vpnContract.routerManagementOvpnCredentials("come2"),
+    { username: "come2", password: "come200" },
+  );
+  assert.throws(
+    () => vpnContract.routerManagementOvpnCredentials("come 2"),
+    /Router name must be/,
+  );
+  assert.throws(
+    () => vpnContract.routerManagementOvpnCredentials("../come2"),
+    /Router name must be/,
+  );
+  assert.match(scriptsRoute, /routerManagementOvpnCredentials\(rows\[0\]\.name\)/);
+  assert.doesNotMatch(scriptsRoute, /vpnUsername: `router-\$\{routerId\}`/);
+  assert.match(syncRoute, /client\.cn === openVpnCredentials\.username/);
+});
+
 test("OpenVPN child fails loudly when the client is not created or running", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
@@ -203,6 +221,11 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /ifconfig-push 10\.8\.5\.2 255\.255\.255\.0/);
   assert.match(setup, /verify-client-cert none/);
   assert.match(setup, /client-cert-not-required/);
+  assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
+  assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
+  assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
+  assert.match(setup, /grep -Fqx/);
+  assert.match(setup, /# OpenVPN does not support data-ciphers/);
   assert.match(setup, /data-ciphers AES-128-CBC/);
   assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);
   assert.match(setup, /Could not start the dedicated router-management OpenVPN service/);

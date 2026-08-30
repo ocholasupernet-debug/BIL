@@ -27,7 +27,7 @@ const selfInstall = await readFile("../ochola-supernet/src/pages/admin/network/S
    synchronously only when the test process is exiting. */
 process.on("exit", () => rmSync(outdir, { recursive: true, force: true }));
 
-test("coexistence OpenVPN never removes existing VPN or firewall resources", () => {
+test("coexistence OpenVPN removes only its exact stale client and preserves firewall resources", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
     vpnPassword: "router-secret",
@@ -36,8 +36,11 @@ test("coexistence OpenVPN never removes existing VPN or firewall resources", () 
     installationMode: "coexist",
   });
   assert.match(script, /coexistence conflict/);
-  assert.match(script, /interface ovpn-client add name=corebillingvpn/);
-  assert.doesNotMatch(script, /interface ovpn-client remove/);
+  assert.match(script, /interface ovpn-client add name="corebillingvpn"/);
+  assert.match(script, /previous incomplete management interface/);
+  assert.match(script, /existingOvpnComment/);
+  assert.match(script, /existingOvpnRunning/);
+  assert.match(script, /interface ovpn-client remove/);
   assert.doesNotMatch(script, /ip firewall filter remove/);
 });
 
