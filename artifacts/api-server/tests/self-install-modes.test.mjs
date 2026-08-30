@@ -20,6 +20,7 @@ await build({
 });
 const mikrotik = await import(path.resolve(outdir, "mikrotik.cjs"));
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const bridgeRoute = await readFile("src/routes/bridge-route.ts", "utf8");
 const selfInstall = await readFile("../ochola-supernet/src/pages/admin/network/SelfInstall.tsx", "utf8");
 /* esbuild's bundled pino logger starts a worker after module evaluation.
    Removing the output directory immediately can race that worker; clean up
@@ -86,4 +87,24 @@ test("dashboard Self Install defaults to coexistence and requires typed takeover
   assert.match(selfInstall, /mode: "takeover"/);
   assert.match(selfInstall, /takeoverConfirmation !== "TAKE CONTROL"/);
   assert.match(selfInstall, /self-install\/takeover\/prepare/);
+});
+
+test("coexistence provisions an owned hotspot bridge without reusing shared service resources", () => {
+  assert.match(scriptsRoute, /function coexistenceBridgeName\(routerId: number\)/);
+  assert.match(scriptsRoute, /ochola-hs-pool-\$\{routerId\}/);
+  assert.match(scriptsRoute, /ochola-hs-dhcp-\$\{routerId\}/);
+  assert.match(scriptsRoute, /ochola-hs-server-\$\{routerId\}/);
+  assert.match(scriptsRoute, /Existing billing bridges and ports are intentionally untouched/);
+  assert.match(scriptsRoute, /Only this subnet is masqueraded; no global HTTP\/HTTPS redirects are added/);
+  assert.match(scriptsRoute, /coexistence-hotspot\/\$\{encodeURIComponent\(rid\)\}/);
+});
+
+test("coexistence port changes reject foreign bridge ownership before assignBridgePorts", () => {
+  const guard = bridgeRoute.indexOf("const conflicts = add");
+  const assign = bridgeRoute.indexOf("const logs = await assignBridgePorts");
+  assert.ok(guard >= 0 && assign > guard, "foreign-port guard must run before RouterOS assignment");
+  assert.match(bridgeRoute, /Coexistence will not move ports already assigned to another billing bridge/);
+  assert.match(bridgeRoute, /Coexistence can only use the isolated Ochola bridge/);
+  assert.match(selfInstall, /Other billing · \$\{currentBridge\}/);
+  assert.match(selfInstall, /installationMode,\s*addPorts/);
 });

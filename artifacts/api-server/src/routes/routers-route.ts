@@ -222,11 +222,19 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
   const routerId = Number(req.body?.routerId);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
   const bridgeName = typeof req.body?.bridge === "string" ? req.body.bridge.trim() : "";
+  const installationMode = req.body?.installationMode === "coexist" ? "coexist" : "takeover";
   const desiredPorts = Array.isArray(req.body?.ports)
     ? req.body.ports.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
     : [];
   if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
+    return;
+  }
+  if (installationMode === "coexist" && desiredPorts.length === 0) {
+    res.status(400).json({
+      ok: false,
+      error: "Coexistence requires at least one physical port assigned to the isolated Ochola bridge.",
+    });
     return;
   }
 
@@ -264,6 +272,26 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
         res.status(409).json({ ok: false, error: `Bridge "${bridgeName}" could not be verified on the router.` });
         return;
       }
+      if (installationMode === "coexist") {
+        const expectedBridge = `ochola-hs-${routerId}`;
+        if (bridgeName !== expectedBridge) {
+          res.status(400).json({
+            ok: false,
+            error: `Coexistence must finish against the isolated Ochola bridge "${expectedBridge}".`,
+          });
+          return;
+        }
+        const foreignAssignments = layout.bridgePorts
+          .filter(port => desiredPorts.includes(port.interface) && port.bridge !== expectedBridge)
+          .map(port => `${port.interface} (${port.bridge})`);
+        if (foreignAssignments.length) {
+          res.status(409).json({
+            ok: false,
+            error: `Coexistence will not claim ports already assigned to another billing bridge: ${foreignAssignments.join(", ")}.`,
+          });
+          return;
+        }
+      }
       const members = new Set(
         layout.bridgePorts.filter(port => port.bridge === bridgeName).map(port => port.interface),
       );
@@ -290,6 +318,7 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
     {
       status: "online",
       host: result.vpnIp,
+      ...(bridgeName ? { bridge_interface: bridgeName } : {}),
       last_seen: result.probe.connectedAt,
       last_connected_host: result.vpnIp,
       model: result.probe.board || row.model,

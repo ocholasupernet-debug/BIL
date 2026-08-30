@@ -401,11 +401,16 @@ function safeFetch(url: string, dst: string): string {
    exactly which file failed by name and resolved destination, so silent
    failures are visible. Each path variable is unique because RouterOS local
    variables share the surrounding script scope. ── */
-function portalFetch(url: string, subpath: string, filename: string): string {
+function portalFetch(
+  url: string,
+  subpath: string,
+  filename: string,
+  fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS,
+): string {
   const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
   return `:local ${variableName} ($hsdir . "/${subpath}")
 :do {
-    /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+    /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${fetchOptions}
     ${verifyFetchedFile(`$${variableName}`, filename)}
   } on-error={ :put ("  WARN: ${filename} failed at " . $${variableName} . " - " . $error) }`;
 }
@@ -424,6 +429,172 @@ function safeRm(cmd: string): string {
     return `:foreach x in=[${menu} find ${cond}] do={ :do { ${menu} remove $x } on-error={} }`;
   }
   return `:do { ${cleaned} } on-error={}`;
+}
+
+function coexistenceBridgeName(routerId: number): string {
+  return `ochola-hs-${routerId}`;
+}
+
+function coexistenceGateway(routerId: number): string {
+  const octet = (Math.abs(routerId) % 250) || 1;
+  return `10.254.${octet}.1`;
+}
+
+type CoexistenceHotspotPlan = {
+  name: string;
+  speed_down: number;
+  speed_up: number;
+  validity: number;
+  validity_unit: string;
+  shared_users: number;
+};
+
+/* A deliberately separate service bundle for Coexistence mode. It never
+   removes or rewrites an existing bridge, DHCP server, pool, hotspot, portal,
+   firewall rule, or NAT rule. Every resource is uniquely named and checked
+   before it is reused, so a name collision stops the import instead of
+   silently sharing another billing system's service. */
+function buildCoexistenceHotspotRsc(
+  origin: string,
+  routerId: number,
+  routerName: string,
+  companyName: string,
+  plans: CoexistenceHotspotPlan[],
+  certificateMode: RouterCertificateMode,
+): string {
+  const fetchOptions = certificateMode === "unverified"
+    ? "mode=https check-certificate=no"
+    : ROUTER_HTTPS_FETCH_OPTIONS;
+  const bridgeName = coexistenceBridgeName(routerId);
+  const gateway = coexistenceGateway(routerId);
+  const subnet = gateway.replace(/\.1$/, ".0/24");
+  const poolName = `ochola-hs-pool-${routerId}`;
+  const dhcpName = `ochola-hs-dhcp-${routerId}`;
+  const profileName = `ochola-hs-profile-${routerId}`;
+  const hotspotName = `ochola-hs-server-${routerId}`;
+  const portalDir = `ochola-hotspot-${routerId}`;
+  const tag = `${companyName} coexistence router ${routerId}`;
+  const safe = (value: string) => rosString(value);
+  const portalBase = origin.replace(/\/$/, "");
+  const lines: string[] = [
+    `# ${safe(companyName)} — isolated Coexistence hotspot service`,
+    `# Router: ${safe(routerName)} (id=${routerId})`,
+    `# Existing billing bridges and ports are intentionally untouched.`,
+    `# Bridge: ${bridgeName} | Gateway: ${gateway} | Subnet: ${subnet}`,
+    ``,
+    `:put "COEXISTENCE SERVICE — ${safe(companyName)}"`,
+    `:local bridgeName "${safe(bridgeName)}"`,
+    `:local bridgeTag "${safe(tag)}"`,
+    `:local gateway "${safe(gateway)}"`,
+    `:local subnet "${safe(subnet)}"`,
+    `:local poolName "${safe(poolName)}"`,
+    `:local dhcpName "${safe(dhcpName)}"`,
+    `:local profileName "${safe(profileName)}"`,
+    `:local hotspotName "${safe(hotspotName)}"`,
+    ``,
+    `# Create only Ochola's bridge. A collision with an unowned bridge is fatal.`,
+    `:local existingBridge [/interface bridge find name=$bridgeName]`,
+    `:if ([:len $existingBridge] = 0) do={`,
+    `  /interface bridge add name=$bridgeName protocol-mode=none fast-forward=no comment=$bridgeTag`,
+    `} else={`,
+    `  :local existingComment [/interface bridge get $existingBridge comment]`,
+    `  :if ([:find $existingComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence bridge name collision: $bridgeName is not owned by ${safe(companyName)}." }`,
+    `  /interface bridge set $existingBridge fast-forward=no`,
+    `}`,
+    ``,
+    `# Never replace an address on this bridge. Only the exact owned address is accepted.`,
+    `:local ownedAddress [/ip address find interface=$bridgeName address="${safe(gateway)}/24"]`,
+    `:if ([:len $ownedAddress] = 0) do={`,
+    `  :if ([:len [/ip address find interface=$bridgeName]] > 0) do={ :error "Coexistence bridge already has an unowned IP address." }`,
+    `  /ip address add address="${safe(gateway)}/24" interface=$bridgeName comment=$bridgeTag`,
+    `}`,
+    ``,
+    `# Dedicated pool, DHCP server, and DHCP network.`,
+    `:local existingPool [/ip pool find name=$poolName]`,
+    `:if ([:len $existingPool] = 0) do={`,
+    `  /ip pool add name=$poolName ranges="${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}" comment=$bridgeTag`,
+    `} else={`,
+    `  :if ([:tostr [/ip pool get $existingPool ranges]] != "${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}") do={ :error "Coexistence pool collision: $poolName has another range." }`,
+    `}`,
+    `:local existingDhcp [/ip dhcp-server find name=$dhcpName]`,
+    `:if ([:len $existingDhcp] = 0) do={`,
+    `  /ip dhcp-server add name=$dhcpName interface=$bridgeName address-pool=$poolName disabled=no comment=$bridgeTag`,
+    `} else={`,
+    `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :error "Coexistence DHCP name collision: $dhcpName is bound to another interface." }`,
+    `  /ip dhcp-server enable $existingDhcp`,
+    `}`,
+    `:local existingNetwork [/ip dhcp-server network find address=$subnet]`,
+    `:if ([:len $existingNetwork] = 0) do={`,
+    `  /ip dhcp-server network add address=$subnet gateway=$gateway dns-server=$gateway comment=$bridgeTag`,
+    `} else={`,
+    `  :local networkComment [/ip dhcp-server network get $existingNetwork comment]`,
+    `  :if ([:find $networkComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence subnet collision: $subnet is already owned by another service." }`,
+    `}`,
+    ``,
+    `# Dedicated hotspot profile and server. Existing hotspot services are not touched.`,
+    `:local existingProfile [/ip hotspot profile find name=$profileName]`,
+    `:if ([:len $existingProfile] = 0) do={`,
+    `  /ip hotspot profile add name=$profileName hotspot-address=$gateway dns-name="wifi-${routerId}.local" login-by=http-chap,http-pap html-directory="${portalDir}"`,
+    `} else={`,
+    `  :if ([/ip hotspot profile get $existingProfile hotspot-address] != $gateway) do={ :error "Coexistence hotspot profile collision: $profileName." }`,
+    `}`,
+    `:local existingHotspot [/ip hotspot find name=$hotspotName]`,
+    `:if ([:len $existingHotspot] = 0) do={`,
+    `  /ip hotspot add name=$hotspotName interface=$bridgeName profile=$profileName address-pool=$poolName idle-timeout=none disabled=no`,
+    `} else={`,
+    `  :if ([/ip hotspot get $existingHotspot interface] != $bridgeName) do={ :error "Coexistence hotspot server collision: $hotspotName." }`,
+    `  /ip hotspot enable $existingHotspot`,
+    `}`,
+    ``,
+    `# Only this subnet is masqueraded; no global HTTP/HTTPS redirects are added.`,
+    `:local natComment "${safe(tag)} NAT"`,
+    `:if ([:len [/ip firewall nat find comment=$natComment]] = 0) do={`,
+    `  /ip firewall nat add chain=srcnat src-address=$subnet action=masquerade comment=$natComment`,
+    `}`,
+    `# Permit DNS queries from this service subnet without changing other billing rules.`,
+    `:do { /ip dns set allow-remote-requests=yes } on-error={ :put "WARN: router DNS could not be enabled" }`,
+    `:local dnsUdpComment "${safe(tag)} DNS UDP"`,
+    `:local dnsTcpComment "${safe(tag)} DNS TCP"`,
+    `:if ([:len [/ip firewall filter find comment=$dnsUdpComment]] = 0) do={ /ip firewall filter add chain=input protocol=udp dst-port=53 src-address=$subnet action=accept comment=$dnsUdpComment }`,
+    `:if ([:len [/ip firewall filter find comment=$dnsTcpComment]] = 0) do={ /ip firewall filter add chain=input protocol=tcp dst-port=53 src-address=$subnet action=accept comment=$dnsTcpComment }`,
+    ``,
+    `# Keep the portal in its own directory so another billing system's files are not overwritten.`,
+    `:local storage ""`,
+    `:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }`,
+    `:if ($storage = "") do={ :if ([:len [/file find name="flash" type=directory]] > 0) do={ :set storage "flash" } }`,
+    `:local hsdir "${portalDir}"`,
+    `:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/${portalDir}") }`,
+    `:do { /file add name=$hsdir type=directory } on-error={}`,
+    `:do { /file make-dir $hsdir } on-error={}`,
+    `:put ("Portal directory: " . $hsdir)`,
+    portalFetch(`${portalBase}/hotspot/login.html`, "login.html", "login.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/alogin.html`, "alogin.html", "alogin.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/logout.html`, "logout.html", "logout.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/status.html`, "status.html", "status.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/rlogin.html`, "rlogin.html", "rlogin.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/redirect.html`, "redirect.html", "redirect.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/error.html`, "error.html", "error.html", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/md5.js`, "md5.js", "md5.js", fetchOptions),
+    portalFetch(`${portalBase}/hotspot/api.json`, "api.json", "api.json", fetchOptions),
+    ``,
+    `# Add plan profiles only when absent; never overwrite a profile owned by another system.`,
+  ];
+
+  for (const plan of plans) {
+    const profile = slugify(plan.name).slice(0, 40) || "default";
+    const rateLimit = toRateLimit(plan.speed_down, plan.speed_up, "Mbps");
+    const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
+    const shared = plan.shared_users || 1;
+    lines.push(
+      `:if ([:len [/ip hotspot user profile find name="${safe(profile)}"]] = 0) do={ /ip hotspot user profile add name="${safe(profile)}" rate-limit="${safe(rateLimit)}" session-timeout=${safe(timeout)} shared-users=${shared} comment="${safe(tag)} plan" }`,
+    );
+  }
+  lines.push(
+    ``,
+    `:put "COEXISTENCE SERVICE READY — ${safe(bridgeName)} belongs to ${safe(companyName)} only."`,
+    `:put "Assign only unassigned physical ports to this bridge from the admin panel."`,
+  );
+  return lines.join("\r\n");
 }
 
 /* ── Router-management VPN auth updater ──
@@ -603,6 +774,7 @@ function buildMainhotspotRsc(
   routerVpnWarning: string = "",
   certificateMode: RouterCertificateMode = "verified",
   installationMode: "coexist" | "takeover" = "takeover",
+  coexistenceHotspotUrl: string = "",
 ): string {
   const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
     ? "mode=https check-certificate=no"
@@ -736,8 +908,24 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
     $pg 1 "coexistence" "failed" $vpnFailureSummary
     :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
 }
-:put ("COEXISTENCE READY — management VPN " . $vpnProtocol . " added; existing customer configuration was not replaced.")
-$pg 1 "coexistence" "applied" ("management-vpn=" . $vpnProtocol)
+:put ("COEXISTENCE VPN READY — " . $vpnProtocol . " added; existing customer configuration was not replaced.")
+$pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
+${coexistenceHotspotUrl ? `
+# Install Ochola's isolated hotspot service only after the management VPN is ready.
+:do {
+    :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
+    /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+    ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download', "ochola-coexistence-hotspot.rsc.download")}
+    /import "ochola-coexistence-hotspot.rsc.download"
+    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
+    $pg 1 "coexistence-hotspot" "applied" ""
+} on-error={
+    :local hotspotError $error
+    :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
+    $pg 1 "coexistence-hotspot" "failed" $hotspotError
+    :error ("Coexistence stopped without changing existing billing resources; isolated hotspot failed: " . $hotspotError)
+}
+` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; $pg 1 "coexistence-hotspot" "failed" "missing bundle"; :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
 ${safeHeartbeatUrl ? `:do {
     /tool fetch url="${safeHeartbeatUrl}?coexist=1" keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     :put "COEXISTENCE HEARTBEAT SENT — existing customer services remain under their current configuration."
@@ -1192,6 +1380,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let routerVpnUrl = "";
   let routerWireGuardUrl = "";
   let routerIpsecUrl = "";
+  let coexistenceHotspotUrl = "";
   let vpnProvisioningError = "";
 
   interface InstallRouter {
@@ -1246,6 +1435,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
            fresh scoped grant when they start another install. */
         installerUrl = "";
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
+        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
         routerVpnIp = assignedIp;
 
         try {
@@ -1323,6 +1513,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
          : "",
       certificateMode,
       installationMode,
+       coexistenceHotspotUrl,
     ));
 });
 
@@ -2248,6 +2439,69 @@ router.get("/scripts/router-migration-collector.rsc", (req, res): void => {
     .set("Content-Disposition", 'attachment; filename="router-migration-collector.rsc"')
     .set("Cache-Control", "no-store")
     .send(buildDomainRouterExportScript(uploadUrl));
+});
+
+/* Coexistence service bundle. The URL is only embedded in a short-lived,
+   router-scoped installer, so the bridge/service plan cannot be fetched for a
+   different router or tenant. */
+router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.routerId);
+  const grant = String(req.query.grant ?? "").trim();
+  const mode = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+    ? "takeover"
+    : "coexist";
+  const certificateMode: RouterCertificateMode = ["off", "none", "disabled", "unverified"]
+    .includes(String(req.query.certificate ?? "").trim().toLowerCase())
+    ? "unverified"
+    : "verified";
+
+  if (!Number.isInteger(routerId) || routerId <= 0 || !grant) {
+    res.status(401).type("text/plain").send("# Invalid or missing router installer authorization.");
+    return;
+  }
+
+  const authorization = mode === "takeover"
+    ? verifyTakeoverGrant(grant, routerId)
+    : verifyInstallerGrant(grant, routerId);
+  if (!authorization) {
+    res.status(403).type("text/plain").send("# Router installer authorization is invalid, expired, or scoped to another router.");
+    return;
+  }
+
+  try {
+    const routers = await sbGet<{ id: number; admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${authorization.adminId}&select=id,admin_id,name&limit=1`,
+    );
+    const currentRouter = routers[0];
+    if (!currentRouter) {
+      res.status(404).type("text/plain").send("# Router was not found for this ISP account.");
+      return;
+    }
+    const admins = await sbGet<{ id: number; name: string }>(
+      `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
+    );
+    const plans = await sbGet<CoexistenceHotspotPlan>(
+      `isp_plans?admin_id=eq.${currentRouter.admin_id}&type=eq.hotspot&select=name,speed_down,speed_up,validity,validity_unit,shared_users`,
+    );
+    const origin = requestOrigin(req);
+    const content = buildCoexistenceHotspotRsc(
+      origin,
+      currentRouter.id,
+      currentRouter.name,
+      admins[0]?.name || "ISPlatty",
+      plans,
+      certificateMode,
+    );
+    res
+      .set("Content-Type", "text/plain; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="${coexistenceBridgeName(currentRouter.id)}.rsc"`)
+      .set("Cache-Control", "no-store")
+      .send(content);
+  } catch (error) {
+    res.status(503).type("text/plain").send(
+      `# Could not generate the isolated coexistence hotspot bundle: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════

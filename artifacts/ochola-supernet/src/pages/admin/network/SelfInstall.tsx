@@ -151,6 +151,10 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+function coexistenceBridgeName(routerId: number): string {
+  return `ochola-hs-${routerId}`;
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -411,12 +415,13 @@ export default function SelfInstall() {
     try {
       const data = await jsonRequest<PortsPayload>("/api/admin/router/self-install/ports", {
         method: "POST",
-        body: JSON.stringify({ routerId: activeRouterId, adminId }),
+        body: JSON.stringify({ routerId: activeRouterId, adminId, installationMode }),
       });
       if (!data.ok) throw new Error(data.error || "Could not read the router interfaces.");
       setPorts(data);
-      const hotspot = data.bridges.find(bridge => /hotspot/i.test(bridge.name));
-      const bridge = hotspot ?? data.bridges[0];
+      const bridge = installationMode === "coexist"
+        ? data.bridges.find(item => item.name === coexistenceBridgeName(activeRouterId))
+        : data.bridges.find(item => /hotspot/i.test(item.name)) ?? data.bridges[0];
       if (!bridge) throw new Error("The router has no bridge available. Create a bridge in RouterOS, then retry.");
       setSelectedBridge(bridge.name);
       setSelectedPorts(new Set(data.bridgePorts.filter(item => item.bridge === bridge.name).map(item => item.interface)));
@@ -431,6 +436,11 @@ export default function SelfInstall() {
 
   const togglePort = async (iface: Iface) => {
     if (!activeRouterId || !ports || !selectedBridge || ifaceKind(iface) === "protected" || portState[iface.name] === "pending") return;
+    const currentBridge = bridgeForPort(iface.name, ports.bridgePorts);
+    if (installationMode === "coexist" && currentBridge && currentBridge !== selectedBridge) {
+      setPortError(`${iface.name} is assigned to ${currentBridge}, so Coexistence will not move it from the other billing system.`);
+      return;
+    }
     const wasSelected = selectedPorts.has(iface.name);
     const next = new Set(selectedPorts);
     if (wasSelected) next.delete(iface.name); else next.add(iface.name);
@@ -446,6 +456,7 @@ export default function SelfInstall() {
             routerId: activeRouterId,
             adminId,
             bridge: selectedBridge,
+            installationMode,
             addPorts: wasSelected ? [] : [iface.name],
             removePorts: wasSelected ? [iface.name] : [],
             desiredPorts: [...next].filter(name => name !== "ether1"),
@@ -474,6 +485,10 @@ export default function SelfInstall() {
 
   const finishInstallation = async () => {
     if (!activeRouterId || !status?.ready || Object.values(portState).some(value => value === "pending")) return;
+    if (installationMode === "coexist" && selectedPorts.size === 0) {
+      setPortError("Select at least one unassigned physical port for the isolated OcholaSuperNet bridge before finishing.");
+      return;
+    }
     setCompleteLoading(true);
     setPageError(null);
     try {
@@ -483,6 +498,7 @@ export default function SelfInstall() {
           routerId: activeRouterId,
           adminId,
           bridge: selectedBridge,
+          installationMode,
           ports: [...selectedPorts],
         }),
       });
@@ -768,9 +784,9 @@ export default function SelfInstall() {
               )}
             </div>
             {!identityReady && !statusQuery.isLoading && <RouterRecovery error={status?.error || statusQuery.error?.message} />}
-            <button onClick={installationMode === "coexist" ? finishInstallation : loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
-              {portsLoading || completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : installationMode === "coexist" ? <Check size={15} /> : <ArrowRight size={15} />}
-              {portsLoading || completeLoading ? "Verifying management access…" : installationMode === "coexist" ? "Finish coexistence install" : "Next — view router and ports"}
+            <button onClick={loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
+              {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
+              {portsLoading ? "Loading isolated service ports…" : "Next — view router and ports"}
             </button>
             {progress && (
               <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -808,18 +824,27 @@ export default function SelfInstall() {
             </div>
             <div style={{ background: "rgba(37,99,235,.06)", border: "1px solid rgba(37,99,235,.22)", borderRadius: 9, padding: ".75rem 1rem", color: "#93c5fd", fontSize: ".75rem", lineHeight: 1.55 }}>
               <Wifi size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              All live ethernet and WLAN interfaces are shown below. Click a port to apply it to the selected bridge. WAN and management interfaces remain protected.
+              {installationMode === "coexist"
+                ? "The OcholaSuperNet bridge is isolated from the existing billing bridge. Only unassigned ports can be added; ports already owned by the other billing system remain protected."
+                : "All live ethernet and WLAN interfaces are shown below. Click a port to apply it to the selected bridge. WAN and management interfaces remain protected."}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
               <span style={{ color: "var(--isp-text-muted)", fontSize: ".75rem", fontWeight: 700 }}>Bridge</span>
-              <select value={selectedBridge} onChange={event => {
+              {installationMode === "coexist" && <span style={{ color: "#5eead4", fontSize: ".7rem", fontWeight: 800 }}>OcholaSuperNet · existing billing bridges protected</span>}
+              <select disabled={installationMode === "coexist"} value={selectedBridge} onChange={event => {
                 const bridge = event.target.value;
                 setSelectedBridge(bridge);
                 setSelectedPorts(new Set(ports.bridgePorts.filter(item => item.bridge === bridge).map(item => item.interface)));
                 setPortState({});
               }} style={{ background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-accent)", border: "1px solid var(--isp-accent-border)", borderRadius: 7, padding: ".42rem .7rem", fontFamily: "monospace", fontSize: ".76rem", fontWeight: 800 }}>
-                {ports.bridges.map(bridge => <option key={bridge.name} value={bridge.name}>{bridge.name}</option>)}
+                {(installationMode === "coexist"
+                  ? ports.bridges.filter(bridge => bridge.name === coexistenceBridgeName(activeRouterId))
+                  : ports.bridges
+                ).map(bridge => <option key={bridge.name} value={bridge.name}>{bridge.name}</option>)}
               </select>
+              {installationMode === "coexist" && <span style={{ color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                {selectedPorts.size} Ochola port{selectedPorts.size === 1 ? "" : "s"} · other billing ports stay where they are
+              </span>}
               <button onClick={loadPorts} disabled={portsLoading} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 7, padding: ".4rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={12} /> Refresh</button>
             </div>
             <div style={panelStyle()}>
@@ -831,13 +856,16 @@ export default function SelfInstall() {
                 const currentBridge = bridgeForPort(iface.name, ports.bridgePorts);
                 const state = portState[iface.name];
                 const protectedPort = kind === "protected";
+                 const ownedByOtherBilling = installationMode === "coexist" && !!currentBridge && currentBridge !== selectedBridge;
                 return (
-                  <div key={iface.name} onClick={() => void togglePort(iface)} style={{
+                   <div key={iface.name} onClick={() => {
+                     if (!ownedByOtherBilling) void togglePort(iface);
+                   }} style={{
                     display: "flex", alignItems: "center", gap: 10, padding: ".72rem 1rem",
                     borderBottom: index < liveInterfaces.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
                     background: selected ? "rgba(20,184,166,.07)" : "transparent",
-                    cursor: protectedPort ? "not-allowed" : state === "pending" ? "wait" : "pointer",
-                    opacity: protectedPort ? .55 : 1,
+                     cursor: protectedPort || ownedByOtherBilling ? "not-allowed" : state === "pending" ? "wait" : "pointer",
+                     opacity: protectedPort || ownedByOtherBilling ? .55 : 1,
                   }}>
                     <div style={{ width: 21, height: 21, borderRadius: 5, display: "grid", placeItems: "center", background: selected ? "var(--isp-accent)" : "rgba(255,255,255,.06)", border: `2px solid ${selected ? "var(--isp-accent)" : "rgba(255,255,255,.18)"}` }}>
                       {state === "pending" ? <Loader2 size={12} color="white" style={{ animation: "spin 1s linear infinite" }} /> : selected && <Check size={12} color="white" strokeWidth={3} />}
@@ -845,8 +873,8 @@ export default function SelfInstall() {
                     {kind === "wlan" ? <Wifi size={15} color={iface.running ? "#60a5fa" : "#475569"} /> : kind === "ether" ? <Plug size={15} color={iface.running ? "var(--isp-accent)" : "#475569"} /> : <Shield size={15} color="#64748b" />}
                     <span style={{ color: "var(--isp-text)", fontFamily: "monospace", fontSize: ".82rem", fontWeight: 800, flex: 1 }}>{iface.name}</span>
                     <span style={{ color: "var(--isp-text-muted)", fontSize: ".65rem", textTransform: "uppercase" }}>{iface.type || kind}</span>
-                    {currentBridge && <span style={{ color: "#86efac", background: "rgba(34,197,94,.1)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: ".17rem .45rem", fontSize: ".62rem", fontWeight: 700 }}>{currentBridge}</span>}
-                    {protectedPort ? <span style={{ color: "#fbbf24", fontSize: ".62rem", fontWeight: 700 }}>Protected</span> : state === "applied" ? <CheckCircle2 size={14} color="#4ade80" /> : state === "failed" ? <AlertTriangle size={14} color="#f87171" /> : <StatusDot active={iface.running} />}
+                     {currentBridge && <span style={{ color: ownedByOtherBilling ? "#fbbf24" : "#86efac", background: ownedByOtherBilling ? "rgba(251,191,36,.1)" : "rgba(34,197,94,.1)", border: `1px solid ${ownedByOtherBilling ? "rgba(251,191,36,.25)" : "rgba(34,197,94,.25)"}`, borderRadius: 4, padding: ".17rem .45rem", fontSize: ".62rem", fontWeight: 700 }}>{ownedByOtherBilling ? `Other billing · ${currentBridge}` : currentBridge}</span>}
+                     {protectedPort || ownedByOtherBilling ? <span style={{ color: "#fbbf24", fontSize: ".62rem", fontWeight: 700 }}>Protected</span> : state === "applied" ? <CheckCircle2 size={14} color="#4ade80" /> : state === "failed" ? <AlertTriangle size={14} color="#f87171" /> : <StatusDot active={iface.running} />}
                   </div>
                 );
               })}
@@ -854,9 +882,9 @@ export default function SelfInstall() {
             {portError && <RouterRecovery error={portError} />}
             <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
               <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
-              <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending")} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending"))}>
+               <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
                 {completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={15} />}
-                {completeLoading ? "Verifying installation…" : "Next — finish installation"}
+                 {completeLoading ? "Verifying installation…" : installationMode === "coexist" && selectedPorts.size === 0 ? "Select a port to continue" : "Next — finish installation"}
               </button>
             </div>
           </>

@@ -58,6 +58,10 @@ type StoredRouter = {
   status: string;
 };
 
+function coexistenceBridgeName(routerId: number): string {
+  return `ochola-hs-${routerId}`;
+}
+
 async function storedRouterCredentials(
   routerId: number,
   adminId: number | undefined,
@@ -124,7 +128,7 @@ async function resolveRequestCredentials(body: {
 
 /* ─── POST /api/admin/router/ports ─────────────────────────────────────── */
 router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res): Promise<void> => {
-  const { host, username, password, bridgeIp, port } = req.body as {
+  const { host, username, password, bridgeIp, port, installationMode, routerId, adminId } = req.body as {
     host: string;
     username: string;
     password: string;
@@ -132,16 +136,20 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
     port?: number;
     routerId?: number;
     adminId?: number;
+    installationMode?: "coexist" | "takeover";
   };
 
   try {
     const { creds } = await resolveRequestCredentials({
       host, username, password, bridgeIp, port,
-      routerId: req.body?.routerId,
-       adminId: authenticatedAdminId(req, req.body?.adminId),
+       routerId,
+       adminId: authenticatedAdminId(req, adminId),
     });
     const layout = await fetchBridgePortLayout(creds);
-    res.json({ ok: true, ...layout });
+    const coexistenceBridge = installationMode === "coexist" && routerId
+      ? coexistenceBridgeName(Number(routerId))
+      : null;
+    res.json({ ok: true, ...layout, coexistenceBridge });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(503).json({
@@ -156,7 +164,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
 
 /* ─── POST /api/admin/router/bridge-assign ──────────────────────────────── */
 router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (req, res): Promise<void> => {
-  const { host, username, password, bridge, addPorts, removePorts, desiredPorts, bridgeIp, port, routerId, adminId } = req.body as {
+  const { host, username, password, bridge, addPorts, removePorts, desiredPorts, bridgeIp, port, routerId, adminId, installationMode } = req.body as {
     host: string;
     username: string;
     password: string;
@@ -168,6 +176,7 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
     port?: number;
     routerId?: number;
     adminId?: number;
+    installationMode?: "coexist" | "takeover";
   };
 
   if (!bridge) {
@@ -189,6 +198,48 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
   const creds = resolved.creds;
   const add = Array.isArray(addPorts) ? addPorts : [];
   const remove = Array.isArray(removePorts) ? removePorts : [];
+  if (installationMode === "coexist") {
+    if (!routerId) {
+      res.status(400).json({ ok: false, error: "Coexistence port changes require a router-scoped request.", logs: ["❌ Router-scoped coexistence request required"] });
+      return;
+    }
+    const expectedBridge = coexistenceBridgeName(Number(routerId));
+    if (bridge !== expectedBridge) {
+      res.status(400).json({
+        ok: false,
+        error: `Coexistence can only use the isolated Ochola bridge "${expectedBridge}".`,
+        logs: [`❌ Use isolated bridge ${expectedBridge}; existing billing bridges are protected.`],
+      });
+      return;
+    }
+    try {
+      const before = await fetchBridgePortLayout(creds);
+      if (!before.bridges.some(item => item.name === expectedBridge)) {
+        res.status(409).json({
+          ok: false,
+          error: `The isolated Ochola bridge "${expectedBridge}" is not present yet. Re-run the Coexistence installer before assigning ports.`,
+          logs: [`❌ Missing isolated bridge ${expectedBridge}; no port was changed.`],
+        });
+        return;
+      }
+      const conflicts = add
+        .map(portName => before.bridgePorts.find(item => item.interface === portName))
+        .filter((item): item is { bridge: string; interface: string; id: string } => !!item && item.bridge !== expectedBridge)
+        .map(item => `${item.interface} (currently on ${item.bridge})`);
+      if (conflicts.length) {
+        res.status(409).json({
+          ok: false,
+          error: `Coexistence will not move ports already assigned to another billing bridge: ${conflicts.join(", ")}.`,
+          logs: [`❌ Existing billing port assignment preserved: ${conflicts.join(", ")}`],
+        });
+        return;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(503).json({ ok: false, error: `Could not verify existing bridge ownership: ${message}`, logs: [`❌ No port was changed: ${message}`] });
+      return;
+    }
+  }
   const protectedNames = new Set(["ether1", "corebillingvpn", "coreispbilling", "ocholasupernet", "ocholasuperproxy"]);
   const safePort = (value: unknown): value is string => {
     if (typeof value !== "string" || !value.trim()) return false;
