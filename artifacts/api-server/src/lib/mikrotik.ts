@@ -2166,25 +2166,17 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     installationMode = "takeover",
   } = opts;
 
-  const tag = "corebillingvpn";
-  const interfaceName = "corebillingvpn";
   const coexistence = installationMode === "coexist";
+  const interfaceName = coexistence && routerId
+    ? `ochola-mgmt-vpn-${routerId}`
+    : "corebillingvpn";
+  const tag = coexistence && routerId
+    ? `ochola-mgmt-vpn-${routerId}`
+    : "corebillingvpn";
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace an existing VPN or API policy.
 :if ([:len [/interface ovpn-client find where name="${interfaceName}"]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict — an existing ${interfaceName} interface was found; nothing was replaced."
-    :error $ocholaVpnChildError
-}
-:if ([:len [/interface ovpn-client find where name="coreispbilling"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — the legacy coreispbilling VPN interface exists; it was not changed."
-    :error $ocholaVpnChildError
-}
-:if ([:len [/interface ovpn-client find where name="ovpn-to-vps"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — an ovpn-to-vps interface exists; it was not changed."
-    :error $ocholaVpnChildError
-}
-:if ([:len [/interface ovpn-client find where name="ocholasupernet"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — an existing ocholasupernet VPN interface was found; it was not changed."
     :error $ocholaVpnChildError
 }
 :if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] > 0) do={

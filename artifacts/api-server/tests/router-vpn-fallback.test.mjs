@@ -54,6 +54,24 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
 });
 
+test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
+  const script = mikrotik.generateRouterAsClientScript({
+    vpsPublicIp: "vpn.example.test",
+    vpnPort: 1196,
+    vpnUsername: "router-42",
+    vpnPassword: "one-time-token",
+    tunnelRouterIp: "10.8.5.42",
+    tunnelVpsIp: "10.8.5.1",
+    routerId: 42,
+    installationMode: "coexist",
+  });
+  assert.match(script, /interface ovpn-client add name=ochola-mgmt-vpn-42/);
+  assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
+  assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
+  assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
+  assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
+});
+
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {
   const script = mikrotik.generateRouterWireGuardClientScript({
     endpoint: "wg.example.test",

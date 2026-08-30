@@ -834,7 +834,15 @@ function buildMainhotspotRsc(
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
         ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
         :delay 2s
-        /import "${tempFileName}"
+        :do {
+            /import "${tempFileName}"
+        } on-error={
+            :local importError $error
+            :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
+            :if ([:len $importError] = 0) do={ :set importError "${protocol}: child script import failed; inspect failed-${fileName} and /log for the exact RouterOS command." }
+            :set ocholaVpnChildError $importError
+            :error $importError
+        }
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="${fileName}"] } on-error={}
         /file set [find name="${tempFileName}"] name="${fileName}"
