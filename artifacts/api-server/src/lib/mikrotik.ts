@@ -2104,6 +2104,8 @@ export interface RouterAsClientOptions {
   routerId?: number;
   /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
   installationMode?: "coexist" | "takeover";
+  /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
+  routerOsMajor?: number;
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2138,6 +2140,8 @@ export interface RouterIpsecClientOptions {
   routerId?: number;
   /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
   installationMode?: "coexist" | "takeover";
+  /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
+  routerOsMajor?: number;
 }
 
 /**
@@ -2164,9 +2168,12 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     lanNetwork      = "192.168.88.0/24",
     routerId,
     installationMode = "takeover",
+    routerOsMajor = 6,
   } = opts;
 
   const coexistence = installationMode === "coexist";
+  const routerOs7 = routerOsMajor >= 7;
+  const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
   const interfaceName = coexistence && routerId
     ? `ochola-mgmt-vpn-${routerId}`
     : "corebillingvpn";
@@ -2205,9 +2212,17 @@ remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
+  const openVpnOptionalSettings = routerOs7
+    ? `# RouterOS 7 path: apply the optional certificate-verification setting only
+# after the broadly compatible client exists. RouterOS 6 never parses this property.
+:do {
+    /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=no
+} on-error={ :put "${tag}: optional RouterOS 7 OpenVPN certificate setting was not accepted; continuing with the verified client." }`
+    : `# RouterOS 6 path: keep the client command to the conservative common property set.
+# RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
 
   return `# ═══════════════════════════════════════════════════════════════
-# OcholaSupernet — MikroTik Router as OpenVPN CLIENT
+# OcholaSupernet — MikroTik ${routerOsPath} Router as OpenVPN CLIENT
 # Generated  : ${new Date().toISOString()}
 # Architecture: Router connects TO VPS (VPS is the OVPN server)
 #
@@ -2226,6 +2241,7 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 #   - tls-auth should be disabled or compatible with MikroTik
 #
 # USAGE: /import router-as-client${routerId ?? ""}.rsc
+# VERSION PATH: ${routerOsPath}; base client creation is cross-version safe.
 # ═══════════════════════════════════════════════════════════════
 
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
@@ -2241,6 +2257,7 @@ ${resourcePreparation}
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError
 }
+${openVpnOptionalSettings}
 
 :delay 10s
 :put "${tag}: waiting for OVPN client to establish..."
@@ -2331,7 +2348,10 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     tunnelVpsIp = "10.8.5.1",
     routerId,
     installationMode = "takeover",
+    routerOsMajor = 6,
   } = opts;
+  const routerOs7 = routerOsMajor >= 7;
+  const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
   const tag = "corebillingvpn";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
   const identityIds = routerId
@@ -2354,17 +2374,26 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: coexistence API firewall rule creation failed."; :error $ocholaVpnChildError }`
     : `:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
 :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }`;
+  const ipsecPeerVariant = routerOs7
+    ? `address=${endpointPrefix} exchange-mode=ike2 send-initial-contact=yes`
+    : `address=${endpointPrefix} exchange-mode=ike2`;
+  const ipsecVariantNote = routerOs7
+    ? `# RouterOS 7 path: use the IKEv2 peer with explicit initial contact.`
+    : `# RouterOS 6 path: use the conservative IKEv2 peer property set.
+# RouterOS 7-only IPsec properties are intentionally absent from this child.`;
 
-  return `# ${tag} — MikroTik IPsec management fallback
+  return `# ${tag} — MikroTik ${routerOsPath} IPsec management fallback
 # This child script is attempted only after OpenVPN and WireGuard fail.
 # IPsec is policy-based, so verification confirms the peer, identity and policy
 # resources; the authenticated heartbeat must confirm end-to-end reachability.
+# VERSION PATH: ${routerOsPath}
 
 :put "${tag}: configuring IPsec fallback..."
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 ${preparation}
-:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
+${ipsecVariantNote}
+:do { /ip ipsec peer add name="${peerName}" ${ipsecPeerVariant} disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}"${identityIds} comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
 ${firewall}
