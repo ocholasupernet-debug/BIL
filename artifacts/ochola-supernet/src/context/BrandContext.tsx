@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { supabase, ADMIN_ID, isLoggedIn } from "@/lib/supabase";
 import { setAdminCurrency, setAdminCountryLocal } from "@/lib/utils";
 
 export interface Brand {
@@ -32,17 +32,29 @@ export function useBrand(): Brand {
 
 export function BrandProvider({ children }: { children: React.ReactNode }) {
   const [brand, setBrand] = useState<Brand>(DEFAULT);
-  const [adminId, setAdminId] = useState<number>(ADMIN_ID);
+  const [adminId, setAdminId] = useState<number | null>(() => isLoggedIn() ? ADMIN_ID : null);
 
   useEffect(() => {
     const handler = () => {
-      try { setAdminId(parseInt(localStorage.getItem("ochola_admin_id") || "5")); } catch {}
+      try {
+        const storedId = localStorage.getItem("ochola_admin_id");
+        setAdminId(storedId ? parseInt(storedId, 10) : null);
+      } catch {
+        setAdminId(null);
+      }
     };
     window.addEventListener("ochola-auth-change", handler);
     return () => window.removeEventListener("ochola-auth-change", handler);
   }, []);
 
   useEffect(() => {
+    if (!adminId) {
+      setBrand({ ...DEFAULT, loading: false });
+      setAdminCurrency(DEFAULT.currency);
+      setAdminCountryLocal(DEFAULT.country);
+      return;
+    }
+
     (async () => {
       try {
         const { data, error } = await supabase

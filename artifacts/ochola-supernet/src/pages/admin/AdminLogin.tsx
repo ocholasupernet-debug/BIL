@@ -33,7 +33,8 @@ export default function AdminLogin() {
           .select("id, name, subdomain")
           .ilike("subdomain", sub)
           .eq("is_active", true)
-          .single();
+          .limit(1)
+          .maybeSingle();
         if (data) setCompany(data as CompanyInfo);
       } finally {
         setCompanyLoading(false);
