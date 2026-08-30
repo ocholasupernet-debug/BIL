@@ -93,12 +93,6 @@ jobs:
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
             upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
-            # The API and the router-management OpenVPN server run on this
-            # same VPS. Keep the endpoint in the runtime environment so
-            # authenticated RouterOS child-script requests can generate the
-            # TCP 1196 client configuration.
-            upsert_env "VPS_HOST" "102.203.116.204"
-            upsert_env "VPS_USER" "root"
 
             sudo -E bash deploy/configure-nginx.sh
 
