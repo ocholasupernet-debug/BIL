@@ -229,7 +229,18 @@ function primaryButton(disabled = false): React.CSSProperties {
   };
 }
 
-function RouterRecovery({ error }: { error?: string }) {
+function RouterRecovery({
+  error,
+  routerId,
+  installationMode,
+}: {
+  error?: string;
+  routerId?: number | null;
+  installationMode?: InstallationMode;
+}) {
+  const interfaceName = installationMode === "coexist" && routerId
+    ? `ochola-mgmt-vpn-${routerId}`
+    : "corebillingvpn";
   return (
     <div style={{
       background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)",
@@ -246,7 +257,7 @@ function RouterRecovery({ error }: { error?: string }) {
         display: "block", marginTop: "0.65rem", color: "#67e8f9", background: "rgba(0,0,0,.28)",
         borderRadius: 6, padding: "0.5rem 0.65rem", fontSize: "0.7rem",
       }}>
-        /interface ovpn-client enable corebillingvpn
+        /interface ovpn-client enable {interfaceName}
       </code>
     </div>
   );
@@ -783,7 +794,13 @@ export default function SelfInstall() {
                 </div>
               )}
             </div>
-            {!identityReady && !statusQuery.isLoading && <RouterRecovery error={status?.error || statusQuery.error?.message} />}
+            {!identityReady && !statusQuery.isLoading && (
+              <RouterRecovery
+                error={status?.error || statusQuery.error?.message}
+                routerId={activeRouterId}
+                installationMode={installationMode}
+              />
+            )}
             <button onClick={loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
               {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
               {portsLoading ? "Loading isolated service ports…" : "Next — view router and ports"}
@@ -879,7 +896,13 @@ export default function SelfInstall() {
                 );
               })}
             </div>
-            {portError && <RouterRecovery error={portError} />}
+            {portError && (
+              <RouterRecovery
+                error={portError}
+                routerId={activeRouterId}
+                installationMode={installationMode}
+              />
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
               <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
                <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
