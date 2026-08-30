@@ -915,7 +915,7 @@ ${coexistenceHotspotUrl ? `
 :do {
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
-    ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download', "ochola-coexistence-hotspot.rsc.download")}
+    ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""

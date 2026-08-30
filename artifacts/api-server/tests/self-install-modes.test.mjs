@@ -97,6 +97,7 @@ test("coexistence provisions an owned hotspot bridge without reusing shared serv
   assert.match(scriptsRoute, /Existing billing bridges and ports are intentionally untouched/);
   assert.match(scriptsRoute, /Only this subnet is masqueraded; no global HTTP\/HTTPS redirects are added/);
   assert.match(scriptsRoute, /coexistence-hotspot\/\$\{encodeURIComponent\(rid\)\}/);
+  assert.match(scriptsRoute, /verifyFetchedFile\('?"ochola-coexistence-hotspot\.rsc\.download"'/);
 });
 
 test("coexistence port changes reject foreign bridge ownership before assignBridgePorts", () => {
