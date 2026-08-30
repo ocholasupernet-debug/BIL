@@ -821,7 +821,7 @@ function buildMainhotspotRsc(
 
   const openVpnSelection = routerVpnUrl
     ? `:set openVpnUrl "${safeRouterVpnUrl}"`
-    : `:if ($majorVersion = 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
+    : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
     return `:if (!$vpnConfigured) do={
@@ -865,7 +865,7 @@ function buildMainhotspotRsc(
 }`;
   };
   const wireGuardAttempt = routerWireGuardUrl
-    ? `:if ($majorVersion = 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n} else={ :put "      WIREGUARD skipped: RouterOS 7 or newer is required." }`
+    ? `:if ($majorVersion >= 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n}`
     : `:put "      WIREGUARD skipped: server-side WireGuard fallback is not configured."`;
   const ipsecAttempt = routerIpsecUrl
     ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")

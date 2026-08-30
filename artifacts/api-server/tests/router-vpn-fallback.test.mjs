@@ -84,7 +84,8 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   });
   assert.match(script, /\/interface wireguard add/);
   assert.match(script, /management resources verified/);
-  assert.match(scriptsRoute, /:if \(\$majorVersion = 7\) do=\{/);
+  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{/);
+  assert.doesNotMatch(scriptsRoute, /WIREGUARD skipped: RouterOS 7 or newer is required/);
   assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
