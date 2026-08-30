@@ -866,10 +866,10 @@ function buildMainhotspotRsc(
   };
   const wireGuardAttempt = routerWireGuardUrl
     ? `:if ($majorVersion >= 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n}`
-    : `:put "      WIREGUARD skipped: server-side WireGuard fallback is not configured."`;
+    : "";
   const ipsecAttempt = routerIpsecUrl
     ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")
-    : `:put "      IPSEC skipped: server-side IPsec fallback is not configured."`;
+    : "";
 
   if (installationMode === "coexist") {
     return `# ${safeCompanyName} — Coexistence management installer

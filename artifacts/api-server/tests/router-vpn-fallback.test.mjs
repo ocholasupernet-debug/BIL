@@ -86,6 +86,8 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   assert.match(script, /management resources verified/);
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{/);
   assert.doesNotMatch(scriptsRoute, /WIREGUARD skipped: RouterOS 7 or newer is required/);
+  assert.doesNotMatch(scriptsRoute, /WIREGUARD skipped: server-side WireGuard fallback is not configured/);
+  assert.doesNotMatch(scriptsRoute, /IPSEC skipped: server-side IPsec fallback is not configured/);
   assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
