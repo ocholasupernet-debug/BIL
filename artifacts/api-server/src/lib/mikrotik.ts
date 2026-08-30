@@ -2144,6 +2144,35 @@ export interface RouterIpsecClientOptions {
   routerOsMajor?: number;
 }
 
+function routerOsString(value: string): string {
+  return `"${value
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')}"`;
+}
+
+function validateRouterOpenVpnEndpoint(value: string): string {
+  const endpoint = value.trim();
+  if (!endpoint || endpoint.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(endpoint)) {
+    throw new Error("VPS OpenVPN endpoint must be a hostname or IP address.");
+  }
+  return endpoint;
+}
+
+function validateRouterOpenVpnPort(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error("VPS OpenVPN port must be an integer between 1 and 65535.");
+  }
+  return value;
+}
+
+function validateRouterOpenVpnCredential(value: string, label: string): string {
+  if (!value || /[\u0000-\u001F\u007F]/.test(value)) {
+    throw new Error(`VPS OpenVPN ${label} is empty or contains control characters.`);
+  }
+  return value;
+}
+
 /**
  * Generates a MikroTik RouterOS script (.rsc) that configures the router
  * as an OpenVPN CLIENT connecting back to the VPS server.
@@ -2171,9 +2200,17 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerOsMajor = 6,
   } = opts;
 
+  const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
+  const port = validateRouterOpenVpnPort(vpnPort);
+  const safeVpnUsername = validateRouterOpenVpnCredential(vpnUsername, "username");
+  const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const coexistence = installationMode === "coexist";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
+  /* RouterOS 6 calls the CBC cipher "aes128"; RouterOS 7 uses the
+     OpenVPN-compatible "aes128-cbc" value. Do not put both spellings in one
+     script: RouterOS parses the whole command before on-error can run. */
+  const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
   const interfaceName = coexistence && routerId
     ? `ochola-mgmt-vpn-${routerId}`
     : "corebillingvpn";
@@ -2226,9 +2263,10 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 # Generated  : ${new Date().toISOString()}
 # Architecture: Router connects TO VPS (VPS is the OVPN server)
 #
-# VPS OVPN server : ${vpsPublicIp}:${vpnPort}/tcp  (tun0 ${tunnelVpsIp})
+# VPS OVPN server : ${endpoint}:${port}/tcp  (tun-router ${tunnelVpsIp})
 # Router tunnel IP: ${tunnelRouterIp}  (assigned by VPS server after connect)
-# VPN user        : ${vpnUsername}
+# VPN user        : ${safeVpnUsername}
+# OpenVPN cipher  : ${openVpnCipher} / auth=sha1
 #
 # After import:
 #   - Router connects to VPS and gets tunnel IP ${tunnelRouterIp}
@@ -2241,7 +2279,9 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 #   - tls-auth should be disabled or compatible with MikroTik
 #
 # USAGE: /import router-as-client${routerId ?? ""}.rsc
-# VERSION PATH: ${routerOsPath}; base client creation is cross-version safe.
+# VERSION PATH: ${routerOsPath}; this file contains only that version's cipher syntax.
+# DIAGNOSTICS: on failure, inspect the printed OVPN state and /log entries with
+#              /log print where topics~"ovpn"
 # ═══════════════════════════════════════════════════════════════
 
 # ── Step 1: Create the OVPN client interface ─────────────────────────────────
@@ -2252,17 +2292,43 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 ${resourcePreparation}
 }
-:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} mode=ip cipher=aes128 auth=sha1 add-default-route=no user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
+:do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
+    :local routerError ""
+    :do { :set routerError $error } on-error={}
+    :set ovpnError "RouterOS rejected the OpenVPN client add command"
+    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+}
 :if ([:len $ovpnError] > 0) do={
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError
 }
 ${openVpnOptionalSettings}
 
-:delay 10s
-:put "${tag}: waiting for OVPN client to establish..."
-:if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] = 0) do={
-    :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session. Check /log for TLS, credential, certificate, or reachability errors."
+:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
+:local ovpnRunning false
+:for attempt from=1 to=12 do={
+    :if (!$ovpnRunning) do={
+        :delay 5s
+        :if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] > 0) do={
+            :set ovpnRunning true
+        }
+    }
+}
+:if (!$ovpnRunning) do={
+    :put "${tag}: OpenVPN did not reach running=yes before the 60s timeout."
+    :put "${tag}: Safe interface diagnostics (credentials are intentionally omitted):"
+    :do {
+        :local ovpnIds [/interface ovpn-client find where name="${interfaceName}"]
+        :if ([:len $ovpnIds] > 0) do={
+            :local ovpnId [:pick $ovpnIds 0]
+            :put ("  name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
+        } else={
+            :put "  interface was not found after the add command."
+        }
+    } on-error={ :put "${tag}: could not read the OpenVPN interface state." }
+    :put "${tag}: Recent RouterOS OpenVPN log entries (if supported):"
+    :do { /log print where topics~"ovpn" } on-error={ :put "${tag}: RouterOS did not expose filtered OpenVPN logs." }
+    :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session within 60 seconds. Review the safe interface diagnostics and OpenVPN log output above for reachability, TLS, authentication, certificate, or server-readiness errors."
     :error $ocholaVpnChildError
 } else={
     :put "${tag}: OVPN client is running."
@@ -2286,7 +2352,7 @@ enable api
 # Expected: inet ${tunnelRouterIp} on ${interfaceName}
 # Then from VPS:  ping ${tunnelRouterIp}  and  curl http://${tunnelRouterIp}:8728
 
-:log info "${tag}: OVPN client configured → ${vpsPublicIp}:${vpnPort}"
+:log info "${tag}: OVPN client configured → ${endpoint}:${port}/tcp (${openVpnCipher})"
 :log info "${tag}: After connect, router API reachable at ${tunnelRouterIp}:8728"
 `;
 }

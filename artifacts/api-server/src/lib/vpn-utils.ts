@@ -37,7 +37,7 @@ function base64(value: string): string {
  *   - TCP only (no UDP)
  *   - No tls-auth / tls-crypt support
  *   - Supports username+password OR certificate auth (not both simultaneously)
- *   - AES-128/192/256 + SHA1 cipher/auth only
+ *   - AES-128-CBC + SHA1 cipher/auth only
  */
 export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const {
@@ -167,8 +167,12 @@ fi
   echo "auth-user-pass-verify $AUTHSCRIPT via-env"
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
-  echo "data-ciphers AES-128-CBC"
-  echo "data-ciphers-fallback AES-128-CBC"
+  if openvpn --help 2>&1 | grep -q -- "--data-ciphers"; then
+    echo "data-ciphers AES-128-CBC"
+    echo "data-ciphers-fallback AES-128-CBC"
+  else
+    echo "    OpenVPN does not support data-ciphers; using legacy cipher only."
+  fi
   echo "auth SHA1"
   echo "status ${ROUTER_MANAGEMENT_VPN.statusPath}"
   echo "verb 3"
