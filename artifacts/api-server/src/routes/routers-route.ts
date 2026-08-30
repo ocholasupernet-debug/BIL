@@ -624,15 +624,16 @@ const failureCount = new Map<number, number>();
 export async function sweepAllRouters(): Promise<void> {
   try {
     const routers = await sbSelect<{
-      id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null;
+      id: number; name: string; host: string; ip_address: string | null;
+      bridge_ip: string | null; vpn_ip: string | null;
       router_username: string; router_secret: string | null;
-    }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret");
+    }>("isp_routers", "status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,ip_address,bridge_ip,vpn_ip,router_username,router_secret");
 
     if (!routers.length) return;
 
     await Promise.allSettled(
       routers.map(async (row) => {
-        const host = cleanRouterHost(row.host);
+        const host = cleanRouterHost(row.host || row.ip_address || "");
         const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip, row.vpn_ip);
         const creds = {
           host:     host || discoveredVpnIp || "",
@@ -659,7 +660,7 @@ export async function sweepAllRouters(): Promise<void> {
           logger.info({ id: row.id, name: row.name, identity: r.identity }, "[monitor] router online via API");
         } catch (apiErr) {
           /* API failed — try TCP fallback on common ports before counting as failure */
-          const host = row.vpn_ip?.trim() || row.host?.trim() || row.bridge_ip?.trim() || "";
+          const host = row.vpn_ip?.trim() || row.host?.trim() || row.ip_address?.trim() || row.bridge_ip?.trim() || "";
           const openPort = await tcpProbe(host);
           if (openPort !== null) {
             /* Host is reachable — reset failures, mark online */

@@ -80,11 +80,11 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
   const unverifiedFetches = scriptsRoute.match(/mode=https check-certificate=no/g) ?? [];
   assert.equal(
     unverifiedFetches.length,
-    2,
-    "only the one-time CA bootstrap and explicit fallback mode may skip certificate validation",
+    3,
+    "only the one-time CA bootstrap and explicit hotspot/PPPoE fallback modes may skip certificate validation",
   );
   assert.match(scriptsRoute, /certificateMode === "unverified"/);
-  assert.match(scriptsRoute, /certificate=off/);
+  assert.match(scriptsRoute, /req\.query\.certificate/);
 });
 
 test("PPPoE installers use the same verified HTTPS policy", () => {
