@@ -292,6 +292,7 @@ function verifyFetchedFile(pathExpression: string, label: string): string {
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
   `mode=https check-certificate=yes`;
+type RouterCertificateMode = "verified" | "unverified";
 
 function routerHttpsTrustBootstrap(scriptsBase: string): string {
   const caUrl = `${scriptsBase}/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
@@ -529,7 +530,15 @@ function buildMainhotspotRsc(
   routerIpsecUrl: string = "",
   routerVpnIp: string = "",
   routerVpnWarning: string = "",
+  certificateMode: RouterCertificateMode = "verified",
 ): string {
+  const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
+    ? "mode=https check-certificate=no"
+    : `mode=https check-certificate=yes`;
+  const httpsTrustBootstrap = certificateMode === "unverified"
+    ? `# HTTPS certificate validation is disabled for this installer by administrator choice.
+# Traffic remains encrypted with HTTPS, but the router will not verify the server certificate.`
+    : routerHttpsTrustBootstrap(scriptsBase);
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
      render a live timeline. The function pg is a no-op when no URL was
@@ -628,7 +637,7 @@ function buildMainhotspotRsc(
 ${pgDef}
 
 # Bootstrap the public CA before any HTTPS download is verified.
-${routerHttpsTrustBootstrap(scriptsBase)}
+${httpsTrustBootstrap}
 
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
@@ -946,6 +955,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
   const adminId = /^\d+$/.test(adminIdRaw) ? adminIdRaw : "";
+  const certificateMode: RouterCertificateMode = ["off", "none", "disabled", "unverified"]
+    .includes(String(req.query.certificate ?? "").trim().toLowerCase())
+    ? "unverified"
+    : "verified";
   const rname  = ((req.query.name  ?? "") as string).trim().slice(0, 80);
   let companyName = "ISPlatty";
   let resolvedRouterName = rname;
@@ -990,7 +1003,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         updateVpnCredentials(`router-${rid}`, resolvedToken);
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
-        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}`;
+        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}${certificateMode === "unverified" ? "&certificate=off" : ""}`;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
         routerVpnIp = assignedIp;
 
@@ -1067,6 +1080,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
        vpnProvisioningError
          ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
          : "",
+      certificateMode,
     ));
 });
 

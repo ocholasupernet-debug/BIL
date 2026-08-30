@@ -18,6 +18,7 @@ const CONFIG_CATEGORIES = [
 ] as const;
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
+type CertificateMode = "verified" | "unverified";
 
 interface RouterSummary {
   id: number;
@@ -229,6 +230,7 @@ export default function SelfInstall() {
   const [phase, setPhase] = useState<Phase>(reconfigureId ? "install" : "idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
   const [generating, setGenerating] = useState(false);
+  const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
   const [portsLoading, setPortsLoading] = useState(false);
   const [ports, setPorts] = useState<PortsPayload | null>(null);
   const [selectedBridge, setSelectedBridge] = useState("");
@@ -277,8 +279,9 @@ export default function SelfInstall() {
   const status = statusQuery.data;
   const identityReady = !!status?.ready;
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (mode: CertificateMode) => {
     setGenerating(true);
+    setCertificateMode(mode);
     setPageError(null);
     try {
       const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
@@ -308,9 +311,12 @@ export default function SelfInstall() {
   };
 
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
-  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}`;
+  const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
+  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}${certificateQuery}`;
   const caUrl = `${window.location.origin}/api/scripts/ochola-isrg-root-x1.pem`;
-  const fetchCommand = `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`;
+  const fetchCommand = certificateMode === "verified"
+    ? `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`
+    : `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;
@@ -494,10 +500,23 @@ export default function SelfInstall() {
                 </p>
               </div>
             </div>
-            <button onClick={handleGenerate} disabled={generating} style={{ ...primaryButton(generating), alignSelf: "flex-start" }}>
-              {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Settings size={15} />}
-              {generating ? "Creating profile…" : "Generate configuration files"}
-            </button>
+            <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
+              <button onClick={() => void handleGenerate("verified")} disabled={generating} style={{ ...primaryButton(generating), alignSelf: "flex-start" }}>
+                {generating && certificateMode === "verified" ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={15} />}
+                {generating && certificateMode === "verified" ? "Creating secure profile…" : "Generate with certificate"}
+              </button>
+              <button onClick={() => void handleGenerate("unverified")} disabled={generating} style={{
+                ...primaryButton(generating),
+                alignSelf: "flex-start",
+                background: generating ? "rgba(148,163,184,.12)" : "rgba(148,163,184,.14)",
+                color: generating ? "#94a3b8" : "#cbd5e1",
+                border: "1px solid rgba(148,163,184,.25)",
+                boxShadow: "none",
+              }}>
+                {generating && certificateMode === "unverified" ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Terminal size={15} />}
+                {generating && certificateMode === "unverified" ? "Creating fallback profile…" : "Generate without certificate"}
+              </button>
+            </div>
             {routers.filter(router => router.status !== "setup").length > 0 && (
               <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontWeight: 700, fontSize: ".8rem", marginBottom: ".6rem" }}>
@@ -538,12 +557,19 @@ export default function SelfInstall() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: ".65rem" }}>
                 <div>
-                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>1. Install HTTPS trust and download configuration</div>
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>
+                    1. {certificateMode === "verified" ? "Install HTTPS trust and download configuration" : "Download configuration without certificate validation"}
+                  </div>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
                     <code style={{ color: "#7dd3fc", fontSize: ".7rem", lineHeight: 1.55, wordBreak: "break-all", flex: 1 }}>{fetchCommand}</code>
                     <CopyButton text={fetchCommand} />
                   </div>
                 </div>
+                {certificateMode === "unverified" && (
+                  <div style={{ color: "#fbbf24", fontSize: ".7rem", lineHeight: 1.5 }}>
+                    Certificate validation is disabled for this installer. HTTPS encryption remains enabled, but use this only until the production certificate is corrected.
+                  </div>
+                )}
                 <div>
                   <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>2. Run configuration</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
