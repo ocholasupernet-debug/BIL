@@ -217,7 +217,7 @@ function RouterRecovery({ error }: { error?: string }) {
         display: "block", marginTop: "0.65rem", color: "#67e8f9", background: "rgba(0,0,0,.28)",
         borderRadius: 6, padding: "0.5rem 0.65rem", fontSize: "0.7rem",
       }}>
-        /interface ovpn-client enable coreispbilling
+        /interface ovpn-client enable corebillingvpn
       </code>
     </div>
   );
