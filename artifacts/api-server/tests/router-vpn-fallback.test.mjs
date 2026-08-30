@@ -54,6 +54,26 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
 });
 
+test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
+  const options = {
+    vpsPublicIp: "vpn.example.test",
+    vpnPort: 1196,
+    vpnUsername: "router-42",
+    vpnPassword: "one-time-token",
+    tunnelRouterIp: "10.8.5.42",
+    tunnelVpsIp: "10.8.5.1",
+    routerId: 42,
+  };
+  const ros6 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 6 });
+  const ros7 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 7 });
+  assert.match(ros6, /VERSION PATH: RouterOS 6/);
+  assert.doesNotMatch(ros6, /verify-server-certificate/);
+  assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
+  assert.match(ros7, /verify-server-certificate=no/);
+  assert.match(scriptsRoute, /ros-version=/);
+  assert.match(scriptsRoute, /routerOsMajor/);
+});
+
 test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
@@ -109,6 +129,25 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
+test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {
+  const options = {
+    endpoint: "ipsec.example.test",
+    preSharedKey: "router-secret",
+    tunnelRouterIp: "10.8.5.42",
+    tunnelVpsIp: "10.8.5.1",
+    routerId: 42,
+  };
+  const ros6 = mikrotik.generateRouterIpsecClientScript({ ...options, routerOsMajor: 6 });
+  const ros7 = mikrotik.generateRouterIpsecClientScript({ ...options, routerOsMajor: 7 });
+  assert.match(ros6, /VERSION PATH: RouterOS 6/);
+  assert.match(ros6, /exchange-mode=ike2/);
+  assert.doesNotMatch(ros6, /send-initial-contact=yes/);
+  assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
+  assert.match(ros7, /send-initial-contact=yes/);
+  assert.match(ros6, /peer was not verified/);
+  assert.match(ros7, /policy was not verified/);
+});
+
 test("fallback order is OpenVPN then WireGuard then IPsec and stops after success", () => {
   const renderedBundle = scriptsRoute.slice(scriptsRoute.indexOf("return `# ${safeCompanyName} Main ISP Setup Script"));
   const openVpn = renderedBundle.indexOf('${vpnAttempt("openvpn"');
@@ -121,6 +160,7 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
   assert.match(scriptsRoute, /child script import failed/);
+  assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
 
 test("recoverable protocol failures do not poison a later successful install", () => {

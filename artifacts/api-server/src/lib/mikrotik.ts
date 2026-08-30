@@ -2374,13 +2374,17 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: coexistence API firewall rule creation failed."; :error $ocholaVpnChildError }`
     : `:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
 :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }`;
-  const ipsecPeerVariant = routerOs7
-    ? `address=${endpointPrefix} exchange-mode=ike2 send-initial-contact=yes`
-    : `address=${endpointPrefix} exchange-mode=ike2`;
-  const ipsecVariantNote = routerOs7
-    ? `# RouterOS 7 path: use the IKEv2 peer with explicit initial contact.`
-    : `# RouterOS 6 path: use the conservative IKEv2 peer property set.
+  const ipsecOptionalSettings = routerOs7
+    ? `# RouterOS 7 path: apply the optional initial-contact setting only after
+# the broadly compatible peer exists.
+:do {
+    /ip ipsec peer set [find where name="${peerName}"] send-initial-contact=yes
+} on-error={ :put "${tag}: optional RouterOS 7 IPsec initial-contact setting was not accepted; continuing with the verified peer." }`
+    : `# RouterOS 6 path: keep the peer command to the conservative common property set.
 # RouterOS 7-only IPsec properties are intentionally absent from this child.`;
+  const ipsecVariantNote = routerOs7
+    ? `# RouterOS 7 path: use the common IKEv2 peer first, then apply optional settings.`
+    : `# RouterOS 6 path: use the conservative IKEv2 peer property set.`;
 
   return `# ${tag} — MikroTik ${routerOsPath} IPsec management fallback
 # This child script is attempted only after OpenVPN and WireGuard fail.
@@ -2393,7 +2397,8 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
 :set ocholaVpnChildError ""
 ${preparation}
 ${ipsecVariantNote}
-:do { /ip ipsec peer add name="${peerName}" ${ipsecPeerVariant} disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
+:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
+${ipsecOptionalSettings}
 :do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}"${identityIds} comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
 ${firewall}

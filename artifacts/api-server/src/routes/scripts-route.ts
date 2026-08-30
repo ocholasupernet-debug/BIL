@@ -352,13 +352,18 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
    RouterOS can report a successful fetch even when the destination is a
    directory or an empty result. Keep this inside the fetch's :do block so the
    caller's on-error handler reports the exact destination. ── */
-function verifyFetchedFile(pathExpression: string, label: string): string {
+function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVpnError = false): string {
+  const routerVpnErrorCheck = rejectRouterVpnError
+    ? `
+ :local fetchedContents [/file get $fetchedFile contents]
+ :if ([:find $fetchedContents "# OCHOLA_ROUTER_VPN_ERROR"] = 0) do={ :error ("server rejected ${label}: " . $fetchedContents) }`
+    : "";
   return `:local fetchedFile [/file find name=${pathExpression}]
 :if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
 :local fetchedType [/file get $fetchedFile type]
 :if ($fetchedType = "directory") do={ :error "download destination is a directory: ${label}" }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }`;
+:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }${routerVpnErrorCheck}`;
 }
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
@@ -819,8 +824,10 @@ function buildMainhotspotRsc(
 }`
     : `:global pg do={}`;
 
+  const versionedUrlAssignment = (variableName: string, url: string): string =>
+    `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
   const openVpnSelection = routerVpnUrl
-    ? `:set openVpnUrl "${safeRouterVpnUrl}"`
+    ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
     : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
@@ -832,7 +839,7 @@ function buildMainhotspotRsc(
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${tempFileName}"] } on-error={}
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
-        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
+        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
         :delay 2s
         :do {
             /import "${tempFileName}"
@@ -904,11 +911,11 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
 :if ([:len $dotPos] > 0) do={ :set majorVersion [:tonum [:pick $version 0 $dotPos]] }
 :if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
 :local openVpnUrl ""
-:local wireGuardUrl "${safeRouterWireGuardUrl}"
-:local ipsecUrl "${safeRouterIpsecUrl}"
+    :local wireGuardUrl ""
+    :local ipsecUrl ""
 ${openVpnSelection}
-${routerWireGuardUrl ? `:set wireGuardUrl "${safeRouterWireGuardUrl}"` : `:set wireGuardUrl ""`}
-${routerIpsecUrl ? `:set ipsecUrl "${safeRouterIpsecUrl}"` : `:set ipsecUrl ""`}
+    ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl) : `:set wireGuardUrl ""`}
+    ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
@@ -1012,11 +1019,13 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 # its own resources; a successful child prevents all later children from running.
 :local openVpnUrl
 ${openVpnSelection}
-:local wireGuardUrl "${safeRouterWireGuardUrl}"
-:local ipsecUrl "${safeRouterIpsecUrl}"
+  :local wireGuardUrl ""
+  :local ipsecUrl ""
 :local vpnConfigured false
 :local vpnProtocol ""
 :local vpnFailureSummary ""
+  ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl) : `:set wireGuardUrl ""`}
+  ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
 ${wireGuardAttempt}
 ${ipsecAttempt}
@@ -1684,12 +1693,15 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
 
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
     const protocol = requestedRouterVpnProtocol(req.query.protocol);
+    const requestedRouterOsMajor = Number.parseInt(String(req.query["ros-version"] ?? ""), 10);
+    const routerOsMajor = Number.isSafeInteger(requestedRouterOsMajor) && requestedRouterOsMajor >= 7 ? 7 : 6;
     let script: string;
 
     if (protocol === "openvpn") {
       const readiness = routerManagementVpnReadiness();
       if (!readiness.endpointConfigured) {
         res.status(503).type("text/plain").send(
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
           "# Router-management VPN endpoint is not configured. " +
           "Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST, then retry.",
         );
@@ -1698,6 +1710,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       const vpsHost = routerVpnEndpointHost(requestOrigin(req));
       if (!vpsHost) {
         res.status(503).type("text/plain").send(
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
           "# VPS OpenVPN endpoint is not configured. Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST.",
         );
         return;
@@ -1716,6 +1729,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
         installationMode,
+        routerOsMajor,
       });
       script = readinessWarning + script;
     } else if (protocol === "wireguard") {
@@ -1727,12 +1741,12 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       if ((!material && !routerWireGuardFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(dbServerPublicKey) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
-        res.status(503).type("text/plain").send("# Router WireGuard fallback is not configured with complete server-side prerequisites.");
+        res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback is not configured with complete server-side prerequisites.");
         return;
       }
       const endpointPort = material?.endpointPort ?? (Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820);
       if (endpointPort < 1 || endpointPort > 65535) {
-        res.status(503).type("text/plain").send("# Router WireGuard fallback has an invalid endpoint port.");
+        res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback has an invalid endpoint port.");
         return;
       }
       script = generateRouterWireGuardClientScript({
@@ -1750,11 +1764,11 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       const endpoint = material?.endpoint || routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
       const preSharedKey = material?.secret || routerEnv("ROUTER_IPSEC_PSK", routerId);
       if ((!material && !routerIpsecFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
-         res.status(503).type("text/plain").send("# Router IPsec fallback is not configured with complete server-side prerequisites.");
+         res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router IPsec fallback is not configured with complete server-side prerequisites.");
         return;
       }
       script = material
-        ? generatedRouterVpnChildScript("ipsec", routerId, material)
+        ? generatedRouterVpnChildScript("ipsec", routerId, material, routerOsMajor)
         : generateRouterIpsecClientScript({
             endpoint,
             preSharedKey,
@@ -1762,6 +1776,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
             tunnelVpsIp: ROUTER_VPN_GATEWAY,
             routerId,
             installationMode,
+            routerOsMajor,
           });
     }
 
