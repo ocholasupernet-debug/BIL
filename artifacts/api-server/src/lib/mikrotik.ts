@@ -2218,10 +2218,23 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     ? `ochola-mgmt-vpn-${routerId}`
     : "corebillingvpn";
   const resourcePreparation = coexistence
-    ? `# Coexistence guard: never replace an existing VPN or API policy.
-:if ([:len [/interface ovpn-client find where name="${interfaceName}"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — an existing ${interfaceName} interface was found; nothing was replaced."
-    :error $ocholaVpnChildError
+    ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
+# incomplete Ochola attempt may leave its uniquely tagged, non-running client
+# behind; remove only that stale resource so the administrator can retry.
+:local existingOvpnIds [/interface ovpn-client find where name="${interfaceName}"]
+:if ([:len $existingOvpnIds] > 0) do={
+    :local existingOvpnId [:pick $existingOvpnIds 0]
+    :local existingOvpnComment [/interface ovpn-client get $existingOvpnId comment]
+    :local existingOvpnRunning [/interface ovpn-client get $existingOvpnId running]
+    :if (($existingOvpnComment = "${tag} VPS tunnel") && (!$existingOvpnRunning)) do={
+        :do { /interface ovpn-client remove $existingOvpnId } on-error={
+            :set ocholaVpnChildError "${tag}: could not remove the previous incomplete management interface; nothing was replaced."
+            :error $ocholaVpnChildError
+        }
+    } else={
+        :set ocholaVpnChildError "${tag}: coexistence conflict — an active or foreign ${interfaceName} interface was found; nothing was replaced."
+        :error $ocholaVpnChildError
+    }
 }
 :if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict — the required API firewall rule already exists."

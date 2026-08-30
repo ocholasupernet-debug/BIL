@@ -91,6 +91,10 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
   });
   assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
+  assert.match(script, /previous incomplete management interface/);
+  assert.match(script, /active or foreign ochola-mgmt-vpn-42 interface/);
+  assert.match(script, /existingOvpnComment/);
+  assert.match(script, /existingOvpnRunning/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
   assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
@@ -197,6 +201,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
   assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
   assert.match(setup, /ifconfig-push 10\.8\.5\.2 255\.255\.255\.0/);
+  assert.match(setup, /verify-client-cert none/);
+  assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /data-ciphers AES-128-CBC/);
   assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);
   assert.match(setup, /Could not start the dedicated router-management OpenVPN service/);

@@ -164,6 +164,15 @@ fi
   echo "persist-key"
   echo "persist-tun"
   echo "script-security 3"
+   # MikroTik supplies username/password but no client certificate. OpenVPN
+   # 2.4+ calls this verify-client-cert; older releases use the legacy
+   # client-cert-not-required spelling. Do not emit both: unknown directives
+   # prevent the dedicated service from starting.
+   if openvpn --help 2>&1 | grep -q -- "--verify-client-cert"; then
+     echo "verify-client-cert none"
+   else
+     echo "client-cert-not-required"
+   fi
   echo "auth-user-pass-verify $AUTHSCRIPT via-env"
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
