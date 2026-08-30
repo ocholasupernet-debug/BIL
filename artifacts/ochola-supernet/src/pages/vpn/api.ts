@@ -1,4 +1,4 @@
-import { getAdminApiToken } from "@/lib/supabase";
+import { getAdminApiToken, getAdminRole, getSelectedTenantId } from "@/lib/supabase";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
@@ -7,6 +7,10 @@ export function vpnFetch(path: string, init: RequestInit = {}): Promise<Response
   const token = getAdminApiToken();
   if (init.body) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const selectedTenantId = getSelectedTenantId();
+  if (getAdminRole() === "superadmin" && selectedTenantId) {
+    headers.set("X-Impersonated-Admin-Id", String(selectedTenantId));
+  }
   return fetch(`${API}${path}`, { ...init, headers });
 }
 

@@ -253,7 +253,7 @@ export default function SelfInstall() {
   const params = new URLSearchParams(window.location.search);
   const reconfigureId = params.get("reconfigure") ? Number(params.get("reconfigure")) : null;
   const [adminId, setAdminId] = useState<number | null>(() => getSelectedTenantId());
-  const [phase, setPhase] = useState<Phase>(reconfigureId ? "install" : "idle");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
   const [generating, setGenerating] = useState(false);
   const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
@@ -331,6 +331,10 @@ export default function SelfInstall() {
       setPageError("Your ISP session is missing a tenant account. Sign in again before creating a router profile.");
       return;
     }
+    if (reconfigureId && !activeRouter) {
+      setPageError("The router selected for reconfiguration is not available in this ISP account.");
+      return;
+    }
     setGenerating(true);
     setCertificateMode(mode);
     setPageError(null);
@@ -389,25 +393,12 @@ export default function SelfInstall() {
     }
   };
 
-  useEffect(() => {
-    if (!reconfigureId || !adminId) return;
-    let cancelled = false;
-    void jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
-      "/api/admin/router/self-install/grant",
-      { method: "POST", body: JSON.stringify({ routerId: reconfigureId, adminId }) },
-    ).then(result => {
-      if (!cancelled && result.ok && result.grantToken) setTakeoverGrant(result.grantToken);
-    }).catch(error => {
-      if (!cancelled) setPageError(error instanceof Error ? error.message : String(error));
-    });
-    return () => { cancelled = true; };
-  }, [reconfigureId, adminId]);
-
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
   const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
   const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
-  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
-  const caUrl = `${window.location.origin}/api/scripts/ochola-isrg-root-x1.pem`;
+  const publicApiOrigin = (API || window.location.origin).replace(/\/$/, "");
+  const scriptUrl = `${publicApiOrigin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
+  const caUrl = `${publicApiOrigin}/api/scripts/ochola-isrg-root-x1.pem`;
   const fetchCommand = certificateMode === "verified"
     ? `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`
     : `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;

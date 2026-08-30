@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { getAdminApiToken, getSelectedTenantId } from "@/lib/supabase";
+import { getAdminApiToken, getAdminRole, getSelectedTenantId } from "@/lib/supabase";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -127,6 +127,8 @@ async function fetchRouters(): Promise<RouterSummary[]> {
   const headers = new Headers();
   const token = getAdminApiToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const role = getAdminRole();
+  if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
   const response = await fetch(`/api/routers?adminId=${encodeURIComponent(String(adminId))}`, { headers });
   if (!response.ok) {
     throw new Error(`Could not load routers (HTTP ${response.status})`);
@@ -141,6 +143,8 @@ async function fetchRouterFiles(routerId: number): Promise<RouterFilesResponse> 
   const headers = new Headers();
   const token = getAdminApiToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const role = getAdminRole();
+  if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
   const response = await fetch(
     `/api/router/${routerId}/files?adminId=${encodeURIComponent(String(adminId))}`,
     { headers },
@@ -352,6 +356,8 @@ export default function Files() {
       const headers = new Headers({ "Content-Type": "application/json" });
       const token = getAdminApiToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
+      const role = getAdminRole();
+      if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
       const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy`, {
         method: "POST",
         headers,
