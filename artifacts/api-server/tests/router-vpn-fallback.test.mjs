@@ -40,15 +40,16 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
   });
-  assert.match(script, /\/interface ovpn-client add name=corebillingvpn/);
-  assert.match(script, /mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
+  assert.match(script, /\/interface ovpn-client add name="corebillingvpn"/);
+  assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
   assert.match(script, /name="corebillingvpn" && running=yes/);
   assert.match(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
-  assert.match(script, /OVPN client did not establish a running session/);
-  assert.match(script, /Check \/log for TLS, credential, certificate, or reachability errors/);
+  assert.match(script, /did not establish a running session within 60 seconds/);
+  assert.match(script, /Safe interface diagnostics/);
+  assert.match(script, /Recent RouterOS OpenVPN log entries/);
   assert.match(script, /ocholaVpnChildError/);
   assert.doesNotMatch(script, /on-error=\{ :set ovpnError \$error \}/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
@@ -67,8 +68,11 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   const ros6 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 6 });
   const ros7 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 7 });
   assert.match(ros6, /VERSION PATH: RouterOS 6/);
+  assert.match(ros6, /protocol=tcp mode=ip cipher=aes128 auth=sha1/);
+  assert.doesNotMatch(ros6, /cipher=aes128-cbc/);
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
+  assert.match(ros7, /protocol=tcp mode=ip cipher=aes128-cbc auth=sha1/);
   assert.match(ros7, /verify-server-certificate=no/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.match(scriptsRoute, /routerOsMajor/);
@@ -85,7 +89,7 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
     routerId: 42,
     installationMode: "coexist",
   });
-  assert.match(script, /interface ovpn-client add name=ochola-mgmt-vpn-42/);
+  assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
@@ -192,6 +196,11 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router-ccd/);
   assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
   assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
+  assert.match(setup, /ifconfig-push 10\.8\.5\.2 255\.255\.255\.0/);
+  assert.match(setup, /data-ciphers AES-128-CBC/);
+  assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);
+  assert.match(setup, /Could not start the dedicated router-management OpenVPN service/);
+  assert.match(setup, /TCP port 1196 is not listening/);
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.statusPath/);
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.ippPath/);
   assert.match(scriptsRoute, /routerManagementVpnReadiness\(\)/);

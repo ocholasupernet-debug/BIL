@@ -228,7 +228,7 @@ fi
 # Static IP for the router client
 cat > "$CCDDIR/${vpnUsername}" << CCDEOF
 # Static tunnel IP for MikroTik router (${tag})
-ifconfig-push ${routerTunnelIp} ${serverGw}
+ifconfig-push ${routerTunnelIp} 255.255.255.0
 CCDEOF
 echo "    Static IP ${routerTunnelIp} assigned to '${vpnUsername}'"
 
@@ -249,11 +249,31 @@ fi
 
 # ── 9. Restart only the dedicated router-management instance ────────────────
 echo "[9] Starting dedicated router-management OpenVPN..."
-systemctl enable --now openvpn-server@ochola-router 2>/dev/null || \\
-  systemctl restart openvpn@ochola-router 2>/dev/null || \\
-  echo "    WARNING: Could not start the router-management instance — start it manually"
+$SUDO ln -sfn "$OVPN_CONF" "$OVPN_DIR/ochola-router.conf"
+service_started=false
+if $SUDO systemctl restart openvpn-server@ochola-router 2>/dev/null || $SUDO systemctl enable --now openvpn-server@ochola-router 2>/dev/null; then
+  service_started=true
+elif $SUDO systemctl restart openvpn@ochola-router 2>/dev/null || $SUDO systemctl enable --now openvpn@ochola-router 2>/dev/null; then
+  service_started=true
+fi
+if [ "$service_started" != "true" ]; then
+  echo "ERROR: Could not start the dedicated router-management OpenVPN service."
+  $SUDO systemctl status openvpn-server@ochola-router --no-pager 2>&1 | tail -n 40 || true
+  $SUDO systemctl status openvpn@ochola-router --no-pager 2>&1 | tail -n 40 || true
+  exit 1
+fi
 
 sleep 2
+if ! $SUDO systemctl is-active --quiet openvpn-server@ochola-router 2>/dev/null && ! $SUDO systemctl is-active --quiet openvpn@ochola-router 2>/dev/null; then
+  echo "ERROR: The dedicated router-management OpenVPN service is not active after startup."
+  $SUDO journalctl -u openvpn-server@ochola-router -u openvpn@ochola-router -n 60 --no-pager 2>&1 || true
+  exit 1
+fi
+if command -v ss >/dev/null 2>&1 && ! $SUDO ss -ltnH | awk '$4 ~ /:'"${vpnPort}"'$/ { found=1 } END { exit(found ? 0 : 1) }'; then
+  echo "ERROR: OpenVPN service is active but TCP port ${vpnPort} is not listening."
+  $SUDO journalctl -u openvpn-server@ochola-router -u openvpn@ochola-router -n 60 --no-pager 2>&1 || true
+  exit 1
+fi
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo " Setup complete. Verify:"

@@ -831,6 +831,21 @@ function buildMainhotspotRsc(
     : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
+    const failureDiagnostics = protocol === "openvpn"
+      ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
+         :do {
+             :local ovpnIds [/interface ovpn-client find]
+             :if ([:len $ovpnIds] > 0) do={
+                 :foreach ovpnId in=$ovpnIds do={
+                     :put ("    name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
+                 }
+             } else={
+                 :put "    no OpenVPN client interfaces were found."
+             }
+         } on-error={ :put "    RouterOS could not read OpenVPN interface state." }
+         :put "  Recent RouterOS OpenVPN log entries (if supported):"
+         :do { /log print where topics~"ovpn" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
+      : "";
     return `:if (!$vpnConfigured) do={
     :do {
         :global ocholaVpnChildError
@@ -864,6 +879,7 @@ function buildMainhotspotRsc(
             :set vpnError "${protocol}: child script import failed. Check failed-${fileName} and /log for the RouterOS error."
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
+        ${failureDiagnostics}
         :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
         $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
@@ -1741,7 +1757,12 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       if ((!material && !routerWireGuardFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(dbServerPublicKey) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
-        res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback is not configured with complete server-side prerequisites.");
+         res.status(503).type("text/plain").send(
+           "# OCHOLA_ROUTER_VPN_ERROR\n" +
+           "# Router WireGuard fallback is unavailable because server-side prerequisites are incomplete.\n" +
+           "# Required: endpoint, server public key, router private key, and a ready server-side WireGuard peer.\n" +
+           "# Run router-management VPN reconciliation on the VPS, then retry the installer.",
+         );
         return;
       }
       const endpointPort = material?.endpointPort ?? (Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820);
@@ -1764,7 +1785,12 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       const endpoint = material?.endpoint || routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
       const preSharedKey = material?.secret || routerEnv("ROUTER_IPSEC_PSK", routerId);
       if ((!material && !routerIpsecFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
-         res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router IPsec fallback is not configured with complete server-side prerequisites.");
+         res.status(503).type("text/plain").send(
+           "# OCHOLA_ROUTER_VPN_ERROR\n" +
+           "# Router IPsec fallback is unavailable because server-side prerequisites are incomplete.\n" +
+           "# Required: endpoint, PSK, and a ready server-side IPsec peer/policy.\n" +
+           "# Run router-management VPN reconciliation on the VPS, then retry the installer.",
+         );
         return;
       }
       script = material
