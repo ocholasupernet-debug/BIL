@@ -93,6 +93,11 @@ jobs:
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
             upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
+            # Dedicated router-management VPN endpoint. Keep this separate
+            # from any stale VPS_HOST value used by older deployments.
+            upsert_env "ROUTER_OPENVPN_ENDPOINT"  "vpn.isplatty.org"
+            # The API's SSH reconciliation helper must reach the same VPS.
+            upsert_env "VPS_HOST"                 "vpn.isplatty.org"
 
             sudo -E bash deploy/configure-nginx.sh
 

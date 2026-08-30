@@ -2193,7 +2193,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}
-:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
+:do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} mode=ip cipher=aes128 auth=sha1 add-default-route=no user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
 :if ([:len $ovpnError] > 0) do={
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError

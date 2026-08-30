@@ -2067,8 +2067,15 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       }
     }
 
-    /* Self-referencing script URL for auto-update inside the .rsc */
-    const scriptBaseUrl = `https://${adminSubdomain}.${baseDomain}/api/scripts`;
+    /* Use the apex certificate for RouterOS downloads. Tenant subdomains are
+       currently served by an older Nginx certificate and redirect to the
+       apex, which RouterOS cannot reliably follow in HTTPS fetch mode.
+       admin_id keeps the generated script tenant-scoped without relying on
+       the request Host header. */
+    const publicAppOrigin = `https://${baseDomain}`;
+    const scriptBaseUrl = `${publicAppOrigin}/api/scripts`;
+    const scriptAdminQuery = `admin_id=${encodeURIComponent(String(adminId))}`;
+    const routerVpnHost = routerVpnEndpointHost(publicAppOrigin) || "vpn.isplatty.org";
 
     /* ── Step 2: Fetch routers for this admin ── */
     interface DbRouter {
@@ -2250,8 +2257,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         );
       } catch { /* ignore */ }
     }
-    const heartbeatUrl = `https://${adminSubdomain}.${baseDomain}/api/isp/router/heartbeat/${routerSecret}`;
-    const registerUrl  = `https://${adminSubdomain}.${baseDomain}/api/isp/router/register/${routerSecret}`;
+    const heartbeatUrl = `${publicAppOrigin}/api/isp/router/heartbeat/${routerSecret}`;
+    const registerUrl  = `${publicAppOrigin}/api/isp/router/register/${routerSecret}`;
     const routerVpnPassword = routerSecret ?? "";
 
     /* Ensure this router has a TLS client certificate ready on the server.
@@ -2300,7 +2307,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
       `:put "[1/8] Checking for config updates..."`,
-      safeFetch(`${scriptBaseUrl}/${rawName}`, `${routerSlug}.rsc`),
+      safeFetch(`${scriptBaseUrl}/${rawName}?${scriptAdminQuery}`, `${routerSlug}.rsc`),
       ``,
       `# === System Identity & DNS ===`,
       `:put "[2/8] Setting identity and DNS..."`,
@@ -2442,15 +2449,15 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
       `:foreach x in=[/certificate find name~"vpn-ca"]        do={ :do { /certificate remove $x } on-error={} }`,
       `# 3) Download + import CA cert (used to verify server - optional with verify-server-certificate=no)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: CA cert fetch failed" }`,
+      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: CA cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/vpn-ca.crt") passphrase="" } on-error={ :put "  WARN: CA cert import failed" }`,
       `:do { /file remove [find name=($storage . "/vpn-ca.crt")] } on-error={}`,
       `# 4) Download + import client certificate`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client cert fetch failed" }`,
+      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.crt") passphrase="" } on-error={ :put "  WARN: client cert import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.crt")] } on-error={}`,
       `# 5) Download + import client private key (auto-matches to cert by public key fingerprint)`,
-      `:do { /tool fetch url="https://${adminSubdomain}.${baseDomain}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client key fetch failed" }`,
+      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client key fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.key") passphrase="" } on-error={ :put "  WARN: client key import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.key")] } on-error={}`,
       `# 6) Mark cert as trusted and wait for RouterOS to finalise key binding`,
@@ -2460,7 +2467,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${adminSubdomain}.isplatty.org" port=${routerManagementVpnPort()} mode=ip cipher=aes256 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPort()} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
@@ -2498,7 +2505,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Config Auto-Update Scheduler (daily) ===`,
       safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
-      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}\\" dst-path=${routerSlug}.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
+      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}?${scriptAdminQuery}\\" dst-path=${routerSlug}.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
       `:put "      Heartbeat every 5 min, auto-update daily at 00:05  OK"`,
       ``,
       `:put ""`,

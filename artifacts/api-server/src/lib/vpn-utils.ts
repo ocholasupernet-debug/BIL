@@ -167,6 +167,8 @@ fi
   echo "auth-user-pass-verify $AUTHSCRIPT via-env"
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
+  echo "data-ciphers AES-128-CBC"
+  echo "data-ciphers-fallback AES-128-CBC"
   echo "auth SHA1"
   echo "status ${ROUTER_MANAGEMENT_VPN.statusPath}"
   echo "verb 3"
