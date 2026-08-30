@@ -7,11 +7,12 @@ import {
   User, Lock, FileText, ShieldCheck, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { downloadVpnFile, vpnFetch } from "./api";
+import { getSelectedTenantId } from "@/lib/supabase";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
 
-function getAdminId() {
-  return localStorage.getItem("ochola_admin_id") ?? "1";
+function getAdminId(): number | null {
+  return getSelectedTenantId();
 }
 
 function CopyBtn({ text, label }: { text: string; label: string }) {
@@ -362,10 +363,12 @@ export default function RemoteAccess() {
   const { data: routers = [], isLoading, refetch } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_remote", adminId],
     queryFn: async () => {
+      if (!adminId) throw new Error("Sign in to an ISP account before loading routers.");
       const r = await vpnFetch(`/api/routers?adminId=${adminId}`);
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
+    enabled: !!adminId,
     refetchInterval: 30_000,
   });
 

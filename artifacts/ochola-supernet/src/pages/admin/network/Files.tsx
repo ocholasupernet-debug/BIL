@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { ADMIN_ID } from "@/lib/supabase";
+import { getAdminApiToken, getSelectedTenantId } from "@/lib/supabase";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -122,7 +122,12 @@ function statusLabel(status: string): string {
 }
 
 async function fetchRouters(): Promise<RouterSummary[]> {
-  const response = await fetch(`/api/routers?adminId=${encodeURIComponent(String(ADMIN_ID))}`);
+  const adminId = getSelectedTenantId();
+  if (!adminId) throw new Error("Sign in to an ISP account before loading routers.");
+  const headers = new Headers();
+  const token = getAdminApiToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`/api/routers?adminId=${encodeURIComponent(String(adminId))}`, { headers });
   if (!response.ok) {
     throw new Error(`Could not load routers (HTTP ${response.status})`);
   }
@@ -131,8 +136,14 @@ async function fetchRouters(): Promise<RouterSummary[]> {
 }
 
 async function fetchRouterFiles(routerId: number): Promise<RouterFilesResponse> {
+  const adminId = getSelectedTenantId();
+  if (!adminId) throw new Error("Sign in to an ISP account before loading router files.");
+  const headers = new Headers();
+  const token = getAdminApiToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(
-    `/api/router/${routerId}/files?adminId=${encodeURIComponent(String(ADMIN_ID))}`,
+    `/api/router/${routerId}/files?adminId=${encodeURIComponent(String(adminId))}`,
+    { headers },
   );
   let data: { error?: string; detail?: string; [key: string]: unknown };
   try {
@@ -273,7 +284,7 @@ export default function Files() {
   const [conflictDetails, setConflictDetails] = useState<{ name: string; size: number; type: string } | null>(null);
 
   const routersQuery = useQuery<RouterSummary[]>({
-    queryKey: ["router-files-routers", ADMIN_ID],
+    queryKey: ["router-files-routers", getSelectedTenantId()],
     queryFn: fetchRouters,
     retry: 1,
   });
@@ -297,7 +308,7 @@ export default function Files() {
   );
 
   const filesQuery = useQuery<RouterFilesResponse>({
-    queryKey: ["router-files", ADMIN_ID, selectedRouterId],
+    queryKey: ["router-files", getSelectedTenantId(), selectedRouterId],
     queryFn: () => fetchRouterFiles(selectedRouterId as number),
     enabled: selectedRouterId !== null,
     retry: 0,
@@ -336,11 +347,16 @@ export default function Files() {
     setDeployStatus("uploading");
 
     try {
+      const adminId = getSelectedTenantId();
+      if (!adminId) throw new Error("Sign in to an ISP account before deploying router files.");
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
       const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
-          adminId: ADMIN_ID,
+          adminId,
           sourceType,
           sourceName,
           destinationDirectory: sourceType === "hotspot" ? destinationDirectory : undefined,

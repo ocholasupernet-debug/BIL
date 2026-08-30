@@ -8,6 +8,7 @@ import {
   MonitorSmartphone, QrCode, ClipboardList, RefreshCw
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import NetworkSelfInstall from "./network/SelfInstall";
 
 /* ─── Self Install Script Generator ─── */
 function generateScript(cfg: {
@@ -88,7 +89,7 @@ function SelfInstallTab() {
     hotspotIp: "192.168.1.1",
     dnsName: "hotspot.isplatty.org",
     radiusIp: "10.0.0.1",
-    radiusSecret: "supersecret",
+    radiusSecret: "",
     bridgeInterface: "bridge1",
     poolStart: "192.168.2.2",
     poolEnd: "192.168.2.254",
@@ -427,7 +428,7 @@ export default function Network() {
         )}
 
         {/* Self Install Tab */}
-        {activeTab === "self-install" && <SelfInstallTab />}
+        {activeTab === "self-install" && <NetworkSelfInstall />}
 
         {/* Coming Soon for other tabs */}
         {(activeTab === "pppoe" || activeTab === "queues" || activeTab === "ippool") && (

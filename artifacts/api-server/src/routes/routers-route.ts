@@ -81,8 +81,12 @@ function discoverVpnIp(
  * Query param:  adminId (preferred) or ispId (alias) — filters by admin_id
  */
 
-router.get("/routers", async (req, res): Promise<void> => {
-  const adminId = req.query.adminId ?? req.query.ispId ?? "1";
+router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId ?? req.query.ispId);
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "The requested ISP account does not match the signed-in admin session." });
+    return;
+  }
   const rows = await sbSelect(
     "isp_routers",
     `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
@@ -158,6 +162,7 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
 router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.query.adminId);
+  const installationMode = String(req.query.mode ?? "").trim().toLowerCase() === "coexist" ? "coexist" : "takeover";
   if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
     return;
@@ -176,7 +181,7 @@ router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res):
   const result = await probeInstallRouter(row);
   const heartbeatAgeMs = row.last_seen ? Date.now() - new Date(row.last_seen).getTime() : Number.POSITIVE_INFINITY;
   const heartbeatRecent = heartbeatAgeMs >= 0 && heartbeatAgeMs < 15 * 60 * 1000;
-  const scriptComplete = !["setup", "awaiting_connection"].includes(row.status);
+  const scriptComplete = installationMode === "coexist" || !["setup", "awaiting_connection"].includes(row.status);
   const ready = result.connected && !!result.probe?.identity && !!result.probe?.version
     && scriptComplete && (row.status !== "awaiting_ports" || heartbeatRecent);
   if (result.connected && result.probe) {

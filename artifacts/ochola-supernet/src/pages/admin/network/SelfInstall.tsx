@@ -290,7 +290,7 @@ export default function SelfInstall() {
     queryKey: ["self-install-routers", adminId],
     queryFn: async () => {
       if (!adminId) throw new Error("Sign in to an ISP account before starting router self-install.");
-      return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
+       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
     },
     enabled: !!adminId,
     refetchInterval: 6_000,
@@ -308,7 +308,7 @@ export default function SelfInstall() {
     queryKey: ["self-install-status", adminId, activeRouterId],
     queryFn: () => {
       if (!adminId) throw new Error("Sign in to an ISP account before checking router installation.");
-      return jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${adminId}`);
+       return jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${adminId}&mode=${installationMode}`);
     },
     enabled: !!adminId && !!activeRouterId && phase === "install",
     refetchInterval: phase === "install" ? 4_000 : false,
@@ -699,6 +699,9 @@ export default function SelfInstall() {
                 <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".9rem" }}>{routerName}</div>
                 <div style={{ color: "var(--isp-text-muted)", fontSize: ".73rem", marginTop: 2 }}>Persistent management address: <code style={{ color: "#5eead4" }}>{status?.vpnIp || activeRouter?.vpn_ip || "assigning…"}</code></div>
               </div>
+              <span style={{ color: installationMode === "takeover" ? "#fbbf24" : "#5eead4", border: `1px solid ${installationMode === "takeover" ? "rgba(251,191,36,.3)" : "rgba(94,234,212,.25)"}`, background: installationMode === "takeover" ? "rgba(251,191,36,.08)" : "rgba(94,234,212,.06)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
+                {installationMode === "takeover" ? "TAKEOVER" : "COEXISTENCE"}
+              </span>
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
               </button>
@@ -706,6 +709,14 @@ export default function SelfInstall() {
             {showHelp && (
               <div style={{ background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)", borderRadius: 9, padding: ".8rem 1rem", color: "#fbbf24", fontSize: ".75rem", lineHeight: 1.65 }}>
                 Reset the MikroTik, give it internet, open Winbox → New Terminal, then run Download configuration followed by Run installer. Leave the terminal open until the final “Setup complete” message appears.
+              </div>
+            )}
+            {installationMode === "takeover" && takeoverPlan.length > 0 && (
+              <div style={{ ...panelStyle(), padding: "1rem 1.15rem", background: "rgba(251,191,36,.05)", borderColor: "rgba(251,191,36,.25)" }}>
+                <div style={{ color: "#fbbf24", fontWeight: 800, fontSize: ".82rem" }}>Takeover removal/replacement summary</div>
+                <ul style={{ color: "#fcd34d", fontSize: ".7rem", lineHeight: 1.6, margin: ".45rem 0 0", paddingLeft: "1.1rem" }}>
+                  {takeoverPlan.map(item => <li key={item}>{item}</li>)}
+                </ul>
               </div>
             )}
             <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
@@ -766,9 +777,9 @@ export default function SelfInstall() {
               )}
             </div>
             {!identityReady && !statusQuery.isLoading && <RouterRecovery error={status?.error || statusQuery.error?.message} />}
-            <button onClick={loadPorts} disabled={!identityReady || portsLoading} style={{ ...primaryButton(!identityReady || portsLoading), alignSelf: "flex-end" }}>
-              {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
-              {portsLoading ? "Loading live ports…" : "Next — view router and ports"}
+            <button onClick={installationMode === "coexist" ? finishInstallation : loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
+              {portsLoading || completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : installationMode === "coexist" ? <Check size={15} /> : <ArrowRight size={15} />}
+              {portsLoading || completeLoading ? "Verifying management access…" : installationMode === "coexist" ? "Finish coexistence install" : "Next — view router and ports"}
             </button>
             {progress && (
               <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", display: "flex", gap: 10, flexWrap: "wrap" }}>

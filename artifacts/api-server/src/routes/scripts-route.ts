@@ -35,7 +35,7 @@ const TAKEOVER_CONFIRMATION = "TAKE CONTROL";
 const TAKEOVER_GRANT_TTL_MS = 10 * 60 * 1000;
 const TAKEOVER_PLAN = [
   "Verified RouterOS backup and text export are created before changes.",
-  "Ochola-tagged hotspot, PPPoE, DHCP, pool, RADIUS, firewall/NAT, VPN, user, and scheduler resources may be replaced.",
+  "Existing hotspot, PPPoE, DHCP, pool, RADIUS, firewall/NAT, VPN, user, and scheduler resources may be replaced.",
   "Existing Supabase customers, billing records, payments, and service history are never deleted.",
 ];
 
@@ -738,6 +738,11 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 }
 :put ("COEXISTENCE READY — management VPN " . $vpnProtocol . " added; existing customer configuration was not replaced.")
 $pg 1 "coexistence" "applied" ("management-vpn=" . $vpnProtocol)
+${safeHeartbeatUrl ? `:do {
+    /tool fetch url="${safeHeartbeatUrl}?coexist=1" keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
+    :put "COEXISTENCE HEARTBEAT SENT — existing customer services remain under their current configuration."
+} on-error={ :put "WARN: coexistence heartbeat could not be sent; retry the installer after the VPN is up." }
+` : ""}
 `;
   }
 
@@ -1236,9 +1241,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         updateVpnCredentials(`router-${rid}`, resolvedToken);
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
-        installerUrl = installationMode === "coexist"
-          ? `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}&mode=coexist${certificateMode === "unverified" ? "&certificate=off" : ""}`
-          : "";
+        /* A dashboard installer grant is intentionally short-lived. Do not
+           bake it into a daily auto-update scheduler; operators can request a
+           fresh scoped grant when they start another install. */
+        installerUrl = "";
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         routerVpnIp = assignedIp;
 
@@ -1324,11 +1330,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
    The browser uses this preflight before showing a router installer. It
    reconciles the server-side peers and returns safe status only; no
    credentials or private material is ever returned. */
-router.get("/scripts/router-vpn/readiness", async (req, res): Promise<void> => {
+router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Promise<void> => {
   const ridRaw = String(req.query.rid ?? "").trim();
-  const adminIdRaw = String(req.query.adminId ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
-  const adminId = /^\d+$/.test(adminIdRaw) ? Number(adminIdRaw) : 0;
+  const adminId = authenticatedAdminId(req, req.query.adminId);
 
   if (!routerId || !adminId) {
     res.status(400).json({ ok: false, ready: false, error: "A valid router id and admin id are required" });
