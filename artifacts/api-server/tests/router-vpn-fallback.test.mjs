@@ -42,7 +42,7 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   });
   assert.match(script, /\/interface ovpn-client add name=corebillingvpn/);
   assert.match(script, /mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
-  assert.match(script, /name="corebillingvpn" and running=yes/);
+  assert.match(script, /name="corebillingvpn" && running=yes/);
   assert.match(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);

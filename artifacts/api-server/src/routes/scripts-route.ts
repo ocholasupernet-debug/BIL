@@ -837,7 +837,8 @@ function buildMainhotspotRsc(
         :do {
             /import "${tempFileName}"
         } on-error={
-            :local importError $error
+            :local importError ""
+            :do { :set importError $error } on-error={}
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
             :if ([:len $importError] = 0) do={ :set importError "${protocol}: child script import failed; inspect failed-${fileName} and /log for the exact RouterOS command." }
             :set ocholaVpnChildError $importError

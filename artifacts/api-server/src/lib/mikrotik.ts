@@ -2187,7 +2187,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     :set ocholaVpnChildError "${tag}: coexistence conflict — the required ping firewall rule already exists."
     :error $ocholaVpnChildError
 }
-:if ([:len [/ip service find where name="api" and disabled=yes]] > 0) do={
+:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict — RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
 }`
@@ -2244,7 +2244,7 @@ ${resourcePreparation}
 
 :delay 10s
 :put "${tag}: waiting for OVPN client to establish..."
-:if ([:len [/interface ovpn-client find where name="${interfaceName}" and running=yes]] = 0) do={
+:if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] = 0) do={
     :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session. Check /log for TLS, credential, certificate, or reachability errors."
     :error $ocholaVpnChildError
 } else={
