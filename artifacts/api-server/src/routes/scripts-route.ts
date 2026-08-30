@@ -1446,6 +1446,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
         routerVpnIp = assignedIp;
+        const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
+          `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
 
         try {
           const provisioning = await provisionRouterManagementVpn({
@@ -1462,23 +1464,20 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
           vpnProvisioningError = error instanceof Error ? error.message : String(error);
         }
 
-        if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
-          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard&mode=${installationMode}${takeoverGrantQuery}`;
-        }
-        if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
-          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec&mode=${installationMode}${takeoverGrantQuery}`;
-        }
+        /* Include both fallback attempts even when server-side readiness is
+           currently false. The router must trial each supported protocol and
+           advance only after that protocol actually fails. The protocol
+           endpoint returns a concrete failure when its server prerequisites
+           are unavailable, rather than silently removing the attempt. */
+        routerWireGuardUrl = fallbackUrl("wireguard");
+        routerIpsecUrl = fallbackUrl("ipsec");
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
-        if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
-          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard&mode=${installationMode}${takeoverGrantQuery}`;
-        }
-        if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
-          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec&mode=${installationMode}${takeoverGrantQuery}`;
-        }
+        routerWireGuardUrl = fallbackUrl("wireguard");
+        routerIpsecUrl = fallbackUrl("ipsec");
       }
     } else {
       const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
