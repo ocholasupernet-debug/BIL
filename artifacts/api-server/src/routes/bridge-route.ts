@@ -24,6 +24,7 @@ import {
 } from "../lib/mikrotik.js";
 import { sbSelect } from "../lib/supabase-client.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -122,7 +123,7 @@ async function resolveRequestCredentials(body: {
 }
 
 /* ─── POST /api/admin/router/ports ─────────────────────────────────────── */
-router.post("/admin/router/self-install/ports", async (req, res): Promise<void> => {
+router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res): Promise<void> => {
   const { host, username, password, bridgeIp, port } = req.body as {
     host: string;
     username: string;
@@ -137,7 +138,7 @@ router.post("/admin/router/self-install/ports", async (req, res): Promise<void> 
     const { creds } = await resolveRequestCredentials({
       host, username, password, bridgeIp, port,
       routerId: req.body?.routerId,
-      adminId: req.body?.adminId,
+       adminId: authenticatedAdminId(req, req.body?.adminId),
     });
     const layout = await fetchBridgePortLayout(creds);
     res.json({ ok: true, ...layout });
@@ -154,7 +155,7 @@ router.post("/admin/router/self-install/ports", async (req, res): Promise<void> 
 });
 
 /* ─── POST /api/admin/router/bridge-assign ──────────────────────────────── */
-router.post("/admin/router/self-install/bridge-assign", async (req, res): Promise<void> => {
+router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (req, res): Promise<void> => {
   const { host, username, password, bridge, addPorts, removePorts, desiredPorts, bridgeIp, port, routerId, adminId } = req.body as {
     host: string;
     username: string;
@@ -176,8 +177,9 @@ router.post("/admin/router/self-install/bridge-assign", async (req, res): Promis
 
   let resolved: { creds: RouterCredentials; router?: StoredRouter };
   try {
-    resolved = await resolveRequestCredentials({
-      host, username, password, bridgeIp, port, routerId, adminId,
+      resolved = await resolveRequestCredentials({
+      host, username, password, bridgeIp, port, routerId,
+      adminId: authenticatedAdminId(req, adminId),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

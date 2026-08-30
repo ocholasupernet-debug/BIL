@@ -2102,6 +2102,8 @@ export interface RouterAsClientOptions {
   lanNetwork?: string;
   /** Router ID for comment labels */
   routerId?: number;
+  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
+  installationMode?: "coexist" | "takeover";
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2119,6 +2121,8 @@ export interface RouterWireGuardClientOptions {
   tunnelVpsIp?: string;
   /** Router ID for comment labels. */
   routerId?: number;
+  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
+  installationMode?: "coexist" | "takeover";
 }
 
 export interface RouterIpsecClientOptions {
@@ -2132,6 +2136,8 @@ export interface RouterIpsecClientOptions {
   tunnelVpsIp?: string;
   /** Router ID for comment labels. */
   routerId?: number;
+  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
+  installationMode?: "coexist" | "takeover";
 }
 
 /**
@@ -2157,10 +2163,56 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     tunnelVpsIp     = "10.8.5.1",
     lanNetwork      = "192.168.88.0/24",
     routerId,
+    installationMode = "takeover",
   } = opts;
 
   const tag = "corebillingvpn";
   const interfaceName = "corebillingvpn";
+  const coexistence = installationMode === "coexist";
+  const resourcePreparation = coexistence
+    ? `# Coexistence guard: never replace an existing VPN or API policy.
+:if ([:len [/interface ovpn-client find where name="${interfaceName}"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — an existing ${interfaceName} interface was found; nothing was replaced."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/interface ovpn-client find where name="coreispbilling"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — the legacy coreispbilling VPN interface exists; it was not changed."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/interface ovpn-client find where name="ovpn-to-vps"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — an ovpn-to-vps interface exists; it was not changed."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/interface ovpn-client find where name="ocholasupernet"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — an existing ocholasupernet VPN interface was found; it was not changed."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — the required API firewall rule already exists."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — the required ping firewall rule already exists."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/ip service find where name="api" and disabled=yes]] > 0) do={
+    :set ocholaVpnChildError "${tag}: coexistence conflict — RouterOS API is disabled; it was not enabled."
+    :error $ocholaVpnChildError
+}`
+    : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
+:do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
+:do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
+:do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
+  const firewallPreparation = coexistence
+    ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." }
+:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." }
+:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }`
+    : `/ip firewall filter
+remove [find where comment="${tag}-api-from-vps-tunnel"]
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
+remove [find where comment="${tag}-ping-from-vps-tunnel"]
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
 
   return `# ═══════════════════════════════════════════════════════════════
 # OcholaSupernet — MikroTik Router as OpenVPN CLIENT
@@ -2189,10 +2241,9 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 :local ovpnError ""
-:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
-:do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
-:do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
-:do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}
+:if ([:len "$ocholaVpnChildError"] = 0) do={
+${resourcePreparation}
+}
 :do { /interface ovpn-client add name=${interfaceName} connect-to=${vpsPublicIp} port=${vpnPort} mode=ip cipher=aes128 auth=sha1 add-default-route=no user=${vpnUsername} password=${vpnPassword} disabled=no comment="${tag} VPS tunnel" } on-error={ :set ovpnError "RouterOS rejected the OpenVPN client add command." }
 :if ([:len $ovpnError] > 0) do={
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
@@ -2211,12 +2262,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 # ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
 # The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
 /ip firewall filter
-remove [find where comment="${tag}-api-from-vps-tunnel"]
-add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
-
-# ── Step 3: Allow ping from VPS (connectivity check) ─────────────────────────
-remove [find where comment="${tag}-ping-from-vps-tunnel"]
-add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"
+${firewallPreparation}
 
 # ── Step 4: Ensure API service is enabled ────────────────────────────────────
 /ip service
@@ -2246,27 +2292,37 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
     tunnelRouterIp = "10.8.5.2",
     tunnelVpsIp = "10.8.5.1",
     routerId,
+    installationMode = "takeover",
   } = opts;
   const tag = "corebillingvpn";
   const interfaceName = "ochola-wg";
+  const coexistence = installationMode === "coexist";
+  const preparation = coexistence
+    ? `:if ([:len [/interface wireguard find where name="${interfaceName}"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — ${interfaceName} already exists."; :error $ocholaVpnChildError }
+:if ([:len [/interface wireguard peers find where comment="${tag} WireGuard management peer"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required WireGuard peer already exists."; :error $ocholaVpnChildError }
+:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vpn-tunnel"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required WireGuard API firewall rule already exists."; :error $ocholaVpnChildError }`
+    : `:do { /interface wireguard peers remove [find where comment="${tag} WireGuard management peer"] } on-error={}
+:do { /ip address remove [find interface="${interfaceName}"] } on-error={}
+:do { /interface wireguard remove [find where name="${interfaceName}"] } on-error={}`;
+  const firewall = coexistence
+    ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: coexistence API firewall rule creation failed."; :error $ocholaVpnChildError }`
+    : `:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
+:do { /ip firewall filter remove [find where comment="${tag}-ping-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard ping firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }`;
 
   return `# ${tag} — MikroTik RouterOS 7 WireGuard management client
 # This child script is fetched only after the OpenVPN attempt fails.
 # RouterOS 6 devices must not import this file.
 
 :put "${tag}: configuring WireGuard fallback..."
-:do { /interface wireguard peers remove [find where comment="${tag} WireGuard management peer"] } on-error={}
-:do { /ip address remove [find interface="${interfaceName}"] } on-error={}
-:do { /interface wireguard remove [find where name="${interfaceName}"] } on-error={}
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
+${preparation}
 :do { /interface wireguard add name="${interfaceName}" private-key="${clientPrivateKey}" disabled=no comment="${tag} WireGuard management" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard interface creation failed: RouterOS rejected the interface command." ; :error $ocholaVpnChildError }
 :do { /ip address add address=${tunnelRouterIp}/24 interface="${interfaceName}" comment="${tag} WireGuard management address" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard address creation failed: RouterOS rejected the address command." ; :error $ocholaVpnChildError }
 :do { /interface wireguard peers add interface="${interfaceName}" public-key="${serverPublicKey}" endpoint-address="${endpoint}" endpoint-port=${endpointPort} allowed-address=${tunnelVpsIp}/32 persistent-keepalive=25 comment="${tag} WireGuard management peer" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
-:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
-:do { /ip firewall filter remove [find where comment="${tag}-ping-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: WireGuard ping firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
+${firewall}
 :delay 5s
 :if ([:len [/interface wireguard find where name="${interfaceName}"]] = 0) do={ :set ocholaVpnChildError "${tag}: WireGuard interface was not verified."; :error $ocholaVpnChildError }
 :put "${tag}: WireGuard management resources verified."
@@ -2282,6 +2338,7 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     tunnelRouterIp = "10.8.5.2",
     tunnelVpsIp = "10.8.5.1",
     routerId,
+    installationMode = "takeover",
   } = opts;
   const tag = "corebillingvpn";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
@@ -2293,6 +2350,18 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     .replace(/[\u0000-\u001F\u007F]/g, "")
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"');
+  const coexistence = installationMode === "coexist";
+  const preparation = coexistence
+    ? `:if ([:len [/ip ipsec peer find where name="${peerName}"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — ${peerName} already exists."; :error $ocholaVpnChildError }
+:if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required IPsec peer already exists."; :error $ocholaVpnChildError }
+:if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required IPsec policy already exists."; :error $ocholaVpnChildError }`
+    : `:do { /ip ipsec policy remove [find where comment="${tag} IPsec management policy"] } on-error={}
+:do { /ip ipsec identity remove [find where comment="${tag} IPsec management identity"] } on-error={}
+:do { /ip ipsec peer remove [find where comment="${tag} IPsec management peer"] } on-error={}`;
+  const firewall = coexistence
+    ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: coexistence API firewall rule creation failed."; :error $ocholaVpnChildError }`
+    : `:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
+:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }`;
 
   return `# ${tag} — MikroTik IPsec management fallback
 # This child script is attempted only after OpenVPN and WireGuard fail.
@@ -2300,16 +2369,13 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
 # resources; the authenticated heartbeat must confirm end-to-end reachability.
 
 :put "${tag}: configuring IPsec fallback..."
-:do { /ip ipsec policy remove [find where comment="${tag} IPsec management policy"] } on-error={}
-:do { /ip ipsec identity remove [find where comment="${tag} IPsec management identity"] } on-error={}
-:do { /ip ipsec peer remove [find where comment="${tag} IPsec management peer"] } on-error={}
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
+${preparation}
 :do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}"${identityIds} comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
-:do { /ip firewall filter remove [find where comment="${tag}-api-from-vpn-tunnel"] } on-error={}
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vpn-tunnel" } on-error={ :set ocholaVpnChildError "${tag}: IPsec API firewall rule failed: RouterOS rejected the firewall command." ; :error $ocholaVpnChildError }
+${firewall}
 :if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec peer was not verified."; :error $ocholaVpnChildError }
 :if ([:len [/ip ipsec identity find where comment="${tag} IPsec management identity"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec identity was not verified."; :error $ocholaVpnChildError }
 :if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec policy was not verified."; :error $ocholaVpnChildError }

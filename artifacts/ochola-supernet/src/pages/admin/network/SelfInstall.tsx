@@ -3,12 +3,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import {
+  getAdminApiToken,
+  getAdminRole,
+  getSelectedTenantId,
+} from "@/lib/supabase";
+import {
   AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, Copy,
   Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
   Settings, Shield, Terminal, Wifi, X,
 } from "lucide-react";
 
-const ADMIN_ID = 1;
 const API = import.meta.env.VITE_API_BASE ?? "";
 const CONFIG_CATEGORIES = [
   { id: "plans", label: "Plans", detail: "Hotspot and PPPoE service profiles" },
@@ -19,6 +23,7 @@ const CONFIG_CATEGORIES = [
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
 type CertificateMode = "verified" | "unverified";
+type InstallationMode = "coexist" | "takeover";
 
 interface RouterSummary {
   id: number;
@@ -106,10 +111,30 @@ interface CopyResult {
   error?: string;
 }
 
+interface TakeoverPreparation {
+  ok: boolean;
+  grantToken?: string;
+  confirmation?: string;
+  expiresInSeconds?: number;
+  removalPlan?: string[];
+  error?: string;
+}
+
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAdminApiToken();
+  const selectedTenantId = getSelectedTenantId();
+  const authHeaders: Record<string, string> = {};
+  if (token) authHeaders.Authorization = `Bearer ${token}`;
+  if (getAdminRole() === "superadmin" && selectedTenantId) {
+    authHeaders["X-Impersonated-Admin-Id"] = String(selectedTenantId);
+  }
   const response = await fetch(`${API}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders,
+      ...(init?.headers ?? {}),
+    },
   });
   const body = await response.text();
   let data: T & { error?: string } = {} as T & { error?: string };
@@ -227,10 +252,15 @@ export default function SelfInstall() {
   const qc = useQueryClient();
   const params = new URLSearchParams(window.location.search);
   const reconfigureId = params.get("reconfigure") ? Number(params.get("reconfigure")) : null;
+  const [adminId, setAdminId] = useState<number | null>(() => getSelectedTenantId());
   const [phase, setPhase] = useState<Phase>(reconfigureId ? "install" : "idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
   const [generating, setGenerating] = useState(false);
   const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
+  const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
+  const [takeoverConfirmation, setTakeoverConfirmation] = useState("");
+  const [takeoverGrant, setTakeoverGrant] = useState("");
+  const [takeoverPlan, setTakeoverPlan] = useState<string[]>([]);
   const [portsLoading, setPortsLoading] = useState(false);
   const [ports, setPorts] = useState<PortsPayload | null>(null);
   const [selectedBridge, setSelectedBridge] = useState("");
@@ -249,9 +279,20 @@ export default function SelfInstall() {
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
   const [copySkipped, setCopySkipped] = useState(false);
 
+  useEffect(() => {
+    const syncTenant = () => setAdminId(getSelectedTenantId());
+    window.addEventListener("ochola-auth-change", syncTenant);
+    syncTenant();
+    return () => window.removeEventListener("ochola-auth-change", syncTenant);
+  }, []);
+
   const routersQuery = useQuery<RouterSummary[]>({
-    queryKey: ["self-install-routers", ADMIN_ID],
-    queryFn: async () => jsonRequest<RouterSummary[]>(`/api/routers?adminId=${ADMIN_ID}`),
+    queryKey: ["self-install-routers", adminId],
+    queryFn: async () => {
+      if (!adminId) throw new Error("Sign in to an ISP account before starting router self-install.");
+      return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
+    },
+    enabled: !!adminId,
     refetchInterval: 6_000,
   });
   const routers = routersQuery.data ?? [];
@@ -264,15 +305,21 @@ export default function SelfInstall() {
   }, [sourceRouters.length, sourceRouterId]);
 
   const statusQuery = useQuery<InstallStatus>({
-    queryKey: ["self-install-status", ADMIN_ID, activeRouterId],
-    queryFn: () => jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${ADMIN_ID}`),
-    enabled: !!activeRouterId && phase === "install",
+    queryKey: ["self-install-status", adminId, activeRouterId],
+    queryFn: () => {
+      if (!adminId) throw new Error("Sign in to an ISP account before checking router installation.");
+      return jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${adminId}`);
+    },
+    enabled: !!adminId && !!activeRouterId && phase === "install",
     refetchInterval: phase === "install" ? 4_000 : false,
   });
   const progressQuery = useQuery<{ ok: boolean; installs: InstallProgress[] }>({
-    queryKey: ["self-install-progress", ADMIN_ID, activeRouterId],
-    queryFn: () => jsonRequest<{ ok: boolean; installs: InstallProgress[] }>(`/api/admin/router/install-progress?adminId=${ADMIN_ID}`),
-    enabled: !!activeRouterId && phase === "install",
+    queryKey: ["self-install-progress", adminId, activeRouterId],
+    queryFn: () => {
+      if (!adminId) throw new Error("Sign in to an ISP account before checking installer progress.");
+      return jsonRequest<{ ok: boolean; installs: InstallProgress[] }>(`/api/admin/router/install-progress?adminId=${adminId}`);
+    },
+    enabled: !!adminId && !!activeRouterId && phase === "install",
     refetchInterval: phase === "install" ? 4_000 : false,
   });
   const progress = progressQuery.data?.installs.find(item => item.routerId === activeRouterId);
@@ -280,19 +327,51 @@ export default function SelfInstall() {
   const identityReady = !!status?.ready;
 
   const handleGenerate = async (mode: CertificateMode) => {
+    if (!adminId) {
+      setPageError("Your ISP session is missing a tenant account. Sign in again before creating a router profile.");
+      return;
+    }
     setGenerating(true);
     setCertificateMode(mode);
     setPageError(null);
     try {
       const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
         method: "POST",
-        body: JSON.stringify({ adminId: ADMIN_ID, routerName: activeRouter?.name || `router${routers.length + 1}` }),
+        body: JSON.stringify({ adminId, routerName: activeRouter?.name || `router${routers.length + 1}` }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
+      if (installationMode === "takeover") {
+        const prepared = await jsonRequest<TakeoverPreparation>("/api/admin/router/self-install/takeover/prepare", {
+          method: "POST",
+          body: JSON.stringify({
+            routerId: result.router.id,
+            adminId,
+            confirmation: takeoverConfirmation,
+          }),
+        });
+        if (!prepared.ok || !prepared.grantToken) {
+          throw new Error(prepared.error || "Takeover authorization could not be prepared.");
+        }
+        setTakeoverGrant(prepared.grantToken);
+        setTakeoverPlan(prepared.removalPlan ?? []);
+      } else {
+        const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
+          "/api/admin/router/self-install/grant",
+          {
+            method: "POST",
+            body: JSON.stringify({ routerId: result.router.id, adminId }),
+          },
+        );
+        if (!prepared.ok || !prepared.grantToken) {
+          throw new Error(prepared.error || "Installer authorization could not be prepared.");
+        }
+        setTakeoverGrant(prepared.grantToken);
+        setTakeoverPlan([]);
+      }
       let vpnWarning = "";
       try {
         await jsonRequest<{ ok: boolean; ready: boolean }>(
-          `/api/scripts/router-vpn/readiness?rid=${result.router.id}&adminId=${ADMIN_ID}`,
+          `/api/scripts/router-vpn/readiness?rid=${result.router.id}&adminId=${adminId}`,
         );
       } catch (error) {
         vpnWarning = error instanceof Error ? error.message : String(error);
@@ -302,7 +381,7 @@ export default function SelfInstall() {
       if (vpnWarning) {
         setPageError(`Profile created. The installer is available, but router-management VPN provisioning is pending: ${vpnWarning}`);
       }
-      qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });
+      qc.invalidateQueries({ queryKey: ["self-install-routers", adminId] });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -310,9 +389,24 @@ export default function SelfInstall() {
     }
   };
 
+  useEffect(() => {
+    if (!reconfigureId || !adminId) return;
+    let cancelled = false;
+    void jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
+      "/api/admin/router/self-install/grant",
+      { method: "POST", body: JSON.stringify({ routerId: reconfigureId, adminId }) },
+    ).then(result => {
+      if (!cancelled && result.ok && result.grantToken) setTakeoverGrant(result.grantToken);
+    }).catch(error => {
+      if (!cancelled) setPageError(error instanceof Error ? error.message : String(error));
+    });
+    return () => { cancelled = true; };
+  }, [reconfigureId, adminId]);
+
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
   const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
-  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${ADMIN_ID}${certificateQuery}`;
+  const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
+  const scriptUrl = `${window.location.origin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
   const caUrl = `${window.location.origin}/api/scripts/ochola-isrg-root-x1.pem`;
   const fetchCommand = certificateMode === "verified"
     ? `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`
@@ -326,7 +420,7 @@ export default function SelfInstall() {
     try {
       const data = await jsonRequest<PortsPayload>("/api/admin/router/self-install/ports", {
         method: "POST",
-        body: JSON.stringify({ routerId: activeRouterId, adminId: ADMIN_ID }),
+        body: JSON.stringify({ routerId: activeRouterId, adminId }),
       });
       if (!data.ok) throw new Error(data.error || "Could not read the router interfaces.");
       setPorts(data);
@@ -359,7 +453,7 @@ export default function SelfInstall() {
           method: "POST",
           body: JSON.stringify({
             routerId: activeRouterId,
-            adminId: ADMIN_ID,
+            adminId,
             bridge: selectedBridge,
             addPorts: wasSelected ? [] : [iface.name],
             removePorts: wasSelected ? [iface.name] : [],
@@ -396,7 +490,7 @@ export default function SelfInstall() {
         method: "POST",
         body: JSON.stringify({
           routerId: activeRouterId,
-          adminId: ADMIN_ID,
+          adminId,
           bridge: selectedBridge,
           ports: [...selectedPorts],
         }),
@@ -404,7 +498,7 @@ export default function SelfInstall() {
       if (!result.ok) throw new Error("The router did not pass the final VPN verification.");
       setCompleteRouter(result.router);
       setPhase("success");
-      qc.invalidateQueries({ queryKey: ["self-install-routers", ADMIN_ID] });
+      qc.invalidateQueries({ queryKey: ["self-install-routers", adminId] });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -421,7 +515,7 @@ export default function SelfInstall() {
       const result = await jsonRequest<CopyResult>("/api/admin/router/sync-copy", {
         method: "POST",
         body: JSON.stringify({
-          adminId: ADMIN_ID,
+          adminId,
           sourceRouterId: selectedSource.id,
           targetRouterId: activeRouterId,
           categories: [...copyCategories],
@@ -490,23 +584,86 @@ export default function SelfInstall() {
 
         {phase === "idle" && (
           <>
+            <div style={{ ...panelStyle(), padding: "1.1rem 1.2rem" }}>
+              <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".86rem", marginBottom: ".45rem" }}>
+                Choose how this router should join the ISP
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 9 }}>
+                {([
+                  {
+                    mode: "coexist" as const,
+                    title: "Coexistence · recommended",
+                    detail: "Preserves another billing system and customer access. Audits the router, adds only isolated management resources, and stops on required-resource conflicts.",
+                    color: "#5eead4",
+                  },
+                  {
+                    mode: "takeover" as const,
+                    title: "Takeover · destructive",
+                    detail: "Replaces the router's Ochola-tagged service configuration after a verified backup/export. Supabase customers and billing records are never deleted.",
+                    color: "#fbbf24",
+                  },
+                ]).map(option => {
+                  const selected = installationMode === option.mode;
+                  return (
+                    <button
+                      key={option.mode}
+                      onClick={() => {
+                        setInstallationMode(option.mode);
+                        if (option.mode === "coexist") {
+                          setTakeoverConfirmation("");
+                          setTakeoverGrant("");
+                          setTakeoverPlan([]);
+                        }
+                      }}
+                      style={{
+                        textAlign: "left", padding: ".75rem .8rem", borderRadius: 9,
+                        border: `1px solid ${selected ? option.color : "var(--isp-border)"}`,
+                        background: selected ? `${option.color}12` : "rgba(255,255,255,.02)",
+                        color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 800, fontSize: ".76rem", color: selected ? option.color : "var(--isp-text)" }}>
+                        <span style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selected ? option.color : "rgba(255,255,255,.25)"}`, display: "inline-block", boxShadow: selected ? `inset 0 0 0 3px var(--isp-card), inset 0 0 0 7px ${option.color}` : "none" }} />
+                        {option.title}
+                      </div>
+                      <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>{option.detail}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {installationMode === "takeover" && (
+                <div style={{ marginTop: ".85rem", padding: ".75rem .8rem", borderRadius: 8, background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.25)" }}>
+                  <div style={{ color: "#fbbf24", fontSize: ".72rem", fontWeight: 800 }}>Destructive confirmation required</div>
+                  <p style={{ color: "#fcd34d", fontSize: ".68rem", lineHeight: 1.5, margin: ".3rem 0 .55rem" }}>
+                    The installer will create and verify a MikroTik backup/export before replacing router service resources. Type <strong>TAKE CONTROL</strong> to continue.
+                  </p>
+                  <input
+                    value={takeoverConfirmation}
+                    onChange={event => setTakeoverConfirmation(event.target.value)}
+                    placeholder="TAKE CONTROL"
+                    aria-label="Type TAKE CONTROL to authorize takeover"
+                    style={{ width: "100%", boxSizing: "border-box", background: "#0a0f1a", color: "#fde68a", border: "1px solid rgba(251,191,36,.35)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "monospace", fontSize: ".75rem" }}
+                  />
+                </div>
+              )}
+            </div>
             <div style={{ ...panelStyle(), padding: "1.2rem 1.3rem", display: "flex", gap: 12, alignItems: "flex-start" }}>
               <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: 2 }} />
               <div>
                 <strong style={{ color: "var(--isp-text)", fontSize: ".88rem" }}>Create a router-specific installation profile</strong>
                 <p style={{ color: "var(--isp-text-muted)", fontSize: ".78rem", lineHeight: 1.65, margin: ".35rem 0 0" }}>
-                  The profile includes the isolated 10.8.5.x management VPN, hotspot, PPPoE, and the current ISP settings.
+                  The profile is scoped to the selected ISP account and uses the isolated 10.8.5.x management VPN. The selected mode controls whether existing router services are preserved or replaced.
                   After the router reports its identity and heartbeat, this page unlocks the live port step.
                 </p>
               </div>
             </div>
             <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
-              <button onClick={() => void handleGenerate("verified")} disabled={generating} style={{ ...primaryButton(generating), alignSelf: "flex-start" }}>
+              <button onClick={() => void handleGenerate("verified")} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{ ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")), alignSelf: "flex-start" }}>
                 {generating && certificateMode === "verified" ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={15} />}
                 {generating && certificateMode === "verified" ? "Creating secure profile…" : "Generate with certificate"}
               </button>
-              <button onClick={() => void handleGenerate("unverified")} disabled={generating} style={{
-                ...primaryButton(generating),
+              <button onClick={() => void handleGenerate("unverified")} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{
+                ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")),
                 alignSelf: "flex-start",
                 background: generating ? "rgba(148,163,184,.12)" : "rgba(148,163,184,.14)",
                 color: generating ? "#94a3b8" : "#cbd5e1",

@@ -265,6 +265,23 @@ export function requireAdmin() {
   };
 }
 
+/**
+ * Resolve the tenant selected by the authenticated admin session.
+ * A client-supplied adminId may be provided as a consistency check, but it
+ * must never be allowed to select a different tenant than the token.
+ */
+export function authenticatedAdminId(req: Request, requested?: unknown): number {
+  const sessionId = Number(req.authUser?.uid);
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0) return 0;
+
+  if (requested !== undefined && requested !== null && String(requested).trim() !== "") {
+    const requestedId = Number(requested);
+    if (!Number.isSafeInteger(requestedId) || requestedId <= 0 || requestedId !== sessionId) return 0;
+  }
+
+  return sessionId;
+}
+
 export function requireCustomer() {
   return requireAuth("c");
 }

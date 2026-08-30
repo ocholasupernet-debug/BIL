@@ -27,8 +27,79 @@ import {
   provisionRouterManagementVpn,
   routerFallbackMaterial,
 } from "../lib/router-vpn-provisioning.js";
+import { createHmac, timingSafeEqual, randomBytes } from "crypto";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
+const TAKEOVER_CONFIRMATION = "TAKE CONTROL";
+const TAKEOVER_GRANT_TTL_MS = 10 * 60 * 1000;
+const TAKEOVER_PLAN = [
+  "Verified RouterOS backup and text export are created before changes.",
+  "Ochola-tagged hotspot, PPPoE, DHCP, pool, RADIUS, firewall/NAT, VPN, user, and scheduler resources may be replaced.",
+  "Existing Supabase customers, billing records, payments, and service history are never deleted.",
+];
+
+function takeoverGrantSecret(): string {
+  return String(process.env.SESSION_SECRET ?? "").trim();
+}
+
+function signTakeoverGrant(payload: string): string {
+  return createHmac("sha256", takeoverGrantSecret()).update(payload).digest("base64url");
+}
+
+function createTakeoverGrant(adminId: number, routerId: number): string {
+  const expiresAt = Date.now() + TAKEOVER_GRANT_TTL_MS;
+  const nonce = randomBytes(16).toString("hex");
+  const payload = `${adminId}.${routerId}.${expiresAt}.${nonce}`;
+  return `tko.v1.${payload}.${signTakeoverGrant(payload)}`;
+}
+
+function createInstallerGrant(adminId: number, routerId: number): string {
+  const expiresAt = Date.now() + 30 * 60 * 1000;
+  const nonce = randomBytes(16).toString("hex");
+  const payload = `${adminId}.${routerId}.${expiresAt}.${nonce}`;
+  return `inst.v1.${payload}.${signTakeoverGrant(payload)}`;
+}
+
+function verifyInstallerGrant(grant: string, routerId: number): { adminId: number } | null {
+  if (!takeoverGrantSecret()) return null;
+  const parts = grant.split(".");
+  if (parts.length !== 7 || parts[0] !== "inst" || parts[1] !== "v1") return null;
+  const [, , adminRaw, routerRaw, expiresRaw, nonce, signature] = parts;
+  const adminId = Number(adminRaw);
+  const grantRouterId = Number(routerRaw);
+  const expiresAt = Number(expiresRaw);
+  if (!Number.isSafeInteger(adminId) || adminId <= 0 ||
+      !Number.isSafeInteger(grantRouterId) || grantRouterId !== routerId ||
+      !Number.isFinite(expiresAt) || expiresAt < Date.now() ||
+      !/^[a-f0-9]{32}$/.test(nonce) || !signature) return null;
+  const payload = `${adminId}.${grantRouterId}.${expiresAt}.${nonce}`;
+  const expected = signTakeoverGrant(payload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  return { adminId };
+}
+
+function verifyTakeoverGrant(grant: string, routerId: number): { adminId: number } | null {
+  if (!takeoverGrantSecret()) return null;
+  const parts = grant.split(".");
+  if (parts.length !== 7 || parts[0] !== "tko" || parts[1] !== "v1") return null;
+  const [, , adminRaw, routerRaw, expiresRaw, nonce, signature] = parts;
+  const adminId = Number(adminRaw);
+  const grantRouterId = Number(routerRaw);
+  const expiresAt = Number(expiresRaw);
+  if (!Number.isSafeInteger(adminId) || adminId <= 0 ||
+      !Number.isSafeInteger(grantRouterId) || grantRouterId !== routerId ||
+      !Number.isFinite(expiresAt) || expiresAt < Date.now() ||
+      !/^[a-f0-9]{32}$/.test(nonce) || !signature) return null;
+  const payload = `${adminId}.${grantRouterId}.${expiresAt}.${nonce}`;
+  const expected = signTakeoverGrant(payload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  return { adminId };
+}
 
 /* ── Files that administrators may publish from the server ────────────────
    Keep this allowlist rooted in the checked-in hotspot directory. The API
@@ -531,6 +602,7 @@ function buildMainhotspotRsc(
   routerVpnIp: string = "",
   routerVpnWarning: string = "",
   certificateMode: RouterCertificateMode = "verified",
+  installationMode: "coexist" | "takeover" = "takeover",
 ): string {
   const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
     ? "mode=https check-certificate=no"
@@ -618,6 +690,71 @@ function buildMainhotspotRsc(
     ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")
     : `:put "      IPSEC skipped: server-side IPsec fallback is not configured."`;
 
+  if (installationMode === "coexist") {
+    return `# ${safeCompanyName} — Coexistence management installer
+# This path never replaces billing, customer-access, or LAN configuration.
+# It audits existing resources, then adds only Ochola management resources.
+
+${pgDef}
+${httpsTrustBootstrap}
+${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
+
+:local bridgeCount [:len [/interface bridge find]]
+:local hotspotCount [:len [/ip hotspot find]]
+:local dhcpCount [:len [/ip dhcp-server find]]
+:local poolCount [:len [/ip pool find]]
+:local radiusCount [:len [/radius find]]
+:local filterCount [:len [/ip firewall filter find]]
+:local natCount [:len [/ip firewall nat find]]
+:local ovpnCount [:len [/interface ovpn-client find]]
+:local ipsecCount [:len [/ip ipsec peer find]]
+:local hotspotUserCount [:len [/ip hotspot user find]]
+:local pppUserCount [:len [/ppp secret find]]
+:local fileCount [:len [/file find]]
+:put ("COEXISTENCE AUDIT — bridges=" . $bridgeCount . ", hotspots=" . $hotspotCount . ", dhcp=" . $dhcpCount . ", pools=" . $poolCount . ", radius=" . $radiusCount . ", firewall=" . $filterCount . ", nat=" . $natCount . ", ovpn=" . $ovpnCount . ", ipsec=" . $ipsecCount . ", hotspot-users=" . $hotspotUserCount . ", ppp-users=" . $pppUserCount . ", files=" . $fileCount)
+$pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . $hotspotCount . ";dhcp=" . $dhcpCount . ";pools=" . $poolCount . ";radius=" . $radiusCount . ";firewall=" . $filterCount . ";nat=" . $natCount . ";ovpn=" . $ovpnCount . ";ipsec=" . $ipsecCount . ";hotspot-users=" . $hotspotUserCount . ";ppp-users=" . $pppUserCount . ";files=" . $fileCount)
+
+:local vpnConfigured false
+:local vpnProtocol ""
+:local vpnFailureSummary ""
+:local majorVersion 0
+:global version [/system package update get installed-version]
+:local dotPos [:find $version "."]
+:if ([:len $dotPos] > 0) do={ :set majorVersion [:tonum [:pick $version 0 $dotPos]] }
+:if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
+:local openVpnUrl ""
+:local wireGuardUrl "${safeRouterWireGuardUrl}"
+:local ipsecUrl "${safeRouterIpsecUrl}"
+${openVpnSelection}
+${routerWireGuardUrl ? `:set wireGuardUrl "${safeRouterWireGuardUrl}"` : `:set wireGuardUrl ""`}
+${routerIpsecUrl ? `:set ipsecUrl "${safeRouterIpsecUrl}"` : `:set ipsecUrl ""`}
+${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
+${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
+${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
+:if (!$vpnConfigured) do={
+    :put ("COEXISTENCE STOPPED — no management VPN was installed. " . $vpnFailureSummary)
+    $pg 1 "coexistence" "failed" $vpnFailureSummary
+    :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
+}
+:put ("COEXISTENCE READY — management VPN " . $vpnProtocol . " added; existing customer configuration was not replaced.")
+$pg 1 "coexistence" "applied" ("management-vpn=" . $vpnProtocol)
+`;
+  }
+
+  const takeoverBackupStem = installationMode === "takeover" ? `ochola-takeover-${Date.now()}` : "";
+  const takeoverBackup = installationMode === "takeover"
+    ? `# TAKEOVER SAFETY BOUNDARY — no service resource is changed before both files exist.
+:local takeoverBackup "${takeoverBackupStem}"
+:do { /system backup save name=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the binary backup." }
+:delay 3s
+:if ([:len [/file find name="${takeoverBackupStem}.backup"]] = 0) do={ :error "Takeover stopped: the RouterOS binary backup could not be verified." }
+:do { /export file=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the text export." }
+:delay 2s
+:if ([:len [/file find name="${takeoverBackupStem}.rsc"]] = 0) do={ :error "Takeover stopped: the RouterOS text export could not be verified." }
+:put "TAKEOVER BACKUP VERIFIED — binary backup and text export are present."
+`
+    : "";
+
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
@@ -635,6 +772,9 @@ function buildMainhotspotRsc(
 # into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
+
+# Takeover is a separate, destructive path. Its safety boundary runs first.
+${takeoverBackup}
 
 # Bootstrap the public CA before any HTTPS download is verified.
 ${httpsTrustBootstrap}
@@ -946,6 +1086,76 @@ router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
     .send(ISRG_ROOT_X1_PEM);
 });
 
+router.post("/admin/router/self-install/takeover/prepare", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.body?.routerId);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const confirmation = String(req.body?.confirmation ?? "").trim();
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !adminId) {
+    res.status(400).json({ ok: false, error: "A valid signed-in ISP account and router are required." });
+    return;
+  }
+  if (confirmation !== TAKEOVER_CONFIRMATION) {
+    res.status(400).json({ ok: false, error: `Type ${TAKEOVER_CONFIRMATION} exactly to authorize takeover.` });
+    return;
+  }
+  if (!takeoverGrantSecret()) {
+    res.status(503).json({ ok: false, error: "Takeover authorization is not configured on this server." });
+    return;
+  }
+
+  try {
+    const routers = await sbGet<{ id: number; admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name&limit=1`,
+    );
+    const selectedRouter = routers[0];
+    if (!selectedRouter) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    res.json({
+      ok: true,
+      router: { id: selectedRouter.id, name: selectedRouter.name },
+      grantToken: createTakeoverGrant(adminId, routerId),
+      expiresInSeconds: TAKEOVER_GRANT_TTL_MS / 1000,
+      confirmation: TAKEOVER_CONFIRMATION,
+      removalPlan: TAKEOVER_PLAN,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `Takeover preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+});
+
+router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.body?.routerId);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !adminId) {
+    res.status(400).json({ ok: false, error: "A valid signed-in ISP account and router are required." });
+    return;
+  }
+  if (!takeoverGrantSecret()) {
+    res.status(503).json({ ok: false, error: "Installer authorization is not configured on this server." });
+    return;
+  }
+  try {
+    const routers = await sbGet<{ id: number; admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name&limit=1`,
+    );
+    if (!routers[0]) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    res.json({ ok: true, grantToken: createInstallerGrant(adminId, routerId), expiresInSeconds: 30 * 60 });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `Installer authorization failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+});
+
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
   const scriptsBase = `${origin}/api/scripts`;
@@ -957,6 +1167,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const ridRaw   = ((req.query.rid   ?? "") as string).trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
   const adminIdRaw = ((req.query.adminId ?? "") as string).trim();
+  const installationMode: "coexist" | "takeover" = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+    ? "takeover"
+    : "coexist";
+  const takeoverGrant = String(req.query.grant ?? "").trim();
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
   const adminId = /^\d+$/.test(adminIdRaw) ? adminIdRaw : "";
@@ -983,12 +1197,26 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let routerVpnIp = "";
   let resolvedToken = token;
 
+  if (installationMode === "takeover") {
+    const grant = verifyTakeoverGrant(takeoverGrant, Number(rid));
+    if (!grant || !adminId || grant.adminId !== Number(adminId)) {
+      res.status(403).type("text/plain").send("# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.");
+      return;
+    }
+  } else if (adminId && !verifyInstallerGrant(takeoverGrant, Number(rid))) {
+    res.status(403).type("text/plain").send("# Installer authorization is missing, invalid, expired, or scoped to another ISP/router.");
+    return;
+  }
+  const takeoverGrantQuery = installationMode === "takeover"
+    ? `&grant=${encodeURIComponent(takeoverGrant)}`
+    : "";
+
   try {
     if (rid && (token || adminId)) {
       /* A valid router secret binds the install script to a specific ISP.
          For the browser-safe path, adminId is checked against the router
          owner and the secret is read only on the server. */
-      const ownerFilter = token
+      const ownerFilter = token && installationMode !== "takeover"
         ? `or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})`
         : `admin_id=eq.${encodeURIComponent(adminId)}`;
       const routers = await sbGet<InstallRouter>(
@@ -1008,8 +1236,10 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         updateVpnCredentials(`router-${rid}`, resolvedToken);
         registrationUrl = `${origin}/api/isp/router/register/${resolvedToken}`;
         heartbeatUrl = `${origin}/api/isp/router/heartbeat/${resolvedToken}`;
-        installerUrl = `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}${certificateMode === "unverified" ? "&certificate=off" : ""}`;
-        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        installerUrl = installationMode === "coexist"
+          ? `${origin}/api/scripts/mainhotspot.rsc?rid=${encodeURIComponent(rid)}&adminId=${encodeURIComponent(String(currentRouter.admin_id))}&mode=coexist${certificateMode === "unverified" ? "&certificate=off" : ""}`
+          : "";
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         routerVpnIp = assignedIp;
 
         try {
@@ -1028,21 +1258,21 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         }
 
         if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
-          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
+          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard&mode=${installationMode}${takeoverGrantQuery}`;
         }
         if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
-          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
+          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec&mode=${installationMode}${takeoverGrantQuery}`;
         }
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
-        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}`;
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         if ((await routerFallbackMaterial(Number(rid), "wireguard")) || routerWireGuardFallbackConfigured(Number(rid))) {
-          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard`;
+          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=wireguard&mode=${installationMode}${takeoverGrantQuery}`;
         }
         if ((await routerFallbackMaterial(Number(rid), "ipsec")) || routerIpsecFallbackConfigured(Number(rid))) {
-          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec`;
+          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=ipsec&mode=${installationMode}${takeoverGrantQuery}`;
         }
       }
     } else {
@@ -1086,6 +1316,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
          ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
          : "",
       certificateMode,
+      installationMode,
     ));
 });
 
@@ -1215,6 +1446,10 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
   const ridRaw = String(req.query.rid ?? "").trim();
   const token = String(req.query.token ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
+  const installationMode: "coexist" | "takeover" = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+    ? "takeover"
+    : "coexist";
+  const takeoverGrant = String(req.query.grant ?? "").trim();
 
   if (!routerId || !/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
     res.status(401).type("text/plain").send("# Invalid or expired router VPN bootstrap session.");
@@ -1224,15 +1459,23 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
   try {
     interface RouterVpnIdentity {
       id: number;
+      admin_id: number;
       name: string;
       vpn_ip?: string | null;
     }
     const rows = await sbGet<RouterVpnIdentity>(
-      `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,name,vpn_ip&limit=1`,
+      `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,admin_id,name,vpn_ip&limit=1`,
     );
     if (!rows[0]) {
       res.status(401).type("text/plain").send("# Router VPN bootstrap is not authorized.");
       return;
+    }
+    if (installationMode === "takeover") {
+      const grant = verifyTakeoverGrant(takeoverGrant, routerId);
+      if (!grant || grant.adminId !== Number(rows[0].admin_id)) {
+        res.status(403).type("text/plain").send("# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.");
+        return;
+      }
     }
 
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
@@ -1268,6 +1511,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         tunnelRouterIp,
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
+        installationMode,
       });
       script = readinessWarning + script;
     } else if (protocol === "wireguard") {
@@ -1295,6 +1539,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         tunnelRouterIp,
         tunnelVpsIp: ROUTER_VPN_GATEWAY,
         routerId,
+        installationMode,
       });
     } else {
       const material = await routerFallbackMaterial(routerId, "ipsec");
@@ -1312,6 +1557,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
             tunnelRouterIp,
             tunnelVpsIp: ROUTER_VPN_GATEWAY,
             routerId,
+            installationMode,
           });
     }
 

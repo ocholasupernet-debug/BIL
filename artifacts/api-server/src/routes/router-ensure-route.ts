@@ -15,6 +15,7 @@
 import { Router, type IRouter } from "express";
 import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -77,21 +78,22 @@ async function allocatePersistentVpnIp(): Promise<string> {
   return allocateRouterVpnIp(used);
 }
 
-router.post("/admin/router/ensure", async (req, res): Promise<void> => {
+router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<void> => {
   if (!SUPABASE_URL || !BEST_KEY) {
     res.status(503).json({ ok: false, error: "Supabase not configured on this server (missing VITE_SUPABASE_URL or VITE_SUPABASE_KEY)" });
     return;
   }
 
-  const { adminId, routerName, bridgeIp, bridgeInterface } = req.body as {
-    adminId: number;
+  const { adminId: requestedAdminId, routerName, bridgeIp, bridgeInterface } = req.body as {
+    adminId?: number;
     routerName: string;
     bridgeIp?: string;
     bridgeInterface?: string;
   };
 
+  const adminId = authenticatedAdminId(req, requestedAdminId);
   if (!adminId || !routerName) {
-    res.status(400).json({ ok: false, error: "adminId and routerName are required" });
+    res.status(400).json({ ok: false, error: "A valid signed-in ISP account and routerName are required" });
     return;
   }
 

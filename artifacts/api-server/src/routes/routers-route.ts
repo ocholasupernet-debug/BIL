@@ -5,6 +5,7 @@ import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../li
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 /* ── TCP reachability probe — tries common MikroTik ports ───────────────────
  * Returns the first port that responds, or null if all fail.
@@ -154,9 +155,9 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
 
 /* Self-install readiness probe. It intentionally uses only the isolated
  * management VPN and never falls back to a public or LAN address. */
-router.get("/admin/router/install-status/:id", async (req, res): Promise<void> => {
+router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.params.id);
-  const adminId = Number(req.query.adminId);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
   if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
     return;
@@ -212,9 +213,9 @@ router.get("/admin/router/install-status/:id", async (req, res): Promise<void> =
 
 /* Final installation gate. Re-probes through the management VPN before
  * promoting a setup record into the normal online router list. */
-router.post("/admin/router/install-complete", async (req, res): Promise<void> => {
+router.post("/admin/router/install-complete", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.body?.routerId);
-  const adminId = Number(req.body?.adminId);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
   const bridgeName = typeof req.body?.bridge === "string" ? req.body.bridge.trim() : "";
   const desiredPorts = Array.isArray(req.body?.ports)
     ? req.body.ports.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
