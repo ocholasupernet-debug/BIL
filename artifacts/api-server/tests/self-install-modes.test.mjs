@@ -101,6 +101,12 @@ test("failed router setup never blocks creation of the next router", () => {
   assert.doesNotMatch(scriptsRoute, /routers\.length \+ 1/);
 });
 
+test("router names require the tenant prefix", () => {
+  assert.doesNotMatch(selfInstall, /companySlug \|\| "router"/);
+  assert.match(scriptsRoute, /A tenant subdomain is required to generate a router file/);
+  assert.doesNotMatch(scriptsRoute, /admin\$\{qid\}/);
+});
+
 test("coexistence provisions an owned hotspot bridge without reusing shared service resources", () => {
   assert.match(scriptsRoute, /function coexistenceBridgeName\(routerId: number\)/);
   assert.match(scriptsRoute, /return "co-hotspot-bridge"/);

@@ -154,7 +154,8 @@ function slugify(value: string): string {
 
 function suggestedRouterName(existing: RouterSummary[]): string {
   const companySlug = getHostSubdomain();
-  const base = companySlug || "router";
+  if (!companySlug) return "tenant router";
+  const base = companySlug;
   const used = new Set(existing.map(router => router.name.trim().toLowerCase()));
   for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
     const candidate = `${base}${ordinal}`;

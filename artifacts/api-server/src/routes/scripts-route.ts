@@ -2685,8 +2685,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const hostHeader = (req.headers.host ?? "") as string;
     const subdomain  = parseSubdomain(hostHeader);
 
-    let adminId        = 5;          // safe fallback
-    let adminSubdomain = subdomain || "ocholasupernet";
+     let adminId: number | null = null;
+     let adminSubdomain = subdomain;
     let companyName    = "OcholaSupernet";
     let baseDomain     = "isplatty.org";
 
@@ -2701,21 +2701,22 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         companyName    = admins[0].name;
       }
     } else if (req.query.admin_id) {
-      /* Fallback: explicit query param — use ID directly, try to fetch name but don't fail */
+      /* Apex requests may identify the tenant explicitly, but the router
+         prefix must still come from that tenant's stored subdomain. */
       const qid = parseInt(req.query.admin_id as string, 10);
       if (!isNaN(qid)) {
-        adminId        = qid;
-        adminSubdomain = `admin${qid}`;
-        try {
-          const admins = await sbGet<DbAdmin>(
-            `isp_admins?id=eq.${qid}&select=id,name,subdomain&limit=1`
-          );
-          if (admins.length > 0) {
-            adminSubdomain = admins[0].subdomain ?? `admin${qid}`;
-            companyName    = admins[0].name;
-          }
-        } catch { /* use defaults if RLS blocks */ }
+        const admins = await sbGet<DbAdmin>(
+          `isp_admins?id=eq.${qid}&select=id,name,subdomain&limit=1`
+        );
+        if (admins.length > 0 && admins[0].subdomain) {
+          adminId        = admins[0].id;
+          adminSubdomain = admins[0].subdomain;
+          companyName    = admins[0].name;
+        }
       }
+    }
+    if (!adminId || !adminSubdomain) {
+      throw new Error("A tenant subdomain is required to generate a router file.");
     }
 
     /* Use the apex certificate for RouterOS downloads. Tenant subdomains are
