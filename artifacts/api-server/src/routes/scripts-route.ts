@@ -1011,6 +1011,7 @@ $pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
 :local coexistenceBundleBytes ""
+:local coexistencePreflightError ""
 :do {
     :global ocholaCoexistenceError
     :set ocholaCoexistenceError ""
@@ -1019,6 +1020,20 @@ ${coexistenceHotspotUrl ? `
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
+    # RouterOS 7 can report the exact source line and column for import-time
+    # syntax/property failures without changing configuration. RouterOS 6
+    # does not have this import option, so the normal import remains the
+    # compatibility path there.
+    :if ($majorVersion >= 7) do={
+        :do {
+            /import "ochola-coexistence-hotspot.rsc.download" verbose=yes dry-run
+        } on-error={
+            :set coexistencePreflightError $error
+        }
+        :if ([:len $coexistencePreflightError] > 0) do={
+            :error ("coexistence hotspot dry-run failed: " . $coexistencePreflightError)
+        }
+    }
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""

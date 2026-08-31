@@ -77,6 +77,8 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.match(scriptsRoute, /global ocholaCoexistenceError/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
   assert.match(scriptsRoute, /after " \. \$coexistenceBundleBytes \. " bytes/);
+  assert.match(scriptsRoute, /coexistence hotspot dry-run failed/);
+  assert.match(scriptsRoute, /verbose=yes dry-run/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE FAILED at/);
   assert.match(scriptsRoute, /isolated hotspot bundle import failed after .*bytes; inspect failed-ochola-coexistence-hotspot\.rsc.*failing stage/);
 });
