@@ -480,6 +480,8 @@ function buildCoexistenceHotspotRsc(
   const profileName = `ochola-hs-profile-${routerId}`;
   const hotspotName = `ochola-hs-server-${routerId}`;
   const portalDir = `ochola-hotspot-${routerId}`;
+  const poolStart = gateway.replace(/\.1$/, ".2");
+  const poolEnd = gateway.replace(/\.1$/, ".254");
   const tag = `${companyName} coexistence router ${routerId}`;
   const safe = (value: string) => rosString(value);
   const portalBase = origin.replace(/\/$/, "");
@@ -499,39 +501,45 @@ function buildCoexistenceHotspotRsc(
     `:local dhcpName "${safe(dhcpName)}"`,
     `:local profileName "${safe(profileName)}"`,
     `:local hotspotName "${safe(hotspotName)}"`,
+    `:local coexistenceStep "start"`,
+    `:global ocholaCoexistenceError`,
+    `:set ocholaCoexistenceError ""`,
     ``,
     `# Create only Ochola's bridge. A collision with an unowned bridge is fatal.`,
+    `:set coexistenceStep "bridge"`,
     `:put "COEXISTENCE STEP: bridge"`,
     `:local existingBridge [/interface bridge find name=$bridgeName]`,
     `:if ([:len $existingBridge] = 0) do={`,
     `  /interface bridge add name=$bridgeName protocol-mode=none fast-forward=no comment=$bridgeTag`,
     `} else={`,
     `  :local existingComment [/interface bridge get $existingBridge comment]`,
-    `  :if ([:find $existingComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence bridge name collision: $bridgeName is not owned by ${safe(companyName)}." }`,
+    `  :if ([:find $existingComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence bridge name collision: $bridgeName is not owned by ${safe(companyName)}."; :error $ocholaCoexistenceError }`,
     `  /interface bridge set $existingBridge fast-forward=no`,
     `}`,
     ``,
     `# Never replace an address on this bridge. Only the exact owned address is accepted.`,
+    `:set coexistenceStep "address"`,
     `:put "COEXISTENCE STEP: address"`,
     `:local ownedAddress [/ip address find interface=$bridgeName address="${safe(gateway)}/24"]`,
     `:if ([:len $ownedAddress] = 0) do={`,
-    `  :if ([:len [/ip address find interface=$bridgeName]] > 0) do={ :error "Coexistence bridge already has an unowned IP address." }`,
+    `  :if ([:len [/ip address find interface=$bridgeName]] > 0) do={ :set ocholaCoexistenceError "Coexistence bridge already has an unowned IP address."; :error $ocholaCoexistenceError }`,
     `  /ip address add address="${safe(gateway)}/24" interface=$bridgeName comment=$bridgeTag`,
     `}`,
     ``,
     `# Dedicated pool, DHCP server, and DHCP network.`,
+    `:set coexistenceStep "dhcp"`,
     `:put "COEXISTENCE STEP: dhcp"`,
     `:local existingPool [/ip pool find name=$poolName]`,
     `:if ([:len $existingPool] = 0) do={`,
-    `  /ip pool add name=$poolName ranges="${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}" comment=$bridgeTag`,
+    `  /ip pool add name=$poolName ranges="${safe(poolStart)}-${safe(poolEnd)}" comment=$bridgeTag`,
     `} else={`,
-    `  :if ([:tostr [/ip pool get $existingPool ranges]] != "${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}") do={ :error "Coexistence pool collision: $poolName has another range." }`,
+    `  :if ([:tostr [/ip pool get $existingPool ranges]] != "${safe(poolStart)}-${safe(poolEnd)}") do={ :set ocholaCoexistenceError "Coexistence pool collision: $poolName has another range."; :error $ocholaCoexistenceError }`,
     `}`,
     `:local existingDhcp [/ip dhcp-server find name=$dhcpName]`,
     `:if ([:len $existingDhcp] = 0) do={`,
     `  /ip dhcp-server add name=$dhcpName interface=$bridgeName address-pool=$poolName disabled=no comment=$bridgeTag`,
     `} else={`,
-    `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :error "Coexistence DHCP name collision: $dhcpName is bound to another interface." }`,
+    `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence DHCP name collision: $dhcpName is bound to another interface."; :error $ocholaCoexistenceError }`,
     `  /ip dhcp-server enable $existingDhcp`,
     `}`,
     `:local existingNetwork [/ip dhcp-server network find address=$subnet]`,
@@ -539,26 +547,28 @@ function buildCoexistenceHotspotRsc(
     `  /ip dhcp-server network add address=$subnet gateway=$gateway dns-server=$gateway comment=$bridgeTag`,
     `} else={`,
     `  :local networkComment [/ip dhcp-server network get $existingNetwork comment]`,
-    `  :if ([:find $networkComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence subnet collision: $subnet is already owned by another service." }`,
+    `  :if ([:find $networkComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence subnet collision: $subnet is already owned by another service."; :error $ocholaCoexistenceError }`,
     `}`,
     ``,
     `# Dedicated hotspot profile and server. Existing hotspot services are not touched.`,
+    `:set coexistenceStep "hotspot"`,
     `:put "COEXISTENCE STEP: hotspot"`,
     `:local existingProfile [/ip hotspot profile find name=$profileName]`,
     `:if ([:len $existingProfile] = 0) do={`,
     `  /ip hotspot profile add name=$profileName hotspot-address=$gateway dns-name="wifi-${routerId}.local" login-by=http-chap,http-pap html-directory="${portalDir}"`,
     `} else={`,
-    `  :if ([/ip hotspot profile get $existingProfile hotspot-address] != $gateway) do={ :error "Coexistence hotspot profile collision: $profileName." }`,
+    `  :if ([/ip hotspot profile get $existingProfile hotspot-address] != $gateway) do={ :set ocholaCoexistenceError "Coexistence hotspot profile collision: $profileName."; :error $ocholaCoexistenceError }`,
     `}`,
     `:local existingHotspot [/ip hotspot find name=$hotspotName]`,
     `:if ([:len $existingHotspot] = 0) do={`,
     `  /ip hotspot add name=$hotspotName interface=$bridgeName profile=$profileName address-pool=$poolName idle-timeout=none disabled=no`,
     `} else={`,
-    `  :if ([/ip hotspot get $existingHotspot interface] != $bridgeName) do={ :error "Coexistence hotspot server collision: $hotspotName." }`,
+    `  :if ([/ip hotspot get $existingHotspot interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence hotspot server collision: $hotspotName."; :error $ocholaCoexistenceError }`,
     `  /ip hotspot enable $existingHotspot`,
     `}`,
     ``,
     `# Only this subnet is masqueraded; no global HTTP/HTTPS redirects are added.`,
+    `:set coexistenceStep "nat-and-dns"`,
     `:put "COEXISTENCE STEP: nat-and-dns"`,
     `:local natComment "${safe(tag)} NAT"`,
     `:if ([:len [/ip firewall nat find comment=$natComment]] = 0) do={`,
@@ -572,6 +582,7 @@ function buildCoexistenceHotspotRsc(
     `:if ([:len [/ip firewall filter find comment=$dnsTcpComment]] = 0) do={ /ip firewall filter add chain=input protocol=tcp dst-port=53 src-address=$subnet action=accept comment=$dnsTcpComment }`,
     ``,
     `# Keep the portal in its own directory so another billing system's files are not overwritten.`,
+    `:set coexistenceStep "portal"`,
     `:put "COEXISTENCE STEP: portal"`,
     `:local storage ""`,
     `:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }`,
@@ -609,11 +620,10 @@ function buildCoexistenceHotspotRsc(
     `:put "COEXISTENCE SERVICE READY — ${safe(bridgeName)} belongs to ${safe(companyName)} only."`,
     `:put "Assign only unassigned physical ports to this bridge from the admin panel."`,
     `} on-error={`,
-    `  :local coexistenceError ""`,
-    `  :do { :set coexistenceError $error } on-error={}`,
-    `  :if ([:len $coexistenceError] = 0) do={ :set coexistenceError "RouterOS aborted the coexistence bundle without returning an error string." }`,
-    `  :put ("COEXISTENCE BUNDLE FAILED: " . $coexistenceError)`,
-    `  :error ("Coexistence hotspot bundle failed: " . $coexistenceError)`,
+    `  :local coexistenceError $ocholaCoexistenceError`,
+    `  :if ([:len $coexistenceError] = 0) do={ :set coexistenceError ("RouterOS aborted the coexistence bundle during " . $coexistenceStep . "; inspect the saved failed bundle and RouterOS log.") }`,
+    `  :put ("COEXISTENCE BUNDLE FAILED at " . $coexistenceStep . ": " . $coexistenceError)`,
+    `  :error ("Coexistence hotspot bundle failed at " . $coexistenceStep . ": " . $coexistenceError)`,
     `}`,
   );
   return lines.join("\r\n");
@@ -984,6 +994,8 @@ $pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
 :do {
+    :global ocholaCoexistenceError
+    :set ocholaCoexistenceError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
@@ -991,10 +1003,9 @@ ${coexistenceHotspotUrl ? `
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""
 } on-error={
-    :local hotspotError ""
-    :do { :set hotspotError $error } on-error={}
+    :local hotspotError $ocholaCoexistenceError
     :if ([:len $hotspotError] = 0) do={
-        :set hotspotError "isolated hotspot bundle import failed; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log."
+        :set hotspotError "isolated hotspot bundle import failed; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log for the failing stage."
     }
     :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
     $pg 1 "coexistence-hotspot" "failed" $hotspotError
