@@ -72,6 +72,8 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.ok(scriptsRoute.includes('const poolStart = gateway.replace(/\\.1$/, ".2");'));
   assert.ok(scriptsRoute.includes('const poolEnd = gateway.replace(/\\.1$/, ".254");'));
   assert.ok(!scriptsRoute.includes('gateway.replace(/\\\\.1$'));
+  assert.match(scriptsRoute, /repaired the owned DHCP pool range/);
+  assert.match(scriptsRoute, /poolComment.*coexistence router/);
   assert.match(scriptsRoute, /global ocholaCoexistenceError/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
   assert.match(scriptsRoute, /after " \. \$coexistenceBundleBytes \. " bytes/);
