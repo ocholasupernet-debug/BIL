@@ -2,6 +2,7 @@ import * as net from "net";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
 import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -246,14 +247,14 @@ export async function probePort(
  */
 async function connectWithRetry(
   creds: RouterCredentials
-): Promise<{ conn: RouterOSAPI; connectedHost: string; probe: PortProbeResult }> {
+): Promise<{ conn: RouterOSAPI; connectedHost: string; probe: PortProbeResult; closeForward?: () => Promise<void> }> {
   const connectMs  = creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS;
   /* Port probe uses a shorter timeout — fail fast, don't burn the full budget */
   const probeMs    = Math.min(connectMs, 6000);
 
   const hosts: Array<{ host: string; label: string; isVpn: boolean }> = [];
 
-  const isVpnIp = (ip: string) => /^10\.8\./.test(ip);
+  const isVpnIp = (ip: string) => /^10\.8\.5\./.test(ip);
 
   if (creds.host) {
     const vpn = isVpnIp(creds.host);
@@ -283,10 +284,28 @@ async function connectWithRetry(
 
   for (let attempt = 1; attempt <= Math.max(1, MAX_RETRIES); attempt++) {
     for (const { host, label, isVpn } of hosts) {
+      let forward: VpsTcpForward | undefined;
+      let connectionHost = host;
+      let connectionPort = creds.port;
 
       /* ── Step 1: TCP port probe ── */
       logger.debug({ host: label, port: creds.port, attempt }, "Port probe");
-      const probe = await probePort(host, creds.port, probeMs);
+      if (isVpn) {
+        try {
+          forward = await openVpsTcpForward(host, creds.port, { timeoutMs: connectMs });
+          connectionHost = forward.host;
+          connectionPort = forward.port;
+        } catch (err) {
+          lastErr = err instanceof Error ? err : new Error(String(err));
+          logger.warn({ host: label, attempt, err: lastErr.message }, "VPS management API forward failed");
+          continue;
+        }
+      }
+
+      const rawProbe = await probePort(connectionHost, connectionPort, probeMs);
+      const probe = isVpn
+        ? { ...rawProbe, host, port: creds.port }
+        : rawProbe;
       lastProbe = probe;
 
       if (!probe.reachable) {
@@ -300,18 +319,24 @@ async function connectWithRetry(
           `(attempt ${attempt}/${MAX_RETRIES}): ${diag}`
         );
         /* Don't attempt RouterOS API when port is blocked — move to next host */
+        await forward?.close();
         continue;
       }
 
       logger.debug({ host: label, port: creds.port, latencyMs: probe.latencyMs }, "Port open");
 
       /* ── Step 2: RouterOS API login ── */
-      const conn = makeConn(host, creds);
+      const conn = makeConn(connectionHost, { ...creds, host: connectionHost, port: connectionPort });
       try {
         logger.debug({ host: label, attempt }, "RouterOS API connect");
         await withTimeout(conn.connect(), connectMs);
         logger.debug({ host: label, attempt }, "RouterOS API connected");
-        return { conn, connectedHost: host, probe };
+        return {
+          conn,
+          connectedHost: host,
+          probe,
+          closeForward: forward ? () => forward!.close() : undefined,
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ host: label, attempt, err: msg }, "RouterOS API connect failed");
@@ -321,6 +346,7 @@ async function connectWithRetry(
           `Check the API username and password, and that the API service is enabled.`
         );
         try { conn.close(); } catch { /* ignore */ }
+        await forward?.close();
       }
     }
 
@@ -341,11 +367,12 @@ async function withConn<T>(
   creds: RouterCredentials,
   fn: (conn: RouterOSAPI, connectedHost: string) => Promise<T>
 ): Promise<T> {
-  const { conn, connectedHost } = await connectWithRetry(creds);
+  const { conn, connectedHost, closeForward } = await connectWithRetry(creds);
   try {
     return await fn(conn, connectedHost);
   } finally {
     try { conn.close(); } catch { /* ignore */ }
+    await closeForward?.();
   }
 }
 

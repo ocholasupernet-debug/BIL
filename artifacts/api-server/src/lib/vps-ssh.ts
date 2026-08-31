@@ -1,12 +1,19 @@
 import { chmodSync, unlinkSync, writeFileSync } from "fs";
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
+import * as net from "net";
 
 export interface VpsScriptResult {
   ok: boolean;
   stdout: string;
   stderr: string;
   error?: string;
+}
+
+export interface VpsTcpForward {
+  host: "127.0.0.1";
+  port: number;
+  close: () => Promise<void>;
 }
 
 const OUTPUT_LIMIT = 128 * 1024;
@@ -170,4 +177,171 @@ export async function runVpsScript(
   } finally {
     try { unlinkSync(askPassPath); } catch { /* best effort cleanup */ }
   }
+}
+
+function reserveLocalPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
+function waitForForward(
+  child: ReturnType<typeof spawn>,
+  port: number,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.off("close", onClose);
+      child.off("error", onError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onClose = () => finish(new Error("VPS SSH port forward exited before becoming ready."));
+    const onError = () => finish(new Error("VPS SSH port forward could not start."));
+
+    const probe = () => {
+      if (settled) return;
+      const socket = net.createConnection({ host: "127.0.0.1", port });
+      socket.setTimeout(Math.min(500, Math.max(100, timeoutMs)));
+      socket.once("connect", () => {
+        socket.destroy();
+        finish();
+      });
+      socket.once("timeout", () => socket.destroy());
+      socket.once("error", () => {
+        socket.destroy();
+        if (Date.now() >= deadline) {
+          finish(new Error(`VPS SSH port forward timed out after ${timeoutMs}ms.`));
+        } else {
+          timer = setTimeout(probe, 100);
+        }
+      });
+    };
+
+    child.once("close", onClose);
+    child.once("error", onError);
+    probe();
+  });
+}
+
+/**
+ * Open a short-lived local TCP endpoint forwarded through the VPS.
+ *
+ * This is used for management VPN addresses because the Replit API process
+ * does not share the VPS OpenVPN route. The SSH key remains in a 0600
+ * temporary file until the returned forward is closed.
+ */
+export async function openVpsTcpForward(
+  remoteHost: string,
+  remotePort: number,
+  options: { timeoutMs?: number } = {},
+): Promise<VpsTcpForward> {
+  const host = remoteHost.trim();
+  if (!/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(host)) {
+    throw new Error("VPS TCP forwarding is restricted to a router management 10.8.5.x address.");
+  }
+  if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+    throw new Error("VPS TCP forwarding requires a valid remote port.");
+  }
+
+  const vpsHost = process.env.VPS_HOST?.trim() ?? "";
+  const vpsUser = process.env.VPS_USER?.trim() ?? "";
+  const keys = configuredKeys();
+  if (!vpsHost || !vpsUser || keys.length === 0) {
+    throw new Error("VPS_HOST, VPS_USER, and a VPS SSH key are required for router management forwarding.");
+  }
+  if (["localhost", "127.0.0.1", "::1"].includes(vpsHost)) {
+    throw new Error("VPS_HOST must point to the remote production VPS.");
+  }
+
+  const timeoutMs = Math.max(5_000, options.timeoutMs ?? 15_000);
+  const localPort = await reserveLocalPort();
+  const askPassPath = `/tmp/ochola-vps-forward-askpass-${randomUUID()}`;
+  const passphrase = process.env.VPS_SSH_PASSPHRASE || "";
+  if (passphrase) {
+    writeFileSync(
+      askPassPath,
+      `#!/bin/sh\nprintf '%s' '${b64(passphrase)}' | base64 -d\n`,
+      { mode: 0o700 },
+    );
+    chmodSync(askPassPath, 0o700);
+  }
+
+  let lastError = "All configured VPS SSH keys failed.";
+  try {
+    for (const key of keys) {
+      const keyPath = `/tmp/ochola-vps-forward-key-${randomUUID()}`;
+      let child: ReturnType<typeof spawn> | undefined;
+      try {
+        writeFileSync(keyPath, key, { mode: 0o600 });
+        chmodSync(keyPath, 0o600);
+        const args = [
+          "-i", keyPath,
+          "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "ConnectTimeout=10",
+          "-o", "ExitOnForwardFailure=yes",
+          "-o", "ServerAliveInterval=15",
+          "-o", "ServerAliveCountMax=2",
+          "-o", passphrase ? "BatchMode=no" : "BatchMode=yes",
+          "-N",
+          "-L", `127.0.0.1:${localPort}:${host}:${remotePort}`,
+          `${vpsUser}@${vpsHost}`,
+        ];
+        const env = { ...process.env };
+        if (passphrase) {
+          env.SSH_ASKPASS = askPassPath;
+          env.SSH_ASKPASS_REQUIRE = "force";
+          env.DISPLAY = env.DISPLAY || "none";
+        }
+        child = spawn("ssh", args, { env, stdio: ["ignore", "ignore", "pipe"] });
+        let stderr = "";
+        child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
+        await waitForForward(child, localPort, timeoutMs);
+        try { unlinkSync(askPassPath); } catch { /* best effort cleanup */ }
+
+        let closed = false;
+        const close = async () => {
+          if (closed) return;
+          closed = true;
+          await new Promise<void>(resolve => {
+            const forceTimer = setTimeout(() => {
+              child?.kill("SIGKILL");
+              resolve();
+            }, 2_000);
+            child?.once("close", () => {
+              clearTimeout(forceTimer);
+              resolve();
+            });
+            child?.kill("SIGTERM");
+          });
+          try { unlinkSync(keyPath); } catch { /* best effort cleanup */ }
+        };
+        return { host: "127.0.0.1", port: localPort, close };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        child?.kill("SIGKILL");
+      } finally {
+        if (!child || child.exitCode !== null) {
+          try { unlinkSync(keyPath); } catch { /* best effort cleanup */ }
+        }
+      }
+    }
+  } finally {
+    try { unlinkSync(askPassPath); } catch { /* best effort cleanup */ }
+  }
+  throw new Error(lastError);
 }
