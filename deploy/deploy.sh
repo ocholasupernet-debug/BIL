@@ -201,11 +201,24 @@ else
   echo "      ✓ Synced to $PUBLIC_HTML"
 fi
 
-# 7. Restart API via PM2
+# 7. Keep tenant HTTPS routes synchronized
+#    The timer is intentionally short so a newly-created active admin becomes
+#    reachable quickly without requiring a manual VPS command.
+echo "[7/8] Installing tenant HTTPS synchronizer..."
+install -m 0644 \
+  "$PROJECT_DIR/deploy/systemd/ochola-tenant-certificates.service" \
+  /etc/systemd/system/ochola-tenant-certificates.service
+install -m 0644 \
+  "$PROJECT_DIR/deploy/systemd/ochola-tenant-certificates.timer" \
+  /etc/systemd/system/ochola-tenant-certificates.timer
+systemctl daemon-reload
+systemctl enable --now ochola-tenant-certificates.timer
+
+# 8. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
 #    a stale legacy value that could mask the canonical service-role key.
-echo "[7/7] Restarting PM2..."
+echo "[8/8] Restarting PM2..."
 mkdir -p logs
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a

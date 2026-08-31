@@ -1,0 +1,9 @@
+[Unit]
+Description=Synchronize active OcholaSupernet tenant HTTPS hosts
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/www/ocholasupernet
+ExecStart=/var/www/ocholasupernet/deploy/sync-tenant-certificates.sh
