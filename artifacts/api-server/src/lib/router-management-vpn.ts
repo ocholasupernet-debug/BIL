@@ -9,6 +9,7 @@ import { existsSync } from "fs";
  */
 export const ROUTER_MANAGEMENT_VPN = {
   port: 1196,
+  publicPortBase: 11960,
   protocol: "tcp",
   tunnelBase: "10.8.5",
   network: "10.8.5.0/24",
@@ -59,6 +60,29 @@ export function routerManagementVpnPort(): number {
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("ROUTER_OPENVPN_PORT must be an integer between 1 and 65535");
+  }
+  return port;
+}
+
+/**
+ * Public listener port used by a router's generated bootstrap profile.
+ * The VPS forwards this per-router port to the shared management listener on
+ * 1196. Using the router id makes the endpoint stable without storing another
+ * mutable router field. The deployment reserves 11960-12959 for the first
+ * 1000 router records.
+ */
+export function routerManagementVpnPortForRouter(routerId: number): number {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) {
+    throw new Error("A valid router id is required to allocate its management VPN port.");
+  }
+  const configuredBase = process.env.ROUTER_OPENVPN_PUBLIC_PORT_BASE?.trim();
+  const base = configuredBase ? Number(configuredBase) : ROUTER_MANAGEMENT_VPN.publicPortBase;
+  if (!Number.isInteger(base) || base < 1024 || base > 65534) {
+    throw new Error("ROUTER_OPENVPN_PUBLIC_PORT_BASE must be an integer between 1024 and 65534");
+  }
+  const port = base + ((routerId - 1) % 1000);
+  if (port > 65535) {
+    throw new Error(`Router ${routerId} cannot be assigned a management VPN port.`);
   }
   return port;
 }
