@@ -99,11 +99,16 @@ jobs:
             # The API's SSH reconciliation helper must reach the same VPS.
             upsert_env "VPS_HOST"                 "vpn.isplatty.org"
 
-            sudo -E bash deploy/configure-nginx.sh
+            # The workflow connects as root. Running sudo here adds an
+            # unnecessary dependency and can fail before the application
+            # deployment starts on minimal VPS images.
+            bash deploy/configure-nginx.sh
 
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
+            curl --fail --silent --show-error --max-time 20 http://127.0.0.1:8080/api/health >/dev/null
+            echo "=== API health check passed ==="
             echo "=== Deploy finished at $(date) ==="
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
