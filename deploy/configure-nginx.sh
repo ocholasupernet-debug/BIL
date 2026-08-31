@@ -6,6 +6,7 @@ DOMAIN="isplatty.org"
 CERT_NAME="${DOMAIN}-wildcard"
 CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
+TENANT_VHOST_DIR="/etc/nginx/tenant-sites.d"
 has_wildcard_certificate() {
   [ -r "${CERT_DIR}/fullchain.pem" ] &&
     [ -r "${CERT_DIR}/privkey.pem" ] &&
@@ -22,7 +23,18 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
 fi
 
 if ! has_wildcard_certificate; then
-  : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required to issue or renew the wildcard certificate}"
+  # A healthy existing Nginx installation must not block an application
+  # deploy just because this host cannot issue a new wildcard certificate.
+  # The certificate synchronizer remains responsible for tenant-specific
+  # certificates when the DNS provider is unavailable.
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    if systemctl is-active --quiet nginx && nginx -t; then
+      echo "No Cloudflare token available; preserving the active Nginx/TLS configuration." >&2
+      exit 0
+    fi
+    echo "CLOUDFLARE_API_TOKEN is required when no healthy Nginx configuration is active." >&2
+    exit 1
+  fi
 
   if ! python3 "${PROJECT_DIR}/deploy/cloudflare-dns-hook.py" verify; then
     if systemctl is-active --quiet nginx && nginx -t; then
@@ -55,6 +67,7 @@ if ! has_wildcard_certificate; then
   exit 1
 fi
 
+install -d -m 0755 "${TENANT_VHOST_DIR}" /var/www/letsencrypt/.well-known/acme-challenge
 install -m 0644 "${PROJECT_DIR}/deploy/nginx.conf" "${NGINX_SITE}"
 ln -sfn "${NGINX_SITE}" "/etc/nginx/sites-enabled/${DOMAIN}"
 rm -f /etc/nginx/sites-enabled/default
