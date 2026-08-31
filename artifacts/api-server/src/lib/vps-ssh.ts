@@ -309,7 +309,7 @@ export async function openVpsTcpForward(
         }
         child = spawn("ssh", args, { env, stdio: ["ignore", "ignore", "pipe"] });
         let stderr = "";
-        child.stderr.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
+        child.stderr?.on("data", chunk => { stderr = appendBounded(stderr, chunk); });
         await waitForForward(child, localPort, timeoutMs);
         try { unlinkSync(askPassPath); } catch { /* best effort cleanup */ }
 
