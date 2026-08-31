@@ -59,7 +59,7 @@ type StoredRouter = {
 };
 
 function coexistenceBridgeName(routerId: number): string {
-  return `ochola-hs-${routerId}`;
+  return `co-hotspot-bridge-${routerId}`;
 }
 
 async function storedRouterCredentials(

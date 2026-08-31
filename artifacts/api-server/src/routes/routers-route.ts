@@ -278,7 +278,7 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
         return;
       }
       if (installationMode === "coexist") {
-        const expectedBridge = `ochola-hs-${routerId}`;
+        const expectedBridge = `co-hotspot-bridge-${routerId}`;
         if (bridgeName !== expectedBridge) {
           res.status(400).json({
             ok: false,

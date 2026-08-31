@@ -439,7 +439,7 @@ function safeRm(cmd: string): string {
 }
 
 function coexistenceBridgeName(routerId: number): string {
-  return `ochola-hs-${routerId}`;
+  return `co-hotspot-bridge-${routerId}`;
 }
 
 function coexistenceGateway(routerId: number): string {
@@ -494,6 +494,7 @@ function buildCoexistenceHotspotRsc(
     `:do {`,
     `:put "COEXISTENCE SERVICE — ${safe(companyName)}"`,
     `:local bridgeName "${safe(bridgeName)}"`,
+    `:local legacyBridgeName "ochola-hs-${routerId}"`,
     `:local bridgeTag "${safe(tag)}"`,
     `:local gateway "${safe(gateway)}"`,
     `:local subnet "${safe(subnet)}"`,
@@ -509,6 +510,15 @@ function buildCoexistenceHotspotRsc(
     `:set coexistenceStep "bridge"`,
     `:put "COEXISTENCE STEP: bridge"`,
     `:local existingBridge [/interface bridge find name=$bridgeName]`,
+    `:if ([:len $existingBridge] = 0) do={`,
+    `  :local legacyBridge [/interface bridge find name=$legacyBridgeName]`,
+    `  :if ([:len $legacyBridge] > 0) do={`,
+    `    :local legacyComment [/interface bridge get $legacyBridge comment]`,
+    `    :if ([:find $legacyComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence bridge name collision: $legacyBridgeName is not owned by ${safe(companyName)}."; :error $ocholaCoexistenceError }`,
+    `    /interface bridge set $legacyBridge name=$bridgeName`,
+    `    :set existingBridge $legacyBridge`,
+    `  }`,
+    `}`,
     `:if ([:len $existingBridge] = 0) do={`,
     `  /interface bridge add name=$bridgeName protocol-mode=none fast-forward=no comment=$bridgeTag`,
     `} else={`,

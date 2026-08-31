@@ -94,6 +94,9 @@ test("dashboard Self Install defaults to coexistence and requires typed takeover
 
 test("coexistence provisions an owned hotspot bridge without reusing shared service resources", () => {
   assert.match(scriptsRoute, /function coexistenceBridgeName\(routerId: number\)/);
+  assert.match(scriptsRoute, /return `co-hotspot-bridge-\$\{routerId\}`/);
+  assert.match(scriptsRoute, /legacyBridgeName "ochola-hs-\$\{routerId\}"/);
+  assert.match(scriptsRoute, /interface bridge set \$legacyBridge name=\$bridgeName/);
   assert.match(scriptsRoute, /ochola-hs-pool-\$\{routerId\}/);
   assert.match(scriptsRoute, /ochola-hs-dhcp-\$\{routerId\}/);
   assert.match(scriptsRoute, /ochola-hs-server-\$\{routerId\}/);

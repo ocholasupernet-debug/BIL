@@ -164,7 +164,7 @@ function suggestedRouterName(existing: RouterSummary[]): string {
 }
 
 function coexistenceBridgeName(routerId: number): string {
-  return `ochola-hs-${routerId}`;
+  return `co-hotspot-bridge-${routerId}`;
 }
 
 function CopyButton({ text }: { text: string }) {
