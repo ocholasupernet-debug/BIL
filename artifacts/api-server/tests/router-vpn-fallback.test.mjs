@@ -27,6 +27,7 @@ const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const provisioningRoute = await readFile("src/lib/router-vpn-provisioning.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 const vpnSettings = await readFile("../ochola-supernet/src/pages/vpn/Settings.tsx", "utf8");
@@ -177,6 +178,14 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
+test("fallback child generation preserves coexistence mode", () => {
+  assert.match(provisioningRoute, /routerId,\s*installationMode,\s*\}\);/);
+  assert.match(
+    scriptsRoute,
+    /generatedRouterVpnChildScript\("ipsec", routerId, material, routerOsMajor, installationMode\)/,
+  );
+});
+
 test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {
   const options = {
     endpoint: "ipsec.example.test",
@@ -207,6 +216,8 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
+  assert.match(scriptsRoute, /server rejected \$\{label\}/);
   assert.match(scriptsRoute, /child script import failed/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });

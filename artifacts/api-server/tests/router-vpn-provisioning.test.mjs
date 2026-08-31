@@ -44,6 +44,11 @@ test("IPsec fallback uses per-router identities for unique server PSKs", () => {
   assert.match(mikrotik, /remote-id=fqdn:ochola-router-\$\{routerId\}-server/);
 });
 
+test("generated fallback children receive the requested installation mode", () => {
+  assert.match(provisioning, /installationMode: "coexist" \| "takeover" = "takeover"/);
+  assert.match(provisioning, /routerId,\s*installationMode,\s*\}\);/);
+});
+
 test("legacy and migration VPN networks remain explicitly separate", () => {
   assert.match(provisioning, /customer OpenVPN \(1194\/10\.8\.0\.x\)/);
   assert.match(provisioning, /migration VPN \(temporary leases\)/);
