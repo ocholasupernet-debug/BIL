@@ -100,6 +100,13 @@ sudo ufw allow 80/tcp  || true
 sudo ufw allow 443/tcp || true
 sudo ufw --force enable || true
 
+# Per-router management VPN ports are redirected to the shared OpenVPN
+# listener on TCP 1196. This keeps each generated router profile on a stable
+# router-specific public port while preserving one isolated 10.8.5.0/24 tunnel.
+if [ -f "$APP_DIR/deploy/configure-router-management-ports.sh" ]; then
+  bash "$APP_DIR/deploy/configure-router-management-ports.sh"
+fi
+
 # ── Done ──────────────────────────────────────────────────
 echo ""
 echo "╔═══════════════════════════════════════════════════════╗"

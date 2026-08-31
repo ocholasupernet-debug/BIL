@@ -214,11 +214,18 @@ install -m 0644 \
 systemctl daemon-reload
 systemctl enable --now ochola-tenant-certificates.timer
 
-# 8. Restart API via PM2
+# Keep the public per-router VPN ports aligned with generated RouterOS
+# profiles. The service is idempotent and survives VPS reboots.
+if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
+  echo "[8/9] Configuring per-router management VPN ports..."
+  bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
+fi
+
+# 9. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
 #    a stale legacy value that could mask the canonical service-role key.
-echo "[8/8] Restarting PM2..."
+echo "[9/9] Restarting PM2..."
 mkdir -p logs
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a

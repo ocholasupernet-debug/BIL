@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
+import { lookup } from "node:dns/promises";
+import * as net from "node:net";
 import path from "path";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
@@ -14,7 +16,7 @@ import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
   ROUTER_MANAGEMENT_VPN,
   routerManagementOvpnCredentials,
-  routerManagementVpnPort,
+  routerManagementVpnPortForRouter,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
 import {
@@ -709,6 +711,20 @@ function routerVpnEndpointHost(origin: string): string {
     return new URL(origin).hostname;
   } catch {
     return "";
+  }
+}
+
+async function routerVpnEndpointAddress(origin: string): Promise<string> {
+  const host = routerVpnEndpointHost(origin);
+  if (!host || net.isIP(host) === 4) return host;
+  if (net.isIP(host) === 6) {
+    throw new Error("The router VPN endpoint must have a public IPv4 address.");
+  }
+  try {
+    const result = await lookup(host, { family: 4 });
+    return result.address;
+  } catch (error) {
+    throw new Error(`Could not resolve the router VPN endpoint "${host}" to an IPv4 address: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -1724,7 +1740,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const vpsHost = routerVpnEndpointHost(requestOrigin(req));
+      const vpsHost = await routerVpnEndpointAddress(requestOrigin(req));
       if (!vpsHost) {
         res.status(503).type("text/plain").send(
           "# OCHOLA_ROUTER_VPN_ERROR\n" +
@@ -1732,7 +1748,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const vpnPort = routerManagementVpnPort();
+      const vpnPort = routerManagementVpnPortForRouter(routerId);
       const readinessWarning = readiness.ready
         ? ""
         : `# WARNING: API could not verify local OpenVPN files (${readiness.missing.join(", ")}).\n` +
@@ -2630,13 +2646,16 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const publicAppOrigin = `https://${baseDomain}`;
     const scriptBaseUrl = `${publicAppOrigin}/api/scripts`;
     const scriptAdminQuery = `admin_id=${encodeURIComponent(String(adminId))}`;
-    const routerVpnHost = routerVpnEndpointHost(publicAppOrigin) || "vpn.isplatty.org";
+    const routerVpnHost = await routerVpnEndpointAddress(publicAppOrigin);
+    if (!routerVpnHost) {
+      throw new Error("Router VPN endpoint is not configured with a public IPv4 address.");
+    }
 
     /* ── Step 2: Fetch routers for this admin ── */
     interface DbRouter {
       id: number; name: string; host: string;
       bridge_interface: string | null;
-      hotspot_dns_name: string | null;
+      hotspot_dns_name?: string | null;
       bridge_ip: string | null;
       vpn_ip: string | null;
       router_secret: string | null;
@@ -2644,7 +2663,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       status: string;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,vpn_ip,router_secret,last_seen,status`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,bridge_ip,vpn_ip,router_secret,last_seen,status`
     );
 
     /* ── Helper to decide if a router record is "pending" (not yet installed) ── */
@@ -3021,7 +3040,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPort()} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,

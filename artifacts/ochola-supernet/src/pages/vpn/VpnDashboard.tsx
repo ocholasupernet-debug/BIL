@@ -126,7 +126,7 @@ export default function VpnDashboard() {
               </div>
               <div className="flex items-center gap-1.5 mt-4">
                 <Globe size={14} className="text-blue-200" />
-                <span className="text-blue-200 text-xs font-mono">vpn.isplatty.org</span>
+                <span className="text-blue-200 text-xs font-mono">Per-router public IP + port</span>
               </div>
             </div>
 
