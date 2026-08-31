@@ -245,25 +245,33 @@ function RouterRecovery({
   error,
   routerId,
   installationMode,
+  vpnConnected = false,
 }: {
   error?: string;
   routerId?: number | null;
   installationMode?: InstallationMode;
+  vpnConnected?: boolean;
 }) {
   const interfaceName = installationMode === "coexist" && routerId
     ? `ochola-mgmt-vpn-${routerId}`
     : "corebillingvpn";
+  const title = vpnConnected ? "RouterOS API is not ready yet" : "Waiting for the router-management VPN";
+  const defaultMessage = vpnConnected
+    ? "The management VPN is connected, but the RouterOS API did not return the router identity and version yet. Confirm API access on port 8728 and refresh."
+    : "The router has not connected to the isolated 10.8.5.x management network yet.";
   return (
     <div style={{
       background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)",
       borderRadius: 10, padding: "0.9rem 1rem",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#f87171", fontSize: "0.83rem", fontWeight: 800 }}>
-        <AlertTriangle size={15} /> Waiting for the router-management VPN
+        <AlertTriangle size={15} /> {title}
       </div>
       <p style={{ margin: "0.45rem 0 0", color: "#fca5a5", fontSize: "0.76rem", lineHeight: 1.6 }}>
-        {error || "The router has not connected to the isolated 10.8.5.x management network yet."}
-        {" "}Confirm the router has internet, re-run the downloaded script in Winbox Terminal, and wait for the VPN client to reconnect.
+        {error || defaultMessage}
+        {" "}{vpnConnected
+          ? "Confirm IP → Services → api is enabled and that port 8728 is allowed from 10.8.5.0/24."
+          : "Confirm the router has internet, re-run the downloaded script in Winbox Terminal, and wait for the VPN client to reconnect."}
       </p>
       <code style={{
         display: "block", marginTop: "0.65rem", color: "#67e8f9", background: "rgba(0,0,0,.28)",
@@ -351,7 +359,10 @@ export default function SelfInstall() {
   });
   const progress = progressQuery.data?.installs.find(item => item.routerId === activeRouterId);
   const status = statusQuery.data;
-  const identityReady = !!status?.ready;
+  /* Loading the live router and ports only needs a verified RouterOS API
+     connection. `status.ready` also includes the final heartbeat/setup gate,
+     which can legitimately lag behind the seven installer stages. */
+  const routerApiReady = !!status?.connected && !!status.router.identity && !!status.router.rosVersion;
 
   const handleGenerate = async (mode: CertificateMode) => {
     if (!adminId) {
@@ -514,7 +525,7 @@ export default function SelfInstall() {
   };
 
   const finishInstallation = async () => {
-    if (!activeRouterId || !status?.ready || Object.values(portState).some(value => value === "pending")) return;
+    if (!activeRouterId || !routerApiReady || Object.values(portState).some(value => value === "pending")) return;
     if (installationMode === "coexist" && selectedPorts.size === 0) {
       setPortError("Select at least one unassigned physical port for the isolated OcholaSuperNet bridge before finishing.");
       return;
@@ -569,7 +580,7 @@ export default function SelfInstall() {
   const asset = modelAsset(completeRouter?.model || status?.router.model || activeRouter?.model || "");
   const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
   const stepLabels = ["Generate profile", "Run installer", "VPN + heartbeat", "Router ports", "Installed"];
-  const currentStep = phase === "idle" ? 0 : phase === "install" ? (identityReady ? 3 : 2) : phase === "ports" ? 4 : 5;
+  const currentStep = phase === "idle" ? 0 : phase === "install" ? (routerApiReady ? 3 : 2) : phase === "ports" ? 4 : 5;
 
   return (
     <AdminLayout>
@@ -813,14 +824,15 @@ export default function SelfInstall() {
                 </div>
               )}
             </div>
-            {!identityReady && !statusQuery.isLoading && (
+            {!routerApiReady && !statusQuery.isLoading && (
               <RouterRecovery
                 error={status?.error || statusQuery.error?.message}
                 routerId={activeRouterId}
                 installationMode={installationMode}
+                vpnConnected={!!status?.vpnConnected}
               />
             )}
-            <button onClick={loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
+            <button onClick={loadPorts} disabled={!routerApiReady || portsLoading || completeLoading} style={{ ...primaryButton(!routerApiReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
               {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
               {portsLoading ? "Loading isolated service ports…" : "Next — view router and ports"}
             </button>
@@ -924,7 +936,7 @@ export default function SelfInstall() {
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
               <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
-               <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
+                <button onClick={finishInstallation} disabled={!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
                 {completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={15} />}
                  {completeLoading ? "Verifying installation…" : installationMode === "coexist" && selectedPorts.size === 0 ? "Select a port to continue" : "Next — finish installation"}
               </button>
