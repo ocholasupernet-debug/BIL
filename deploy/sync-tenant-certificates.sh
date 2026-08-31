@@ -68,6 +68,7 @@ import sys
 
 reserved = {"www", "api", "vpn", "register", "proxyvpn", "mail", "admin"}
 pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+print("register")
 with open(sys.argv[1], encoding="utf-8") as source:
     rows = json.load(source)
 for row in rows:

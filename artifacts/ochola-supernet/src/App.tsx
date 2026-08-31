@@ -77,6 +77,7 @@ import AdminSetPassword from "./pages/admin/AdminSetPassword";
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
    the root "/" path redirects straight to that company's login page.
+   The reserved registration host has its own public entry point.
    On the bare domain (isplatty.org) the normal landing page is shown.
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
@@ -85,7 +86,7 @@ function SubdomainGuard() {
   useEffect(() => {
     const sub = getHostSubdomain();
     if (sub) {
-      setLocation("/admin/login");
+      setLocation(sub === "register" ? "/admin/register" : "/admin/login");
     }
   }, [setLocation]);
 
