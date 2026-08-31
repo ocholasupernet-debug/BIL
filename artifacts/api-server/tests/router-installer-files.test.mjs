@@ -73,8 +73,10 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.ok(scriptsRoute.includes('const poolEnd = gateway.replace(/\\.1$/, ".254");'));
   assert.ok(!scriptsRoute.includes('gateway.replace(/\\\\.1$'));
   assert.match(scriptsRoute, /global ocholaCoexistenceError/);
+  assert.match(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
+  assert.match(scriptsRoute, /after " \. \$coexistenceBundleBytes \. " bytes/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE FAILED at/);
-  assert.match(scriptsRoute, /:set hotspotError "\s*isolated hotspot bundle import failed.*failing stage/);
+  assert.match(scriptsRoute, /isolated hotspot bundle import failed after .*bytes; inspect failed-ochola-coexistence-hotspot\.rsc.*failing stage/);
 });
 
 test("installer bootstraps the public CA and validates managed HTTPS fetches", () => {

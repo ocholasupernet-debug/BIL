@@ -1005,19 +1005,23 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 $pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
+:local coexistenceBundleBytes ""
 :do {
     :global ocholaCoexistenceError
     :set ocholaCoexistenceError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
+    :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
+    :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""
 } on-error={
+    :global ocholaCoexistenceError
     :local hotspotError $ocholaCoexistenceError
     :if ([:len $hotspotError] = 0) do={
-        :set hotspotError "isolated hotspot bundle import failed; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log for the failing stage."
+        :set hotspotError ("isolated hotspot bundle import failed after " . $coexistenceBundleBytes . " bytes; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log for the failing stage.")
     }
     :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
     $pg 1 "coexistence-hotspot" "failed" $hotspotError
