@@ -292,6 +292,18 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+function nextAvailableRouterName(
+  base: string,
+  routers: Array<{ name: string }>,
+): string {
+  const used = new Set(routers.map(router => router.name.trim().toLowerCase()));
+  for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
+    const candidate = `${base}${ordinal}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  throw new Error(`No available router name remains for "${base}"`);
+}
+
 /* ── Rate-limit string ── */
 function toRateLimit(down: number, up: number, unit = "Mbps"): string {
   const s = unit === "Kbps" ? "k" : unit === "Gbps" ? "G" : "M";
@@ -2727,28 +2739,24 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       bridge_ip: string | null;
       vpn_ip: string | null;
       router_secret: string | null;
+      token: string | null;
       last_seen: string | null;
       status: string;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,bridge_ip,vpn_ip,router_secret,last_seen,status`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,bridge_ip,vpn_ip,router_secret,token,last_seen,status`
     );
 
-    /* ── Helper to decide if a router record is "pending" (not yet installed) ── */
-    const STALE_MS = 12 * 60 * 1000;
-    function isPending(r: DbRouter): boolean {
-      if (!r.last_seen) return true;
-      return (Date.now() - new Date(r.last_seen).getTime()) > STALE_MS;
-    }
-
-    /* "mainhotspot" always serves the NEXT router that needs configuring:
-       1. First router that hasn't connected yet (pending)
-       2. If all are installed → auto-create the next numbered one
-       Any other slug → find router by name, or auto-create on-the-fly */
+     /* A generic mainhotspot request creates a fresh router profile. It must
+        not select an unfinished record: a failed install belongs to that
+        router and must not block the next router's installer. A request with
+        a specific slug still targets that named router. */
     let router_row: DbRouter | undefined;
     if (slug === "mainhotspot" || slug === "main-hotspot") {
-      router_row = routers.find(isPending) ?? routers[0];
-      // If still undefined → all installed, we'll auto-create below
+       const requestedId = Number(req.query.rid);
+       if (Number.isSafeInteger(requestedId) && requestedId > 0) {
+         router_row = routers.find(router => router.id === requestedId);
+       }
     } else {
       router_row = routers.find(r => slugify(r.name) === slug);
     }
@@ -2765,10 +2773,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
         .replace(/[^a-zA-Z0-9]/g, "")
         .slice(0, 48);
 
-      const isMainHotspot = slug === "mainhotspot" || slug === "main-hotspot";
-      const autoName = isMainHotspot
-        ? `${adminSubdomain}${routers.length + 1}`
-        : slug;   // use the slug as the router name (e.g. "come1")
+       const isMainHotspot = slug === "mainhotspot" || slug === "main-hotspot";
+       const autoName = isMainHotspot
+         ? nextAvailableRouterName(adminSubdomain, routers)
+         : slug;   // use the slug as the router name (e.g. "come1")
 
       /* Try service-role key first (bypasses RLS), then anon key */
       const serviceKey = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -2869,39 +2877,40 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        with whatever bridge_ip the router has configured. Fire-and-forget. ── */
     autoUpsertPool(adminId, router_row.id, "hspool", poolStart, poolEnd).catch(() => {});
 
-    /* ── Router secret token for heartbeat ──
-       If the router already has a secret, use it.
-       Otherwise generate one, persist it to Supabase, then use it.
-    ── */
-    let routerSecret = router_row.router_secret;
-    /* Treat missing, too-short, or obvious placeholder secrets as invalid
-       and auto-generate a proper 40-char alphanumeric token. */
-    const WEAK = !routerSecret
-      || routerSecret.length < 20
-      || !/^[A-Za-z0-9_-]+$/.test(routerSecret)
-      || /^(admin|password|secret|test|default)$/i.test(routerSecret);
-    if (WEAK) {
+     /* Keep the RouterOS API password and the installer/heartbeat token
+        separate. The API password follows the router-name convention; the
+        token remains unpredictable and is used only by server callbacks. */
+     const routerApiPassword = routerName;
+     let installerToken = router_row.token ?? "";
+     const WEAK_TOKEN = !installerToken
+       || installerToken.length < 20
+       || !/^[A-Za-z0-9_-]+$/.test(installerToken)
+       || /^(admin|password|secret|test|default)$/i.test(installerToken);
+     if (WEAK_TOKEN) {
       const raw = `${adminId}:${router_row.id}:ocholanet:${Date.now()}`;
-      routerSecret = Buffer.from(raw).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
-      /* Persist to DB (best-effort, don't fail the request if this errors) */
-      try {
-        await fetch(
-          `${SUPABASE_URL}/rest/v1/isp_routers?id=eq.${router_row.id}&admin_id=eq.${adminId}`,
-          {
-            method: "PATCH",
-            headers: {
-              apikey: SUPABASE_KEY,
-              Authorization: `Bearer ${SUPABASE_KEY}`,
-              "Content-Type": "application/json",
-              Prefer: "return=minimal",
-            },
-            body: JSON.stringify({ router_secret: routerSecret }),
-          }
-        );
-      } catch { /* ignore */ }
+       installerToken = Buffer.from(raw).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 48);
     }
-    const heartbeatUrl = `${publicAppOrigin}/api/isp/router/heartbeat/${routerSecret}`;
-    const registerUrl  = `${publicAppOrigin}/api/isp/router/register/${routerSecret}`;
+     try {
+       await fetch(
+         `${SUPABASE_URL}/rest/v1/isp_routers?id=eq.${router_row.id}&admin_id=eq.${adminId}`,
+         {
+           method: "PATCH",
+           headers: {
+             apikey: SUPABASE_KEY,
+             Authorization: `Bearer ${SUPABASE_KEY}`,
+             "Content-Type": "application/json",
+             Prefer: "return=minimal",
+           },
+           body: JSON.stringify({
+             router_username: routerName,
+             router_secret: routerApiPassword,
+             ...(WEAK_TOKEN ? { token: installerToken } : {}),
+           }),
+         }
+       );
+     } catch { /* installer can still be downloaded if persistence is briefly unavailable */ }
+     const heartbeatUrl = `${publicAppOrigin}/api/isp/router/heartbeat/${installerToken}`;
+     const registerUrl  = `${publicAppOrigin}/api/isp/router/register/${installerToken}`;
     /* Keep the password-only management OpenVPN identity in sync. */
     updateVpnCredentials(openVpnCredentials.username, openVpnCredentials.password);
 
@@ -2948,7 +2957,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Auto-Update: fetch latest config from ${companyName} ===`,
       `:put "[1/8] Checking for config updates..."`,
-      safeFetch(`${scriptBaseUrl}/${rawName}?${scriptAdminQuery}`, `${routerSlug}.rsc`),
+       safeFetch(`${scriptBaseUrl}/${rawName}?${scriptAdminQuery}&rid=${router_row.id}&token=${encodeURIComponent(installerToken)}`, `${routerSlug}.rsc`),
       ``,
       `# === System Identity & DNS ===`,
       `:put "[2/8] Setting identity and DNS..."`,
@@ -3090,15 +3099,15 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
       `:foreach x in=[/certificate find name~"vpn-ca"]        do={ :do { /certificate remove $x } on-error={} }`,
       `# 3) Download + import CA cert (used to verify server - optional with verify-server-certificate=no)`,
-      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/ca.crt" dst-path=($storage . "/vpn-ca.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: CA cert fetch failed" }`,
+       `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${installerToken}/ca.crt" dst-path=($storage . "/vpn-ca.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: CA cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/vpn-ca.crt") passphrase="" } on-error={ :put "  WARN: CA cert import failed" }`,
       `:do { /file remove [find name=($storage . "/vpn-ca.crt")] } on-error={}`,
       `# 4) Download + import client certificate`,
-      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/client.crt" dst-path=($storage . "/${routerSlug}.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client cert fetch failed" }`,
+       `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${installerToken}/client.crt" dst-path=($storage . "/${routerSlug}.crt") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client cert fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.crt") passphrase="" } on-error={ :put "  WARN: client cert import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.crt")] } on-error={}`,
       `# 5) Download + import client private key (auto-matches to cert by public key fingerprint)`,
-      `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${routerSecret}/client.key" dst-path=($storage . "/${routerSlug}.key") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client key fetch failed" }`,
+       `:do { /tool fetch url="${publicAppOrigin}/api/vpn/client-cert/${installerToken}/client.key" dst-path=($storage . "/${routerSlug}.key") ${ROUTER_HTTPS_FETCH_OPTIONS} } on-error={ :put "  WARN: client key fetch failed" }`,
       `:do { /certificate import file-name=($storage . "/${routerSlug}.key") passphrase="" } on-error={ :put "  WARN: client key import failed" }`,
       `:do { /file remove [find name=($storage . "/${routerSlug}.key")] } on-error={}`,
       `# 6) Mark cert as trusted and wait for RouterOS to finalise key binding`,
@@ -3108,7 +3117,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+        ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, openVpnCredentials.password),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
@@ -3117,7 +3126,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# Idempotent: existing user with this name is removed first so the password`,
       `# is always refreshed to match what is stored in the backend / VPS auth file.`,
       safeRm(`/user remove [find name="${routerSlug}"]`),
-       safeRos(`/user add name="${routerSlug}" password="${routerSecret}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
+        safeRos(`/user add name="${routerSlug}" password="${routerApiPassword}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
        `:put "      VPN tunnel 'corebillingvpn' added  OK"`,
       ``,
       `# === Default User Profile ===`,

@@ -92,6 +92,15 @@ test("dashboard Self Install defaults to coexistence and requires typed takeover
   assert.match(selfInstall, /self-install\/takeover\/prepare/);
 });
 
+test("failed router setup never blocks creation of the next router", () => {
+  assert.match(selfInstall, /reconfiguringExisting && activeRouter\?\.name/);
+  assert.match(selfInstall, /Create another router/);
+  assert.match(scriptsRoute, /function nextAvailableRouterName/);
+  assert.match(scriptsRoute, /router_row = routers\.find\(router => router\.id === requestedId\)/);
+  assert.doesNotMatch(scriptsRoute, /routers\.find\(isPending\)/);
+  assert.doesNotMatch(scriptsRoute, /routers\.length \+ 1/);
+});
+
 test("coexistence provisions an owned hotspot bridge without reusing shared service resources", () => {
   assert.match(scriptsRoute, /function coexistenceBridgeName\(routerId: number\)/);
   assert.match(scriptsRoute, /return "co-hotspot-bridge"/);

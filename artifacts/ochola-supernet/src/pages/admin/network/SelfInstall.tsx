@@ -290,6 +290,7 @@ export default function SelfInstall() {
   const [adminId, setAdminId] = useState<number | null>(() => getSelectedTenantId());
   const [phase, setPhase] = useState<Phase>("idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
+  const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
   const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
   const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
@@ -369,7 +370,7 @@ export default function SelfInstall() {
       setPageError("Your ISP session is missing a tenant account. Sign in again before creating a router profile.");
       return;
     }
-    if (reconfigureId && !activeRouter) {
+    if (reconfiguringExisting && !activeRouter) {
       setPageError("The router selected for reconfiguration is not available in this ISP account.");
       return;
     }
@@ -381,7 +382,7 @@ export default function SelfInstall() {
         method: "POST",
         body: JSON.stringify({
           adminId,
-          ...(activeRouter?.name ? { routerName: activeRouter.name } : {}),
+          ...(reconfiguringExisting && activeRouter?.name ? { routerName: activeRouter.name } : {}),
         }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
@@ -432,6 +433,23 @@ export default function SelfInstall() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const startAnotherRouter = () => {
+    window.history.replaceState({}, "", window.location.pathname);
+    setReconfiguringExisting(false);
+    setActiveRouterId(null);
+    setPhase("idle");
+    setPorts(null);
+    setSelectedBridge("");
+    setSelectedPorts(new Set());
+    setPortState({});
+    setTakeoverGrant("");
+    setTakeoverPlan([]);
+    setTakeoverConfirmation("");
+    setPageError(null);
+    setCopyResult(null);
+    setCopySkipped(false);
   };
 
   const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
@@ -588,7 +606,7 @@ export default function SelfInstall() {
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 900 }}>
         <div>
           <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 .2rem" }}>
-            {reconfigureId ? "Reconfigure Router" : "Self Install"}
+            {reconfiguringExisting ? "Reconfigure Router" : "Self Install"}
           </h1>
           <p style={{ fontSize: ".8rem", color: "var(--isp-text-muted)", margin: 0 }}>
             Connect a MikroTik through the management VPN, choose its live ports, and finish setup without leaving this flow.
@@ -752,6 +770,9 @@ export default function SelfInstall() {
               </span>
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
+              </button>
+              <button onClick={startAnotherRouter} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "#93c5fd", background: "transparent", border: "1px solid rgba(147,197,253,.3)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
+                <RefreshCw size={13} /> Create another router
               </button>
             </div>
             {showHelp && (
