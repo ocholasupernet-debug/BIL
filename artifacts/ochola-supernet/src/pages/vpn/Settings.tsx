@@ -671,6 +671,9 @@ key  /etc/openvpn/server.key
 dh   /etc/openvpn/dh2048.pem
 
 server 10.8.0.0 255.255.255.0
+# MikroTik RouterOS clients require point-to-point net30 addressing.
+# Without this, RouterOS can interpret the pushed peer as a /0 netmask.
+topology net30
 ifconfig-pool-persist /etc/openvpn/ipp.txt
 
 push "redirect-gateway def1 bypass-dhcp"
@@ -684,6 +687,10 @@ script-security 2
 # User authentication from /etc/openvpn/users.db
 auth-user-pass-verify /etc/openvpn/check-auth.sh via-file
 username-as-common-name
+# MikroTik uses username/password authentication and does not present a
+# client certificate. OpenVPN 2.4+ uses this directive; older releases use
+# client-cert-not-required instead.
+verify-client-cert none
 
 persist-key
 persist-tun

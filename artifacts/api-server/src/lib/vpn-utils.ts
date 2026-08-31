@@ -273,6 +273,23 @@ elif command -v iptables-save &>/dev/null; then
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
+# ── 8b. Validate the two RouterOS compatibility requirements ──────────────────
+# A subnet-topology server pushes an address form that RouterOS can interpret
+# as a /0 netmask. The dedicated service must stay net30 and must not require a
+# client certificate because MikroTik authenticates with username/password.
+if ! grep -Eq '^[[:space:]]*topology[[:space:]]+net30([[:space:]]|$)' "$OVPN_CONF"; then
+  echo "ERROR: Dedicated router-management OpenVPN must use topology net30."
+  exit 1
+fi
+if ! grep -Eq '^[[:space:]]*(verify-client-cert[[:space:]]+none|client-cert-not-required)([[:space:]]|$)' "$OVPN_CONF"; then
+  echo "ERROR: Dedicated router-management OpenVPN must allow username/password clients without a certificate."
+  exit 1
+fi
+if grep -Eq '^[[:space:]]*(topology[[:space:]]+subnet|tls-auth|tls-crypt|tls-crypt-v2)([[:space:]]|$)' "$OVPN_CONF"; then
+  echo "ERROR: Dedicated router-management OpenVPN contains an incompatible subnet topology or TLS wrapper."
+  exit 1
+fi
+
 # ── 9. Restart only the dedicated router-management instance ────────────────
 echo "[9] Starting dedicated router-management OpenVPN..."
 $SUDO ln -sfn "$OVPN_CONF" "$OVPN_DIR/ochola-router.conf"

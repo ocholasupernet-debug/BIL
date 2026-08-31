@@ -29,6 +29,7 @@ await rm(outdir, { recursive: true, force: true });
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
+const vpnSettings = await readFile("../ochola-supernet/src/pages/vpn/Settings.tsx", "utf8");
 
 test("management OpenVPN credentials use the configured router name", () => {
   assert.deepEqual(
@@ -252,6 +253,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);
   assert.match(setup, /Could not start the dedicated router-management OpenVPN service/);
   assert.match(setup, /TCP port 1196 is not listening/);
+  assert.match(vpnSettings, /server 10\.8\.0\.0 255\.255\.255\.0[\s\S]{0,240}topology net30/);
+  assert.match(vpnSettings, /auth-user-pass-verify[\s\S]{0,420}verify-client-cert none/);
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.statusPath/);
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.ippPath/);
   assert.match(scriptsRoute, /routerManagementVpnReadiness\(\)/);
