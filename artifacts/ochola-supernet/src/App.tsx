@@ -85,13 +85,14 @@ function SubdomainGuard() {
 
   useEffect(() => {
     const sub = getHostSubdomain();
-    if (sub) {
-      setLocation(sub === "register" ? "/admin/register" : "/admin/login");
+    if (sub && sub !== "register") {
+      setLocation("/admin/login");
     }
   }, [setLocation]);
 
-  /* While redirect fires, show nothing (or show LandingPage as fallback) */
+  /* Render registration directly so the public host never flashes blank. */
   const sub = getHostSubdomain();
+  if (sub === "register") return <AdminRegister />;
   if (sub) return null;
 
   return <LandingPage />;
