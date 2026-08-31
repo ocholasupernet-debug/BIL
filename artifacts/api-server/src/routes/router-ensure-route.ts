@@ -55,11 +55,14 @@ function routerNameBase(value: string): string {
     .trim()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return (slug.slice(0, 27) || "router").replace(/-+$/g, "") || "router";
+  const base = slug.slice(0, 27).replace(/-+$/g, "");
+  if (!base) throw new Error("A tenant subdomain is required before creating a router");
+  return base;
 }
 
 async function nextCompanyRouterName(adminId: number, requestHost: string): Promise<string> {
-  let base = routerNameBase(getTenantSubdomain(requestHost) ?? "");
+  const requestTenant = getTenantSubdomain(requestHost);
+  let base = requestTenant ? routerNameBase(requestTenant) : "";
   try {
     const adminRes = await fetch(
       `${SUPABASE_URL}/rest/v1/isp_admins?id=eq.${adminId}&select=name,subdomain&limit=1`,
@@ -68,12 +71,13 @@ async function nextCompanyRouterName(adminId: number, requestHost: string): Prom
     if (adminRes.ok) {
       const admins = await adminRes.json() as Array<{ name?: string | null; subdomain?: string | null }>;
       const admin = admins[0];
-      base = routerNameBase(admin?.subdomain || admin?.name || base);
+      if (admin?.subdomain) base = routerNameBase(admin.subdomain);
     }
   } catch {
-    /* The tenant host remains a safe fallback when the admin lookup is
-       temporarily unavailable. */
+    /* Use the verified tenant host when the admin lookup is temporarily
+       unavailable; never fall back to a generic router prefix. */
   }
+  if (!base) throw new Error("Could not resolve the signed-in tenant subdomain");
 
   const usedRes = await fetch(
     `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&select=name`,
