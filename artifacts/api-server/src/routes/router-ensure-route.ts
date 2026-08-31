@@ -7,7 +7,7 @@
  * Falls back to the anon key and handles 409 conflicts by fetching the
  * existing row.
  *
- * Body: { adminId: number, routerName: string, bridgeIp?: string, bridgeInterface?: string }
+ * Body: { adminId: number, routerName?: string, bridgeIp?: string, bridgeInterface?: string }
  * Response: { ok: true, router: { id, name, router_secret, ... } }
  *            { ok: false, error: string, detail?: string }
  */
@@ -16,6 +16,7 @@ import { Router, type IRouter } from "express";
 import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { getTenantSubdomain } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -46,6 +47,46 @@ function makeSecret(adminId: number): string {
     .toString("base64")
     .replace(/[^a-zA-Z0-9]/g, "")
     .slice(0, 48);
+}
+
+function routerNameBase(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return (slug.slice(0, 27) || "router").replace(/-+$/g, "") || "router";
+}
+
+async function nextCompanyRouterName(adminId: number, requestHost: string): Promise<string> {
+  let base = routerNameBase(getTenantSubdomain(requestHost) ?? "");
+  try {
+    const adminRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/isp_admins?id=eq.${adminId}&select=name,subdomain&limit=1`,
+      { headers: sbHeaders(BEST_KEY) },
+    );
+    if (adminRes.ok) {
+      const admins = await adminRes.json() as Array<{ name?: string | null; subdomain?: string | null }>;
+      const admin = admins[0];
+      base = routerNameBase(admin?.subdomain || admin?.name || base);
+    }
+  } catch {
+    /* The tenant host remains a safe fallback when the admin lookup is
+       temporarily unavailable. */
+  }
+
+  const usedRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&select=name`,
+    { headers: sbHeaders(BEST_KEY) },
+  );
+  if (!usedRes.ok) throw new Error(`Could not inspect existing router names (${usedRes.status})`);
+  const usedRows = await usedRes.json() as Array<{ name?: string | null }>;
+  const used = new Set(usedRows.map(row => String(row.name ?? "").trim().toLowerCase()));
+  for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
+    const candidate = `${base}${ordinal}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  throw new Error(`No available router name remains for company prefix "${base}"`);
 }
 
 /* Credentials are consumed by server-side RouterOS routes and by the
@@ -86,18 +127,29 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
 
   const { adminId: requestedAdminId, routerName, bridgeIp, bridgeInterface } = req.body as {
     adminId?: number;
-    routerName: string;
+    routerName?: string;
     bridgeIp?: string;
     bridgeInterface?: string;
   };
 
   const adminId = authenticatedAdminId(req, requestedAdminId);
-  if (!adminId || !routerName) {
-    res.status(400).json({ ok: false, error: "A valid signed-in ISP account and routerName are required" });
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "A valid signed-in ISP account is required" });
     return;
   }
 
-  const name = routerName.trim();
+  let name = typeof routerName === "string" ? routerName.trim() : "";
+  if (!name) {
+    try {
+      name = await nextCompanyRouterName(adminId, req.get("host") ?? "");
+    } catch (error) {
+      res.status(503).json({
+        ok: false,
+        error: `Could not choose a company router name: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return;
+    }
+  }
 
   /* ── 1. Try to find an existing router with this name ── */
   try {

@@ -152,6 +152,17 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+function suggestedRouterName(existing: RouterSummary[]): string {
+  const companySlug = getHostSubdomain();
+  const base = companySlug || "router";
+  const used = new Set(existing.map(router => router.name.trim().toLowerCase()));
+  for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
+    const candidate = `${base}${ordinal}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${base}1`;
+}
+
 function coexistenceBridgeName(routerId: number): string {
   return `ochola-hs-${routerId}`;
 }
@@ -357,7 +368,10 @@ export default function SelfInstall() {
     try {
       const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
         method: "POST",
-        body: JSON.stringify({ adminId, routerName: activeRouter?.name || `router${routers.length + 1}` }),
+        body: JSON.stringify({
+          adminId,
+          ...(activeRouter?.name ? { routerName: activeRouter.name } : {}),
+        }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
       if (installationMode === "takeover") {
@@ -409,7 +423,7 @@ export default function SelfInstall() {
     }
   };
 
-  const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
+  const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
   const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
   const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
   /* When an ISP admin is signed in on its own hostname, keep installer URLs
