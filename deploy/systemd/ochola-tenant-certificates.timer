@@ -2,8 +2,8 @@
 Description=Refresh OcholaSupernet tenant HTTPS hosts
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=2min
+OnBootSec=10s
+OnUnitActiveSec=10s
 Persistent=true
 Unit=ochola-tenant-certificates.service
 

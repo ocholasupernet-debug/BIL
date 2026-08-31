@@ -39,11 +39,26 @@ chmod 0755 "$WEBROOT" "$WEBROOT/.well-known" "$WEBROOT/.well-known/acme-challeng
 
 admin_json="$(mktemp)"
 trap 'rm -f "$admin_json"' EXIT
-curl --fail --silent --show-error --max-time 30 \
-  -H "apikey: $SERVICE_KEY" \
-  -H "Authorization: Bearer $SERVICE_KEY" \
-  "$SUPABASE_URL/rest/v1/isp_admins?select=subdomain&is_active=eq.true&subdomain=not.is.null&order=id.asc" \
-  > "$admin_json"
+export SUPABASE_URL SERVICE_KEY ADMIN_JSON="$admin_json"
+python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+url = (
+    os.environ["SUPABASE_URL"].rstrip("/")
+    + "/rest/v1/isp_admins?select=subdomain&is_active=eq.true"
+      "&subdomain=not.is.null&order=id.asc"
+)
+key = os.environ["SERVICE_KEY"]
+request = urllib.request.Request(
+    url,
+    headers={"apikey": key, "Authorization": "Bearer " + key},
+)
+with urllib.request.urlopen(request, timeout=30) as response:
+    with open(os.environ["ADMIN_JSON"], "wb") as output:
+        output.write(response.read())
+PY
 
 mapfile -t subdomains < <(
   python3 - "$admin_json" <<'PY'
