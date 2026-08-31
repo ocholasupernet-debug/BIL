@@ -6,6 +6,7 @@ DOMAIN="isplatty.org"
 CERT_NAME="${DOMAIN}-wildcard"
 CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
+TENANT_VHOST_DIR="/etc/nginx/tenant-sites.d"
 has_wildcard_certificate() {
   [ -r "${CERT_DIR}/fullchain.pem" ] &&
     [ -r "${CERT_DIR}/privkey.pem" ] &&
@@ -55,6 +56,7 @@ if ! has_wildcard_certificate; then
   exit 1
 fi
 
+install -d -m 0755 "${TENANT_VHOST_DIR}" /var/www/letsencrypt/.well-known/acme-challenge
 install -m 0644 "${PROJECT_DIR}/deploy/nginx.conf" "${NGINX_SITE}"
 ln -sfn "${NGINX_SITE}" "/etc/nginx/sites-enabled/${DOMAIN}"
 rm -f /etc/nginx/sites-enabled/default
