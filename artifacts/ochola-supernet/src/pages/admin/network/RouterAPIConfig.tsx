@@ -325,17 +325,31 @@ function RouterForm({
       };
 
       let err;
+      let savedRouterId = routerId;
       if (routerId) {
         ({ error: err } = await supabase.from("isp_routers").update(payload).eq("id", routerId));
       } else {
-        ({ error: err } = await supabase.from("isp_routers").insert({
+        const result = await supabase.from("isp_routers").insert({
           ...payload,
           description: userDesc || autoDesc,
           status:      "unknown",
           created_at:  now.toISOString(),
-        }));
+        }).select("id").single();
+        err = result.error;
+        savedRouterId = result.data?.id ?? null;
       }
       if (err) throw new Error(err.message);
+      if (savedRouterId) {
+        const poolResponse = await fetch("/api/admin/router/default-pools", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId: ADMIN_ID, routerId: savedRouterId }),
+        });
+        const poolResult = await poolResponse.json().catch(() => ({})) as { ok?: boolean; error?: string };
+        if (!poolResponse.ok || !poolResult.ok) {
+          throw new Error(poolResult.error || "Router saved, but its default IP pools could not be created.");
+        }
+      }
       onSaved();
     } catch (e) {
       setSaveErr(e instanceof Error ? e.message : "Save failed");

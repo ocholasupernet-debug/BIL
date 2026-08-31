@@ -6,6 +6,7 @@ import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 
 /* ── TCP reachability probe — tries common MikroTik ports ───────────────────
  * Returns the first port that responds, or null if all fail.
@@ -316,6 +317,16 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
     }
   }
 
+  try {
+    await ensureDefaultRouterPools(adminId, routerId, row.bridge_ip);
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `The router was verified, but its default IP pools could not be created: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return;
+  }
+
   const updated = await sbUpdate<InstallRouter>(
     "isp_routers",
     `id=eq.${routerId}&admin_id=eq.${adminId}`,
@@ -348,6 +359,39 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
   });
 });
 
+router.post("/admin/router/default-pools", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.body?.routerId);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
+    return;
+  }
+
+  const rows = await sbSelect<Pick<InstallRouter, "id" | "admin_id" | "bridge_ip" | "status">>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,bridge_ip,status&limit=1`,
+  );
+  const row = rows[0];
+  if (!row) {
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
+    return;
+  }
+  if (isPendingSetup(row.status)) {
+    res.status(409).json({ ok: false, error: "IP pools are created after router installation is complete." });
+    return;
+  }
+
+  try {
+    await ensureDefaultRouterPools(adminId, routerId, row.bridge_ip);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `The router was saved, but its default IP pools could not be created: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+});
+
 router.post("/routers", async (req, res): Promise<void> => {
   const { adminId = 1, ispId, name, host, ipAddress, model, rosVersion, apiPort, router_username, apiUsername, router_secret, apiPassword, bridge_ip, status } = req.body;
   const effectiveAdminId = adminId || ispId || 1;
@@ -367,6 +411,13 @@ router.post("/routers", async (req, res): Promise<void> => {
     status:           status ?? "offline",
   });
   if (!r) { res.status(500).json({ error: "Failed to create router" }); return; }
+  if (!isPendingSetup(String(r.status ?? status ?? "offline"))) {
+    try {
+      await ensureDefaultRouterPools(Number(effectiveAdminId), Number(r.id), String(r.bridge_ip ?? bridge_ip ?? ""));
+    } catch (error) {
+      logger.warn({ err: error, routerId: r.id }, "[routers] default IP pool creation failed");
+    }
+  }
   void logActivity({ adminId: Number(effectiveAdminId), type: "router", action: "added", subject: name, details: { host: host || ipAddress } });
   res.status(201).json(r);
 });
