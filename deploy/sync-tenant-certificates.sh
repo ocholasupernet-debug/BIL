@@ -120,6 +120,7 @@ server {
     ssl_certificate_key $cert_dir/privkey.pem;
     include             /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+    add_header          Strict-Transport-Security "max-age=31536000" always;
 
     location / {
         proxy_pass         http://127.0.0.1:8080;
