@@ -12,6 +12,7 @@ export const RESERVED_SUBDOMAINS = new Set([
   "api",
   "vpn",
   "register",
+  "latex",
   "proxyvpn",
   "mail",
   "admin",

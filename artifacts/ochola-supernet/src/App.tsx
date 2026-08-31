@@ -85,14 +85,15 @@ function SubdomainGuard() {
 
   useEffect(() => {
     const sub = getHostSubdomain();
-    if (sub && sub !== "register") {
+    if (sub && sub !== "register" && sub !== "latex") {
       setLocation("/admin/login");
     }
   }, [setLocation]);
 
-  /* Render registration directly so the public host never flashes blank. */
+  /* Render platform entry points directly so they never flash blank. */
   const sub = getHostSubdomain();
   if (sub === "register") return <AdminRegister />;
+  if (sub === "latex") return <SuperAdminLogin />;
   if (sub) return null;
 
   return <LandingPage />;
