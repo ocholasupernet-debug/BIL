@@ -130,7 +130,7 @@ export default function PPPoE() {
   const { data: routers = [], isLoading: loadingRouters } = useQuery({
     queryKey: ["isp_routers_pppoe", ADMIN_ID],
     queryFn: async () => {
-      const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID);
+      const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
       if (error) throw error;
       return (data ?? []) as DbRouter[];
     },

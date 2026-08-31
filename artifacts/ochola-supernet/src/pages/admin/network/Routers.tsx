@@ -23,14 +23,14 @@ function useTicker(interval = 10_000) {
 
 /* ── helpers ── */
 async function fetchRouters(): Promise<DbRouter[]> {
-  /* Show every router saved for this administrator, including routers that
-     are still being configured or are currently offline. Their status and
-     last-seen values remain visible in the table so an admin can recover,
-     edit, or remove any router they have added. */
+  /* Setup records belong to the installer workflow until the final
+     management-VPN and bridge verification succeeds. They must not appear
+     in the account's normal router list before that gate. */
   const { data, error } = await supabase
     .from("isp_routers")
     .select("*")
     .eq("admin_id", ADMIN_ID)
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
     .order("id", { ascending: false });
   if (error) throw error;
   return data ?? [];

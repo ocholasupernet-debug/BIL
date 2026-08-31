@@ -251,6 +251,7 @@ export default function PPPoESettings() {
         .from("isp_routers")
         .select("id,name,host,admin_id")
         .eq("admin_id", ADMIN_ID)
+        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("name");
       if (error) throw error;
       return (data ?? []) as DbRouter[];

@@ -53,6 +53,7 @@ async function fetchRouters(): Promise<DbRouter[]> {
     .from("isp_routers")
     .select("id,name,host,bridge_ip,status,router_username,router_secret")
     .eq("admin_id", ADMIN_ID)
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
     .order("name");
   return (data ?? []) as DbRouter[];
 }

@@ -316,7 +316,8 @@ export default function BridgePorts() {
         const { data } = await supabase
           .from("isp_routers")
           .select("id,name,host,status,router_username,router_secret,bridge_ip,vpn_ip")
-          .eq("admin_id", ADMIN_ID);
+          .eq("admin_id", ADMIN_ID)
+          .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
         return (data ?? []) as SbRouter[];
       } catch { return []; }
     },

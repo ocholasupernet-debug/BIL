@@ -751,6 +751,7 @@ export default function RouterAPIConfig() {
         .from("isp_routers")
         .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
+        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("name");
       return (data ?? []) as DbRouter[];
     },

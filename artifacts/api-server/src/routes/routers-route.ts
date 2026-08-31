@@ -87,9 +87,13 @@ router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ ok: false, error: "The requested ISP account does not match the signed-in admin session." });
     return;
   }
+  const includeSetup = String(req.query.includeSetup ?? "").trim().toLowerCase() === "true";
+  const setupFilter = includeSetup
+    ? ""
+    : "&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)";
   const rows = await sbSelect(
     "isp_routers",
-    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
+    `admin_id=eq.${adminId}${setupFilter}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
 });

@@ -216,6 +216,7 @@ export default function LoadBalancing() {
         .from("isp_routers")
         .select("id,name,host,ros_version,status")
         .eq("admin_id", ADMIN_ID)
+        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("name");
       if (cancelled) return;
       const rows = (data ?? []) as RouterOption[];

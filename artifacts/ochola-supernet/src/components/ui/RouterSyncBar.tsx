@@ -333,7 +333,7 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
   const { data: routers = [] } = useQuery<DbRouterMin[]>({
     queryKey: ["isp_routers_sync"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,vpn_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID);
+      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,vpn_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
       return (data ?? []) as DbRouterMin[];
     },
   });

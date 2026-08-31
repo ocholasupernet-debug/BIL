@@ -54,7 +54,7 @@ async function fetchPlans(): Promise<DbPlanLite[]> {
 }
 
 async function fetchRouters(): Promise<DbRouterLite[]> {
-  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID);
+  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
   if (error) throw error;
   return data ?? [];
 }

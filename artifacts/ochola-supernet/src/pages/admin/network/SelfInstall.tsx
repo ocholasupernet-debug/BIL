@@ -317,7 +317,7 @@ export default function SelfInstall() {
     queryKey: ["self-install-routers", adminId],
     queryFn: async () => {
       if (!adminId) throw new Error("Sign in to an ISP account before starting router self-install.");
-       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
+       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}&includeSetup=true`);
     },
     enabled: !!adminId,
     refetchInterval: 6_000,

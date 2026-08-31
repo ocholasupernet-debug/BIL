@@ -186,7 +186,8 @@ async function fetchRouters(): Promise<Router[]> {
   const { data } = await supabase
     .from("isp_routers")
     .select("id,name,host,status,bridge_ip")
-    .eq("admin_id", ADMIN_ID);
+    .eq("admin_id", ADMIN_ID)
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
   return (data ?? []) as Router[];
 }
 async function fetchPayments(customerIds: number[]): Promise<Payment[]> {

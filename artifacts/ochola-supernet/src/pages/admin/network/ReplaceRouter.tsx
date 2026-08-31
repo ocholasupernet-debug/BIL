@@ -747,6 +747,7 @@ export default function ReplaceRouter() {
         .from("isp_routers")
         .select("id,name,host,status,model,ros_version,last_seen,bridge_interface,router_username,router_secret,bridge_ip,vpn_ip")
         .eq("admin_id", ADMIN_ID)
+        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("created_at", { ascending: true });
       return (data ?? []) as DbRouter[];
     },

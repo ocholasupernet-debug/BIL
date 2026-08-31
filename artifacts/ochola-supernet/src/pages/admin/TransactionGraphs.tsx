@@ -34,7 +34,8 @@ async function fetchPlans(): Promise<PlanRow[]> {
 async function fetchRouters(): Promise<RouterRow[]> {
   const { data, error } = await supabase
     .from("isp_routers")
-    .select("id,name");
+    .select("id,name,status")
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
   if (error) throw error;
   return (data ?? []) as RouterRow[];
 }

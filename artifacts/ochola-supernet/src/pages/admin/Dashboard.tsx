@@ -70,7 +70,11 @@ function fmtSince(iso: string | null | undefined): string {
 }
 
 async function fetchRouters(): Promise<DbRouter[]> {
-  const { data, error } = await supabase.from("isp_routers").select("*").eq("admin_id", ADMIN_ID);
+  const { data, error } = await supabase
+    .from("isp_routers")
+    .select("*")
+    .eq("admin_id", ADMIN_ID)
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
   if (error) throw error;
   return data ?? [];
 }
