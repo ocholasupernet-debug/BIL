@@ -33,7 +33,7 @@ const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 test("management OpenVPN credentials use the configured router name", () => {
   assert.deepEqual(
     vpnContract.routerManagementOvpnCredentials("come2"),
-    { username: "come2", password: "come200" },
+    { username: "come2", password: "come2" },
   );
   assert.throws(
     () => vpnContract.routerManagementOvpnCredentials("come 2"),
@@ -218,7 +218,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router-ccd/);
   assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
   assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
-  assert.match(setup, /ifconfig-push 10\.8\.5\.2 255\.255\.255\.0/);
+   assert.match(setup, /topology net30/);
+   assert.match(setup, /ifconfig-push 10\.8\.5\.2 10\.8\.5\.3/);
   assert.match(setup, /verify-client-cert none/);
   assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
@@ -233,7 +234,7 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.statusPath/);
   assert.match(vpnStatus, /ROUTER_MANAGEMENT_VPN\.ippPath/);
   assert.match(scriptsRoute, /routerManagementVpnReadiness\(\)/);
-  assert.match(scriptsRoute, /routerManagementVpnPort\(\)/);
+  assert.match(scriptsRoute, /routerManagementVpnPortForRouter\(routerId\)/);
   assert.match(scriptsRoute, /if \(!readiness\.endpointConfigured\)/);
   assert.match(scriptsRoute, /The OpenVPN server may be hosted separately/);
 });

@@ -23,14 +23,14 @@ function useTicker(interval = 10_000) {
 
 /* ── helpers ── */
 async function fetchRouters(): Promise<DbRouter[]> {
-  /* Show every router saved for this administrator, including routers that
-     are still being configured or are currently offline. Their status and
-     last-seen values remain visible in the table so an admin can recover,
-     edit, or remove any router they have added. */
+  /* Setup records belong to the installer workflow until the final
+     management-VPN and bridge verification succeeds. They must not appear
+     in the account's normal router list before that gate. */
   const { data, error } = await supabase
     .from("isp_routers")
     .select("*")
     .eq("admin_id", ADMIN_ID)
+    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
     .order("id", { ascending: false });
   if (error) throw error;
   return data ?? [];
@@ -557,8 +557,8 @@ export default function Routers() {
       vpn_ip:           r.vpn_ip             ?? "",
       proxy_ip:         r.proxy_ip           ?? "",
       bridge_interface: r.bridge_interface   ?? "",
-      router_username:  r.router_username    ?? "admin",
-      router_secret:    r.router_secret      ?? "",
+      router_username:  r.name               ?? "admin",
+      router_secret:    r.name               ?? "",
       coordinates:      (r as any).coordinates ?? "",
       coverage:         (r as any).coverage    ?? "",
     });
@@ -595,17 +595,18 @@ export default function Routers() {
     setEditSaving(true);
     setEditError(null);
     try {
+      const routerName = editForm.name.trim() || editRouter.name;
       const { error } = await supabase
         .from("isp_routers")
         .update({
-          name:             editForm.name.trim()             || editRouter.name,
+          name:             routerName,
           host:             editForm.host.trim()             || editRouter.host,
           bridge_ip:        editForm.bridge_ip.trim()        || null,
           vpn_ip:           editForm.vpn_ip.trim()           || null,
           proxy_ip:         editForm.proxy_ip.trim()         || null,
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
-          router_username:  editForm.router_username.trim()  || "admin",
-          router_secret:    editForm.router_secret.trim()    || null,
+          router_username:  routerName,
+          router_secret:    routerName,
           coordinates:      editForm.coordinates.trim()      || null,
           coverage:         editForm.coverage.trim()         || null,
           updated_at:       new Date().toISOString(),
