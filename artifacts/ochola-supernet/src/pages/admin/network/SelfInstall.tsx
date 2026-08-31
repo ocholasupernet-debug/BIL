@@ -7,6 +7,7 @@ import {
   getAdminRole,
   getSelectedTenantId,
 } from "@/lib/supabase";
+import { getHostSubdomain } from "@/lib/subdomain";
 import {
   AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, Copy,
   Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
@@ -151,8 +152,19 @@ function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+function suggestedRouterName(existing: RouterSummary[]): string {
+  const companySlug = getHostSubdomain();
+  const base = companySlug || "router";
+  const used = new Set(existing.map(router => router.name.trim().toLowerCase()));
+  for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
+    const candidate = `${base}${ordinal}`;
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${base}1`;
+}
+
 function coexistenceBridgeName(routerId: number): string {
-  return `ochola-hs-${routerId}`;
+  return "co-hotspot-bridge";
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -233,25 +245,33 @@ function RouterRecovery({
   error,
   routerId,
   installationMode,
+  vpnConnected = false,
 }: {
   error?: string;
   routerId?: number | null;
   installationMode?: InstallationMode;
+  vpnConnected?: boolean;
 }) {
   const interfaceName = installationMode === "coexist" && routerId
     ? `ochola-mgmt-vpn-${routerId}`
     : "corebillingvpn";
+  const title = vpnConnected ? "RouterOS API is not ready yet" : "Waiting for the router-management VPN";
+  const defaultMessage = vpnConnected
+    ? "The management VPN is connected, but the RouterOS API did not return the router identity and version yet. Confirm API access on port 8728 and refresh."
+    : "The router has not connected to the isolated 10.8.5.x management network yet.";
   return (
     <div style={{
       background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)",
       borderRadius: 10, padding: "0.9rem 1rem",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#f87171", fontSize: "0.83rem", fontWeight: 800 }}>
-        <AlertTriangle size={15} /> Waiting for the router-management VPN
+        <AlertTriangle size={15} /> {title}
       </div>
       <p style={{ margin: "0.45rem 0 0", color: "#fca5a5", fontSize: "0.76rem", lineHeight: 1.6 }}>
-        {error || "The router has not connected to the isolated 10.8.5.x management network yet."}
-        {" "}Confirm the router has internet, re-run the downloaded script in Winbox Terminal, and wait for the VPN client to reconnect.
+        {error || defaultMessage}
+        {" "}{vpnConnected
+          ? "Confirm IP → Services → api is enabled and that port 8728 is allowed from 10.8.5.0/24."
+          : "Confirm the router has internet, re-run the downloaded script in Winbox Terminal, and wait for the VPN client to reconnect."}
       </p>
       <code style={{
         display: "block", marginTop: "0.65rem", color: "#67e8f9", background: "rgba(0,0,0,.28)",
@@ -270,6 +290,7 @@ export default function SelfInstall() {
   const [adminId, setAdminId] = useState<number | null>(() => getSelectedTenantId());
   const [phase, setPhase] = useState<Phase>("idle");
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
+  const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
   const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
   const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
@@ -305,7 +326,7 @@ export default function SelfInstall() {
     queryKey: ["self-install-routers", adminId],
     queryFn: async () => {
       if (!adminId) throw new Error("Sign in to an ISP account before starting router self-install.");
-       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
+       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}&includeSetup=true`);
     },
     enabled: !!adminId,
     refetchInterval: 6_000,
@@ -339,14 +360,17 @@ export default function SelfInstall() {
   });
   const progress = progressQuery.data?.installs.find(item => item.routerId === activeRouterId);
   const status = statusQuery.data;
-  const identityReady = !!status?.ready;
+  /* Loading the live router and ports only needs a verified RouterOS API
+     connection. `status.ready` also includes the final heartbeat/setup gate,
+     which can legitimately lag behind the seven installer stages. */
+  const routerApiReady = !!status?.connected && !!status.router.identity && !!status.router.rosVersion;
 
   const handleGenerate = async (mode: CertificateMode) => {
     if (!adminId) {
       setPageError("Your ISP session is missing a tenant account. Sign in again before creating a router profile.");
       return;
     }
-    if (reconfigureId && !activeRouter) {
+    if (reconfiguringExisting && !activeRouter) {
       setPageError("The router selected for reconfiguration is not available in this ISP account.");
       return;
     }
@@ -356,7 +380,10 @@ export default function SelfInstall() {
     try {
       const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
         method: "POST",
-        body: JSON.stringify({ adminId, routerName: activeRouter?.name || `router${routers.length + 1}` }),
+        body: JSON.stringify({
+          adminId,
+          ...(reconfiguringExisting && activeRouter?.name ? { routerName: activeRouter.name } : {}),
+        }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
       if (installationMode === "takeover") {
@@ -408,10 +435,31 @@ export default function SelfInstall() {
     }
   };
 
-  const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
+  const startAnotherRouter = () => {
+    window.history.replaceState({}, "", window.location.pathname);
+    setReconfiguringExisting(false);
+    setActiveRouterId(null);
+    setPhase("idle");
+    setPorts(null);
+    setSelectedBridge("");
+    setSelectedPorts(new Set());
+    setPortState({});
+    setTakeoverGrant("");
+    setTakeoverPlan([]);
+    setTakeoverConfirmation("");
+    setPageError(null);
+    setCopyResult(null);
+    setCopySkipped(false);
+  };
+
+  const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
   const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
   const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
-  const publicApiOrigin = (API || window.location.origin).replace(/\/$/, "");
+  /* When an ISP admin is signed in on its own hostname, keep installer URLs
+     on that hostname so RouterOS validates that company's certificate. */
+  const publicApiOrigin = (
+    getHostSubdomain() ? window.location.origin : (API || window.location.origin)
+  ).replace(/\/$/, "");
   const scriptUrl = `${publicApiOrigin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
   const caUrl = `${publicApiOrigin}/api/scripts/ochola-isrg-root-x1.pem`;
   const fetchCommand = certificateMode === "verified"
@@ -495,7 +543,7 @@ export default function SelfInstall() {
   };
 
   const finishInstallation = async () => {
-    if (!activeRouterId || !status?.ready || Object.values(portState).some(value => value === "pending")) return;
+    if (!activeRouterId || !routerApiReady || Object.values(portState).some(value => value === "pending")) return;
     if (installationMode === "coexist" && selectedPorts.size === 0) {
       setPortError("Select at least one unassigned physical port for the isolated OcholaSuperNet bridge before finishing.");
       return;
@@ -550,7 +598,7 @@ export default function SelfInstall() {
   const asset = modelAsset(completeRouter?.model || status?.router.model || activeRouter?.model || "");
   const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
   const stepLabels = ["Generate profile", "Run installer", "VPN + heartbeat", "Router ports", "Installed"];
-  const currentStep = phase === "idle" ? 0 : phase === "install" ? (identityReady ? 3 : 2) : phase === "ports" ? 4 : 5;
+  const currentStep = phase === "idle" ? 0 : phase === "install" ? (routerApiReady ? 3 : 2) : phase === "ports" ? 4 : 5;
 
   return (
     <AdminLayout>
@@ -558,7 +606,7 @@ export default function SelfInstall() {
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 900 }}>
         <div>
           <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 .2rem" }}>
-            {reconfigureId ? "Reconfigure Router" : "Self Install"}
+            {reconfiguringExisting ? "Reconfigure Router" : "Self Install"}
           </h1>
           <p style={{ fontSize: ".8rem", color: "var(--isp-text-muted)", margin: 0 }}>
             Connect a MikroTik through the management VPN, choose its live ports, and finish setup without leaving this flow.
@@ -723,6 +771,9 @@ export default function SelfInstall() {
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
               </button>
+              <button onClick={startAnotherRouter} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "#93c5fd", background: "transparent", border: "1px solid rgba(147,197,253,.3)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
+                <RefreshCw size={13} /> Create another router
+              </button>
             </div>
             {showHelp && (
               <div style={{ background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)", borderRadius: 9, padding: ".8rem 1rem", color: "#fbbf24", fontSize: ".75rem", lineHeight: 1.65 }}>
@@ -794,14 +845,15 @@ export default function SelfInstall() {
                 </div>
               )}
             </div>
-            {!identityReady && !statusQuery.isLoading && (
+            {!routerApiReady && !statusQuery.isLoading && (
               <RouterRecovery
                 error={status?.error || statusQuery.error?.message}
                 routerId={activeRouterId}
                 installationMode={installationMode}
+                vpnConnected={!!status?.vpnConnected}
               />
             )}
-            <button onClick={loadPorts} disabled={!identityReady || portsLoading || completeLoading} style={{ ...primaryButton(!identityReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
+            <button onClick={loadPorts} disabled={!routerApiReady || portsLoading || completeLoading} style={{ ...primaryButton(!routerApiReady || portsLoading || completeLoading), alignSelf: "flex-end" }}>
               {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
               {portsLoading ? "Loading isolated service ports…" : "Next — view router and ports"}
             </button>
@@ -905,7 +957,7 @@ export default function SelfInstall() {
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
               <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
-               <button onClick={finishInstallation} disabled={!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!status?.ready || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
+                <button onClick={finishInstallation} disabled={!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
                 {completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={15} />}
                  {completeLoading ? "Verifying installation…" : installationMode === "coexist" && selectedPorts.size === 0 ? "Select a port to continue" : "Next — finish installation"}
               </button>

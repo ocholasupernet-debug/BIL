@@ -89,18 +89,6 @@ async function nextCompanyRouterName(adminId: number, requestHost: string): Prom
   throw new Error(`No available router name remains for company prefix "${base}"`);
 }
 
-async function mostRecentUnfinishedRouter(adminId: number): Promise<Record<string, unknown> | null> {
-  const pendingRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=*&order=id.desc&limit=1`,
-    { headers: sbHeaders(BEST_KEY) },
-  );
-  if (!pendingRes.ok) {
-    throw new Error(`Could not inspect unfinished router setup records (${pendingRes.status})`);
-  }
-  const rows = await pendingRes.json() as Record<string, unknown>[];
-  return rows[0] ?? null;
-}
-
 /* Credentials are consumed by server-side RouterOS routes and by the
  * generated installer only. Never return them to the admin browser. */
 function publicRouter(row: Record<string, unknown>): Record<string, unknown> {
@@ -151,25 +139,6 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
   }
 
   let name = typeof routerName === "string" ? routerName.trim() : "";
-  let reusedUnfinished = false;
-  if (!name) {
-    /* A browser refresh can clear activeRouterId. Reuse the unfinished setup
-       record instead of allocating comeN+1 for a retry. */
-    try {
-      const unfinished = await mostRecentUnfinishedRouter(adminId);
-      const unfinishedName = String(unfinished?.name ?? "").trim();
-      if (unfinishedName) {
-        name = unfinishedName;
-        reusedUnfinished = true;
-      }
-    } catch (error) {
-      res.status(503).json({
-        ok: false,
-        error: `Could not find an unfinished router setup to retry: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      return;
-    }
-  }
   if (!name) {
     try {
       name = await nextCompanyRouterName(adminId, req.get("host") ?? "");
@@ -208,7 +177,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
             console.warn("[router/ensure] persistent VPN IP allocation deferred:", error);
           }
         }
-        res.json({ ok: true, router: publicRouter(existing), created: false, reusedUnfinished });
+        res.json({ ok: true, router: publicRouter(existing), created: false });
         return;
       }
     }
@@ -273,7 +242,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
         if (existRes2.ok) {
           const rows2 = await existRes2.json() as Record<string, unknown>[];
           if (rows2.length > 0) {
-            res.json({ ok: true, router: publicRouter(rows2[0]), created: false, reusedUnfinished });
+            res.json({ ok: true, router: publicRouter(rows2[0]), created: false });
             return;
           }
         }
