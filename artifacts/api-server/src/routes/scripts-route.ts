@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from "fs";
+import { lookup } from "node:dns/promises";
+import * as net from "node:net";
 import path from "path";
 import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } from "./pppoe-script-route.js";
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
@@ -8,13 +10,13 @@ import {
   generateRouterIpsecClientScript,
   generateRouterWireGuardClientScript,
 } from "../lib/mikrotik.js";
-import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
+import { allocateRouterVpnIp, isRouterVpnIp, routerVpnPeerIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
   ROUTER_MANAGEMENT_VPN,
   routerManagementOvpnCredentials,
-  routerManagementVpnPort,
+  routerManagementVpnPortForRouter,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
 import {
@@ -437,7 +439,7 @@ function safeRm(cmd: string): string {
 }
 
 function coexistenceBridgeName(routerId: number): string {
-  return `ochola-hs-${routerId}`;
+  return "co-hotspot-bridge";
 }
 
 function coexistenceGateway(routerId: number): string {
@@ -478,6 +480,8 @@ function buildCoexistenceHotspotRsc(
   const profileName = `ochola-hs-profile-${routerId}`;
   const hotspotName = `ochola-hs-server-${routerId}`;
   const portalDir = `ochola-hotspot-${routerId}`;
+  const poolStart = gateway.replace(/\.1$/, ".2");
+  const poolEnd = gateway.replace(/\.1$/, ".254");
   const tag = `${companyName} coexistence router ${routerId}`;
   const safe = (value: string) => rosString(value);
   const portalBase = origin.replace(/\/$/, "");
@@ -487,8 +491,11 @@ function buildCoexistenceHotspotRsc(
     `# Existing billing bridges and ports are intentionally untouched.`,
     `# Bridge: ${bridgeName} | Gateway: ${gateway} | Subnet: ${subnet}`,
     ``,
+    `:do {`,
     `:put "COEXISTENCE SERVICE — ${safe(companyName)}"`,
     `:local bridgeName "${safe(bridgeName)}"`,
+    `:local legacyBridgeName "co-hotspot-bridge-${routerId}"`,
+    `:local olderBridgeName "ochola-hs-${routerId}"`,
     `:local bridgeTag "${safe(tag)}"`,
     `:local gateway "${safe(gateway)}"`,
     `:local subnet "${safe(subnet)}"`,
@@ -496,36 +503,60 @@ function buildCoexistenceHotspotRsc(
     `:local dhcpName "${safe(dhcpName)}"`,
     `:local profileName "${safe(profileName)}"`,
     `:local hotspotName "${safe(hotspotName)}"`,
+    `:local coexistenceStep "start"`,
+    `:global ocholaCoexistenceError`,
+    `:set ocholaCoexistenceError ""`,
     ``,
     `# Create only Ochola's bridge. A collision with an unowned bridge is fatal.`,
+    `:set coexistenceStep "bridge"`,
+    `:put "COEXISTENCE STEP: bridge"`,
     `:local existingBridge [/interface bridge find name=$bridgeName]`,
+    `:if ([:len $existingBridge] = 0) do={`,
+    `  :local legacyBridge [/interface bridge find name=$legacyBridgeName]`,
+    `  :if ([:len $legacyBridge] = 0) do={ :set legacyBridge [/interface bridge find name=$olderBridgeName] }`,
+    `  :if ([:len $legacyBridge] > 0) do={`,
+    `    :local legacyComment [/interface bridge get $legacyBridge comment]`,
+    `    :if ([:find $legacyComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence bridge name collision: $legacyBridgeName is not owned by ${safe(companyName)}."; :error $ocholaCoexistenceError }`,
+    `    /interface bridge set $legacyBridge name=$bridgeName`,
+    `    :set existingBridge $legacyBridge`,
+    `  }`,
+    `}`,
     `:if ([:len $existingBridge] = 0) do={`,
     `  /interface bridge add name=$bridgeName protocol-mode=none fast-forward=no comment=$bridgeTag`,
     `} else={`,
     `  :local existingComment [/interface bridge get $existingBridge comment]`,
-    `  :if ([:find $existingComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence bridge name collision: $bridgeName is not owned by ${safe(companyName)}." }`,
+    `  :if ([:find $existingComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence bridge name collision: $bridgeName is not owned by ${safe(companyName)}."; :error $ocholaCoexistenceError }`,
     `  /interface bridge set $existingBridge fast-forward=no`,
     `}`,
     ``,
     `# Never replace an address on this bridge. Only the exact owned address is accepted.`,
+    `:set coexistenceStep "address"`,
+    `:put "COEXISTENCE STEP: address"`,
     `:local ownedAddress [/ip address find interface=$bridgeName address="${safe(gateway)}/24"]`,
     `:if ([:len $ownedAddress] = 0) do={`,
-    `  :if ([:len [/ip address find interface=$bridgeName]] > 0) do={ :error "Coexistence bridge already has an unowned IP address." }`,
+    `  :if ([:len [/ip address find interface=$bridgeName]] > 0) do={ :set ocholaCoexistenceError "Coexistence bridge already has an unowned IP address."; :error $ocholaCoexistenceError }`,
     `  /ip address add address="${safe(gateway)}/24" interface=$bridgeName comment=$bridgeTag`,
     `}`,
     ``,
     `# Dedicated pool, DHCP server, and DHCP network.`,
+    `:set coexistenceStep "dhcp"`,
+    `:put "COEXISTENCE STEP: dhcp"`,
     `:local existingPool [/ip pool find name=$poolName]`,
     `:if ([:len $existingPool] = 0) do={`,
-    `  /ip pool add name=$poolName ranges="${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}" comment=$bridgeTag`,
+    `  /ip pool add name=$poolName ranges="${safe(poolStart)}-${safe(poolEnd)}" comment=$bridgeTag`,
     `} else={`,
-    `  :if ([:tostr [/ip pool get $existingPool ranges]] != "${safe(gateway.replace(/\\.1$/, ".2"))}-${safe(gateway.replace(/\\.1$/, ".254"))}") do={ :error "Coexistence pool collision: $poolName has another range." }`,
+    `  :if ([:tostr [/ip pool get $existingPool ranges]] != "${safe(poolStart)}-${safe(poolEnd)}") do={`,
+    `    :local poolComment [/ip pool get $existingPool comment]`,
+    `    :if ([:find $poolComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence pool collision: $poolName has another range."; :error $ocholaCoexistenceError }`,
+    `    /ip pool set $existingPool ranges="${safe(poolStart)}-${safe(poolEnd)}"`,
+    `    :put "COEXISTENCE repaired the owned DHCP pool range."`,
+    `  }`,
     `}`,
     `:local existingDhcp [/ip dhcp-server find name=$dhcpName]`,
     `:if ([:len $existingDhcp] = 0) do={`,
     `  /ip dhcp-server add name=$dhcpName interface=$bridgeName address-pool=$poolName disabled=no comment=$bridgeTag`,
     `} else={`,
-    `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :error "Coexistence DHCP name collision: $dhcpName is bound to another interface." }`,
+    `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence DHCP name collision: $dhcpName is bound to another interface."; :error $ocholaCoexistenceError }`,
     `  /ip dhcp-server enable $existingDhcp`,
     `}`,
     `:local existingNetwork [/ip dhcp-server network find address=$subnet]`,
@@ -533,25 +564,29 @@ function buildCoexistenceHotspotRsc(
     `  /ip dhcp-server network add address=$subnet gateway=$gateway dns-server=$gateway comment=$bridgeTag`,
     `} else={`,
     `  :local networkComment [/ip dhcp-server network get $existingNetwork comment]`,
-    `  :if ([:find $networkComment "coexistence router ${routerId}"] = nil) do={ :error "Coexistence subnet collision: $subnet is already owned by another service." }`,
+    `  :if ([:find $networkComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence subnet collision: $subnet is already owned by another service."; :error $ocholaCoexistenceError }`,
     `}`,
     ``,
     `# Dedicated hotspot profile and server. Existing hotspot services are not touched.`,
+    `:set coexistenceStep "hotspot"`,
+    `:put "COEXISTENCE STEP: hotspot"`,
     `:local existingProfile [/ip hotspot profile find name=$profileName]`,
     `:if ([:len $existingProfile] = 0) do={`,
     `  /ip hotspot profile add name=$profileName hotspot-address=$gateway dns-name="wifi-${routerId}.local" login-by=http-chap,http-pap html-directory="${portalDir}"`,
     `} else={`,
-    `  :if ([/ip hotspot profile get $existingProfile hotspot-address] != $gateway) do={ :error "Coexistence hotspot profile collision: $profileName." }`,
+    `  :if ([/ip hotspot profile get $existingProfile hotspot-address] != $gateway) do={ :set ocholaCoexistenceError "Coexistence hotspot profile collision: $profileName."; :error $ocholaCoexistenceError }`,
     `}`,
     `:local existingHotspot [/ip hotspot find name=$hotspotName]`,
     `:if ([:len $existingHotspot] = 0) do={`,
     `  /ip hotspot add name=$hotspotName interface=$bridgeName profile=$profileName address-pool=$poolName idle-timeout=none disabled=no`,
     `} else={`,
-    `  :if ([/ip hotspot get $existingHotspot interface] != $bridgeName) do={ :error "Coexistence hotspot server collision: $hotspotName." }`,
+    `  :if ([/ip hotspot get $existingHotspot interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence hotspot server collision: $hotspotName."; :error $ocholaCoexistenceError }`,
     `  /ip hotspot enable $existingHotspot`,
     `}`,
     ``,
     `# Only this subnet is masqueraded; no global HTTP/HTTPS redirects are added.`,
+    `:set coexistenceStep "nat-and-dns"`,
+    `:put "COEXISTENCE STEP: nat-and-dns"`,
     `:local natComment "${safe(tag)} NAT"`,
     `:if ([:len [/ip firewall nat find comment=$natComment]] = 0) do={`,
     `  /ip firewall nat add chain=srcnat src-address=$subnet action=masquerade comment=$natComment`,
@@ -564,6 +599,8 @@ function buildCoexistenceHotspotRsc(
     `:if ([:len [/ip firewall filter find comment=$dnsTcpComment]] = 0) do={ /ip firewall filter add chain=input protocol=tcp dst-port=53 src-address=$subnet action=accept comment=$dnsTcpComment }`,
     ``,
     `# Keep the portal in its own directory so another billing system's files are not overwritten.`,
+    `:set coexistenceStep "portal"`,
+    `:put "COEXISTENCE STEP: portal"`,
     `:local storage ""`,
     `:if ([:len [/file find name="disk1" type=directory]] > 0) do={ :set storage "disk1" }`,
     `:if ($storage = "") do={ :if ([:len [/file find name="flash" type=directory]] > 0) do={ :set storage "flash" } }`,
@@ -596,8 +633,15 @@ function buildCoexistenceHotspotRsc(
   }
   lines.push(
     ``,
+    `:put "COEXISTENCE STEP: plans"`,
     `:put "COEXISTENCE SERVICE READY — ${safe(bridgeName)} belongs to ${safe(companyName)} only."`,
     `:put "Assign only unassigned physical ports to this bridge from the admin panel."`,
+    `} on-error={`,
+    `  :local coexistenceError $ocholaCoexistenceError`,
+    `  :if ([:len $coexistenceError] = 0) do={ :set coexistenceError ("RouterOS aborted the coexistence bundle during " . $coexistenceStep . "; inspect the saved failed bundle and RouterOS log.") }`,
+    `  :put ("COEXISTENCE BUNDLE FAILED at " . $coexistenceStep . ": " . $coexistenceError)`,
+    `  :error ("Coexistence hotspot bundle failed at " . $coexistenceStep . ": " . $coexistenceError)`,
+    `}`,
   );
   return lines.join("\r\n");
 }
@@ -712,24 +756,46 @@ function routerVpnEndpointHost(origin: string): string {
   }
 }
 
+async function routerVpnEndpointAddress(origin: string): Promise<string> {
+  const host = routerVpnEndpointHost(origin);
+  if (!host || net.isIP(host) === 4) return host;
+  if (net.isIP(host) === 6) {
+    throw new Error("The router VPN endpoint must have a public IPv4 address.");
+  }
+  try {
+    const result = await lookup(host, { family: 4 });
+    return result.address;
+  } catch (error) {
+    throw new Error(`Could not resolve the router VPN endpoint "${host}" to an IPv4 address: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function defaultRouterTunnelIp(routerId: number): string {
   return `10.8.5.${2 + ((routerId - 1) % 253)}`;
 }
 
 async function ensurePersistentRouterTunnelIp(routerId: number, existingIp?: string | null): Promise<string> {
-  if (isRouterVpnIp(existingIp)) return existingIp!.trim();
-
   const used = new Set<string>(readIppEntries().values());
+  const currentIp = isRouterVpnIp(existingIp) ? existingIp!.trim() : "";
   try {
-    const routers = await sbGet<{ vpn_ip: string | null }>(
-      "isp_routers?select=vpn_ip&vpn_ip=not.is.null",
+    const routers = await sbGet<{ id: number; vpn_ip: string | null }>(
+      "isp_routers?select=id,vpn_ip&vpn_ip=not.is.null",
     );
     for (const router of routers) {
-      if (isRouterVpnIp(router.vpn_ip)) used.add(router.vpn_ip!.trim());
+      if (router.id !== routerId && isRouterVpnIp(router.vpn_ip)) used.add(router.vpn_ip!.trim());
     }
   } catch {
     /* The deterministic fallback below still gives an existing router a
        stable address when the metadata lookup is temporarily unavailable. */
+  }
+
+  if (currentIp) {
+    used.delete(currentIp);
+    try {
+      if (!used.has(routerVpnPeerIp(currentIp))) return currentIp;
+    } catch {
+      /* Reallocate an address that cannot form a valid net30 pair. */
+    }
   }
 
   let assigned: string;
@@ -944,17 +1010,28 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 $pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
+:local coexistenceBundleBytes ""
 :do {
+    :global ocholaCoexistenceError
+    :set ocholaCoexistenceError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
+    :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
+    :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""
 } on-error={
-    :local hotspotError $error
+    :global ocholaCoexistenceError
+    :local hotspotError $ocholaCoexistenceError
+    :if ([:len $hotspotError] = 0) do={
+        :set hotspotError ("isolated hotspot bundle import failed after " . $coexistenceBundleBytes . " bytes; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log for the failing stage.")
+    }
     :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
     $pg 1 "coexistence-hotspot" "failed" $hotspotError
+    :do { /file remove [find name="failed-ochola-coexistence-hotspot.rsc"] } on-error={}
+    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
     :error ("Coexistence stopped without changing existing billing resources; isolated hotspot failed: " . $hotspotError)
 }
 ` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; $pg 1 "coexistence-hotspot" "failed" "missing bundle"; :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
@@ -1716,7 +1793,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const vpsHost = routerVpnEndpointHost(requestOrigin(req));
+      const vpsHost = await routerVpnEndpointAddress(requestOrigin(req));
       if (!vpsHost) {
         res.status(503).type("text/plain").send(
           "# OCHOLA_ROUTER_VPN_ERROR\n" +
@@ -1724,7 +1801,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const vpnPort = routerManagementVpnPort();
+      const vpnPort = routerManagementVpnPortForRouter(routerId);
       const readinessWarning = readiness.ready
         ? ""
         : `# WARNING: API could not verify local OpenVPN files (${readiness.missing.join(", ")}).\n` +
@@ -2622,13 +2699,16 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     const publicAppOrigin = `https://${baseDomain}`;
     const scriptBaseUrl = `${publicAppOrigin}/api/scripts`;
     const scriptAdminQuery = `admin_id=${encodeURIComponent(String(adminId))}`;
-    const routerVpnHost = routerVpnEndpointHost(publicAppOrigin) || "vpn.isplatty.org";
+    const routerVpnHost = await routerVpnEndpointAddress(publicAppOrigin);
+    if (!routerVpnHost) {
+      throw new Error("Router VPN endpoint is not configured with a public IPv4 address.");
+    }
 
     /* ── Step 2: Fetch routers for this admin ── */
     interface DbRouter {
       id: number; name: string; host: string;
       bridge_interface: string | null;
-      hotspot_dns_name: string | null;
+      hotspot_dns_name?: string | null;
       bridge_ip: string | null;
       vpn_ip: string | null;
       router_secret: string | null;
@@ -2636,7 +2716,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       status: string;
     }
     const routers = await sbGet<DbRouter>(
-      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,hotspot_dns_name,bridge_ip,vpn_ip,router_secret,last_seen,status`
+      `isp_routers?admin_id=eq.${adminId}&select=id,name,host,bridge_interface,bridge_ip,vpn_ip,router_secret,last_seen,status`
     );
 
     /* ── Helper to decide if a router record is "pending" (not yet installed) ── */
@@ -3013,7 +3093,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPort()} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
+       ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, routerSecret ?? ""),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
