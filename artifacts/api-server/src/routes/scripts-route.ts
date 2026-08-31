@@ -369,8 +369,16 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
 function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVpnError = false): string {
   const routerVpnErrorCheck = rejectRouterVpnError
     ? `
- :local fetchedContents [/file get $fetchedFile contents]
- :if ([:find $fetchedContents "# OCHOLA_ROUTER_VPN_ERROR"] = 0) do={ :error ("server rejected ${label}: " . $fetchedContents) }`
+ :global ocholaVpnChildError
+ :local fetchedContents ""
+ :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={
+     :set ocholaVpnChildError "downloaded ${label} could not be inspected before import"
+     :error $ocholaVpnChildError
+ }
+ :if ([:find $fetchedContents "# OCHOLA_ROUTER_VPN_ERROR"] = 0) do={
+     :set ocholaVpnChildError ("server rejected ${label}: " . $fetchedContents)
+     :error $ocholaVpnChildError
+ }`
     : "";
   return `:local fetchedFile [/file find name=${pathExpression}]
 :if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
@@ -902,8 +910,13 @@ function buildMainhotspotRsc(
 }`
     : `:global pg do={}`;
 
-  const versionedUrlAssignment = (variableName: string, url: string): string =>
-    `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
+  const versionedUrlAssignment = (
+    variableName: string,
+    url: string,
+    minimumMajor = 6,
+  ): string => minimumMajor >= 7
+    ? `:if ($majorVersion >= 7) do={ :set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion]) } else={ :set ${variableName} "" }`
+    : `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
   const openVpnSelection = routerVpnUrl
     ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
     : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
@@ -928,12 +941,27 @@ function buildMainhotspotRsc(
     :do {
         :global ocholaVpnChildError
         :set ocholaVpnChildError ""
+         :if ([:len $${urlVariable}] = 0) do={
+             :error "${protocol}: no compatible RouterOS child script was selected"
+         }
         $pg 1 "vpn-${protocol}" "downloading" ""
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${tempFileName}"] } on-error={}
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
         ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
         :delay 2s
+         :if ($majorVersion >= 7) do={
+             :local preflightError ""
+             :do {
+                 /import "${tempFileName}" verbose=yes dry-run
+             } on-error={
+                 :set preflightError $error
+             }
+             :if ([:len $preflightError] > 0) do={
+                 :set ocholaVpnChildError ("${protocol}: RouterOS 7 dry-run rejected the child script: " . $preflightError)
+                 :error $ocholaVpnChildError
+             }
+         }
         :do {
             /import "${tempFileName}"
         } on-error={
@@ -999,16 +1027,24 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
 :local vpnConfigured false
 :local vpnProtocol ""
 :local vpnFailureSummary ""
+:local routerOsVersion [/system resource get version]
+:local routerOsMajorDigit [:pick $routerOsVersion 0 1]
 :local majorVersion 0
-:global version [/system package update get installed-version]
-:local dotPos [:find $version "."]
-:if ([:len $dotPos] > 0) do={ :set majorVersion [:tonum [:pick $version 0 $dotPos]] }
+:if ($routerOsMajorDigit = "7") do={
+    :set majorVersion 7
+} else={
+    :if ($routerOsMajorDigit = "6") do={
+        :set majorVersion 6
+    } else={
+        :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
+    }
+}
 :if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
 :local openVpnUrl ""
     :local wireGuardUrl ""
     :local ipsecUrl ""
 ${openVpnSelection}
-    ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl) : `:set wireGuardUrl ""`}
+    ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
     ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
@@ -1110,16 +1146,25 @@ ${httpsTrustBootstrap}
 
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
-:global version [/system package update get installed-version]
+:local routerOsVersion [/system resource get version]
+:local routerOsMajorDigit [:pick $routerOsVersion 0 1]
 :local majorVersion 0
 :local minorVersion 0
-:local dotPos [:find $version "."]
-:if ([:len $dotPos] > 0) do={
-    :set majorVersion [:tonum [:pick $version 0 $dotPos]]
-    :local remaining [:pick $version ($dotPos + 1) [:len $version]]
-    :set dotPos [:find $remaining "."]
-    :if ([:len $dotPos] > 0) do={
-        :set minorVersion [:tonum [:pick $remaining 0 $dotPos]]
+:if ($routerOsMajorDigit = "7") do={
+    :set majorVersion 7
+} else={
+    :if ($routerOsMajorDigit = "6") do={
+        :set majorVersion 6
+        :local firstDot [:find $routerOsVersion "."]
+        :local remaining [:pick $routerOsVersion ($firstDot + 1) [:len $routerOsVersion]]
+        :local secondDot [:find $remaining "."]
+        :if ([:len $secondDot] > 0) do={
+            :set minorVersion [:tonum [:pick $remaining 0 $secondDot]]
+        } else={
+            :set minorVersion [:tonum $remaining]
+        }
+    } else={
+        :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
     }
 }
 :if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
@@ -1144,7 +1189,7 @@ ${openVpnSelection}
 :local vpnConfigured false
 :local vpnProtocol ""
 :local vpnFailureSummary ""
-  ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl) : `:set wireGuardUrl ""`}
+  ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
   ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
 ${wireGuardAttempt}
@@ -1738,6 +1783,13 @@ function requestedRouterVpnProtocol(value: unknown): RouterVpnProtocol {
   throw new Error("Unsupported router VPN protocol");
 }
 
+function requestedRouterOsMajor(value: unknown): 6 | 7 | null {
+  const version = String(value ?? "").trim();
+  if (version === "6") return 6;
+  if (version === "7") return 7;
+  return null;
+}
+
 function configuredEnv(name: string): string {
   return String(process.env[name] ?? "").trim();
 }
@@ -1777,7 +1829,10 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
   const takeoverGrant = String(req.query.grant ?? "").trim();
 
   if (!routerId || !/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
-    res.status(401).type("text/plain").send("# Invalid or expired router VPN bootstrap session.");
+    res.status(401).type("text/plain").send(
+      "# OCHOLA_ROUTER_VPN_ERROR\n" +
+      "# Invalid or expired router VPN bootstrap session.",
+    );
     return;
   }
 
@@ -1792,21 +1847,33 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,admin_id,name,vpn_ip&limit=1`,
     );
     if (!rows[0]) {
-      res.status(401).type("text/plain").send("# Router VPN bootstrap is not authorized.");
+      res.status(401).type("text/plain").send(
+        "# OCHOLA_ROUTER_VPN_ERROR\n" +
+        "# Router VPN bootstrap is not authorized.",
+      );
       return;
     }
     if (installationMode === "takeover") {
       const grant = verifyTakeoverGrant(takeoverGrant, routerId);
       if (!grant || grant.adminId !== Number(rows[0].admin_id)) {
-        res.status(403).type("text/plain").send("# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.");
+        res.status(403).type("text/plain").send(
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          "# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.",
+        );
         return;
       }
     }
 
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
     const protocol = requestedRouterVpnProtocol(req.query.protocol);
-    const requestedRouterOsMajor = Number.parseInt(String(req.query["ros-version"] ?? ""), 10);
-    const routerOsMajor = Number.isSafeInteger(requestedRouterOsMajor) && requestedRouterOsMajor >= 7 ? 7 : 6;
+    const routerOsMajor = requestedRouterOsMajor(req.query["ros-version"]);
+    if (!routerOsMajor) {
+      res.status(400).type("text/plain").send(
+        "# OCHOLA_ROUTER_VPN_ERROR\n" +
+        "# RouterOS major version is required. The installer must read /system resource version first and request ros-version=6 or ros-version=7.",
+      );
+      return;
+    }
     let script: string;
 
     if (protocol === "openvpn") {
@@ -1911,7 +1978,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("ROUTER_OPENVPN_PORT") ? 503 : 500;
-    res.status(status).type("text/plain").send(`# Error generating router VPN bootstrap: ${message}`);
+    res.status(status).type("text/plain").send(`# OCHOLA_ROUTER_VPN_ERROR\n# Error generating router VPN bootstrap: ${message}`);
   }
 });
 
@@ -2299,7 +2366,8 @@ router.get("/scripts/normalpppoe.rsc", (req, res): void => {
 /* ── VPN setup – RouterOS 7 ── */
 function buildVpn7Rsc(origin: string): string {
   void origin;
-  return `# vpn7.rsc – OpenVPN client setup for RouterOS 7
+  return `# OCHOLA_ROUTER_VPN_ERROR
+# vpn7.rsc – OpenVPN client setup for RouterOS 7
 # Direct downloads are intentionally not configured with shared credentials.
 # mainhotspot.rsc must be downloaded with rid and token so it can fetch the
 # authenticated, router-specific /scripts/router-vpn.rsc bootstrap.
@@ -2311,7 +2379,8 @@ function buildVpn7Rsc(origin: string): string {
 /* ── VPN setup – RouterOS 6 ── */
 function buildVpn6Rsc(origin: string): string {
   void origin;
-  return `# vpn6.rsc – OpenVPN client setup for RouterOS 6
+  return `# OCHOLA_ROUTER_VPN_ERROR
+# vpn6.rsc – OpenVPN client setup for RouterOS 6
 # Direct downloads are intentionally not configured with shared credentials.
 # mainhotspot.rsc must be downloaded with rid and token so it can fetch the
 # authenticated, router-specific /scripts/router-vpn.rsc bootstrap.

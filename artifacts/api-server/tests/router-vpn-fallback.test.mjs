@@ -96,6 +96,27 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.match(scriptsRoute, /routerOsMajor/);
 });
 
+test("installer reads RouterOS version locally and never defaults an unknown router to version 6", () => {
+  assert.match(scriptsRoute, /\/system resource get version/);
+  assert.doesNotMatch(scriptsRoute, /:global version \[\/system package update get installed-version\]/);
+  assert.match(scriptsRoute, /:local routerOsMajorDigit \[:pick \$routerOsVersion 0 1\]/);
+  assert.match(scriptsRoute, /\$routerOsMajorDigit = "7"/);
+  assert.match(scriptsRoute, /\$routerOsMajorDigit = "6"/);
+  assert.match(scriptsRoute, /Unsupported RouterOS version/);
+  assert.match(scriptsRoute, /function requestedRouterOsMajor\(value: unknown\): 6 \| 7 \| null/);
+  assert.match(scriptsRoute, /RouterOS major version is required/);
+});
+
+test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on RouterOS 6", () => {
+  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{ :set openVpnUrl/);
+  assert.match(scriptsRoute, /minimumMajor >= 7/);
+  assert.match(scriptsRoute, /versionedUrlAssignment\("wireGuardUrl", safeRouterWireGuardUrl, 7\)/);
+  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{\\n\$\{vpnAttempt\("wireguard"/);
+  assert.match(scriptsRoute, /ros-version=/);
+  assert.match(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
+  assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
+});
+
 test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
