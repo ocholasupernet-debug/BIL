@@ -2253,23 +2253,20 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     :local existingOvpnId [:pick $existingOvpnIds 0]
     :local existingOvpnComment [/interface ovpn-client get $existingOvpnId comment]
     :local existingOvpnRunning [/interface ovpn-client get $existingOvpnId running]
-    :if (($existingOvpnComment = "${tag} VPS tunnel") && (!$existingOvpnRunning)) do={
-        :do { /interface ovpn-client remove $existingOvpnId } on-error={
-            :set ocholaVpnChildError "${tag}: could not remove the previous incomplete management interface; nothing was replaced."
-            :error $ocholaVpnChildError
+    :if ($existingOvpnComment = "${tag} VPS tunnel") do={
+        :if (!$existingOvpnRunning) do={
+            :do { /interface ovpn-client remove $existingOvpnId } on-error={
+                :set ocholaVpnChildError "${tag}: could not remove the previous incomplete management interface; nothing was replaced."
+                :error $ocholaVpnChildError
+            }
+        } else={
+            :set reuseExistingOvpn true
+            :put "${tag}: existing active management VPN reused for retry."
         }
     } else={
         :set ocholaVpnChildError "${tag}: coexistence conflict — an active or foreign ${interfaceName} interface was found; nothing was replaced."
         :error $ocholaVpnChildError
     }
-}
-:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — the required API firewall rule already exists."
-    :error $ocholaVpnChildError
-}
-:if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — the required ping firewall rule already exists."
-    :error $ocholaVpnChildError
 }
 :if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict — RouterOS API is disabled; it was not enabled."
@@ -2280,9 +2277,9 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence
-    ? `:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." }
+    ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
-:do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." }
+:if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }`
     : `/ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
@@ -2329,14 +2326,17 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 :local ovpnError ""
+:local reuseExistingOvpn false
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 ${resourcePreparation}
 }
-:do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
+:if (!$reuseExistingOvpn) do={
+ :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
     :local routerError ""
     :do { :set routerError $error } on-error={}
     :set ovpnError "RouterOS rejected the OpenVPN client add command"
     :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+ }
 }
 :if ([:len $ovpnError] > 0) do={
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)

@@ -976,9 +976,15 @@ ${coexistenceHotspotUrl ? `
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     $pg 1 "coexistence-hotspot" "applied" ""
 } on-error={
-    :local hotspotError $error
+    :local hotspotError ""
+    :do { :set hotspotError $error } on-error={}
+    :if ([:len $hotspotError] = 0) do={
+        :set hotspotError "isolated hotspot bundle import failed; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log."
+    }
     :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
     $pg 1 "coexistence-hotspot" "failed" $hotspotError
+    :do { /file remove [find name="failed-ochola-coexistence-hotspot.rsc"] } on-error={}
+    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
     :error ("Coexistence stopped without changing existing billing resources; isolated hotspot failed: " . $hotspotError)
 }
 ` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; $pg 1 "coexistence-hotspot" "failed" "missing bundle"; :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
