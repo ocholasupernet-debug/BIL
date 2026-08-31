@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { Shield, Zap, CreditCard, Activity, Ticket, ArrowRight, CheckCircle2, Users, Server } from "lucide-react";
 import { Logo } from "@/components/Logo";
 
+const REGISTRATION_URL = "https://register.isplatty.org/";
+
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[#080c10] text-slate-200 font-sans selection:bg-blue-500/30">
@@ -25,9 +27,9 @@ export default function LandingPage() {
             <Link href="/admin/login" className="text-sm font-semibold text-slate-300 hover:text-white transition-colors">
               Sign In
             </Link>
-            <Link href="/isp-register" className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm font-bold shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all">
+            <a href={REGISTRATION_URL} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm font-bold shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all">
               Get Started
-            </Link>
+            </a>
           </div>
         </div>
       </nav>
@@ -54,9 +56,9 @@ export default function LandingPage() {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/isp-register" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-blue-600 text-white font-bold text-lg shadow-xl shadow-blue-500/25 hover:shadow-blue-500/40 hover:-translate-y-1 transition-all flex items-center justify-center gap-2">
+            <a href={REGISTRATION_URL} className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-500 to-blue-600 text-white font-bold text-lg shadow-xl shadow-blue-500/25 hover:shadow-blue-500/40 hover:-translate-y-1 transition-all flex items-center justify-center gap-2">
               Start Free Trial <ArrowRight className="w-5 h-5" />
-            </Link>
+            </a>
             <Link href="/admin/login" className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white/5 border border-white/10 text-white font-bold text-lg hover:bg-white/10 transition-all text-center">
               View Live Demo
             </Link>
@@ -136,7 +138,7 @@ export default function LandingPage() {
                   </li>
                 ))}
               </ul>
-              <Link href="/isp-register" className="block w-full py-3 rounded-xl bg-white/5 border border-white/10 text-center font-bold text-white hover:bg-white/10 transition-colors">Choose Starter</Link>
+              <a href={REGISTRATION_URL} className="block w-full py-3 rounded-xl bg-white/5 border border-white/10 text-center font-bold text-white hover:bg-white/10 transition-colors">Choose Starter</a>
             </div>
 
             <div className="bg-gradient-to-b from-blue-900/40 to-[#111820] border border-blue-500/30 rounded-3xl p-8 relative transform md:-translate-y-4 shadow-2xl shadow-blue-900/20">
@@ -154,7 +156,7 @@ export default function LandingPage() {
                   </li>
                 ))}
               </ul>
-              <Link href="/isp-register" className="block w-full py-3 rounded-xl bg-blue-500 text-center font-bold text-white hover:bg-blue-400 shadow-lg shadow-blue-500/25 transition-colors">Start Free Trial</Link>
+              <a href={REGISTRATION_URL} className="block w-full py-3 rounded-xl bg-blue-500 text-center font-bold text-white hover:bg-blue-400 shadow-lg shadow-blue-500/25 transition-colors">Start Free Trial</a>
             </div>
 
             <div className="bg-[#111820] border border-white/10 rounded-3xl p-8">
