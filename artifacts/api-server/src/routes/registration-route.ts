@@ -152,6 +152,10 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(400).json({ ok: false, error: "Enter a company name and valid contact and M-Pesa payment numbers." });
     return;
   }
+  if (RESERVED_SUBDOMAINS.has(slug)) {
+    res.status(409).json({ ok: false, error: "This company name is reserved for platform services. Please choose another name." });
+    return;
+  }
 
   let settings = getPaymentDestinations();
   const registrationFee = settings.registrationFee;

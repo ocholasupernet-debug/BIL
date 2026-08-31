@@ -16,6 +16,8 @@ function slugify(str: string) {
   return str.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"]);
+
 interface RegistrationDestination {
   type: "bank" | "till" | "paybill";
   name: string;
@@ -57,9 +59,14 @@ export default function AdminRegister() {
     if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
     if (company.trim().length < 2) return;
 
+    const slug = slugify(company.trim());
+    if (RESERVED_SUBDOMAINS.has(slug)) {
+      setCompanyAvailable(false);
+      return;
+    }
+
     companyDebounceRef.current = setTimeout(async () => {
       setCheckingCompany(true);
-      const slug = slugify(company.trim());
       const { data } = await supabase
         .from("isp_admins")
         .select("id")
@@ -140,7 +147,11 @@ export default function AdminRegister() {
   const validate = () => {
     const e: Record<string, string> = {};
     if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
-    if (companyAvailable === false) e.company = "This company name is already taken";
+    else if (RESERVED_SUBDOMAINS.has(slugify(company))) {
+      e.company = "This company name is reserved for platform services. Please choose another name.";
+    } else if (companyAvailable === false) {
+      e.company = "This company name is already taken";
+    }
     if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
     if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
@@ -393,7 +404,11 @@ export default function AdminRegister() {
             </div>
             {!errors.company && company.trim().length >= 2 && !checkingCompany && companyAvailable !== null && (
               <p style={{ fontSize: "0.75rem", marginTop: 6, fontWeight: 500, color: companyAvailable ? "#16A34A" : "#DC2626" }}>
-                {companyAvailable ? "Available" : "Already taken — try a different name"}
+                {companyAvailable
+                  ? "Available"
+                  : RESERVED_SUBDOMAINS.has(slugify(company))
+                  ? "Reserved platform name — choose another name"
+                  : "Already taken — try a different name"}
               </p>
             )}
             {errors.company && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.company}</p>}
