@@ -107,7 +107,21 @@ jobs:
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
-            curl --fail --silent --show-error --max-time 20 http://127.0.0.1:8080/api/health >/dev/null
+            api_ready=false
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/api/healthz >/dev/null; then
+                api_ready=true
+                break
+              fi
+              echo "API is still starting (attempt ${attempt}/30)..."
+              sleep 2
+            done
+            if [ "$api_ready" != "true" ]; then
+              echo "ERROR: API health check did not pass after 60 seconds."
+              pm2 status || true
+              pm2 logs ocholanet-api --lines 80 --nostream || true
+              exit 1
+            fi
             echo "=== API health check passed ==="
             echo "=== Deploy finished at $(date) ==="
         env:
