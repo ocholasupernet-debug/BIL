@@ -16,6 +16,7 @@ function slugify(str: string) {
   return str.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+const COMPANY_NAME_PATTERN = /^[a-z]+$/;
 const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"]);
 
 interface RegistrationDestination {
@@ -58,6 +59,11 @@ export default function AdminRegister() {
     setCompanyAvailable(null);
     if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current);
     if (company.trim().length < 2) return;
+
+    if (!COMPANY_NAME_PATTERN.test(company)) {
+      setCompanyAvailable(false);
+      return;
+    }
 
     const slug = slugify(company.trim());
     if (RESERVED_SUBDOMAINS.has(slug)) {
@@ -146,7 +152,10 @@ export default function AdminRegister() {
 
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!company.trim() || company.trim().length < 2) e.company = "Company name is required";
+    if (!company || company.length < 2) e.company = "Company name must be at least 2 lowercase letters.";
+    else if (!COMPANY_NAME_PATTERN.test(company)) {
+      e.company = "Use lowercase letters only (a-z), with no spaces, numbers, or symbols.";
+    }
     else if (RESERVED_SUBDOMAINS.has(slugify(company))) {
       e.company = "This company name is reserved for platform services. Please choose another name.";
     } else if (companyAvailable === false) {
@@ -388,8 +397,8 @@ export default function AdminRegister() {
               <input
                 type="text"
                 value={company}
-                onChange={e => setCompany(e.target.value.toLowerCase())}
-                placeholder="e.g. ochola networks"
+                onChange={e => setCompany(e.target.value)}
+                placeholder="e.g. ocholanetworks"
                 autoComplete="organization"
                  className="register-input"
                  style={inputStyle(!!errors.company, companyAvailable)}
@@ -406,6 +415,8 @@ export default function AdminRegister() {
               <p style={{ fontSize: "0.75rem", marginTop: 6, fontWeight: 500, color: companyAvailable ? "#16A34A" : "#DC2626" }}>
                 {companyAvailable
                   ? "Available"
+                  : !COMPANY_NAME_PATTERN.test(company)
+                  ? "Invalid format — lowercase letters only (a-z)"
                   : RESERVED_SUBDOMAINS.has(slugify(company))
                   ? "Reserved platform name — choose another name"
                   : "Already taken — try a different name"}

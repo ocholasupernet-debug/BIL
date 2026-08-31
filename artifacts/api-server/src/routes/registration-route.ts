@@ -140,16 +140,19 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
 });
 
 router.post("/registration/payment", async (req: Request, res: Response): Promise<void> => {
-  const company = typeof req.body?.company === "string" ? req.body.company.trim() : "";
+  const company = typeof req.body?.company === "string" ? req.body.company : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
 
-  if (company.length < 2 || !slug || !/^2547\d{8}$/.test(formattedPhone) ||
-      !/^2547\d{8}$/.test(formattedPaymentPhone)) {
-    res.status(400).json({ ok: false, error: "Enter a company name and valid contact and M-Pesa payment numbers." });
+  if (company.length < 2 || !/^[a-z]+$/.test(company) || !slug) {
+    res.status(400).json({ ok: false, error: "Company name must use lowercase letters only (a-z), with no spaces, numbers, or symbols." });
+    return;
+  }
+  if (!/^2547\d{8}$/.test(formattedPhone) || !/^2547\d{8}$/.test(formattedPaymentPhone)) {
+    res.status(400).json({ ok: false, error: "Enter valid contact and M-Pesa payment numbers." });
     return;
   }
   if (RESERVED_SUBDOMAINS.has(slug)) {
