@@ -76,11 +76,9 @@ const inp: React.CSSProperties = {
 };
 
 /* ─── API Panel (expandable per router) ──────────────────────── */
-const DEFAULT_PASSWORD = "ocholasupernet";
-
 function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }) {
-  const defaultUser = router.router_username || router.name || "admin";
-  const defaultPass = router.router_secret   || DEFAULT_PASSWORD;
+  const defaultUser = router.name || "admin";
+  const defaultPass = router.name || "admin";
 
   const [host,     setHost]     = useState(router.host || router.vpn_ip || "");
   const [user,     setUser]     = useState(defaultUser);
@@ -95,8 +93,8 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
   /* Reset fields if router prop changes */
   useEffect(() => {
     setHost(router.host || router.vpn_ip || "");
-    setUser(router.router_username || router.name || "admin");
-    setPass(router.router_secret   || DEFAULT_PASSWORD);
+    setUser(router.name || "admin");
+    setPass(router.name || "admin");
     setProbe(null);
   }, [router.id]);
 
@@ -112,8 +110,8 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
     try {
       await supabase.from("isp_routers").update({
         host:             host.trim(),
-        router_username:  user.trim() || "admin",
-        router_secret:    pass,
+         router_username:  router.name || user.trim() || "admin",
+         router_secret:    router.name || pass,
         description:      `Replaced on ${fmtDate}`,
         updated_at:       now.toISOString(),
       }).eq("id", router.id);
@@ -169,6 +167,9 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
         <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
           API Connection Settings — port 8728
         </div>
+        <div style={{ marginTop: "0.25rem", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+          Username and password use this router's name.
+        </div>
       </div>
 
       {/* Fields */}
@@ -198,7 +199,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
             style={inp}
             value={user}
             onChange={e => setUser(e.target.value)}
-            placeholder={router.name || "admin"}
+             placeholder={router.name || "admin"}
             onFocus={e => (e.target.style.borderColor = "var(--isp-accent)")}
             onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
           />

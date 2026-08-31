@@ -399,14 +399,15 @@ router.post("/routers", async (req, res): Promise<void> => {
     res.status(400).json({ error: "name and host are required" });
     return;
   }
+  const routerName = String(name).trim();
   const [r] = await sbInsert<Record<string, unknown>>("isp_routers", {
     admin_id:         effectiveAdminId,
-    name,
+    name:             routerName,
     host:             host || ipAddress || "",
     model:            model ?? null,
     ros_version:      rosVersion ?? null,
-    router_username:  router_username || apiUsername || "admin",
-    router_secret:    router_secret  || apiPassword  || null,
+    router_username:  routerName,
+    router_secret:    routerName,
     bridge_ip:        bridge_ip ?? null,
     status:           status ?? "offline",
   });

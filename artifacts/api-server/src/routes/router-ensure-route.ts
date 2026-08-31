@@ -229,9 +229,9 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     admin_id:         adminId,
     name,
     host:             "",
-    router_username:  "admin",
-    router_secret:    secret,
-    token:            secret,   /* NOT NULL column — same value as router_secret */
+    router_username:  name,
+    router_secret:    name,
+    token:            secret,   /* NOT NULL installer token — kept separate from API password */
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.88.1",
     ...(vpnIp ? { vpn_ip: vpnIp } : {}),

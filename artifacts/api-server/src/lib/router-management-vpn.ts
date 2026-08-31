@@ -49,7 +49,7 @@ export function routerManagementOvpnCredentials(routerName: string): RouterManag
   }
   return {
     username,
-    password: `${username}00`,
+    password: username,
   };
 }
 

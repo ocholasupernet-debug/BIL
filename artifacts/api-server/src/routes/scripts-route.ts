@@ -2759,7 +2759,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
        • specific slug (e.g. come1) → name = that slug exactly
          (handles the case where the frontend DB insert failed silently) */
     if (!router_row) {
-      const autoSecret = Buffer
+      const autoToken = Buffer
         .from(`${adminId}:${Date.now()}:ocholanet`)
         .toString("base64")
         .replace(/[^a-zA-Z0-9]/g, "")
@@ -2791,8 +2791,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
                 name:             autoName,
                 host:             "",
                 router_username:  autoName,
-                router_secret:    autoSecret,
-                token:            autoSecret,  /* NOT NULL column */
+                router_secret:    autoName,
+                token:            autoToken,  /* NOT NULL installer token */
                 bridge_interface: "hotspot-bridge",
                 bridge_ip:        "192.168.88.1",
                 status:           "setup",

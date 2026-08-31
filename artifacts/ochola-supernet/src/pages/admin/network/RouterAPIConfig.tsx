@@ -174,7 +174,7 @@ const EMPTY_FORM: RouterForm = {
   name: "", host: "",
   bridge_ip: "", vpn_ip: "", proxy_ip: "",
   bridge_interface: "", main_bridge_interface: "bridge",
-  router_username: "admin", router_secret: "", api_port: 8728, description: "",
+  router_username: "", router_secret: "", api_port: 8728, description: "",
 };
 
 /* ── FirewallScriptLink: collects VPS IP then generates a download link ──── */
@@ -261,8 +261,8 @@ function RouterForm({
         body: JSON.stringify({
           host:      form.host || form.vpn_ip || form.bridge_ip,
           port:      form.api_port || 8728,
-          username:  form.router_username || "admin",
-          password:  form.router_secret,
+        username:  form.name.trim(),
+        password:  form.name.trim(),
           bridgeIp:  form.vpn_ip || undefined,
         }),
       });
@@ -297,7 +297,6 @@ function RouterForm({
   async function handleSave() {
     if (!form.name.trim()) { setSaveErr("Router name is required."); return; }
     if (!form.host.trim() && !form.vpn_ip.trim() && !form.bridge_ip.trim()) { setSaveErr("Enter a public IP, management VPN IP, or router LAN address."); return; }
-    if (!form.router_username.trim()) { setSaveErr("API username is required."); return; }
     setSaving(true); setSaveErr("");
     try {
       const now = new Date();
@@ -308,18 +307,19 @@ function RouterForm({
 
       const userDesc = form.description.trim();
       const autoDesc = `Manually installed on ${fmtDate}`;
+      const routerName = form.name.trim();
 
       const payload = {
         admin_id:              ADMIN_ID,
-        name:                  form.name.trim(),
+        name:                  routerName,
         host:                  form.host.trim(),
         bridge_ip:             form.bridge_ip.trim()             || null,
         vpn_ip:                form.vpn_ip.trim()                || null,
         proxy_ip:              form.proxy_ip.trim()              || null,
         bridge_interface:      form.bridge_interface.trim()      || "hotspot-bridge",
         main_bridge_interface: form.main_bridge_interface.trim() || "bridge",
-        router_username:       form.router_username.trim(),
-        router_secret:         form.router_secret,
+        router_username:       routerName,
+        router_secret:         routerName,
         description:           userDesc || null,
         updated_at:            now.toISOString(),
       };
@@ -385,7 +385,8 @@ function RouterForm({
         </div>
         <div>
           <label style={lbl}><User size={11} /> API Username</label>
-          <input value={form.router_username} onChange={e => set("router_username", e.target.value)} style={inp} placeholder="admin" />
+          <input value={form.name.trim()} readOnly style={{ ...inp, opacity: 0.75 }} placeholder="Router name" />
+          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Same as the router name</p>
         </div>
       </div>
 
@@ -401,8 +402,8 @@ function RouterForm({
         </div>
         <div>
           <label style={lbl}><Lock size={11} /> API Password</label>
-          <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="RouterOS API password" />
-          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Stored securely in Supabase</p>
+          <PwInput value={form.name.trim()} onChange={() => undefined} placeholder="Router name" />
+          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Same as the router name</p>
         </div>
       </div>
 
@@ -808,8 +809,8 @@ export default function RouterAPIConfig() {
     proxy_ip:              editingRouter.proxy_ip ?? "",
     bridge_interface:      editingRouter.bridge_interface ?? "",
     main_bridge_interface: editingRouter.main_bridge_interface ?? "bridge",
-    router_username:       editingRouter.router_username ?? "admin",
-    router_secret:         editingRouter.router_secret ?? "",
+    router_username:       editingRouter.name ?? "admin",
+    router_secret:         editingRouter.name ?? "",
     api_port:              8728,
     description:           editingRouter.description ?? "",
   } : undefined;

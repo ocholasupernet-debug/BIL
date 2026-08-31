@@ -33,7 +33,7 @@ const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 test("management OpenVPN credentials use the configured router name", () => {
   assert.deepEqual(
     vpnContract.routerManagementOvpnCredentials("come2"),
-    { username: "come2", password: "come200" },
+    { username: "come2", password: "come2" },
   );
   assert.throws(
     () => vpnContract.routerManagementOvpnCredentials("come 2"),
