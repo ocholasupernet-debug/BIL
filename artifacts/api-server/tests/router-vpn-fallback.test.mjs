@@ -218,7 +218,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router-ccd/);
   assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
   assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
-  assert.match(setup, /ifconfig-push 10\.8\.5\.2 255\.255\.255\.0/);
+   assert.match(setup, /topology net30/);
+   assert.match(setup, /ifconfig-push 10\.8\.5\.2 10\.8\.5\.3/);
   assert.match(setup, /verify-client-cert none/);
   assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);

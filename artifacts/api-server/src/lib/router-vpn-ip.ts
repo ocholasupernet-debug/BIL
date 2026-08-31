@@ -16,6 +16,20 @@ export function isRouterVpnIp(value: string | null | undefined): boolean {
 }
 
 /**
+ * RouterOS 6 does not understand the address form OpenVPN emits with
+ * `topology subnet`. The management server therefore uses net30 pairs:
+ * each client address has the adjacent address as its point-to-point peer.
+ */
+export function routerVpnPeerIp(value: string): string {
+  const match = new RegExp(`^${ROUTER_VPN_SUBNET}\\.(\\d+)$`).exec(value.trim());
+  const host = match ? Number(match[1]) : NaN;
+  if (!Number.isInteger(host) || host < 2 || host > 253) {
+    throw new Error(`Router management address cannot form a net30 peer: ${value}`);
+  }
+  return `${ROUTER_VPN_SUBNET}.${host % 2 === 0 ? host + 1 : host - 1}`;
+}
+
+/**
  * Pick a free client address. The first address is deliberately not tied to
  * a router ID so deleted records do not permanently consume the pool.
  */
@@ -24,7 +38,13 @@ export function allocateRouterVpnIp(usedIps: Iterable<string>): string {
   used.add(ROUTER_VPN_GATEWAY);
   for (let host = 2; host <= 254; host += 1) {
     const candidate = `${ROUTER_VPN_SUBNET}.${host}`;
-    if (!used.has(candidate)) return candidate;
+    let peer: string;
+    try {
+      peer = routerVpnPeerIp(candidate);
+    } catch {
+      continue;
+    }
+    if (!used.has(candidate) && !used.has(peer)) return candidate;
   }
-  throw new Error(`Router management VPN pool exhausted (${ROUTER_VPN_SUBNET}.0/24).`);
+  throw new Error(`Router management VPN net30 pool exhausted (${ROUTER_VPN_SUBNET}.0/24).`);
 }

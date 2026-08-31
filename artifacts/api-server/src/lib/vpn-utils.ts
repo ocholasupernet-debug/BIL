@@ -4,6 +4,7 @@
  * to accept connections from MikroTik routers as OVPN clients.
  */
 import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import { routerVpnPeerIp } from "./router-vpn-ip.js";
 
 export interface VpsOvpnSetupOptions {
   /** VPS public IP (shown to the user as the endpoint) */
@@ -53,6 +54,7 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const tag       = routerId ? `router${routerId}` : "router";
   const serverNet = `${tunnelBase}.0`;
   const serverGw  = `${tunnelBase}.1`;
+  const routerPeerIp = routerVpnPeerIp(routerTunnelIp);
   const usernameB64 = base64(vpnUsername);
   const passwordB64 = base64(vpnPassword);
 
@@ -165,7 +167,9 @@ fi
   echo "proto tcp-server"
   echo "dev tun-router"
   echo "server ${serverNet} 255.255.255.0"
-  echo "topology subnet"
+  # RouterOS 6 expects the net30 point-to-point address form. The subnet
+  # topology makes it interpret the pushed peer address as a /0 netmask.
+  echo "topology net30"
   echo "ca $CA_FILE"
   echo "cert $CERT_FILE"
   echo "key $KEY_FILE"
@@ -249,8 +253,8 @@ fi
 
 # Static IP for the router client
 cat > "$CCDDIR/${vpnUsername}" << CCDEOF
-# Static tunnel IP for MikroTik router (${tag})
-ifconfig-push ${routerTunnelIp} 255.255.255.0
+# Static tunnel IP and net30 peer for MikroTik router (${tag})
+ifconfig-push ${routerTunnelIp} ${routerPeerIp}
 CCDEOF
 echo "    Static IP ${routerTunnelIp} assigned to '${vpnUsername}'"
 

@@ -8,7 +8,7 @@ import {
   generateRouterIpsecClientScript,
   generateRouterWireGuardClientScript,
 } from "../lib/mikrotik.js";
-import { allocateRouterVpnIp, isRouterVpnIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
+import { allocateRouterVpnIp, isRouterVpnIp, routerVpnPeerIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
@@ -717,19 +717,27 @@ function defaultRouterTunnelIp(routerId: number): string {
 }
 
 async function ensurePersistentRouterTunnelIp(routerId: number, existingIp?: string | null): Promise<string> {
-  if (isRouterVpnIp(existingIp)) return existingIp!.trim();
-
   const used = new Set<string>(readIppEntries().values());
+  const currentIp = isRouterVpnIp(existingIp) ? existingIp!.trim() : "";
   try {
-    const routers = await sbGet<{ vpn_ip: string | null }>(
-      "isp_routers?select=vpn_ip&vpn_ip=not.is.null",
+    const routers = await sbGet<{ id: number; vpn_ip: string | null }>(
+      "isp_routers?select=id,vpn_ip&vpn_ip=not.is.null",
     );
     for (const router of routers) {
-      if (isRouterVpnIp(router.vpn_ip)) used.add(router.vpn_ip!.trim());
+      if (router.id !== routerId && isRouterVpnIp(router.vpn_ip)) used.add(router.vpn_ip!.trim());
     }
   } catch {
     /* The deterministic fallback below still gives an existing router a
        stable address when the metadata lookup is temporarily unavailable. */
+  }
+
+  if (currentIp) {
+    used.delete(currentIp);
+    try {
+      if (!used.has(routerVpnPeerIp(currentIp))) return currentIp;
+    } catch {
+      /* Reallocate an address that cannot form a valid net30 pair. */
+    }
   }
 
   let assigned: string;
