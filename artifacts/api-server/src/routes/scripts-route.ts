@@ -375,7 +375,7 @@ function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVp
      :set ocholaVpnChildError "downloaded ${label} could not be inspected before import"
      :error $ocholaVpnChildError
  }
- :if ([:find $fetchedContents "# OCHOLA_ROUTER_VPN_ERROR"] = 0) do={
+ :if ([:len $fetchedContents] >= [:len "# OCHOLA_ROUTER_VPN_ERROR"] && [:pick $fetchedContents 0 [:len "# OCHOLA_ROUTER_VPN_ERROR"]] = "# OCHOLA_ROUTER_VPN_ERROR") do={
      :set ocholaVpnChildError ("server rejected ${label}: " . $fetchedContents)
      :error $ocholaVpnChildError
  }`
@@ -963,7 +963,7 @@ function buildMainhotspotRsc(
              }
          }
         :do {
-            /import "${tempFileName}"
+            /import "${tempFileName}" verbose=yes
         } on-error={
             :local importError ""
             :do { :set importError $error } on-error={}
@@ -1958,7 +1958,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         return;
       }
       script = material
-        ? generatedRouterVpnChildScript("ipsec", routerId, material, routerOsMajor)
+        ? generatedRouterVpnChildScript("ipsec", routerId, material, routerOsMajor, installationMode)
         : generateRouterIpsecClientScript({
             endpoint,
             preSharedKey,
