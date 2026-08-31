@@ -7,6 +7,7 @@ import {
   getAdminRole,
   getSelectedTenantId,
 } from "@/lib/supabase";
+import { getHostSubdomain } from "@/lib/subdomain";
 import {
   AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, Copy,
   Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
@@ -411,7 +412,11 @@ export default function SelfInstall() {
   const routerName = activeRouter?.name || status?.router.name || `router${routers.length + 1}`;
   const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
   const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
-  const publicApiOrigin = (API || window.location.origin).replace(/\/$/, "");
+  /* When an ISP admin is signed in on its own hostname, keep installer URLs
+     on that hostname so RouterOS validates that company's certificate. */
+  const publicApiOrigin = (
+    getHostSubdomain() ? window.location.origin : (API || window.location.origin)
+  ).replace(/\/$/, "");
   const scriptUrl = `${publicApiOrigin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
   const caUrl = `${publicApiOrigin}/api/scripts/ochola-isrg-root-x1.pem`;
   const fetchCommand = certificateMode === "verified"
