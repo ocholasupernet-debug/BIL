@@ -74,6 +74,7 @@ module.exports = {
          VPS_DEPLOYMENT_KEY_V3: process.env.VPS_DEPLOYMENT_KEY_V3 || "",
          VPS_SSH_KEY:          process.env.VPS_SSH_KEY || "",
          VPS_SSH_PASSPHRASE:   process.env.VPS_SSH_PASSPHRASE || "",
+          VPS_SSH_PASSPHRASE_B64: process.env.VPS_SSH_PASSPHRASE_B64 || "",
         /* Pass service-role key under the canonical name the API uses.
             Accepts the legacy name only for older .env files. */
          ...(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
