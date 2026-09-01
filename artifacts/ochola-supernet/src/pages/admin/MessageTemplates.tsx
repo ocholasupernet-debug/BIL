@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
+import { getAdminApiToken } from "@/lib/supabase";
 import {
   MessageSquare, Mail, Phone, Send, Save, Eye,
   X, Check, Copy, Info,
@@ -88,10 +89,11 @@ const CHANNEL_META: Record<string, { label: string; color: string; icon: React.R
   telegram: { label: "Telegram", color: "#0088cc", icon: <Send size={11} /> },
 };
 
-function TemplateEditor({ template, onClose, onSave }: { template: Template; onClose: () => void; onSave: (t: Template) => void }) {
+function TemplateEditor({ template, onClose, onSave }: { template: Template; onClose: () => void; onSave: (t: Template) => Promise<void> }) {
   const [form, setForm] = useState<Template>({ ...template });
   const [showPreview, setShowPreview] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const previewBody = form.body
     .replace(/\[\[name\]\]/g, "John Kamau")
@@ -106,7 +108,7 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
     .replace(/\[\[invoice\]\]/g, "INV-001234");
 
   const copyVar = (v: string) => {
-    navigator.clipboard.writeText(v);
+    void navigator.clipboard?.writeText(v);
     setCopied(v);
     setTimeout(() => setCopied(null), 1500);
   };
@@ -212,8 +214,8 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
             <button onClick={onClose} style={{ flex: 1, padding: "0.6rem", borderRadius: 10, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
               Cancel
             </button>
-            <button onClick={() => onSave(form)} style={{ flex: 2, padding: "0.6rem", borderRadius: 10, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              <Save size={14} /> Save Template
+             <button disabled={saving} onClick={() => { setSaving(true); void onSave(form).finally(() => setSaving(false)); }} style={{ flex: 2, padding: "0.6rem", borderRadius: 10, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.85rem", cursor: saving ? "wait" : "pointer", opacity: saving ? 0.7 : 1, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+               <Save size={14} /> {saving ? "Saving…" : "Save Template"}
             </button>
           </div>
         </div>
@@ -223,16 +225,53 @@ function TemplateEditor({ template, onClose, onSave }: { template: Template; onC
 }
 
 export default function MessageTemplates() {
-  const [templates, setTemplates] = useState<Template[]>(DEFAULT_TEMPLATES);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [editing, setEditing] = useState<Template | null>(null);
-
-  const handleSave = (t: Template) => {
-    setTemplates(prev => prev.map(p => p.id === t.id ? t : p));
-    setEditing(null);
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const authHeaders = () => {
+    const token = getAdminApiToken();
+    return { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   };
 
-  const toggleEnabled = (id: string) => {
-    setTemplates(prev => prev.map(t => t.id === id ? { ...t, enabled: !t.enabled } : t));
+  const loadTemplates = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/message-templates", { headers: authHeaders(), cache: "no-store" });
+      const data = await response.json() as { templates?: Template[]; error?: string };
+      if (!response.ok || !data.templates) throw new Error(data.error || "Message templates could not be loaded.");
+      setTemplates(data.templates);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Message templates could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadTemplates(); }, []);
+
+  const handleSave = async (t: Template) => {
+    setSavingKey(t.id);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/message-templates/${encodeURIComponent(t.id)}`, {
+        method: "PUT", headers: authHeaders(), body: JSON.stringify(t),
+      });
+      const data = await response.json() as { template?: Template; error?: string };
+      if (!response.ok || !data.template) throw new Error(data.error || "Message template could not be saved.");
+      setTemplates(prev => prev.map(p => p.id === t.id ? data.template as Template : p));
+      setEditing(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Message template could not be saved.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const toggleEnabled = (template: Template) => {
+    void handleSave({ ...template, enabled: !template.enabled });
   };
 
   return (
@@ -246,6 +285,10 @@ export default function MessageTemplates() {
           </p>
         </div>
 
+        {error && <div role="alert" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", borderRadius: 10, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: "0.78rem" }}>{error}</div>}
+        {loading ? (
+          <div style={{ padding: "3rem", textAlign: "center", color: "var(--isp-text-muted)" }}>Loading templates…</div>
+        ) : (
         <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, overflow: "hidden" }}>
           {templates.map((t, i) => (
             <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem", borderBottom: i < templates.length - 1 ? "1px solid var(--isp-border)" : "none" }}>
@@ -272,7 +315,7 @@ export default function MessageTemplates() {
                 </p>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <button onClick={() => toggleEnabled(t.id)} style={{
+                 <button disabled={savingKey === t.id} aria-label={`${t.enabled ? "Disable" : "Enable"} ${t.name}`} onClick={() => toggleEnabled(t)} style={{
                   width: 40, height: 22, borderRadius: 11, cursor: "pointer", border: "none", position: "relative",
                   background: t.enabled ? "var(--isp-accent)" : "rgba(255,255,255,0.1)",
                   transition: "background 0.2s",
@@ -290,6 +333,7 @@ export default function MessageTemplates() {
             </div>
           ))}
         </div>
+        )}
 
         {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSave={handleSave} />}
       </div>

@@ -29,6 +29,7 @@ import typographyRouter from "./typography-route.js";
 import pppoePortalRouter from "./pppoe-portal-route.js";
 import storageGovernanceRouter from "./storage-governance-route.js";
 import routerLoadBalancingRouter from "./router-load-balancing-route.js";
+import adminSettingsRouter from "./admin-settings-route.js";
 
 const router: IRouter = Router();
 
@@ -62,5 +63,6 @@ router.use(dashboardPreferencesRouter);
   router.use(pppoePortalRouter);
   router.use(storageGovernanceRouter);
   router.use(routerLoadBalancingRouter);
+  router.use(adminSettingsRouter);
 
 export default router;

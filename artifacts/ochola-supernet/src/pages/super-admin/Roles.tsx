@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { ShieldCheck, Check, X, Save, CheckCircle2 } from "lucide-react";
+import { Check, X, Save, CheckCircle2, Loader2 } from "lucide-react";
 
 const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
 
 const ROLES = ["Super Admin", "ISP Admin", "Sub Admin", "Reseller", "Support"];
+const ROLE_KEYS = ["super_admin", "isp_admin", "sub_admin", "reseller", "support"];
 
 const PERMISSIONS: { category: string; perms: string[] }[] = [
   { category: "Admins", perms: ["View Admins", "Create Admins", "Edit Admins", "Delete Admins", "Toggle Active"] },
@@ -27,16 +28,57 @@ const DEFAULT_MATRIX: Record<string, Record<string, boolean>> = {
 };
 
 export default function SuperAdminRoles() {
-  const [matrix, setMatrix] = useState(DEFAULT_MATRIX);
+  const [matrix, setMatrix] = useState<Record<string, Record<string, boolean>>>({});
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const authHeaders = () => ({
+    "Content-Type": "application/json",
+    "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "",
+  });
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/roles", { headers: authHeaders(), cache: "no-store" });
+      const data = await response.json() as { matrix?: Record<string, Record<string, boolean>>; error?: string };
+      if (!response.ok || !data.matrix) throw new Error(data.error || "Roles and permissions could not be loaded.");
+      setMatrix(Object.fromEntries(ROLES.map((role, index) => [role, data.matrix?.[ROLE_KEYS[index]] ?? {}])));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Roles and permissions could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
 
   const toggle = (role: string, perm: string) => {
     if (role === "Super Admin") return;
-    setMatrix(m => ({ ...m, [role]: { ...m[role], [perm]: !m[role][perm] } }));
+    setMatrix(m => ({ ...m, [role]: { ...m[role], [perm]: !m[role]?.[perm] } }));
     setSaved(false);
   };
 
-  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const apiMatrix = Object.fromEntries(ROLES.map((role, index) => [ROLE_KEYS[index], matrix[role] ?? {}]));
+      const response = await fetch("/api/super-admin/roles", { method: "PUT", headers: authHeaders(), body: JSON.stringify({ matrix: apiMatrix }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "Roles and permissions could not be saved.");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Roles and permissions could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <SuperAdminLayout>
@@ -46,10 +88,11 @@ export default function SuperAdminRoles() {
             <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "white", margin: 0 }}>Roles & Permissions</h1>
             <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.82rem" }}>Define what each role can access and do on the platform.</p>
           </div>
-          <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 8, background: saved ? "#065f46" : C.accent, border: "none", borderRadius: 10, padding: "10px 20px", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer", transition: "background 0.3s" }}>
-            {saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saved ? "Saved!" : "Save Changes"}
+          <button disabled={loading || saving} onClick={() => void save()} style={{ display: "flex", alignItems: "center", gap: 8, background: saved ? "#065f46" : C.accent, border: "none", borderRadius: 10, padding: "10px 20px", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: loading || saving ? "wait" : "pointer", opacity: loading || saving ? 0.65 : 1, transition: "background 0.3s" }}>
+            {saving ? <Loader2 size={15} className="spin" /> : saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saving ? "Saving…" : saved ? "Saved!" : "Save Changes"}
           </button>
         </div>
+        {error && <div role="alert" style={{ marginBottom: 16, padding: "0.75rem 1rem", borderRadius: 10, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5", fontSize: "0.78rem" }}>{error}</div>}
 
         {/* Legend */}
         <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
@@ -62,6 +105,9 @@ export default function SuperAdminRoles() {
         </div>
 
         {/* Matrix */}
+        {loading ? (
+          <div style={{ padding: 48, textAlign: "center", color: C.muted }}><Loader2 size={22} className="spin" /> <p>Loading permissions…</p></div>
+        ) : (
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
             <thead>
@@ -116,10 +162,12 @@ export default function SuperAdminRoles() {
             </tbody>
           </table>
         </div>
+        )}
         <p style={{ fontSize: "0.72rem", color: C.muted, margin: "12px 0 0" }}>
           Super Admin always has full access and cannot be restricted. Click any cell to toggle permission for that role.
         </p>
       </div>
+      <style>{`.spin{animation:spin 1s linear infinite}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </SuperAdminLayout>
   );
 }
