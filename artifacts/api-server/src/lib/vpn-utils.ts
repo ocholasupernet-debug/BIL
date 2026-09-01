@@ -150,8 +150,18 @@ if [ -f "$BASE_OVPN_CONF" ]; then
   CERT_FILE="$(conf_value cert)"
   KEY_FILE="$(conf_value key)"
   DH_FILE="$(conf_value dh)"
+   [ -n "$DH_FILE" ] || DH_FILE="none"
   for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
-    value="$(eval "printf '%s' \"\${$f}\"")"
+    # Use Bash indirect expansion for the variable named by $f. The previous
+    # eval form produced invalid Bash indirect-variable syntax before any
+    # router-management credentials or CCD entries were reconciled.
+    value="$(printf '%s' "\${!f}")"
+    # Older failed runs may have persisted the literal as /etc/openvpn/none.
+    # Treat either spelling as the intentional no-DH setting.
+    if [ "$value" = "none" ] || [ "\${value##*/}" = "none" ]; then
+      if [ "$f" = "DH_FILE" ]; then DH_FILE="none"; fi
+      continue
+    fi
     if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
       eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
     fi
@@ -185,7 +195,7 @@ fi
   echo "ca $CA_FILE"
   echo "cert $CERT_FILE"
   echo "key $KEY_FILE"
-  [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
+   [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
   [ "$DH_FILE" = "none" ] && echo "ecdh-curve prime256v1"
   echo "client-config-dir $CCDDIR"
    echo "ifconfig-pool-persist ${contract.ippPath}"

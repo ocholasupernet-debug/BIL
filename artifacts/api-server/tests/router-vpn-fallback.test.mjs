@@ -335,8 +335,14 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
   assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
+  assert.match(setup, /\$\{value##\*\/\}.*none/);
+  assert.match(setup, /\[ -n "\$DH_FILE" \] \|\| DH_FILE="none"/);
+  assert.match(setup, /\[ -n "\$DH_FILE" \] && echo "dh \$DH_FILE"/);
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
   assert.match(setup, /grep -Fqx/);
+  assert.match(setup, /\$\{!f\}/);
+  assert.doesNotMatch(setup, /\$\{\$f\}/);
+  assert.match(setup, /\$\{value##\*\/\}/);
   assert.match(setup, /# OpenVPN does not support data-ciphers/);
   assert.match(setup, /data-ciphers AES-128-CBC/);
   assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);
