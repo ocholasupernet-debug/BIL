@@ -30,6 +30,7 @@ import pppoePortalRouter from "./pppoe-portal-route.js";
 import storageGovernanceRouter from "./storage-governance-route.js";
 import routerLoadBalancingRouter from "./router-load-balancing-route.js";
 import adminSettingsRouter from "./admin-settings-route.js";
+import routerFailoverDiagnosticRouter from "./router-failover-diagnostic-route.js";
 
 const router: IRouter = Router();
 
@@ -64,5 +65,6 @@ router.use(dashboardPreferencesRouter);
   router.use(storageGovernanceRouter);
   router.use(routerLoadBalancingRouter);
   router.use(adminSettingsRouter);
+  router.use(routerFailoverDiagnosticRouter);
 
 export default router;

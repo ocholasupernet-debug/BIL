@@ -10,8 +10,8 @@ import {
 import { getHostSubdomain } from "@/lib/subdomain";
 import {
   AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, Copy,
-  Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
-  Settings, Shield, Terminal, Wifi, X,
+  Clock3, Download, HelpCircle, Info, Loader2, Network, Plug, RefreshCw, Server,
+  Settings, Shield, Terminal, Wifi, X, Activity, Radio,
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_BASE ?? "";
@@ -110,6 +110,64 @@ interface CopyResult {
   categories?: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }>;
   logs?: string[];
   error?: string;
+}
+
+interface FailoverServiceState {
+  active: boolean;
+  listening: boolean;
+  clientTunnelIp: string | null;
+}
+
+interface FailoverStep {
+  id: "primary_connection" | "primary_outage" | "backup_connection" | "primary_restore";
+  status: "passed" | "failed" | "skipped";
+  detail: string;
+}
+
+interface FailoverRun {
+  ok: boolean;
+  source: "server_staged";
+  startedAt: string;
+  finishedAt: string;
+  primaryTunnelIp: string | null;
+  backupTunnelIp: string | null;
+  steps: FailoverStep[];
+  error?: string;
+}
+
+interface FailoverDiagnostic {
+  ok: boolean;
+  router: {
+    id: number;
+    name: string;
+    status: string;
+    model: string | null;
+    rosVersion: string | null;
+    lastSeen: string | null;
+  };
+  endpoints: {
+    endpoint: string | null;
+    primary: { port: number; network: string; tunnelIp: string; gateway: string };
+    backup: { port: number; network: string; tunnelIp: string; gateway: string };
+  };
+  routerosEvidence: {
+    available: boolean;
+    source: "routeros_heartbeat" | "server_staged_only";
+    lastSeen: string | null;
+  };
+  live: {
+    checkedAt: string;
+    ok: boolean;
+    error: string | null;
+    primary: FailoverServiceState;
+    backup: FailoverServiceState;
+  };
+  history: Array<{
+    id: number;
+    subject: string | null;
+    details: Record<string, unknown> | null;
+    created_at: string;
+  }>;
 }
 
 interface TakeoverPreparation {
@@ -284,6 +342,184 @@ function RouterRecovery({
   );
 }
 
+function diagnosticTime(value: string | null | undefined): string {
+  if (!value) return "Never";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function DiagnosticServiceCard({
+  label,
+  service,
+  endpoint,
+  color,
+}: {
+  label: string;
+  service: FailoverServiceState;
+  endpoint: FailoverDiagnostic["endpoints"]["primary"] & { endpoint: string | null };
+  color: string;
+}) {
+  return (
+    <div style={{ border: `1px solid ${service.active && service.listening ? `${color}55` : "var(--isp-border)"}`, background: service.active && service.listening ? `${color}08` : "rgba(255,255,255,.025)", borderRadius: 9, padding: ".8rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: ".78rem", fontWeight: 800 }}>
+        <StatusDot active={service.active && service.listening} />
+        {label}
+        <span style={{ marginLeft: "auto", color: service.active && service.listening ? "#86efac" : "#fbbf24", fontSize: ".65rem" }}>
+          {service.active && service.listening ? "Ready" : "Needs attention"}
+        </span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: "5px 12px", marginTop: ".7rem", color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+        <span>Endpoint <strong style={{ color: "var(--isp-text)" }}>{endpoint.endpoint || "Not configured"}</strong></span>
+        <span>TCP port <strong style={{ color: "var(--isp-text)" }}>{endpoint.port}</strong></span>
+        <span>Network <strong style={{ color: "var(--isp-text)" }}>{endpoint.network}</strong></span>
+        <span>Expected tunnel <strong style={{ color: "#5eead4" }}>{endpoint.tunnelIp}</strong></span>
+        <span>Listener <strong style={{ color: service.listening ? "#86efac" : "#fbbf24" }}>{service.listening ? "listening" : "not listening"}</strong></span>
+        <span>Observed client <strong style={{ color: service.clientTunnelIp ? "#86efac" : "var(--isp-text)" }}>{service.clientTunnelIp || "not connected"}</strong></span>
+      </div>
+    </div>
+  );
+}
+
+function RouterFailoverDiagnosticPanel({
+  routers,
+  selectedRouterId,
+  onSelectRouter,
+  diagnostic,
+  loading,
+  error,
+  confirmed,
+  onConfirm,
+  running,
+  run,
+  onRun,
+  onRefresh,
+}: {
+  routers: RouterSummary[];
+  selectedRouterId: number | null;
+  onSelectRouter: (id: number) => void;
+  diagnostic: FailoverDiagnostic | undefined;
+  loading: boolean;
+  error?: string;
+  confirmed: boolean;
+  onConfirm: (value: boolean) => void;
+  running: boolean;
+  run: FailoverRun | null;
+  onRun: () => void;
+  onRefresh: () => void;
+}) {
+  const selected = routers.find(router => router.id === selectedRouterId);
+  const live = diagnostic?.live;
+  const evidence = diagnostic?.routerosEvidence;
+  const runSteps = run?.steps ?? [];
+  return (
+    <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 9, flexWrap: "wrap" }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, display: "grid", placeItems: "center", background: "rgba(96,165,250,.12)", color: "#60a5fa" }}><Activity size={16} /></div>
+        <div style={{ flex: 1, minWidth: 230 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            <strong style={{ color: "var(--isp-text)", fontSize: ".87rem" }}>Router failover diagnostics</strong>
+            <span style={{ color: "#93c5fd", background: "rgba(96,165,250,.1)", border: "1px solid rgba(96,165,250,.25)", borderRadius: 999, padding: ".2rem .48rem", fontSize: ".6rem", fontWeight: 800 }}>SERVER-SIDE STAGED</span>
+          </div>
+          <p style={{ margin: ".32rem 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.55 }}>
+            Check the isolated primary and backup listeners, then run a controlled VPS failover test. This does not claim that a physical MikroTik switched unless a RouterOS heartbeat is also present.
+          </p>
+        </div>
+        <button onClick={onRefresh} disabled={loading || running} aria-label="Refresh failover diagnostics" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .6rem", fontSize: ".68rem", cursor: loading || running ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          <RefreshCw size={12} style={{ animation: loading ? "spin 1s linear infinite" : undefined }} /> Refresh
+        </button>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: ".85rem" }}>
+        <label htmlFor="failover-router" style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700 }}>Test router</label>
+        <select id="failover-router" value={selectedRouterId ?? ""} onChange={event => onSelectRouter(Number(event.target.value))} disabled={routers.length === 0 || running} style={{ flex: 1, maxWidth: 330, background: "#0a0f1a", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".5rem .6rem", fontFamily: "inherit", fontSize: ".72rem" }}>
+          {routers.length === 0 && <option value="">No routers available</option>}
+          {routers.map(router => <option key={router.id} value={router.id}>{router.name} · {router.status}</option>)}
+        </select>
+      </div>
+
+      {error && <div style={{ marginTop: ".75rem", color: "#fca5a5", background: "rgba(248,113,113,.07)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 8, padding: ".65rem .75rem", fontSize: ".7rem" }}>{error}</div>}
+      {!selected && routers.length > 0 && <div style={{ marginTop: ".8rem", color: "var(--isp-text-muted)", fontSize: ".72rem" }}>Select a router to load its management VPN state.</div>}
+      {selected && diagnostic && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: ".8rem", padding: ".6rem .7rem", borderRadius: 8, background: evidence?.available ? "rgba(74,222,128,.06)" : "rgba(251,191,36,.07)", border: `1px solid ${evidence?.available ? "rgba(74,222,128,.2)" : "rgba(251,191,36,.22)"}` }}>
+            <Radio size={14} color={evidence?.available ? "#4ade80" : "#fbbf24"} />
+            <span style={{ color: evidence?.available ? "#86efac" : "#fcd34d", fontSize: ".7rem", fontWeight: 800 }}>
+              {evidence?.available ? "RouterOS heartbeat evidence available" : "No RouterOS heartbeat evidence yet"}
+            </span>
+            <span style={{ color: "var(--isp-text-muted)", fontSize: ".67rem" }}>
+              {evidence?.available ? `Last seen ${diagnosticTime(evidence.lastSeen)} · ${diagnostic.router.model || "MikroTik"} · RouterOS ${diagnostic.router.rosVersion || "unknown"}` : "Current results are server-side only; connect the physical router before calling this a MikroTik failover."}
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 8, marginTop: ".75rem" }}>
+            <DiagnosticServiceCard label="Primary management VPN" service={live!.primary} endpoint={{ ...diagnostic.endpoints.primary, endpoint: diagnostic.endpoints.endpoint }} color="#14b8a6" />
+            <DiagnosticServiceCard label="Backup management VPN" service={live!.backup} endpoint={{ ...diagnostic.endpoints.backup, endpoint: diagnostic.endpoints.endpoint }} color="#60a5fa" />
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: ".7rem", color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+            <span>Router record: <strong style={{ color: "var(--isp-text)" }}>{diagnostic.router.status}</strong></span>
+            <span>Last connection: <strong style={{ color: "var(--isp-text)" }}>{diagnosticTime(diagnostic.router.lastSeen)}</strong></span>
+            <span>Server state checked: <strong style={{ color: "var(--isp-text)" }}>{diagnosticTime(live?.checkedAt)}</strong></span>
+          </div>
+          {!live?.ok && <div style={{ marginTop: ".7rem", color: "#fbbf24", fontSize: ".68rem" }}>{live?.error || "One or more management VPN server checks are not ready."}</div>}
+          <div style={{ marginTop: ".9rem", padding: ".75rem .8rem", borderRadius: 8, background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <AlertTriangle size={15} color="#fbbf24" style={{ flexShrink: 0, marginTop: 2 }} />
+              <div>
+                <div style={{ color: "#fbbf24", fontSize: ".72rem", fontWeight: 800 }}>Controlled outage warning</div>
+                <p style={{ margin: ".28rem 0 0", color: "#fcd34d", fontSize: ".68rem", lineHeight: 1.55 }}>
+                  Running this test briefly stops the primary management VPN for every connected router. Do not run it during an installation or maintenance window. The endpoint is restored automatically before the result returns.
+                </p>
+                <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: ".55rem", color: "#fde68a", fontSize: ".68rem", cursor: running ? "not-allowed" : "pointer" }}>
+                  <input type="checkbox" checked={confirmed} onChange={event => onConfirm(event.target.checked)} disabled={running} />
+                  I understand this will briefly stop the primary management listener.
+                </label>
+              </div>
+            </div>
+            <button onClick={onRun} disabled={!confirmed || running} style={{ ...primaryButton(!confirmed || running), marginTop: ".7rem", background: confirmed && !running ? "linear-gradient(135deg,#2563eb,#1d4ed8)" : undefined, boxShadow: confirmed && !running ? "0 4px 14px rgba(37,99,235,.25)" : "none" }}>
+              {running ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Activity size={15} />}
+              {running ? "Running staged failover…" : "Run controlled failover check"}
+            </button>
+          </div>
+          {run && (
+            <div style={{ marginTop: ".85rem", padding: ".8rem", borderRadius: 8, background: run.ok ? "rgba(74,222,128,.06)" : "rgba(248,113,113,.07)", border: `1px solid ${run.ok ? "rgba(74,222,128,.22)" : "rgba(248,113,113,.25)"}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, color: run.ok ? "#86efac" : "#fca5a5", fontSize: ".75rem", fontWeight: 800 }}>
+                {run.ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+                {run.ok ? "Staged failover completed" : "Staged failover did not complete"}
+                <span style={{ marginLeft: "auto", color: "var(--isp-text-muted)", fontSize: ".63rem", fontWeight: 500 }}>{diagnosticTime(run.finishedAt)}</span>
+              </div>
+              <div style={{ display: "grid", gap: 5, marginTop: ".65rem" }}>
+                {runSteps.map(step => (
+                  <div key={step.id} style={{ display: "flex", alignItems: "flex-start", gap: 7, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                    {step.status === "passed" ? <CheckCircle2 size={13} color="#4ade80" /> : step.status === "failed" ? <AlertTriangle size={13} color="#f87171" /> : <Clock3 size={13} color="#fbbf24" />}
+                    <span><strong style={{ color: "var(--isp-text)" }}>{step.id.replaceAll("_", " ")}</strong> — {step.detail}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: ".6rem", color: "#93c5fd", fontSize: ".66rem" }}>
+                Evidence source: server-side staged OpenVPN client · primary {run.primaryTunnelIp || "not observed"} · backup {run.backupTunnelIp || "not observed"}
+              </div>
+              {run.error && <div style={{ marginTop: ".3rem", color: "#fca5a5", fontSize: ".66rem" }}>Failure reason: {run.error}</div>}
+            </div>
+          )}
+          {diagnostic.history.length > 0 && (
+            <div style={{ marginTop: ".85rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--isp-text-muted)", fontSize: ".68rem", fontWeight: 800, marginBottom: ".4rem" }}><Clock3 size={13} /> Recent recorded checks</div>
+              {diagnostic.history.map(entry => {
+                const details = entry.details as { ok?: boolean; source?: string; primaryTunnelIp?: string | null; backupTunnelIp?: string | null } | null;
+                return <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--isp-border-subtle)", padding: ".45rem 0", color: "var(--isp-text-muted)", fontSize: ".66rem" }}>
+                  {details?.ok ? <CheckCircle2 size={12} color="#4ade80" /> : <AlertTriangle size={12} color="#f87171" />}
+                  <span style={{ color: "var(--isp-text)" }}>{details?.ok ? "Passed" : "Failed"}</span>
+                  <span>{diagnosticTime(entry.created_at)}</span>
+                  <span style={{ marginLeft: "auto", color: "#93c5fd" }}>{details?.primaryTunnelIp || "—"} → {details?.backupTunnelIp || "—"}</span>
+                </div>;
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function SelfInstall() {
   const qc = useQueryClient();
   const params = new URLSearchParams(window.location.search);
@@ -315,6 +551,10 @@ export default function SelfInstall() {
   const [copyLoading, setCopyLoading] = useState(false);
   const [copyResult, setCopyResult] = useState<CopyResult | null>(null);
   const [copySkipped, setCopySkipped] = useState(false);
+  const [diagnosticRouterId, setDiagnosticRouterId] = useState<number | null>(null);
+  const [failoverConfirmed, setFailoverConfirmed] = useState(false);
+  const [failoverRunning, setFailoverRunning] = useState(false);
+  const [failoverResult, setFailoverResult] = useState<FailoverRun | null>(null);
 
   useEffect(() => {
     const syncTenant = () => setAdminId(getSelectedTenantId());
@@ -336,6 +576,48 @@ export default function SelfInstall() {
   const activeRouter = routers.find(router => router.id === activeRouterId) ?? null;
   const sourceRouters = routers.filter(router => router.id !== activeRouterId && router.status !== "setup");
   const selectedSource = sourceRouters.find(router => router.id === sourceRouterId) ?? sourceRouters[0] ?? null;
+
+  useEffect(() => {
+    if (routers.length === 0) {
+      setDiagnosticRouterId(null);
+      return;
+    }
+    if (!diagnosticRouterId || !routers.some(router => router.id === diagnosticRouterId)) {
+      setDiagnosticRouterId(routers[0].id);
+    }
+  }, [routers, diagnosticRouterId]);
+
+  const diagnosticQuery = useQuery<FailoverDiagnostic>({
+    queryKey: ["router-failover-diagnostic", adminId, diagnosticRouterId],
+    queryFn: () => {
+      if (!adminId || !diagnosticRouterId) throw new Error("Select a router before loading failover diagnostics.");
+      return jsonRequest<FailoverDiagnostic>(`/api/admin/router/failover-diagnostic/${diagnosticRouterId}?adminId=${adminId}`);
+    },
+    enabled: !!adminId && !!diagnosticRouterId,
+    refetchInterval: 15_000,
+  });
+
+  const runFailoverDiagnostic = async () => {
+    if (!adminId || !diagnosticRouterId || !failoverConfirmed || failoverRunning) return;
+    setFailoverRunning(true);
+    setFailoverResult(null);
+    try {
+      const result = await jsonRequest<{ ok: boolean; run: FailoverRun; diagnostic: FailoverDiagnostic }>(
+        `/api/admin/router/failover-diagnostic/${diagnosticRouterId}/run`,
+        {
+          method: "POST",
+          body: JSON.stringify({ adminId }),
+        },
+      );
+      setFailoverResult(result.run);
+      qc.setQueryData(["router-failover-diagnostic", adminId, diagnosticRouterId], result.diagnostic);
+      setFailoverConfirmed(false);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setFailoverRunning(false);
+    }
+  };
 
   useEffect(() => {
     if (sourceRouters.length > 0 && !sourceRouterId) setSourceRouterId(sourceRouters[0].id);
@@ -614,7 +896,24 @@ export default function SelfInstall() {
           </p>
         </div>
         <NetworkTabs active="self-install" />
-
+        <RouterFailoverDiagnosticPanel
+          routers={routers}
+          selectedRouterId={diagnosticRouterId}
+          onSelectRouter={id => {
+            setDiagnosticRouterId(id);
+            setFailoverResult(null);
+            setFailoverConfirmed(false);
+          }}
+          diagnostic={diagnosticQuery.data}
+          loading={diagnosticQuery.isFetching}
+          error={diagnosticQuery.error?.message}
+          confirmed={failoverConfirmed}
+          onConfirm={setFailoverConfirmed}
+          running={failoverRunning}
+          run={failoverResult}
+          onRun={() => void runFailoverDiagnostic()}
+          onRefresh={() => void diagnosticQuery.refetch()}
+        />
         <div style={{
           display: "flex", alignItems: "center", gap: 0, overflowX: "auto",
           background: "rgba(20,184,166,.05)", border: "1px solid rgba(20,184,166,.18)",
