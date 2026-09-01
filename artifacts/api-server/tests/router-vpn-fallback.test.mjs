@@ -178,6 +178,8 @@ test("main coexistence diagnostics exclude unrelated billing OpenVPN clients and
   assert.match(scriptsRoute, /\/log print where topics~"ovpn" && message~"\$\{expectedInterfaceName\}"/);
   assert.match(scriptsRoute, /\$vpnFailureSummary \. \$vpnError \. "; "/);
   assert.doesNotMatch(scriptsRoute, /\$vpnFailureSummary \. "\$\{protocol\}: " \. \$vpnError/);
+  assert.match(scriptsRoute, /SCRIPT REVISION: coexistence-vpn-diagnostics-v2/);
+  assert.match(scriptsRoute, /"Cache-Control", "no-store"/);
 });
 
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {

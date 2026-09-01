@@ -1064,6 +1064,7 @@ function buildMainhotspotRsc(
 
   if (installationMode === "coexist") {
     return `# ${safeCompanyName} — Coexistence management installer
+# SCRIPT REVISION: coexistence-vpn-diagnostics-v2
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -1187,6 +1188,7 @@ ${safeHeartbeatUrl ? `:do {
     : "";
 
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
+# SCRIPT REVISION: main-installer-vpn-diagnostics-v2
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
 #
@@ -3105,6 +3107,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# Import  : /import ${routerSlug}.rsc`,
       `# ===================================================`,
       `:put ""`,
+      `:put "OcholaSupernet installer revision: main-installer-vpn-diagnostics-v2"`,
       `:put "======================================================"`,
       `:put " ${companyName} Setup — ${routerName}"`,
       `:put "======================================================"`,
@@ -3361,7 +3364,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     res
       .set("Content-Type", "text/plain; charset=utf-8")
       .set("Content-Disposition", `attachment; filename="${routerSlug}.rsc"`)
-      .set("Cache-Control", "no-cache")
+      .set("Cache-Control", "no-store")
+      .set("Pragma", "no-cache")
       .send(body);
 
   } catch (err: unknown) {
