@@ -35,6 +35,7 @@ const TELEMETRY_COLLECTION_INTERVAL_MS = TELEMETRY_COLLECTION_INTERVAL_MINUTES *
 const TELEMETRY_STALE_AFTER_MS = TELEMETRY_STALE_AFTER_MINUTES * 60_000;
 const HISTORY_WINDOW_DAYS = 30;
 const HISTORY_LIMIT = 1_000;
+const DEFAULT_CAPACITY_WARNING_PERCENT = 80;
 
 type CleanupStatus = "pending" | "processing" | "cancelled" | "completed" | "failed";
 
@@ -68,6 +69,26 @@ interface TenantUsageHistoryRow {
   measured_at: string | null;
   error: string | null;
   captured_at: string;
+}
+
+interface StorageSettingsRow {
+  capacity_bytes: number | string | null;
+  capacity_warning_percent: number | string | null;
+  capacity_warning_active: boolean;
+  capacity_warning_last_percent: number | string | null;
+  capacity_warning_last_notified_at: string | null;
+  capacity_warning_recovered_at: string | null;
+  updated_at: string;
+}
+
+interface CapacityWarningNotification {
+  id: number;
+  notification_type: "storage_capacity_warning" | "storage_capacity_recovered";
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
 }
 
 interface CleanupCandidate {
@@ -199,18 +220,41 @@ async function measureAndPersist(): Promise<MeasureRow[]> {
     throw new Error("Supabase service-role access is required for tenant storage measurement.");
   }
   const rows = await sbRpc<MeasureRow>("platform_storage_measure", {});
-  for (const row of rows) {
+  const persistResults = await Promise.allSettled(rows.map(row => {
     const adminId = parsePositiveId(row.admin_id);
-    if (!adminId || !row.source) continue;
-    await sbUpsertStrict("platform_storage_usage", "admin_id,source", {
+    if (!adminId || !row.source) return Promise.resolve();
+    return sbUpsertStrict("platform_storage_usage", "admin_id,source", {
       admin_id: adminId,
       source: row.source,
       bytes: Math.max(0, Math.floor(asNumber(row.bytes))),
       row_count: Math.max(0, Math.floor(asNumber(row.row_count))),
       measured_at: new Date().toISOString(),
     });
+  }));
+  const failedPersistCount = persistResults.filter(result => result.status === "rejected").length;
+  if (failedPersistCount > 0) {
+    logger.warn({ failedPersistCount }, "[super-admin/storage] some tenant usage rows could not be persisted; current measurement retained");
   }
   return rows;
+}
+
+async function collectTenantCapacityWarning(): Promise<void> {
+  if (!supabaseServiceRoleConfigured) return;
+  try {
+    const measured = await measureAndPersist();
+    const settings = await sbSelect<StorageSettingsRow>(
+      "platform_storage_settings",
+      "id=eq.1&select=capacity_bytes,capacity_warning_percent,capacity_warning_active,capacity_warning_last_percent,capacity_warning_last_notified_at,capacity_warning_recovered_at,updated_at&limit=1",
+    );
+    const totalUsedBytes = measured.reduce(
+      (sum, row) => sum + Math.max(0, Math.floor(asNumber(row.bytes))),
+      0,
+    );
+    const capacityBytes = settings[0]?.capacity_bytes == null ? null : asNumber(settings[0].capacity_bytes);
+    await evaluateCapacityWarning({ settings: settings[0], capacityBytes, totalUsedBytes });
+  } catch (error) {
+    logger.warn({ err: error }, "[super-admin/storage] tenant capacity warning check failed");
+  }
 }
 
 function physicalPublic(measurement: StorageTelemetry | PhysicalUsageRow) {
@@ -232,6 +276,121 @@ function toNullableNumber(value: number | string | null | undefined): number | n
   if (value == null) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function formatAlertBytes(value: number): string {
+  if (value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  return `${(value / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+}
+
+async function loadCapacityWarningNotifications(): Promise<CapacityWarningNotification[]> {
+  return sbSelect<CapacityWarningNotification>(
+    "platform_super_admin_notifications",
+    "select=id,notification_type,title,body,metadata,read_at,created_at&order=created_at.desc&limit=10",
+  );
+}
+
+async function evaluateCapacityWarning(input: {
+  settings: StorageSettingsRow | undefined;
+  capacityBytes: number | null;
+  totalUsedBytes: number | null;
+}): Promise<{
+  state: "monitoring" | "warning" | "unavailable";
+  active: boolean;
+  thresholdPercent: number;
+  usagePercent: number | null;
+  lastNotifiedAt: string | null;
+  recoveredAt: string | null;
+  notifications: CapacityWarningNotification[];
+}> {
+  const settings = input.settings;
+  const thresholdPercent = Math.min(
+    100,
+    Math.max(1, Math.floor(asNumber(settings?.capacity_warning_percent) || DEFAULT_CAPACITY_WARNING_PERCENT)),
+  );
+  let active = settings?.capacity_warning_active === true;
+  let lastNotifiedAt = settings?.capacity_warning_last_notified_at ?? null;
+  let recoveredAt = settings?.capacity_warning_recovered_at ?? null;
+  const usagePercent = input.capacityBytes === null || input.totalUsedBytes === null
+    ? null
+    : input.capacityBytes > 0
+      ? Math.min(100, Math.max(0, (input.totalUsedBytes / input.capacityBytes) * 100))
+      : input.totalUsedBytes > 0 ? 100 : 0;
+
+  if (usagePercent !== null && input.capacityBytes !== null && input.totalUsedBytes !== null && supabaseServiceRoleConfigured) {
+    try {
+      const now = new Date().toISOString();
+      if (usagePercent >= thresholdPercent && !active) {
+        const [claimed] = await sbUpdateStrict<StorageSettingsRow>(
+          "platform_storage_settings",
+          "id=eq.1&capacity_warning_active=eq.false",
+          {
+            capacity_warning_active: true,
+            capacity_warning_last_percent: usagePercent,
+            capacity_warning_last_notified_at: now,
+            capacity_warning_recovered_at: null,
+          },
+        );
+        if (claimed) {
+          active = true;
+          lastNotifiedAt = now;
+          recoveredAt = null;
+          await sbInsertStrict("platform_super_admin_notifications", {
+            notification_type: "storage_capacity_warning",
+            title: `Storage capacity warning: ${usagePercent.toFixed(1)}% used`,
+            body: `Tenant row-payload estimates currently use ${formatAlertBytes(input.totalUsedBytes)} of the configured ${formatAlertBytes(input.capacityBytes)} budget, above the ${thresholdPercent}% warning threshold.`,
+            metadata: {
+              source: "tenant_row_payload_estimate",
+              usagePercent,
+              thresholdPercent,
+              usedBytes: input.totalUsedBytes,
+              capacityBytes: input.capacityBytes,
+            },
+          });
+        }
+      } else if (usagePercent < thresholdPercent && active) {
+        const [released] = await sbUpdateStrict<StorageSettingsRow>(
+          "platform_storage_settings",
+          "id=eq.1&capacity_warning_active=eq.true",
+          {
+            capacity_warning_active: false,
+            capacity_warning_last_percent: usagePercent,
+            capacity_warning_recovered_at: now,
+          },
+        );
+        if (released) {
+          active = false;
+          recoveredAt = now;
+          await sbInsertStrict("platform_super_admin_notifications", {
+            notification_type: "storage_capacity_recovered",
+            title: "Storage capacity warning cleared",
+            body: `Tenant row-payload estimates are back below the ${thresholdPercent}% warning threshold at ${usagePercent.toFixed(1)}% of the configured budget.`,
+            metadata: {
+              source: "tenant_row_payload_estimate",
+              usagePercent,
+              thresholdPercent,
+              usedBytes: input.totalUsedBytes,
+              capacityBytes: input.capacityBytes,
+            },
+          });
+        }
+      }
+    } catch (error) {
+      logger.warn({ err: error }, "[super-admin/storage] capacity warning state unavailable");
+    }
+  }
+
+  return {
+    state: usagePercent === null ? "unavailable" : active ? "warning" : "monitoring",
+    active,
+    thresholdPercent,
+    usagePercent,
+    lastNotifiedAt,
+    recoveredAt,
+    notifications: await loadCapacityWarningNotifications(),
+  };
 }
 
 async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Promise<void> {
@@ -415,6 +574,7 @@ async function collectPhysicalMeasurements(): Promise<void> {
 
 async function runTelemetryCycle(): Promise<void> {
   await collectPhysicalMeasurements();
+  await collectTenantCapacityWarning();
   await markStalePhysicalMeasurements();
 }
 
@@ -533,9 +693,9 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
     });
     const [physicalMeasurements, settings, admins, candidates, requests, history] = await Promise.all([
       loadPhysicalMeasurements(),
-      sbSelectStrict<{ capacity_bytes: number | string | null; updated_at: string }>(
+      sbSelectStrict<StorageSettingsRow>(
         "platform_storage_settings",
-        "id=eq.1&select=capacity_bytes,updated_at&limit=1",
+        "id=eq.1&select=capacity_bytes,capacity_warning_percent,capacity_warning_active,capacity_warning_last_percent,capacity_warning_last_notified_at,capacity_warning_recovered_at,updated_at&limit=1",
       ),
       sbSelectStrict<{ id: number; name: string; username: string; email: string | null; is_active: boolean }>(
         "isp_admins",
@@ -576,6 +736,11 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
       ? null
       : Math.max(0, capacityBytes - totalUsedBytes);
     const forecast = buildCapacityForecast(history.tenant, capacityBytes);
+    const capacityWarning = await evaluateCapacityWarning({
+      settings: settings[0],
+      capacityBytes,
+      totalUsedBytes,
+    });
     const candidateRows = candidates.map(candidate => ({
       ...candidate,
       bytes: asNumber(candidate.bytes),
@@ -624,6 +789,7 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
       usagePercent: capacityBytes && capacityBytes > 0 && totalUsedBytes !== null
         ? Math.min(100, (totalUsedBytes / capacityBytes) * 100)
         : null,
+      capacityWarning,
       history: {
         windowDays: HISTORY_WINDOW_DAYS,
         physical: history.physical,
@@ -644,22 +810,34 @@ router.put("/super-admin/storage/capacity", async (req, res): Promise<void> => {
   if (!isSuperAdmin(req, res)) return;
   const raw = req.body?.capacityBytes;
   const capacity = Number(raw);
+  const rawWarningPercent = req.body?.warningPercent;
+  const warningPercent = rawWarningPercent == null ? null : Number(rawWarningPercent);
   if (!Number.isSafeInteger(capacity) || capacity < 0 || capacity > 9_000_000_000_000_000) {
     res.status(400).json({ ok: false, error: "Capacity must be a whole number of bytes between 0 and 9 PB." });
     return;
   }
+  if (warningPercent !== null && (!Number.isSafeInteger(warningPercent) || warningPercent < 1 || warningPercent > 100)) {
+    res.status(400).json({ ok: false, error: "The capacity warning threshold must be a whole percentage between 1 and 100." });
+    return;
+  }
   try {
     const token = String(req.headers["x-sa-token"] ?? "");
+    const settings: Record<string, unknown> = {
+      capacity_bytes: capacity,
+      updated_by: activeSuperAdminName(token) ?? "superadmin",
+      updated_at: new Date().toISOString(),
+    };
+    if (warningPercent !== null) settings.capacity_warning_percent = warningPercent;
     const updated = await sbUpdateStrict(
       "platform_storage_settings",
       "id=eq.1",
-      { capacity_bytes: capacity, updated_by: activeSuperAdminName(token) ?? "superadmin", updated_at: new Date().toISOString() },
+      settings,
     );
     if (!updated[0]) {
       res.status(503).json({ ok: false, error: "Storage capacity settings are not available." });
       return;
     }
-    res.json({ ok: true, capacityBytes: capacity });
+    res.json({ ok: true, capacityBytes: capacity, warningPercent });
   } catch {
     res.status(503).json({ ok: false, error: "Could not save the platform storage capacity." });
   }

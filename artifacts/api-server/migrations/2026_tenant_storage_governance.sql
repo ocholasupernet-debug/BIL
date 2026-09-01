@@ -5,6 +5,12 @@
 create table if not exists platform_storage_settings (
   id             integer primary key default 1 check (id = 1),
   capacity_bytes bigint check (capacity_bytes is null or capacity_bytes >= 0),
+  capacity_warning_percent integer not null default 80
+    check (capacity_warning_percent between 1 and 100),
+  capacity_warning_active boolean not null default false,
+  capacity_warning_last_percent numeric(5,2),
+  capacity_warning_last_notified_at timestamptz,
+  capacity_warning_recovered_at timestamptz,
   updated_by     text,
   updated_at     timestamptz not null default now()
 );
@@ -12,6 +18,21 @@ create table if not exists platform_storage_settings (
 insert into platform_storage_settings (id)
 values (1)
 on conflict (id) do nothing;
+alter table platform_storage_settings
+  add column if not exists capacity_warning_percent integer not null default 80;
+alter table platform_storage_settings
+  add column if not exists capacity_warning_active boolean not null default false;
+alter table platform_storage_settings
+  add column if not exists capacity_warning_last_percent numeric(5,2);
+alter table platform_storage_settings
+  add column if not exists capacity_warning_last_notified_at timestamptz;
+alter table platform_storage_settings
+  add column if not exists capacity_warning_recovered_at timestamptz;
+alter table platform_storage_settings
+  drop constraint if exists platform_storage_settings_warning_percent_check;
+alter table platform_storage_settings
+  add constraint platform_storage_settings_warning_percent_check
+  check (capacity_warning_percent between 1 and 100);
 
 create table if not exists platform_storage_usage (
   admin_id     bigint not null references isp_admins(id) on delete cascade,
@@ -114,6 +135,20 @@ create index if not exists platform_admin_notifications_admin_idx
 create index if not exists platform_admin_notifications_request_idx
   on platform_admin_notifications(cleanup_request_id);
 
+-- Super Admin alerts are separate from tenant-admin notifications. The
+-- single platform stream is protected by the Super Admin session at the API.
+create table if not exists platform_super_admin_notifications (
+  id                bigserial primary key,
+  notification_type text not null check (notification_type in ('storage_capacity_warning', 'storage_capacity_recovered')),
+  title             text not null,
+  body              text not null,
+  metadata          jsonb not null default '{}'::jsonb,
+  read_at           timestamptz,
+  created_at        timestamptz not null default now()
+);
+create index if not exists platform_super_admin_notifications_created_idx
+  on platform_super_admin_notifications(created_at desc);
+
 create table if not exists platform_storage_audit_logs (
   id                 bigserial primary key,
   cleanup_request_id bigint references platform_storage_cleanup_requests(id) on delete set null,
@@ -136,6 +171,7 @@ alter table platform_storage_physical_usage_history enable row level security;
 alter table platform_storage_tenant_usage_history enable row level security;
 alter table platform_storage_cleanup_requests enable row level security;
 alter table platform_admin_notifications enable row level security;
+alter table platform_super_admin_notifications enable row level security;
 alter table platform_storage_audit_logs enable row level security;
 
 revoke all on table platform_storage_settings from anon, authenticated;
@@ -145,6 +181,7 @@ revoke all on table platform_storage_physical_usage_history from anon, authentic
 revoke all on table platform_storage_tenant_usage_history from anon, authenticated;
 revoke all on table platform_storage_cleanup_requests from anon, authenticated;
 revoke all on table platform_admin_notifications from anon, authenticated;
+revoke all on table platform_super_admin_notifications from anon, authenticated;
 revoke all on table platform_storage_audit_logs from anon, authenticated;
 grant select, insert, update on table platform_storage_settings to service_role;
 grant select, insert, update, delete on table platform_storage_usage to service_role;
@@ -153,9 +190,11 @@ grant select, insert, update, delete on table platform_storage_physical_usage_hi
 grant select, insert, update, delete on table platform_storage_tenant_usage_history to service_role;
 grant select, insert, update, delete on table platform_storage_cleanup_requests to service_role;
 grant select, insert, update, delete on table platform_admin_notifications to service_role;
+grant select, insert, update on table platform_super_admin_notifications to service_role;
 grant select, insert on table platform_storage_audit_logs to service_role;
 grant usage, select on sequence platform_storage_cleanup_requests_id_seq to service_role;
 grant usage, select on sequence platform_admin_notifications_id_seq to service_role;
+grant usage, select on sequence platform_super_admin_notifications_id_seq to service_role;
 grant usage, select on sequence platform_storage_audit_logs_id_seq to service_role;
 
 -- Return row-payload estimates for tenant-owned tables and explicitly

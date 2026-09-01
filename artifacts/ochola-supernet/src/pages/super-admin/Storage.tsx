@@ -102,12 +102,31 @@ interface CapacityForecast {
   reason: string | null;
 }
 
+interface CapacityWarningNotification {
+  id: number;
+  notification_type: "storage_capacity_warning" | "storage_capacity_recovered";
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+}
+
 interface StorageData {
   measuredAt: string;
   capacityBytes: number | null;
   totalUsedBytes: number | null;
   freeBytes: number | null;
   usagePercent: number | null;
+  capacityWarning: {
+    state: "monitoring" | "warning" | "unavailable";
+    active: boolean;
+    thresholdPercent: number;
+    usagePercent: number | null;
+    lastNotifiedAt: string | null;
+    recoveredAt: string | null;
+    notifications: CapacityWarningNotification[];
+  };
   capacity: { bytes: number | null; source: string; measuredAt: string | null };
   freeSpace: { bytes: number | null; source: string | null; measuredAt: string | null };
   measurement: {
@@ -236,6 +255,7 @@ export default function SuperAdminStorage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [capacityGb, setCapacityGb] = useState("");
+  const [warningPercent, setWarningPercent] = useState("80");
   const [selectedAdminId, setSelectedAdminId] = useState<number | null>(null);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<number[]>([]);
   const [reason, setReason] = useState("");
@@ -262,6 +282,7 @@ export default function SuperAdminStorage() {
       if (!response.ok || !body.ok) throw new Error(body.error || "Could not load storage data.");
       setData(body);
       if (body.capacityBytes !== null) setCapacityGb((body.capacityBytes / 1024 ** 3).toFixed(1));
+      if (body.capacityWarning) setWarningPercent(String(body.capacityWarning.thresholdPercent));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load storage data.");
     } finally {
@@ -327,7 +348,10 @@ export default function SuperAdminStorage() {
       const response = await fetch("/api/super-admin/storage/capacity", {
         method: "PUT",
         headers: { "Content-Type": "application/json", "x-sa-token": token() },
-        body: JSON.stringify({ capacityBytes: Math.round(gb * 1024 ** 3) }),
+        body: JSON.stringify({
+          capacityBytes: Math.round(gb * 1024 ** 3),
+          warningPercent: Number(warningPercent),
+        }),
       });
       const body = await response.json() as { ok?: boolean; error?: string; deletedBytes?: number };
       if (!response.ok || !body.ok) throw new Error(body.error || "Could not save capacity.");
@@ -552,7 +576,28 @@ export default function SuperAdminStorage() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input value={capacityGb} onChange={event => setCapacityGb(event.target.value)} inputMode="decimal" placeholder="e.g. 250" style={{ width: 110, background: "rgba(0,0,0,0.2)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 12 }} />
                   <span style={{ color: C.sub, fontSize: 11 }}>GB</span>
+                  <input value={warningPercent} onChange={event => setWarningPercent(event.target.value)} inputMode="numeric" min="1" max="100" placeholder="80" aria-label="Capacity warning threshold" style={{ width: 58, background: "rgba(0,0,0,0.2)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 8px", color: C.text, fontSize: 12 }} />
+                  <span style={{ color: C.sub, fontSize: 11 }}>% warning</span>
                   <Button onClick={() => void saveCapacity()} disabled={saving}>Save capacity</Button>
+                </div>
+              </div>
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <AlertTriangle size={16} color={data.capacityWarning.state === "warning" ? C.amber : data.capacityWarning.state === "unavailable" ? C.muted : C.green} style={{ marginTop: 1, flexShrink: 0 }} />
+                <div>
+                  <strong style={{ color: data.capacityWarning.state === "warning" ? C.amber : data.capacityWarning.state === "unavailable" ? C.muted : C.green, fontSize: 12 }}>
+                    {data.capacityWarning.state === "warning" ? "Capacity warning is active" : data.capacityWarning.state === "unavailable" ? "Capacity warning is waiting for a valid measurement" : "Capacity warning is monitoring"}
+                  </strong>
+                  <p style={{ margin: "4px 0 0", color: C.sub, fontSize: 11, lineHeight: 1.5 }}>
+                    Alerts trigger at {data.capacityWarning.thresholdPercent}% of the configured budget and are sent once until usage falls back below the threshold.
+                    {data.capacityWarning.lastNotifiedAt ? ` Last warning: ${formatDate(data.capacityWarning.lastNotifiedAt)}.` : " No warning has been sent."}
+                  </p>
+                  <p style={{ margin: "3px 0 0", color: C.muted, fontSize: 10 }}>
+                    {data.capacityWarning.state === "unavailable"
+                      ? "Only current, available tenant row-payload measurements can change this state; stale, partial, and unavailable samples are ignored."
+                      : data.capacityWarning.notifications.length > 0
+                        ? `Latest alert: ${data.capacityWarning.notifications[0].title} · ${formatDate(data.capacityWarning.notifications[0].created_at)}`
+                        : "No capacity alert notifications have been recorded yet."}
+                  </p>
                 </div>
               </div>
             </section>

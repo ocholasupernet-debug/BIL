@@ -13,6 +13,7 @@ test("storage governance persists capacity, tenant estimates, notices, requests,
     "platform_storage_usage",
     "platform_storage_cleanup_requests",
     "platform_admin_notifications",
+    "platform_super_admin_notifications",
     "platform_storage_audit_logs",
     "platform_storage_physical_usage_history",
     "platform_storage_tenant_usage_history",
@@ -25,6 +26,10 @@ test("storage governance persists capacity, tenant estimates, notices, requests,
   assert.match(migration, /platform_storage_physical_usage/);
   assert.match(migration, /measurement_kind/);
   assert.match(migration, /'stale'/);
+  assert.match(migration, /capacity_warning_percent integer not null default 80/);
+  assert.match(migration, /capacity_warning_active boolean not null default false/);
+  assert.match(migration, /storage_capacity_warning/);
+  assert.match(migration, /storage_capacity_recovered/);
 });
 
 test("cleanup scope is explicitly limited to aged migration artifacts", () => {
@@ -64,6 +69,15 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(route, /platform_storage_tenant_usage_history/);
   assert.match(route, /buildCapacityForecast/);
   assert.match(route, /point\.status === "available"/);
+  assert.match(route, /collectTenantCapacityWarning/);
+  assert.match(route, /capacity_warning_active=eq\.false/);
+  assert.match(route, /capacity_warning_active=eq\.true/);
+  assert.match(route, /storage_capacity_warning/);
+  assert.match(route, /storage_capacity_recovered/);
+  assert.match(route, /usagePercent >= thresholdPercent/);
+  assert.match(route, /usagePercent < thresholdPercent/);
+  assert.match(route, /Promise\.allSettled\(rows\.map/);
+  assert.match(route, /current measurement retained/);
   assert.match(route, /Provider capacity/);
   assert.match(route, /Unavailable sources are never included/);
   assert.match(storageUi, /Connected physical storage sources/);
@@ -74,4 +88,7 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(storageUi, /Storage history &amp; capacity trends/);
   assert.match(storageUi, /Only available samples are plotted/);
   assert.match(storageUi, /Capacity forecast/);
+  assert.match(storageUi, /warningPercent/);
+  assert.match(storageUi, /Capacity warning is active/);
+  assert.match(storageUi, /are sent once until usage falls back below the threshold/);
 });
