@@ -252,6 +252,8 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
   assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
   assert.match(scriptsRoute, /:local importError \$error/);
+  assert.match(scriptsRoute, /:local rawVpnError \$error/);
+  assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);
   assert.match(scriptsRoute, /:local attemptPhase "start"/);
   assert.match(scriptsRoute, /server rejected \$\{label\}/);
   assert.match(scriptsRoute, /child import/);
