@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const httpsTrust = await readFile("src/lib/router-https-trust.ts", "utf8");
 const pppoeRoute = await readFile("src/routes/pppoe-script-route.ts", "utf8");
+const appSource = await readFile("src/app.ts", "utf8");
 
 test("installer selects an available storage directory, including router root", () => {
   assert.match(scriptsRoute, /:local storage ""/);
@@ -81,6 +82,30 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.match(scriptsRoute, /verbose=yes dry-run/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE FAILED at/);
   assert.match(scriptsRoute, /isolated hotspot bundle import failed after .*bytes; inspect failed-ochola-coexistence-hotspot\.rsc.*failing stage/);
+});
+
+test("coexistence installs independent primary and backup management OpenVPN clients", () => {
+  assert.match(scriptsRoute, /independent = false/);
+  assert.match(scriptsRoute, /const attemptWrapper = independent \? ":do \{" : ":if \(!\$vpnConfigured\) do=\{";/);
+  assert.match(scriptsRoute, /:set vpnProtocols \(\$vpnProtocols \. "\$\{protocol\},"\)/);
+  assert.match(scriptsRoute, /vpnAttempt\("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn\.rsc", true\)/);
+  assert.match(scriptsRoute, /vpnAttempt\("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup\.rsc", true\)/);
+  assert.match(scriptsRoute, /COEXISTENCE VPN READY — " \. \$vpnProtocols/);
+});
+
+test("coexistence bundle includes the portal assets referenced by its HTML files", () => {
+  for (const asset of [
+    "css/style.css",
+    "img/password.svg",
+    "img/user.svg",
+    "favicon.ico",
+    "sweetalert2.js",
+    "tailwind.js",
+    "xml/WISPAP.xsd",
+  ]) {
+    assert.match(scriptsRoute, new RegExp(`"${asset.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"`));
+  }
+  assert.match(appSource, /app\.use\("\/hotspot", express\.static\(hotspotStaticDir/);
 });
 
 test("installer bootstraps the public CA and validates managed HTTPS fetches", () => {
