@@ -62,6 +62,18 @@ function b64(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
 }
 
+function configuredPassphrase(): string {
+  const encoded = process.env.VPS_SSH_PASSPHRASE_B64?.trim() ?? "";
+  if (encoded.startsWith("base64:")) {
+    try {
+      return Buffer.from(encoded.slice("base64:".length), "base64").toString("utf8");
+    } catch {
+      return "";
+    }
+  }
+  return process.env.VPS_SSH_PASSPHRASE ?? "";
+}
+
 function appendBounded(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
   return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
@@ -104,7 +116,7 @@ export async function runVpsScript(
   };
 
   try {
-    const passphrase = process.env.VPS_SSH_PASSPHRASE || "";
+    const passphrase = configuredPassphrase();
     if (passphrase) {
       writeFileSync(
         askPassPath,

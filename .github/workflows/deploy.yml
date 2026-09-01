@@ -63,7 +63,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY,VPS_SSH_PASSPHRASE
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -98,6 +98,15 @@ jobs:
             upsert_env "ROUTER_OPENVPN_ENDPOINT"  "vpn.isplatty.org"
             # The API's SSH reconciliation helper must reach the same VPS.
             upsert_env "VPS_HOST"                 "vpn.isplatty.org"
+            upsert_env "VPS_USER"                 "$VPS_USER"
+            # Store multiline SSH material as base64: so .env remains valid.
+            # The API decodes it only in memory when opening the SSH channel.
+            if [ -n "${VPS_SSH_KEY:-}" ]; then
+              upsert_env "VPS_SSH_KEY" "base64:$(printf '%s' "$VPS_SSH_KEY" | base64 -w0)"
+            fi
+            if [ -n "${VPS_SSH_PASSPHRASE:-}" ]; then
+              upsert_env "VPS_SSH_PASSPHRASE_B64" "base64:$(printf '%s' "$VPS_SSH_PASSPHRASE" | base64 -w0)"
+            fi
 
             # The workflow connects as root. Running sudo here adds an
             # unnecessary dependency and can fail before the application
@@ -132,3 +141,6 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PASSPHRASE: ${{ secrets.VPS_SSH_PASSPHRASE }}
