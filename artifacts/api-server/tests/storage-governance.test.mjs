@@ -6,6 +6,7 @@ const migration = await readFile("migrations/2026_tenant_storage_governance.sql"
 const route = await readFile("src/routes/storage-governance-route.ts", "utf8");
 const telemetry = await readFile("src/lib/storage-telemetry.ts", "utf8");
 const storageUi = await readFile("../ochola-supernet/src/pages/super-admin/Storage.tsx", "utf8");
+const superAdminNotificationsUi = await readFile("../ochola-supernet/src/pages/super-admin/Notifications.tsx", "utf8");
 
 test("storage governance persists capacity, tenant estimates, notices, requests, and audit history", () => {
   for (const table of [
@@ -78,6 +79,10 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(route, /usagePercent < thresholdPercent/);
   assert.match(route, /Promise\.allSettled\(rows\.map/);
   assert.match(route, /current measurement retained/);
+  assert.match(route, /\/super-admin\/storage\/notifications/);
+  assert.match(route, /unreadCount/);
+  assert.match(route, /read_at=is\.null/);
+  assert.match(route, /Could not acknowledge the capacity alert/);
   assert.match(route, /Provider capacity/);
   assert.match(route, /Unavailable sources are never included/);
   assert.match(storageUi, /Connected physical storage sources/);
@@ -91,4 +96,13 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(storageUi, /warningPercent/);
   assert.match(storageUi, /Capacity warning is active/);
   assert.match(storageUi, /are sent once until usage falls back below the threshold/);
+});
+
+test("Super Admin capacity inbox distinguishes unread warnings and supports acknowledgement", () => {
+  assert.match(storageUi, /capacityWarning/);
+  assert.match(superAdminNotificationsUi, /Capacity alerts/);
+  assert.match(superAdminNotificationsUi, /unread/);
+  assert.match(superAdminNotificationsUi, /Mark read/);
+  assert.match(superAdminNotificationsUi, /Warning cleared/);
+  assert.match(superAdminNotificationsUi, /never clears the underlying active storage warning/);
 });

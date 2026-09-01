@@ -1027,6 +1027,54 @@ router.get("/admin/storage/notifications", requireAdmin(), async (req, res): Pro
   }
 });
 
+router.get("/super-admin/storage/notifications", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const notifications = await sbSelectStrict<CapacityWarningNotification>(
+      "platform_super_admin_notifications",
+      "select=id,notification_type,title,body,metadata,read_at,created_at&order=created_at.desc&limit=100",
+    );
+    res.json({
+      ok: true,
+      unreadCount: notifications.filter(notification => notification.read_at === null).length,
+      notifications,
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load Super Admin capacity alerts." });
+  }
+});
+
+router.post("/super-admin/storage/notifications/:id/read", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    res.status(400).json({ ok: false, error: "A valid capacity alert ID is required." });
+    return;
+  }
+  try {
+    const [updated] = await sbUpdateStrict<CapacityWarningNotification>(
+      "platform_super_admin_notifications",
+      `id=eq.${id}&read_at=is.null`,
+      { read_at: new Date().toISOString() },
+    );
+    if (updated) {
+      res.json({ ok: true, notification: updated });
+      return;
+    }
+    const existing = await sbSelectStrict<CapacityWarningNotification>(
+      "platform_super_admin_notifications",
+      `id=eq.${id}&select=id,notification_type,title,body,metadata,read_at,created_at&limit=1`,
+    );
+    if (!existing[0]) {
+      res.status(404).json({ ok: false, error: "Capacity alert not found." });
+      return;
+    }
+    res.json({ ok: true, notification: existing[0] });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not acknowledge the capacity alert." });
+  }
+});
+
 router.post("/admin/storage/cleanup-requests/:id/recover", requireAdmin(), async (req, res): Promise<void> => {
   const adminId = tenantAdminId(req, res);
   if (!adminId) return;
