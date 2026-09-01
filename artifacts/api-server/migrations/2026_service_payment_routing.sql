@@ -36,6 +36,7 @@ declare
   tx isp_transactions%rowtype;
   customer_id_to_credit bigint;
   normalized_phone text;
+  matching_customer_id bigint;
 begin
   if p_status not in ('completed', 'failed') then
     raise exception 'Unsupported settlement status';
@@ -56,6 +57,26 @@ begin
     return;
   end if;
   if tx.customer_id is not null and tx.plan_id is not null then
+    select c.id into matching_customer_id
+    from isp_customers as c
+    join isp_plans as p
+      on p.id = tx.plan_id
+     and p.admin_id = tx.admin_id
+     and p.is_active = true
+     and lower(coalesce(p.type, '')) = 'pppoe'
+    where c.id = tx.customer_id
+      and c.admin_id = tx.admin_id
+      and c.type = 'pppoe';
+
+    if matching_customer_id is null then
+      update isp_transactions
+         set status = 'failed',
+             notes = 'Verified payment could not be applied: PPPoE customer and active plan do not match.'
+       where id = tx.id;
+      return query select true, tx.payment_method, tx.admin_id, tx.amount, null::bigint;
+      return;
+    end if;
+
     update isp_customers as c
        set plan_id = tx.plan_id,
            status = 'active',
@@ -74,7 +95,7 @@ begin
             and active_plan.is_active = true
             and lower(coalesce(active_plan.type, '')) = 'pppoe'
        );
-    customer_id_to_credit := tx.customer_id;
+    customer_id_to_credit := matching_customer_id;
   end if;
   if tx.payment_method in ('mpesa_registration', 'manual_registration') and tx.admin_id is not null then
     update isp_admins set is_active = true, status = 'active', updated_at = now() where id = tx.admin_id;

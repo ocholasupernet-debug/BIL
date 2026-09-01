@@ -13,8 +13,16 @@
  */
 
 import { sbSelect, sbInsert, sbUpdate } from "./supabase-client";
-import { addPPPSecret, updatePPPSecret, addHotspotUser, updateHotspotUser } from "./mikrotik";
+import {
+  addPPPSecret,
+  fetchPPPSecrets,
+  removePPPSecret,
+  updatePPPSecret,
+  addHotspotUser,
+  updateHotspotUser,
+} from "./mikrotik";
 import { logger } from "./logger";
+import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
 interface SbCustomer {
@@ -42,11 +50,134 @@ interface SbPlan {
 
 interface SbRouter {
   id: number;
+  name?: string;
   host: string;
   bridge_ip: string | null;
   vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
+}
+
+export interface PppoeRenewalAccessResult {
+  ok: boolean;
+  skipped?: boolean;
+  routerName?: string;
+  username?: string;
+  error?: string;
+  rollback?: () => Promise<void>;
+}
+
+/**
+ * Re-enable the RouterOS account for a verified PPPoE renewal.
+ *
+ * This is intentionally separate from autoProvision: the M-Pesa callback has
+ * already created the pending transaction and must not record a second
+ * transaction while it restores access. The callback invokes this before the
+ * atomic Supabase settlement, so a temporarily unreachable router leaves the
+ * payment pending for the deferred retry worker instead of creating a
+ * database-active/router-disabled mismatch.
+ */
+export async function reactivatePppoeAccess(opts: {
+  adminId: number;
+  customerId: number;
+  planId: number;
+  reference: string;
+}): Promise<PppoeRenewalAccessResult> {
+  const plans = await sbSelect<{
+    id: number;
+    admin_id: number;
+    name: string;
+    type: string | null;
+    plan_type: string | null;
+    router_id: number | null;
+  }>(
+    "isp_plans",
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,router_id&limit=1`,
+  );
+  const plan = plans[0];
+  const planType = String(plan?.plan_type || plan?.type || "").toLowerCase();
+  if (!plan || planType !== "pppoe") return { ok: true, skipped: true };
+  if (!plan.router_id) {
+    return { ok: false, error: "The PPPoE plan is not assigned to a router." };
+  }
+
+  const customers = await sbSelect<Pick<SbCustomer, "id" | "admin_id" | "type" | "username" | "pppoe_username" | "password">>(
+    "isp_customers",
+    `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}&type=eq.pppoe&select=id,admin_id,type,username,pppoe_username,password&limit=1`,
+  );
+  const customer = customers[0];
+  if (!customer) {
+    return { ok: false, error: "The verified PPPoE customer account was not found." };
+  }
+
+  const routers = await sbSelect<SbRouter>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${opts.adminId}&select=id,name,host,vpn_ip,bridge_ip,router_username,router_secret&limit=1`,
+  );
+  const router = routers[0];
+  const vpnIp = isRouterManagementVpnIp(router?.vpn_ip) ? router.vpn_ip!.trim() : "";
+  const host = router?.host?.trim() || vpnIp;
+  if (!router || !host) {
+    return { ok: false, error: "The PPPoE router has no public host or management VPN address." };
+  }
+
+  const username = customer.pppoe_username?.trim() || customer.username?.trim() || "";
+  if (!username) return { ok: false, error: "The PPPoE customer has no username to reactivate." };
+
+  const credentials = {
+    host,
+    port: 8728,
+    username: router.router_username || "admin",
+    password: router.router_secret || "",
+    useSSL: false,
+    bridgeIp: vpnIp || undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+  const comment = `M-Pesa verified PPPoE renewal — ${opts.reference}`;
+
+  try {
+    const secrets = await fetchPPPSecrets(credentials);
+    const existing = secrets.find(secret => secret.name === username);
+    const rollback = async (): Promise<void> => {
+      if (existing?.id) {
+        await updatePPPSecret(credentials, existing.id, {
+          disabled: existing.disabled,
+          profile: existing.profile,
+          comment: existing.comment,
+        });
+        return;
+      }
+      const current = await fetchPPPSecrets(credentials);
+      const created = current.find(secret => secret.name === username);
+      if (created?.id) await removePPPSecret(credentials, created.id);
+    };
+    if (existing?.id) {
+      await updatePPPSecret(credentials, existing.id, {
+        disabled: false,
+        profile: plan.name,
+        comment,
+      });
+    } else {
+      await addPPPSecret(credentials, {
+        name: username,
+        password: customer.password || "changeme",
+        profile: plan.name,
+        service: "pppoe",
+        comment,
+      });
+    }
+
+    const verified = await fetchPPPSecrets(credentials);
+    const restored = verified.find(secret => secret.name === username && !secret.disabled);
+    if (!restored) throw new Error("RouterOS did not report the PPPoE account as enabled.");
+
+    return { ok: true, routerName: router.name, username, rollback };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn({ err: message, customerId: opts.customerId, planId: opts.planId }, "[provision] PPPoE renewal access restore failed");
+    return { ok: false, error: `Router PPPoE access could not be restored: ${message}` };
+  }
 }
 
 /* ── Result type ─────────────────────────────────────────────────────────── */

@@ -18,6 +18,7 @@ import { extractToken, generatePaymentIntent, validatePaymentIntent, validateTok
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { addHotspotIpBinding, resolveHotspotClientMac, type RouterCredentials } from "../lib/mikrotik.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
+import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 
 const router: IRouter = Router();
 
@@ -287,6 +288,7 @@ interface PendingMpesaTransaction {
   id: number;
   admin_id: number | null;
   customer_id: number | null;
+  plan_id: number | null;
   amount: number;
   payment_method: string;
   payment_phone: string | null;
@@ -301,7 +303,7 @@ interface SettlementResult {
   credited_customer_id: number | null;
 }
 
-interface DarajaStkQuery {
+export interface DarajaStkQuery {
   verified: boolean;
   resultCode: number | null;
   resultDesc: string;
@@ -355,7 +357,35 @@ async function reconcileInitiatedStkRequest(
   return false;
 }
 
-async function processMpesaCallback(body: unknown): Promise<boolean> {
+export interface MpesaCallbackDependencies {
+  selectPending: (filter: string) => Promise<PendingMpesaTransaction[]>;
+  getSettings: () => Promise<MpesaSettings>;
+  verifyStk: (settings: MpesaSettings, checkoutId: string) => Promise<DarajaStkQuery>;
+  reactivatePppoeAccess: (opts: {
+    adminId: number;
+    customerId: number;
+    planId: number;
+    reference: string;
+  }) => Promise<{ ok: boolean; skipped?: boolean; rollback?: () => Promise<void>; error?: string }>;
+  settle: (args: {
+    p_transaction_id: number;
+    p_status: "completed" | "failed";
+    p_note: string;
+  }) => Promise<SettlementResult[]>;
+}
+
+export async function processMpesaCallback(
+  body: unknown,
+  overrides: Partial<MpesaCallbackDependencies> = {},
+): Promise<boolean> {
+  const dependencies: MpesaCallbackDependencies = {
+    selectPending: filter => sbSelect<PendingMpesaTransaction>("isp_transactions", filter),
+    getSettings: getMpesaSettings,
+    verifyStk: queryDarajaStkResult,
+    reactivatePppoeAccess,
+    settle: args => sbRpc<SettlementResult>("settle_verified_mpesa_transaction", args),
+    ...overrides,
+  };
   const callback = (body as { Body?: { stkCallback?: Record<string, unknown> } })?.Body?.stkCallback;
   if (!callback) {
     logger.warn("[mpesa/callback] No stkCallback in body — ignoring");
@@ -369,9 +399,8 @@ async function processMpesaCallback(body: unknown): Promise<boolean> {
     return false;
   }
 
-  const pendingRows = await sbSelect<PendingMpesaTransaction>(
-    "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,amount,payment_method,payment_phone,mac_address&limit=1`,
+  const pendingRows = await dependencies.selectPending(
+    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,plan_id,amount,payment_method,payment_phone,mac_address&limit=1`,
   );
   const transaction = pendingRows[0];
   if (!transaction) {
@@ -379,8 +408,8 @@ async function processMpesaCallback(body: unknown): Promise<boolean> {
     return false;
   }
 
-  const settings = await getMpesaSettings();
-  const verification = await queryDarajaStkResult(settings, checkoutId);
+  const settings = await dependencies.getSettings();
+  const verification = await dependencies.verifyStk(settings, checkoutId);
   const callbackResultCode = Number(ResultCode);
   if (!verification.verified || verification.resultCode !== callbackResultCode) {
     logger.warn({ checkoutId, callbackResultCode, verification }, "[mpesa/callback] Callback could not be verified with Daraja");
@@ -388,13 +417,37 @@ async function processMpesaCallback(body: unknown): Promise<boolean> {
   }
 
   const isSuccessful = verification.resultCode === 0;
-  const settlements = await sbRpc<SettlementResult>("settle_verified_mpesa_transaction", {
-    p_transaction_id: transaction.id,
-    p_status: isSuccessful ? "completed" : "failed",
-    p_note: isSuccessful
-      ? "M-Pesa payment verified by Daraja."
-      : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
-  });
+  let rollbackPppoeAccess: (() => Promise<void>) | undefined;
+  if (isSuccessful && transaction.admin_id && transaction.customer_id && transaction.plan_id) {
+    const access = await dependencies.reactivatePppoeAccess({
+      adminId: transaction.admin_id,
+      customerId: transaction.customer_id,
+      planId: transaction.plan_id,
+      reference: checkoutId,
+    });
+    if (!access.ok && !access.skipped) {
+      logger.warn({ checkoutId, error: access.error }, "[mpesa/callback] PPPoE access restore is pending");
+      return false;
+    }
+    rollbackPppoeAccess = access.rollback;
+  }
+  let settlements: SettlementResult[];
+  try {
+    settlements = await dependencies.settle({
+      p_transaction_id: transaction.id,
+      p_status: isSuccessful ? "completed" : "failed",
+      p_note: isSuccessful
+        ? "M-Pesa payment verified by Daraja."
+        : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
+    });
+  } catch (error) {
+    if (rollbackPppoeAccess) {
+      await rollbackPppoeAccess().catch(rollbackError => {
+        logger.error({ err: rollbackError, checkoutId }, "[mpesa/callback] PPPoE access rollback failed");
+      });
+    }
+    throw error;
+  }
   const settlement = settlements[0];
   if (!settlement?.settled) {
     logger.info({ checkoutId }, "[mpesa/callback] Callback replay ignored after state transition");
