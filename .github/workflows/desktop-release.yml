@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'desktop-v*'
+      - "desktop-v*"
 
 concurrency:
   group: desktop-release
@@ -17,9 +17,10 @@ jobs:
   windows:
     name: Windows installer
     runs-on: windows-latest
+    environment: desktop-production
     env:
       EXPO_PUBLIC_API_BASE_URL: https://isplatty.org
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - name: Check out the release
         uses: actions/checkout@v4
@@ -38,22 +39,66 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Windows packages
+      - name: Prepare Windows signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            throw 'WINDOWS_CERTIFICATE_BASE64 is not configured in the desktop-production environment.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw 'WINDOWS_CERTIFICATE_PASSWORD is not configured in the desktop-production environment.'
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'ocholasupernet-signing.p12'
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64)
+          )
+
+      - name: Build signed Windows packages
+        env:
+          CSC_LINK: ${{ runner.temp }}\ocholasupernet-signing.p12
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: pnpm --filter @workspace/ocholasupernet-mobile run desktop:package:windows
 
-      - name: Upload unsigned Windows packages
+      - name: Verify Windows signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(Get-ChildItem 'artifacts/ocholasupernet-mobile/desktop-releases' -Filter '*.exe')
+          if ($packages.Count -lt 2) {
+            throw 'Expected both the NSIS installer and portable Windows executable.'
+          }
+          foreach ($package in $packages) {
+            $signature = Get-AuthenticodeSignature -FilePath $package.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature for $($package.Name): $($signature.Status)"
+            }
+            Write-Host "$($package.Name): $($signature.Status)"
+          }
+
+      - name: Remove temporary Windows signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'ocholasupernet-signing.p12')
+
+      - name: Upload signed Windows packages
         uses: actions/upload-artifact@v4
         with:
-          name: ocholasupernet-windows-unsigned
+          name: ocholasupernet-windows-signed
           path: artifacts/ocholasupernet-mobile/desktop-releases/*
           if-no-files-found: error
 
   macos:
     name: macOS installer
     runs-on: macos-latest
+    environment: desktop-production
     env:
       EXPO_PUBLIC_API_BASE_URL: https://isplatty.org
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - name: Check out the release
         uses: actions/checkout@v4
@@ -72,12 +117,78 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build macOS packages
+      - name: Prepare macOS signing and notarization credentials
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          for required in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!required}" ]; then
+              echo "$required is not configured in the desktop-production environment." >&2
+              exit 1
+            fi
+          done
+          certificate_path="$RUNNER_TEMP/ocholasupernet-signing.p12"
+          api_key_path="$RUNNER_TEMP/ocholasupernet-notary.p8"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 -D > "$certificate_path"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$api_key_path"
+          chmod 600 "$certificate_path" "$api_key_path"
+
+      - name: Build signed and notarized macOS packages
+        env:
+          CSC_LINK: ${{ runner.temp }}/ocholasupernet-signing.p12
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/ocholasupernet-notary.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: pnpm --filter @workspace/ocholasupernet-mobile run desktop:package:macos
 
-      - name: Upload unsigned macOS packages
+      - name: Verify macOS signatures and notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmg_files=(artifacts/ocholasupernet-mobile/desktop-releases/*.dmg)
+          zip_files=(artifacts/ocholasupernet-mobile/desktop-releases/*.zip)
+          if [ "${#dmg_files[@]}" -ne 1 ] || [ "${#zip_files[@]}" -ne 1 ]; then
+            echo 'Expected exactly one DMG and one ZIP package.' >&2
+            exit 1
+          fi
+          mount_point="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$mount_point" -quiet 2>/dev/null || true
+            rm -rf "$mount_point"
+          }
+          trap cleanup EXIT
+          hdiutil attach "${dmg_files[0]}" -readonly -nobrowse -mountpoint "$mount_point"
+          app_path="$mount_point/OcholaSuperNet.app"
+          test -d "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "${dmg_files[0]}"
+          zip_extract="$(mktemp -d)"
+          ditto -x -k "${zip_files[0]}" "$zip_extract"
+          zip_app_path="$zip_extract/OcholaSuperNet.app"
+          test -d "$zip_app_path"
+          codesign --verify --deep --strict --verbose=2 "$zip_app_path"
+          spctl --assess --type execute --verbose=4 "$zip_app_path"
+          xcrun stapler validate "$zip_app_path"
+          rm -rf "$zip_extract"
+
+      - name: Remove temporary macOS signing credentials
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/ocholasupernet-signing.p12" "$RUNNER_TEMP/ocholasupernet-notary.p8"
+
+      - name: Upload signed macOS packages
         uses: actions/upload-artifact@v4
         with:
-          name: ocholasupernet-macos-unsigned
+          name: ocholasupernet-macos-signed
           path: artifacts/ocholasupernet-mobile/desktop-releases/*
           if-no-files-found: error

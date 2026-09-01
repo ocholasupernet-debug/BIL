@@ -32,6 +32,7 @@ mac:
     - zip
   hardenedRuntime: true
   gatekeeperAssess: false
+  notarize: true
 
 linux:
   category: Network

@@ -87,21 +87,31 @@ between builds. `EXPO_PUBLIC_API_BASE_URL` can override the default
 web export and must be a public HTTPS origin reachable by the desktop machine.
 
 GitHub Actions includes a `Desktop Releases` workflow. Run it manually or push
-a tag matching `desktop-v*` to build unsigned Windows and macOS artifacts on
-their native runners. The workflow deliberately disables automatic signing so
-it can produce test packages without credentials.
+a tag matching `desktop-v*` to build signed Windows and macOS installers on
+their native runners. The jobs use the protected `desktop-production`
+environment and fail closed when signing or notarization credentials are
+missing; they upload only packages that pass the native trust checks.
 
 #### Signing and notarization
 
-Unsigned packages are suitable for internal testing only. A production Windows
-release needs a Microsoft code-signing certificate and protected CI
-credentials. A production macOS release needs an Apple Developer
-Developer ID Application certificate, an App Store Connect API key (or Apple
-ID app-specific password), and notarization access. Configure those in the
-CI secret store; never commit `.p12`, `.p8`, `.cer`, `.key`, or password files.
-The Electron builder supports the corresponding `CSC_LINK`, `CSC_KEY_PASSWORD`,
-`APPLE_API_KEY`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` environment
-variables when the owner is ready to enable trusted releases.
+Configure these as protected secrets on the `desktop-production` GitHub
+environment before using the workflow:
+
+- `WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`: the
+  company Authenticode certificate exported as a base64 `.p12`/`.pfx` and its
+  password.
+- `MACOS_CERTIFICATE_BASE64` and `MACOS_CERTIFICATE_PASSWORD`: the Apple
+  Developer ID Application certificate exported as a base64 `.p12` and its
+  password.
+- `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`: the
+  App Store Connect API key (`.p8`) and its issuer metadata for notarization.
+
+The workflow decodes these files only inside the ephemeral native runner,
+passes their paths/passwords to Electron Builder, and deletes the runner after
+the job. Never commit `.p12`, `.p8`, `.cer`, `.key`, or password files. The
+local desktop commands remain useful for unsigned development packages; the
+trusted release workflow uploads only artifacts that pass Authenticode,
+`codesign`, Gatekeeper, and stapler validation.
 
 Desktop packaging does not change the API, Android/iOS session contract, or
 native secure-storage behavior. The native Android and iOS targets do not
