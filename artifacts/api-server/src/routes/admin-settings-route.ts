@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin, authenticatedAdminId } from "../lib/api-auth.js";
@@ -26,12 +26,55 @@ import {
   sbSelectStrict,
   sbUpdateStrict,
   sbUpsertStrict,
+  supabaseConfigured,
 } from "../lib/supabase-client.js";
 import { activeSuperAdminName, isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 
 const router: IRouter = Router();
 const CHANNELS = new Set<MessageChannel>(["sms", "whatsapp", "email", "telegram"]);
-const BACKUP_DIR = process.env.BACKUP_DIR?.trim() || join(tmpdir(), "ochola-supernet-backups");
+const BACKUP_DIR = resolve(process.env.BACKUP_DIR?.trim() || join(process.cwd(), "data", "backups"));
+const BACKUP_STORAGE_IS_DURABLE = ![resolve(tmpdir()), "/tmp", "/var/tmp", "/dev/shm"]
+  .some(tempRoot => BACKUP_DIR === tempRoot || BACKUP_DIR.startsWith(`${tempRoot}/`));
+const BACKUP_STORAGE_REASON = BACKUP_STORAGE_IS_DURABLE
+  ? null
+  : "BACKUP_DIR must point to persistent storage outside the process temporary directory.";
+const backupStorageState: { available: boolean; error: string | null } = {
+  available: BACKUP_STORAGE_IS_DURABLE,
+  error: BACKUP_STORAGE_REASON,
+};
+const BACKUP_SCHEDULER_ENABLED = process.env.BACKUP_SCHEDULER_ENABLED !== "false";
+const BACKUP_SCHEDULE_UTC = process.env.BACKUP_SCHEDULE_UTC?.trim() || "02:00";
+const BACKUP_RETENTION_DAYS = Math.max(1, Number.parseInt(process.env.BACKUP_RETENTION_DAYS || "30", 10) || 30);
+const BACKUP_RETENTION_COUNT = Math.max(1, Number.parseInt(process.env.BACKUP_RETENTION_COUNT || "30", 10) || 30);
+
+function backupScheduleParts(value: string): { hour: number; minute: number; label: string } | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  if (!match) return null;
+  return { hour: Number(match[1]), minute: Number(match[2]), label: `${match[1]}:${match[2]}` };
+}
+
+const BACKUP_SCHEDULE = backupScheduleParts(BACKUP_SCHEDULE_UTC);
+const schedulerState: {
+  status: "starting" | "healthy" | "degraded" | "unavailable" | "disabled";
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastError: string | null;
+} = {
+  status: !BACKUP_SCHEDULER_ENABLED
+    ? "disabled"
+    : !BACKUP_SCHEDULE
+      ? "unavailable"
+      : "starting",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastError: BACKUP_SCHEDULE ? null : "BACKUP_SCHEDULE_UTC must use HH:MM in UTC.",
+};
+const retentionState: {
+  status: "healthy" | "degraded";
+  lastRunAt: string | null;
+  lastError: string | null;
+} = { status: "healthy", lastRunAt: null, lastError: null };
+let backupSchedulerTimer: NodeJS.Timeout | undefined;
 
 interface TemplateRow {
   template_key: string;
@@ -56,6 +99,7 @@ interface BackupRow {
   started_at: string;
   completed_at: string | null;
   created_at: string;
+  scheduled_for?: string | null;
 }
 
 function requireSuperAdmin(req: Request, res: Response): string | null {
@@ -285,18 +329,64 @@ function runPgDump(filePath: string): Promise<{ ok: boolean; reason?: string }> 
   }
 }
 
-async function executeBackup(row: BackupRow): Promise<void> {
+async function applyBackupRetention(): Promise<void> {
+  try {
+    const rows = await sbSelectStrict<BackupRow>(
+      "platform_backup_jobs",
+      "select=id,status,artifact_name,artifact_size,artifact_sha256,created_at&order=created_at.desc&limit=500",
+    );
+    const cutoff = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const completed = rows.filter(row => row.status === "completed");
+    const keepCompleted = new Set(completed.slice(0, BACKUP_RETENTION_COUNT).map(row => row.id));
+    const expired = rows.filter(row => {
+      if (row.status === "running") return false;
+      const createdAt = Date.parse(row.created_at);
+      return Number.isFinite(createdAt) && (
+        createdAt < cutoff
+        || (row.status === "completed" && !keepCompleted.has(row.id))
+      );
+    });
+    for (const row of expired) {
+      if (row.artifact_name) {
+        await rm(join(BACKUP_DIR, basename(row.artifact_name)), { force: true });
+      }
+      await sbDeleteStrict("platform_backup_jobs", `id=eq.${row.id}`);
+    }
+    retentionState.status = "healthy";
+    retentionState.lastRunAt = new Date().toISOString();
+    retentionState.lastError = null;
+  } catch (error) {
+    retentionState.status = "degraded";
+    retentionState.lastError = error instanceof Error ? error.message : "Backup retention cleanup failed.";
+    throw error;
+  }
+}
+
+async function executeBackup(row: BackupRow): Promise<{ ok: boolean; reason?: string }> {
   const artifactName = `${row.id}-${basename(row.name).replace(/[^a-zA-Z0-9._-]/g, "-")}.dump`;
   const artifactPath = join(BACKUP_DIR, artifactName);
   try {
+    if (!backupStorageState.available) {
+      const reason = backupStorageState.error ?? "Durable backup storage is unavailable.";
+      await sbUpdateStrict("platform_backup_jobs", `id=eq.${row.id}`, {
+        status: "unavailable",
+        failure_reason: reason,
+        completed_at: new Date().toISOString(),
+      });
+      return { ok: false, reason };
+    }
     await mkdir(BACKUP_DIR, { recursive: true });
     const result = await runPgDump(artifactPath);
     if (!result.ok) {
+      await rm(artifactPath, { force: true }).catch(() => undefined);
       await sbUpdateStrict("platform_backup_jobs", `id=eq.${row.id}`, { status: result.reason?.includes("unavailable") ? "unavailable" : "failed", failure_reason: result.reason, completed_at: new Date().toISOString() });
-      return;
+      return { ok: false, reason: result.reason };
     }
     const info = await stat(artifactPath);
     const checksum = await sha256File(artifactPath);
+    if (info.size <= 0 || !/^[a-f0-9]{64}$/i.test(checksum)) {
+      throw new Error("The backup artifact failed its checksum verification.");
+    }
     await sbUpdateStrict("platform_backup_jobs", `id=eq.${row.id}`, {
       status: "completed",
       artifact_name: artifactName,
@@ -304,6 +394,7 @@ async function executeBackup(row: BackupRow): Promise<void> {
       artifact_sha256: checksum,
       completed_at: new Date().toISOString(),
     });
+    return { ok: true };
   } catch {
     await rm(artifactPath, { force: true }).catch(() => undefined);
     await sbUpdateStrict("platform_backup_jobs", `id=eq.${row.id}`, {
@@ -311,8 +402,146 @@ async function executeBackup(row: BackupRow): Promise<void> {
       failure_reason: "The backup artifact could not be created or verified.",
       completed_at: new Date().toISOString(),
     }).catch(() => undefined);
+    return { ok: false, reason: "The backup artifact could not be created or verified." };
+  } finally {
+    await applyBackupRetention().catch(error => {
+      schedulerState.status = "degraded";
+      schedulerState.lastError = `Retention cleanup failed: ${error instanceof Error ? error.message : "backup artifacts could not be removed."}`;
+      console.error(schedulerState.lastError);
+    });
   }
 }
+
+function nextScheduledBackup(from = new Date()): Date {
+  const next = new Date(from);
+  next.setUTCHours(BACKUP_SCHEDULE?.hour ?? 0, BACKUP_SCHEDULE?.minute ?? 0, 0, 0);
+  if (next.getTime() <= from.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+async function createAutomaticBackup(): Promise<void> {
+  if (!BACKUP_SCHEDULE || !backupStorageState.available || !supabaseConfigured) return;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const existing = await sbSelectStrict<BackupRow>(
+    "platform_backup_jobs",
+    `backup_type=eq.auto&created_at=gte.${today.toISOString()}&select=*&order=created_at.desc&limit=1`,
+  );
+  if (existing[0]) return;
+  const date = today.toISOString().slice(0, 10);
+  let created: BackupRow[];
+  try {
+    created = await sbInsertStrict<BackupRow>("platform_backup_jobs", {
+      name: `automatic-backup-${date}`,
+      backup_type: "auto",
+      status: "running",
+      scheduled_for: date,
+    });
+  } catch (error) {
+    if (String(error).toLowerCase().includes("duplicate") || String(error).toLowerCase().includes("unique")) return;
+    throw error;
+  }
+  if (!created[0]) throw new Error("Automatic backup job was not created.");
+  const result = await executeBackup(created[0]);
+  schedulerState.lastRunAt = new Date().toISOString();
+  schedulerState.lastError = result.ok ? null : result.reason ?? "Automatic backup failed.";
+  schedulerState.status = result.ok ? "healthy" : "degraded";
+}
+
+function scheduleNextAutomaticBackup(): void {
+  if (!BACKUP_SCHEDULER_ENABLED || !BACKUP_SCHEDULE || !backupStorageState.available || !supabaseConfigured) return;
+  if (backupSchedulerTimer) clearTimeout(backupSchedulerTimer);
+  const next = nextScheduledBackup();
+  schedulerState.nextRunAt = next.toISOString();
+  const delay = Math.max(1_000, next.getTime() - Date.now());
+  backupSchedulerTimer = setTimeout(() => {
+    void createAutomaticBackup()
+      .catch(error => {
+        schedulerState.status = "degraded";
+        schedulerState.lastError = error instanceof Error ? error.message : "Automatic backup failed.";
+      })
+      .finally(() => scheduleNextAutomaticBackup());
+  }, delay);
+  backupSchedulerTimer.unref?.();
+}
+
+async function startBackupScheduler(): Promise<void> {
+  if (!BACKUP_SCHEDULER_ENABLED || !BACKUP_SCHEDULE) return;
+  if (!BACKUP_STORAGE_IS_DURABLE || !supabaseConfigured) {
+    schedulerState.status = "unavailable";
+    schedulerState.lastError = BACKUP_STORAGE_REASON
+      ?? (!supabaseConfigured ? "Supabase backup storage is not configured." : "Durable backup storage is unavailable.");
+    return;
+  }
+  try {
+    try {
+      await mkdir(BACKUP_DIR, { recursive: true });
+      backupStorageState.available = true;
+      backupStorageState.error = null;
+    } catch {
+      backupStorageState.available = false;
+      backupStorageState.error = "The configured durable backup directory is not writable.";
+      schedulerState.status = "unavailable";
+      schedulerState.lastError = backupStorageState.error;
+      return;
+    }
+    const latest = (await sbSelectStrict<BackupRow>(
+      "platform_backup_jobs",
+      "backup_type=eq.auto&select=*&order=created_at.desc&limit=1",
+    ))[0];
+    schedulerState.lastRunAt = latest?.completed_at ?? latest?.created_at ?? null;
+    schedulerState.lastError = latest?.failure_reason ?? null;
+    schedulerState.status = latest?.status === "failed" || latest?.status === "unavailable" ? "degraded" : "healthy";
+    const lastCreated = latest?.created_at ? Date.parse(latest.created_at) : 0;
+    if (!lastCreated || Date.now() - lastCreated >= 24 * 60 * 60 * 1000) {
+      await createAutomaticBackup();
+    }
+    scheduleNextAutomaticBackup();
+  } catch (error) {
+    schedulerState.status = "unavailable";
+    schedulerState.lastError = error instanceof Error ? error.message : "Automatic backup scheduler could not start.";
+  }
+}
+
+void startBackupScheduler();
+
+router.get("/super-admin/backups/status", async (req, res): Promise<void> => {
+  if (!requireSuperAdmin(req, res)) return;
+  try {
+    const latestAuto = (await sbSelectStrict<BackupRow>(
+      "platform_backup_jobs",
+      "backup_type=eq.auto&select=*&order=created_at.desc&limit=1",
+    ))[0] ?? null;
+    const currentError = schedulerState.lastError ?? latestAuto?.failure_reason ?? null;
+    res.set("Cache-Control", "no-store").json({
+      ok: true,
+      scheduler: {
+        enabled: BACKUP_SCHEDULER_ENABLED,
+        status: schedulerState.status,
+        scheduleUtc: BACKUP_SCHEDULE ? `${BACKUP_SCHEDULE.label} UTC daily` : null,
+        nextRunAt: schedulerState.nextRunAt,
+        lastRunAt: schedulerState.lastRunAt ?? latestAuto?.completed_at ?? latestAuto?.created_at ?? null,
+        lastError: currentError,
+      },
+      storage: {
+        durable: BACKUP_STORAGE_IS_DURABLE,
+        available: backupStorageState.available,
+        kind: "persistent-filesystem",
+        error: backupStorageState.error,
+      },
+      retention: {
+        days: BACKUP_RETENTION_DAYS,
+        maxArtifacts: BACKUP_RETENTION_COUNT,
+        status: retentionState.status,
+        lastRunAt: retentionState.lastRunAt,
+        lastError: retentionState.lastError,
+      },
+      latestAutoBackup: latestAuto ? backupPublic(latestAuto) : null,
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Backup scheduler status could not be loaded. Confirm the settings migration has been applied." });
+  }
+});
 
 router.get("/super-admin/backups", async (req, res): Promise<void> => {
   if (!requireSuperAdmin(req, res)) return;
@@ -360,6 +589,10 @@ router.delete("/super-admin/backups/:id", async (req, res): Promise<void> => {
 
 router.get("/super-admin/backups/:id/download", async (req, res): Promise<void> => {
   if (!requireSuperAdmin(req, res)) return;
+  if (!BACKUP_STORAGE_IS_DURABLE) {
+    res.status(503).json({ ok: false, error: BACKUP_STORAGE_REASON ?? "Durable backup storage is unavailable." });
+    return;
+  }
   const id = Number(req.params.id);
   try {
     const rows = await sbSelectStrict<BackupRow>("platform_backup_jobs", `id=eq.${id}&status=eq.completed&select=*&limit=1`);

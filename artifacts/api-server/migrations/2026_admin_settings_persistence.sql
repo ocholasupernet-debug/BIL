@@ -45,6 +45,15 @@ create table if not exists platform_backup_jobs (
 );
 create index if not exists platform_backup_jobs_created_idx
   on platform_backup_jobs(created_at desc);
+-- A scheduled_for date makes the daily server scheduler idempotent across
+-- restarts and prevents duplicate automatic jobs for the same UTC day.
+alter table platform_backup_jobs
+  add column if not exists scheduled_for date;
+create index if not exists platform_backup_jobs_scheduled_idx
+  on platform_backup_jobs(backup_type, scheduled_for);
+create unique index if not exists platform_backup_jobs_auto_scheduled_unique
+  on platform_backup_jobs(backup_type, scheduled_for)
+  where backup_type = 'auto' and scheduled_for is not null;
 
 alter table isp_message_templates enable row level security;
 alter table platform_role_permissions enable row level security;

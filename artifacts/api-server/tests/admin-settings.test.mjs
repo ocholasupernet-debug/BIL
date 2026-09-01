@@ -6,6 +6,7 @@ const migration = await readFile("migrations/2026_admin_settings_persistence.sql
 const route = await readFile("src/routes/admin-settings-route.ts", "utf8");
 const templates = await readFile("src/lib/message-templates.ts", "utf8");
 const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
+const backupsUi = await readFile("../ochola-supernet/src/pages/super-admin/Backups.tsx", "utf8");
 
 test("admin settings migration creates durable and service-role-only storage", () => {
   for (const table of ["isp_message_templates", "platform_role_permissions", "platform_backup_jobs"]) {
@@ -14,6 +15,9 @@ test("admin settings migration creates durable and service-role-only storage", (
   }
   assert.match(migration, /unique \(admin_id, template_key\)/);
   assert.match(migration, /artifact_sha256/);
+  assert.match(migration, /scheduled_for date/);
+  assert.match(migration, /platform_backup_jobs_scheduled_idx/);
+  assert.match(migration, /platform_backup_jobs_auto_scheduled_unique/);
 });
 
 test("deployment migration runner includes admin settings storage", () => {
@@ -25,7 +29,22 @@ test("settings API keeps tenant templates and platform controls separate", () =>
   assert.match(route, /router\.put\("\/admin\/message-templates\/:templateKey", requireAdmin\(\), requireTenantPermission\("Edit Settings"\)/);
   assert.match(route, /router\.get\("\/super-admin\/roles"/);
   assert.match(route, /router\.get\("\/super-admin\/backups"/);
+  assert.match(route, /router\.get\("\/super-admin\/backups\/status"/);
+  assert.match(route, /process\.cwd\(\).*data.*backups/);
+  assert.match(route, /BACKUP_SCHEDULE_UTC/);
+  assert.match(route, /applyBackupRetention/);
+  assert.match(route, /retentionState/);
+  assert.match(route, /duplicate.*unique/i);
+  assert.match(route, /sha256File\(filePath\)/);
   assert.match(route, /integrity verification/);
+});
+
+test("backup UI reports server scheduler health instead of claiming a static configuration", () => {
+  assert.match(backupsUi, /super-admin\/backups\/status/);
+  assert.match(backupsUi, /Automatic Schedule: Checking/);
+  assert.match(backupsUi, /Durable filesystem storage is active/);
+  assert.match(backupsUi, /Retention:/);
+  assert.doesNotMatch(backupsUi, /Automatic Schedule: Not configured/);
 });
 
 test("delivery lookup has an enabled-template fallback and variable rendering", () => {
