@@ -14,6 +14,7 @@
     "test:pppoe-portal": "node --test tests/pppoe-portal-reference.test.mjs",
     "test:pppoe-portal-live": "node --test tests/pppoe-portal-live-staging.test.mjs",
     "test:pppoe-renewal": "tsx --test tests/pppoe-renewal-staging.test.mjs",
+    "test:hotspot-export": "node --test tests/hotspot-export.test.mjs",
     "test:payment-routing": "node --test tests/payment-routing.test.mjs",
     "test:storage-governance": "node --test tests/storage-governance.test.mjs"
   },

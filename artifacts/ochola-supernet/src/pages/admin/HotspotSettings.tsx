@@ -234,7 +234,7 @@ async function resolvePortalApiBase(domain: string): Promise<string> {
   return portalOriginFromBrand(domain);
 }
 
-async function buildPortalHtml(settings: HSettings, domain: string): Promise<string> {
+export async function buildPortalHtml(settings: HSettings, domain: string): Promise<string> {
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
