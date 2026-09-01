@@ -2392,6 +2392,11 @@ ${openVpnOptionalSettings}
     :put "${tag}: OVPN client is running."
 }
 
+:if ([:len [/interface ovpn-client find where name="${interfaceName}"]] = 0) do={
+    :set ocholaVpnChildError "${tag}: OVPN client interface was not created after importing the child script."
+    :error $ocholaVpnChildError
+}
+
 # ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
 # The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
 /ip firewall filter

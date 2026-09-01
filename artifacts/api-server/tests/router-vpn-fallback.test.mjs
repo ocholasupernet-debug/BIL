@@ -167,6 +167,7 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
   assert.match(script, /active or foreign ochola-mgmt-vpn-42 interface/);
   assert.match(script, /existingOvpnComment/);
   assert.match(script, /existingOvpnRunning/);
+  assert.match(script, /interface ovpn-client find where name="ochola-mgmt-vpn-42"/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
   assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
@@ -299,12 +300,13 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.doesNotMatch(scriptsRoute, /verifyFetchedFile\(`"\$\{tempFileName\}"`, tempFileName, true\)/);
   assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
   assert.match(scriptsRoute, /:local importError \$error/);
   assert.match(scriptsRoute, /:local rawVpnError \$error/);
   assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);
   assert.match(scriptsRoute, /:local attemptPhase "start"/);
-  assert.match(scriptsRoute, /server rejected \$\{label\}/);
+  assert.match(scriptsRoute, /larger \.rsc files are not reliably readable on/);
   assert.match(scriptsRoute, /child import/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });

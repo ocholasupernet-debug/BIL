@@ -367,28 +367,17 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
 
 /* ── Verify a RouterOS download created a usable file.
    RouterOS can report a successful fetch even when the destination is a
-   directory or an empty result. Keep this inside the fetch's :do block so the
-   caller's on-error handler reports the exact destination. ── */
-function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVpnError = false): string {
-  const routerVpnErrorCheck = rejectRouterVpnError
-    ? `
- :global ocholaVpnChildError
- :local fetchedContents ""
- :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={
-     :set ocholaVpnChildError "downloaded ${label} could not be inspected before import"
-     :error $ocholaVpnChildError
- }
- :if ([:len $fetchedContents] >= [:len "# OCHOLA_ROUTER_VPN_ERROR"] && [:pick $fetchedContents 0 [:len "# OCHOLA_ROUTER_VPN_ERROR"]] = "# OCHOLA_ROUTER_VPN_ERROR") do={
-     :set ocholaVpnChildError ("server rejected ${label}: " . $fetchedContents)
-     :error $ocholaVpnChildError
- }`
-    : "";
+   directory or an empty result. Do not read the whole file through
+   `/file get ... contents`: larger .rsc files are not reliably readable on
+   every RouterOS version. HTTP errors are caught by /tool fetch, while the
+   imported child verifies its own required resource. ── */
+function verifyFetchedFile(pathExpression: string, label: string): string {
   return `:local fetchedFile [/file find name=${pathExpression}]
 :if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
 :local fetchedType [/file get $fetchedFile type]
 :if ($fetchedType = "directory") do={ :error "download destination is a directory: ${label}" }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }${routerVpnErrorCheck}`;
+ :if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }`;
 }
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
@@ -1000,7 +989,7 @@ function buildMainhotspotRsc(
          :set attemptPhase "download"
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
          :set attemptPhase "download verification"
-        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
+        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
         :delay 2s
          :if ($majorVersion >= 7) do={
              :local preflightError ""

@@ -76,7 +76,7 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.match(scriptsRoute, /repaired the owned DHCP pool range/);
   assert.match(scriptsRoute, /poolComment.*coexistence router/);
   assert.match(scriptsRoute, /global ocholaCoexistenceError/);
-  assert.match(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
+  assert.doesNotMatch(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
   assert.match(scriptsRoute, /after " \. \$coexistenceBundleBytes \. " bytes/);
   assert.match(scriptsRoute, /coexistence hotspot dry-run failed/);
   assert.match(scriptsRoute, /verbose=yes dry-run/);
@@ -88,9 +88,9 @@ test("coexistence installs independent primary and backup management OpenVPN cli
   assert.match(scriptsRoute, /independent = false/);
   assert.match(scriptsRoute, /const attemptWrapper = independent \? ":do \{" : ":if \(!\$vpnConfigured\) do=\{";/);
   assert.match(scriptsRoute, /:set vpnProtocols \(\$vpnProtocols \. "\$\{protocol\},"\)/);
-  assert.match(scriptsRoute, /vpnAttempt\("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn\.rsc", true\)/);
-  assert.match(scriptsRoute, /vpnAttempt\("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup\.rsc", true\)/);
-  assert.match(scriptsRoute, /COEXISTENCE VPN READY — " \. \$vpnProtocols/);
+  assert.match(scriptsRoute, /vpnAttempt\("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn\.rsc", true/);
+  assert.match(scriptsRoute, /vpnAttempt\("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup\.rsc", true/);
+  assert.match(scriptsRoute, /Management VPN ready; existing customer configuration was not replaced/);
 });
 
 test("coexistence bundle includes the portal assets referenced by its HTML files", () => {
