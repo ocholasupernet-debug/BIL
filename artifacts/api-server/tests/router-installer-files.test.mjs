@@ -39,6 +39,13 @@ test("installer verifies downloads and reports the resolved destination", () => 
   assert.doesNotMatch(scriptsRoute, /portalFetch[\s\S]{0,500}dst-path=\(\$hsdir \. "/);
 });
 
+test("unpersonalized installers stop instead of downloading placeholder VPN scripts", () => {
+  assert.match(scriptsRoute, /generated installer stops before changing router state/);
+  assert.match(scriptsRoute, /This is not a personalized router installer/);
+  assert.match(scriptsRoute, /signed-in ISP Self Install page/);
+  assert.match(scriptsRoute, /existing router configuration was not changed/);
+});
+
 test("successful child imports preserve named RouterOS artifacts", () => {
   for (const fileName of [
     "hotspotsetup.rsc",

@@ -945,7 +945,7 @@ function buildMainhotspotRsc(
     : `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
   const openVpnSelection = routerVpnUrl
     ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
-    : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
+    : `:set openVpnUrl ""`;
   const openVpnBackupSelection = routerVpnBackupUrl
     ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
     : `:set openVpnBackupUrl ""`;
@@ -1041,6 +1041,11 @@ function buildMainhotspotRsc(
 }`;
   };
   const coexistenceFallbacksDisabled = installationMode === "coexist";
+  const personalizedInstallerGuard = !routerVpnUrl
+    ? `:put "ERROR: This is not a personalized router installer."
+:put "Download mainhotspot.rsc again from the signed-in ISP Self Install page for a router-specific rid, adminId, and grant."
+:error "Personalized router installer required; existing router configuration was not changed."`
+    : "";
   const wireGuardAttempt = !coexistenceFallbacksDisabled && routerWireGuardUrl
     ? `:if ($majorVersion >= 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n}`
     : "";
@@ -1050,11 +1055,12 @@ function buildMainhotspotRsc(
 
   if (installationMode === "coexist") {
     return `# ${safeCompanyName} — Coexistence management installer
-# SCRIPT REVISION: coexistence-vpn-diagnostics-v2
+# SCRIPT REVISION: coexistence-vpn-diagnostics-v3
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
 ${pgDef}
+${personalizedInstallerGuard}
 ${httpsTrustBootstrap}
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
@@ -1159,11 +1165,12 @@ ${safeHeartbeatUrl ? `:do {
     : "";
 
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
-# SCRIPT REVISION: main-installer-vpn-diagnostics-v2
+# SCRIPT REVISION: main-installer-vpn-diagnostics-v3
 # Downloads and imports the router VPN, hotspot, PPPoE, sync, and heartbeat setup.
 # Router: ${safeRouterName || "new router"}
 
 ${pgDef}
+${personalizedInstallerGuard}
 
 # Takeover is a separate, destructive path. Its safety boundary runs first.
 ${takeoverBackup}
@@ -1535,9 +1542,9 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
      progress callbacks. The admin UI may instead send rid+adminId; in that
-     case the server resolves the router secret here so credentials never
-     need to be placed in a browser URL. Without rid+token/adminId the script
-     runs exactly as before (no callbacks). */
+      case the server resolves the router secret here so credentials never
+      need to be placed in a browser URL. Without a router identity, the
+      generated installer stops before changing router state. */
   const ridRaw   = ((req.query.rid   ?? "") as string).trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
   const adminIdRaw = ((req.query.adminId ?? "") as string).trim();

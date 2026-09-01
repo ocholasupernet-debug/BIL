@@ -141,7 +141,8 @@ test("installer reads RouterOS version locally and never defaults an unknown rou
 });
 
 test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on RouterOS 6", () => {
-  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{ :set openVpnUrl/);
+  assert.match(scriptsRoute, /const openVpnSelection = routerVpnUrl/);
+  assert.match(scriptsRoute, /:set openVpnUrl ""/);
   assert.match(scriptsRoute, /minimumMajor >= 7/);
   assert.match(scriptsRoute, /versionedUrlAssignment\("wireGuardUrl", safeRouterWireGuardUrl, 7\)/);
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{\\n\$\{vpnAttempt\("wireguard"/);
@@ -179,7 +180,7 @@ test("main coexistence diagnostics exclude unrelated billing OpenVPN clients and
   assert.match(scriptsRoute, /\/log print where topics~"ovpn" && message~"\$\{expectedInterfaceName\}"/);
   assert.match(scriptsRoute, /\$vpnFailureSummary \. \$vpnError \. "; "/);
   assert.doesNotMatch(scriptsRoute, /\$vpnFailureSummary \. "\$\{protocol\}: " \. \$vpnError/);
-  assert.match(scriptsRoute, /SCRIPT REVISION: coexistence-vpn-diagnostics-v2/);
+  assert.match(scriptsRoute, /SCRIPT REVISION: coexistence-vpn-diagnostics-v3/);
   assert.match(scriptsRoute, /\.set\("Cache-Control", "no-store"\)\n    \.set\("Pragma", "no-cache"\)/);
 });
 
@@ -307,6 +308,9 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);
   assert.match(scriptsRoute, /:local attemptPhase "start"/);
   assert.match(scriptsRoute, /larger \.rsc files are not reliably readable on/);
+  assert.match(scriptsRoute, /const openVpnSelection = routerVpnUrl/);
+  assert.match(scriptsRoute, /:set openVpnUrl ""/);
+  assert.match(scriptsRoute, /Personalized router installer required/);
   assert.match(scriptsRoute, /child import/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
