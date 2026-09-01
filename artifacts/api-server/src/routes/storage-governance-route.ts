@@ -11,6 +11,12 @@ import {
 } from "../lib/supabase-client.js";
 import { requireAdmin } from "../lib/api-auth.js";
 import { activeSuperAdminName, isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import {
+  measureSupabaseDatabase,
+  measureSupabaseStorage,
+  measureVpsDisk,
+  type StorageTelemetry,
+} from "../lib/storage-telemetry.js";
 
 const router: IRouter = Router();
 const CLEANUP_SCOPE = "expired_migration_artifacts";
@@ -146,6 +152,9 @@ async function notifyAdmin(
 }
 
 async function measureAndPersist(): Promise<MeasureRow[]> {
+  if (!supabaseServiceRoleConfigured) {
+    throw new Error("Supabase service-role access is required for tenant storage measurement.");
+  }
   const rows = await sbRpc<MeasureRow>("platform_storage_measure", {});
   for (const row of rows) {
     const adminId = parsePositiveId(row.admin_id);
@@ -159,6 +168,42 @@ async function measureAndPersist(): Promise<MeasureRow[]> {
     });
   }
   return rows;
+}
+
+function physicalPublic(measurement: StorageTelemetry) {
+  return {
+    source: measurement.source,
+    status: measurement.status,
+    measurementKind: measurement.measurementKind,
+    usedBytes: measurement.usedBytes,
+    capacityBytes: measurement.capacityBytes,
+    freeBytes: measurement.freeBytes,
+    measuredAt: measurement.measuredAt,
+    error: measurement.error,
+    details: measurement.details ?? {},
+  };
+}
+
+async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Promise<void> {
+  if (!supabaseServiceRoleConfigured) return;
+  const results = await Promise.allSettled(measurements.map(measurement => sbUpsertStrict(
+    "platform_storage_physical_usage",
+    "source",
+    {
+      source: measurement.source,
+      status: measurement.status,
+      measurement_kind: measurement.measurementKind,
+      used_bytes: measurement.usedBytes,
+      capacity_bytes: measurement.capacityBytes,
+      free_bytes: measurement.freeBytes,
+      details: measurement.details ?? {},
+      measured_at: measurement.measuredAt,
+      error: measurement.error,
+    },
+  )));
+  if (results.some(result => result.status === "rejected")) {
+    logger.warn("[super-admin/storage] physical telemetry snapshot could not be persisted");
+  }
 }
 
 async function getCleanupRequest(id: number): Promise<CleanupRequest | null> {
@@ -247,7 +292,19 @@ void processDueCleanupRequests();
 router.get("/super-admin/storage", async (req, res): Promise<void> => {
   if (!isSuperAdmin(req, res)) return;
   try {
-    const measured = await measureAndPersist();
+    let measured: MeasureRow[] = [];
+    let tenantMeasurementError: string | null = null;
+    try {
+      measured = await measureAndPersist();
+    } catch {
+      tenantMeasurementError = "Tenant row-payload measurement is unavailable.";
+    }
+    const physicalMeasurements = await Promise.all([
+      measureSupabaseDatabase(),
+      measureSupabaseStorage(),
+      measureVpsDisk(),
+    ]);
+    await persistPhysicalMeasurements(physicalMeasurements);
     const [settings, admins, candidates, requests] = await Promise.all([
       sbSelectStrict<{ capacity_bytes: number | string | null; updated_at: string }>(
         "platform_storage_settings",
@@ -279,13 +336,18 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
 
     const usage = admins.map(admin => ({
       ...admin,
-      bytes: byAdmin.get(admin.id)?.bytes ?? 0,
-      rowCount: byAdmin.get(admin.id)?.rows ?? 0,
+      bytes: tenantMeasurementError ? null : byAdmin.get(admin.id)?.bytes ?? 0,
+      rowCount: tenantMeasurementError ? null : byAdmin.get(admin.id)?.rows ?? 0,
       breakdown: byAdmin.get(admin.id)?.breakdown ?? {},
     }));
-    const totalUsedBytes = usage.reduce((sum, admin) => sum + admin.bytes, 0);
+    const measuredAt = new Date().toISOString();
+    const totalUsedBytes = tenantMeasurementError
+      ? null
+      : usage.reduce((sum, admin) => sum + (admin.bytes ?? 0), 0);
     const capacityBytes = settings[0]?.capacity_bytes == null ? null : asNumber(settings[0].capacity_bytes);
-    const freeBytes = capacityBytes == null ? null : Math.max(0, capacityBytes - totalUsedBytes);
+    const freeBytes = capacityBytes == null || totalUsedBytes == null
+      ? null
+      : Math.max(0, capacityBytes - totalUsedBytes);
     const candidateRows = candidates.map(candidate => ({
       ...candidate,
       bytes: asNumber(candidate.bytes),
@@ -294,19 +356,41 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
 
     res.json({
       ok: true,
-      measuredAt: new Date().toISOString(),
+      measuredAt,
       measurement: {
         kind: "tenant_row_payload_estimate",
         retentionDays: RETENTION_DAYS,
+        tenantRowPayload: {
+          source: "supabase_row_payload_rpc",
+          status: tenantMeasurementError ? "unavailable" : "available",
+          usedBytes: totalUsedBytes,
+          measuredAt: tenantMeasurementError ? null : measuredAt,
+          error: tenantMeasurementError,
+        },
+        physicalSources: physicalMeasurements.map(physicalPublic),
         notes: [
-          "Measured bytes estimate tenant row payloads only.",
-          "Database indexes, TOAST overhead, Supabase Storage buckets, and VPS disk usage are not attributed.",
+          "Tenant bytes are row-payload estimates and are not physical database usage.",
+          "Supabase Postgres and VPS filesystem measurements are physical-source readings; Supabase Storage reports logical object bytes.",
+          "Provider capacity and overhead are not inferred when a source does not expose them.",
+          "Unavailable sources are never included in capacity or free-space calculations.",
         ],
       },
       capacityBytes,
       totalUsedBytes,
       freeBytes,
-      usagePercent: capacityBytes && capacityBytes > 0 ? Math.min(100, (totalUsedBytes / capacityBytes) * 100) : null,
+      capacity: {
+        bytes: capacityBytes,
+        source: capacityBytes === null ? "not_configured" : "super_admin_configured_budget",
+        measuredAt: settings[0]?.updated_at ?? null,
+      },
+      freeSpace: {
+        bytes: freeBytes,
+        source: freeBytes === null ? null : "configured_budget_minus_tenant_row_payload_estimate",
+        measuredAt: freeBytes === null ? null : measuredAt,
+      },
+      usagePercent: capacityBytes && capacityBytes > 0 && totalUsedBytes !== null
+        ? Math.min(100, (totalUsedBytes / capacityBytes) * 100)
+        : null,
       usage,
       candidates: candidateRows,
       requests,

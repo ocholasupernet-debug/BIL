@@ -1,6 +1,6 @@
 -- Tenant storage accounting and controlled cleanup governance.
--- This migration intentionally measures row payloads, not database indexes,
--- TOAST overhead, Supabase Storage buckets, or VPS disk usage.
+-- The tenant measurement RPC intentionally measures row payloads. The API
+-- stores physical-source snapshots separately when those sources are reachable.
 
 create table if not exists platform_storage_settings (
   id             integer primary key default 1 check (id = 1),
@@ -23,6 +23,22 @@ create table if not exists platform_storage_usage (
 );
 create index if not exists platform_storage_usage_measured_idx
   on platform_storage_usage(measured_at desc);
+
+-- Physical source telemetry is kept separate from tenant row-payload
+-- estimates because the two measurements have different meanings.
+create table if not exists platform_storage_physical_usage (
+  source            text primary key,
+  status            text not null check (status in ('available', 'partial', 'unavailable')),
+  measurement_kind  text not null,
+  used_bytes        bigint check (used_bytes is null or used_bytes >= 0),
+  capacity_bytes    bigint check (capacity_bytes is null or capacity_bytes >= 0),
+  free_bytes        bigint check (free_bytes is null or free_bytes >= 0),
+  details           jsonb not null default '{}'::jsonb,
+  measured_at       timestamptz,
+  error             text
+);
+create index if not exists platform_storage_physical_measured_idx
+  on platform_storage_physical_usage(measured_at desc);
 
 create table if not exists platform_storage_cleanup_requests (
   id                bigserial primary key,
@@ -86,11 +102,13 @@ alter table platform_storage_audit_logs enable row level security;
 
 revoke all on table platform_storage_settings from anon, authenticated;
 revoke all on table platform_storage_usage from anon, authenticated;
+revoke all on table platform_storage_physical_usage from anon, authenticated;
 revoke all on table platform_storage_cleanup_requests from anon, authenticated;
 revoke all on table platform_admin_notifications from anon, authenticated;
 revoke all on table platform_storage_audit_logs from anon, authenticated;
 grant select, insert, update on table platform_storage_settings to service_role;
 grant select, insert, update, delete on table platform_storage_usage to service_role;
+grant select, insert, update, delete on table platform_storage_physical_usage to service_role;
 grant select, insert, update, delete on table platform_storage_cleanup_requests to service_role;
 grant select, insert, update, delete on table platform_admin_notifications to service_role;
 grant select, insert on table platform_storage_audit_logs to service_role;

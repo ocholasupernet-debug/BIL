@@ -23,8 +23,8 @@ interface AdminUsage {
   username: string;
   email: string | null;
   is_active: boolean;
-  bytes: number;
-  rowCount: number;
+  bytes: number | null;
+  rowCount: number | null;
   breakdown: Record<string, { bytes: number; rows: number }>;
 }
 
@@ -54,13 +54,49 @@ interface CleanupRequest {
   created_at: string;
 }
 
+interface PhysicalSource {
+  source: string;
+  status: "available" | "partial" | "unavailable";
+  measurementKind: string;
+  usedBytes: number | null;
+  capacityBytes: number | null;
+  freeBytes: number | null;
+  measuredAt: string | null;
+  error: string | null;
+  details: {
+    path?: string;
+    buckets?: Array<{
+      bucket: string;
+      status: "available" | "unavailable";
+      usedBytes: number | null;
+      objectCount: number | null;
+      measuredAt: string | null;
+      error: string | null;
+    }>;
+  };
+}
+
 interface StorageData {
   measuredAt: string;
   capacityBytes: number | null;
-  totalUsedBytes: number;
+  totalUsedBytes: number | null;
   freeBytes: number | null;
   usagePercent: number | null;
-  measurement: { kind: string; retentionDays: number; notes: string[] };
+  capacity: { bytes: number | null; source: string; measuredAt: string | null };
+  freeSpace: { bytes: number | null; source: string | null; measuredAt: string | null };
+  measurement: {
+    kind: string;
+    retentionDays: number;
+    notes: string[];
+    tenantRowPayload: {
+      source: string;
+      status: "available" | "unavailable";
+      usedBytes: number | null;
+      measuredAt: string | null;
+      error: string | null;
+    };
+    physicalSources: PhysicalSource[];
+  };
   usage: AdminUsage[];
   candidates: Candidate[];
   requests: CleanupRequest[];
@@ -77,6 +113,14 @@ function formatBytes(value: number | null): string {
 function formatDate(value: string | null): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" });
+}
+
+function sourceLabel(source: string): string {
+  return {
+    supabase_postgres: "Supabase Postgres",
+    supabase_storage: "Supabase Storage",
+    vps_filesystem: "VPS filesystem",
+  }[source] || source;
 }
 
 function countdown(value: string, now: number): string {
@@ -323,16 +367,49 @@ export default function SuperAdminStorage() {
         ) : data && (
           <>
             <div className="storage-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14, marginBottom: 18 }}>
-              <StatCard label="Measured in use" value={formatBytes(data.totalUsedBytes)} detail="Tenant row payload estimate" icon={Database} />
-              <StatCard label="Platform capacity" value={formatBytes(data.capacityBytes)} detail={data.capacityBytes === null ? "Configure a capacity budget below" : `${data.usagePercent?.toFixed(1)}% of configured budget`} icon={HardDrive} color={data.capacityBytes === null ? C.amber : C.accent} />
-              <StatCard label="Storage left" value={formatBytes(data.freeBytes)} detail={data.freeBytes === null ? "Remaining capacity is unknown" : "Configured capacity less measured usage"} icon={ShieldCheck} color={data.freeBytes === null ? C.amber : C.green} />
+              <StatCard label="Measured in use" value={formatBytes(data.totalUsedBytes)} detail={data.measurement.tenantRowPayload.status === "available" ? `Tenant row estimate · ${formatDate(data.measurement.tenantRowPayload.measuredAt)}` : "Tenant estimate unavailable"} icon={Database} color={data.totalUsedBytes === null ? C.amber : C.accent} />
+              <StatCard label="Platform capacity" value={formatBytes(data.capacityBytes)} detail={data.capacityBytes === null ? "Configure a capacity budget below" : `${data.usagePercent?.toFixed(1)}% · ${data.capacity.source} · ${formatDate(data.capacity.measuredAt)}`} icon={HardDrive} color={data.capacityBytes === null ? C.amber : C.accent} />
+              <StatCard label="Storage left" value={formatBytes(data.freeBytes)} detail={data.freeSpace.source ? `${data.freeSpace.source} · ${formatDate(data.freeSpace.measuredAt)}` : "Remaining capacity is unknown"} icon={ShieldCheck} color={data.freeBytes === null ? C.amber : C.green} />
               <StatCard label="Cleanup candidates" value={String(data.candidates.length)} detail={`Aged migration items · ${data.measurement.retentionDays}+ days`} icon={Trash2} color={data.candidates.length > 0 ? C.amber : C.green} />
             </div>
 
             <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 10, padding: "11px 14px", color: C.sub, fontSize: 11, lineHeight: 1.5, marginBottom: 20 }}>
-              <strong style={{ color: C.amber }}>Measurement boundary:</strong> {data.measurement.notes.join(" ")} This page will not claim Supabase bucket or VPS disk usage until those sources are connected.
+              <strong style={{ color: C.amber }}>Measurement boundary:</strong> {data.measurement.notes.join(" ")}
               <span style={{ display: "block", color: C.muted, marginTop: 3 }}>Last measured {formatDate(data.measuredAt)}.</span>
             </div>
+
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+              <div style={{ marginBottom: 12 }}>
+                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Connected physical storage sources</h2>
+                <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>These measurements are kept separate from tenant row-payload estimates. Every value carries its source and measurement time.</p>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+                {data.measurement.physicalSources.map(source => {
+                  const statusColor = source.status === "available" ? C.green : source.status === "partial" ? C.amber : C.red;
+                  const buckets = source.details.buckets ?? [];
+                  return (
+                    <div key={source.source} style={{ background: "rgba(0,0,0,0.16)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 13 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                        <strong style={{ color: "white", fontSize: 12 }}>{sourceLabel(source.source)}</strong>
+                        <span style={{ color: statusColor, fontSize: 9, fontWeight: 800, textTransform: "uppercase" }}>{source.status}</span>
+                      </div>
+                      <p style={{ color: C.muted, fontSize: 10, margin: "6px 0 10px" }}>{source.measurementKind}</p>
+                      <div style={{ color: source.usedBytes === null ? C.amber : C.accent, fontWeight: 800, fontSize: 16 }}>{formatBytes(source.usedBytes)} used</div>
+                      <div style={{ color: C.sub, fontSize: 10, marginTop: 4 }}>
+                        {source.capacityBytes === null ? "Capacity: unavailable" : `Capacity: ${formatBytes(source.capacityBytes)}`}
+                        {" · "}
+                        {source.freeBytes === null ? "Free: unavailable" : `Free: ${formatBytes(source.freeBytes)}`}
+                      </div>
+                      <div style={{ color: C.muted, fontSize: 9, marginTop: 8 }}>Measured {formatDate(source.measuredAt)}</div>
+                      {source.error && <div style={{ color: C.red, fontSize: 10, marginTop: 7 }}>{source.error}</div>}
+                      {buckets.length > 0 && <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 9, paddingTop: 8 }}>
+                        {buckets.map(bucket => <div key={bucket.bucket} style={{ display: "flex", justifyContent: "space-between", color: bucket.status === "available" ? C.sub : C.red, fontSize: 10, padding: "2px 0" }}><span>{bucket.bucket}</span><span>{bucket.status === "available" ? formatBytes(bucket.usedBytes) : "unavailable"}</span></div>)}
+                      </div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
 
             <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -358,12 +435,12 @@ export default function SuperAdminStorage() {
                   <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["ISP admin", "Measured data", "Records", "Share of measured total", "Breakdown"].map(label => <th key={label} style={{ textAlign: "left", padding: "10px 16px", color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</th>)}</tr></thead>
                   <tbody>
                     {data.usage.map(admin => {
-                      const share = data.totalUsedBytes > 0 ? admin.bytes / data.totalUsedBytes * 100 : 0;
+                      const share = data.totalUsedBytes !== null && data.totalUsedBytes > 0 && admin.bytes !== null ? admin.bytes / data.totalUsedBytes * 100 : 0;
                       return (
                         <tr key={admin.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                           <td style={{ padding: "12px 16px" }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><UserRound size={14} color={C.accent} /><div><strong style={{ color: "white" }}>{admin.name || admin.username}</strong><span style={{ display: "block", color: C.muted, fontSize: 10 }}>{admin.email || admin.username}</span></div></div></td>
                           <td style={{ padding: "12px 16px", color: C.accent, fontWeight: 800, whiteSpace: "nowrap" }}>{formatBytes(admin.bytes)}<div style={{ width: 110, height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 4, marginTop: 6 }}><div style={{ width: `${Math.min(100, share)}%`, height: "100%", background: C.accent, borderRadius: 4 }} /></div></td>
-                          <td style={{ padding: "12px 16px", color: C.sub }}>{admin.rowCount.toLocaleString()}</td>
+                          <td style={{ padding: "12px 16px", color: C.sub }}>{admin.rowCount === null ? "—" : admin.rowCount.toLocaleString()}</td>
                           <td style={{ padding: "12px 16px", color: C.sub }}>{share.toFixed(1)}%</td>
                           <td style={{ padding: "12px 16px", color: C.muted, maxWidth: 360 }}>{Object.entries(admin.breakdown).sort(([, a], [, b]) => b.bytes - a.bytes).slice(0, 4).map(([source, value]) => <span key={source} style={{ display: "inline-block", margin: "2px 6px 2px 0", padding: "3px 6px", background: "rgba(255,255,255,0.04)", borderRadius: 5, fontSize: 10 }}>{source}: {formatBytes(value.bytes)}</span>)}</td>
                         </tr>
