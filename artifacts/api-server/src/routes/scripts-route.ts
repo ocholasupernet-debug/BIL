@@ -902,6 +902,7 @@ function buildMainhotspotRsc(
   certificateMode: RouterCertificateMode = "verified",
   installationMode: "coexist" | "takeover" = "takeover",
   coexistenceHotspotUrl: string = "",
+  routerId: number | null = null,
 ): string {
   const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
     ? "mode=https check-certificate=no"
@@ -960,28 +961,32 @@ function buildMainhotspotRsc(
   const openVpnBackupSelection = routerVpnBackupUrl
     ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
     : `:set openVpnBackupUrl ""`;
+  const managementInterfaceName = installationMode === "coexist" && routerId
+    ? `ochola-mgmt-vpn-${routerId}`
+    : "corebillingvpn";
   const vpnAttempt = (
     protocol: string,
     urlVariable: string,
     fileName: string,
     independent = false,
+    expectedInterfaceName = managementInterfaceName,
   ): string => {
     const tempFileName = `${fileName}.download`;
     const attemptWrapper = independent ? ":do {" : ":if (!$vpnConfigured) do={";
     const failureDiagnostics = protocol.startsWith("openvpn")
       ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
          :do {
-             :local ovpnIds [/interface ovpn-client find]
+             :local ovpnIds [/interface ovpn-client find where name="${expectedInterfaceName}"]
              :if ([:len $ovpnIds] > 0) do={
                  :foreach ovpnId in=$ovpnIds do={
                      :put ("    name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
                  }
              } else={
-                 :put "    no OpenVPN client interfaces were found."
+                 :put "    management OpenVPN interface was not found."
              }
          } on-error={ :put "    RouterOS could not read OpenVPN interface state." }
-         :put "  Recent RouterOS OpenVPN log entries (if supported):"
-         :do { /log print where topics~"ovpn" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
+         :put "  Recent management OpenVPN log entries (if supported):"
+         :do { /log print where topics~"ovpn" && message~"${expectedInterfaceName}" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
       : "";
     return `${attemptWrapper}
     :local attemptPhase "start"
@@ -1042,7 +1047,7 @@ function buildMainhotspotRsc(
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
         ${failureDiagnostics}
-        :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
+        :set vpnFailureSummary ($vpnFailureSummary . $vpnError . "; ")
         $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
         :do { /file set [find name="${tempFileName}"] name="failed-${fileName}" } on-error={}
@@ -1106,8 +1111,8 @@ ${openVpnSelection}
 ${openVpnBackupSelection}
     ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
     ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
-${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc", true)}
-${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc", true)}
+${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc", true, managementInterfaceName)}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc", true, `${managementInterfaceName}-backup`)}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 :if (!$vpnConfigured) do={
@@ -1255,8 +1260,8 @@ ${openVpnBackupSelection}
 :local vpnFailureSummary ""
   ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
   ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
-${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
-${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc")}
+${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc", false, managementInterfaceName)}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc", false, `${managementInterfaceName}-backup`)}
 ${wireGuardAttempt}
 ${ipsecAttempt}
 :if (!$vpnConfigured) do={
@@ -1776,7 +1781,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
          : "",
       certificateMode,
       installationMode,
-       coexistenceHotspotUrl,
+      coexistenceHotspotUrl,
+      rid ? Number(rid) : null,
     ));
 });
 

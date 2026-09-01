@@ -172,6 +172,14 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
   assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
 });
 
+test("main coexistence diagnostics exclude unrelated billing OpenVPN clients and avoid duplicate errors", () => {
+  assert.match(scriptsRoute, /const managementInterfaceName = installationMode === "coexist" && routerId/);
+  assert.match(scriptsRoute, /interface ovpn-client find where name="\$\{expectedInterfaceName\}"/);
+  assert.match(scriptsRoute, /\/log print where topics~"ovpn" && message~"\$\{expectedInterfaceName\}"/);
+  assert.match(scriptsRoute, /\$vpnFailureSummary \. \$vpnError \. "; "/);
+  assert.doesNotMatch(scriptsRoute, /\$vpnFailureSummary \. "\$\{protocol\}: " \. \$vpnError/);
+});
+
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {
   const script = mikrotik.generateRouterWireGuardClientScript({
     endpoint: "wg.example.test",
