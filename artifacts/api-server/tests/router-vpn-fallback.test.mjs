@@ -50,6 +50,37 @@ test("management OpenVPN credentials use the configured router name", () => {
   assert.match(syncRoute, /client\.cn === openVpnCredentials\.username/);
 });
 
+test("admin RouterOS operations forward management VPN connections through the VPS", () => {
+  assert.match(syncRoute, /openVpsTcpForward, type VpsTcpForward/);
+  assert.match(syncRoute, /forward = await openVpsTcpForward\(candidate, 8728/);
+  assert.match(syncRoute, /conn = makeConn\(forward\.host, username, password\)/);
+  assert.match(syncRoute, /closeForward: forward \? \(\) => forward!\.close\(\)/);
+
+  const operationRoutes = [
+    "/admin/sync",
+    "/admin/sync/plans",
+    "/admin/sync/ip-pools",
+    "/admin/sync/users",
+    "/admin/router/sync-copy",
+    "/admin/router/reboot",
+    "/admin/router/fix-api",
+    "/admin/router/probe",
+    "/admin/router/ports",
+    "/admin/router/bridge-assign",
+  ];
+  for (const route of operationRoutes) {
+    const start = syncRoute.indexOf(`router.post("${route}"`);
+    assert.notEqual(start, -1, `${route} route should exist`);
+    const end = syncRoute.indexOf("\n});", start);
+    const source = syncRoute.slice(start, end === -1 ? undefined : end);
+    assert.match(source, /connectWithFallback/, `${route} should use the forwarded connector`);
+    assert.doesNotMatch(source, /makeConn\(/, `${route} must not connect directly`);
+  }
+
+  const adminRoutes = syncRoute.slice(syncRoute.indexOf('router.post("/admin/sync"'));
+  assert.doesNotMatch(adminRoutes, /new RouterOSAPI/, "admin routes must not instantiate RouterOSAPI directly");
+});
+
 test("OpenVPN child fails loudly when the client is not created or running", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",

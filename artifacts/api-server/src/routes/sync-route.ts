@@ -5,6 +5,7 @@ import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import { routerManagementBackupIp, routerManagementOvpnCredentials } from "../lib/router-management-vpn.js";
+import { openVpsTcpForward, type VpsTcpForward } from "../lib/vps-ssh.js";
 
 const router: IRouter = Router();
 
@@ -67,37 +68,55 @@ async function connectWithFallback(
   username: string,
   password: string,
   log: (msg: string) => void,
-): Promise<{ conn: RouterOSAPI; via: string }> {
+): Promise<{ conn: RouterOSAPI; via: string; closeForward?: () => Promise<void> }> {
   const validVpnIp = vpnIp && isRouterManagementVpnIp(vpnIp) ? vpnIp : undefined;
-  const primary = host || validVpnIp || "";
-  if (!primary) throw new Error("No public host or management VPN IP provided");
-
-  log(`▶ Connecting to ${primary}:8728 as '${username || "admin"}'...`);
-  const conn = makeConn(primary, username, password);
-  try {
-    await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected via ${primary}`);
-    return { conn, via: primary };
-  } catch (firstErr) {
-    const candidates = [
-      validVpnIp && validVpnIp !== primary ? validVpnIp : "",
-      validVpnIp && /^10\.8\.5\./.test(validVpnIp) ? routerManagementBackupIp(validVpnIp) : "",
-    ].filter((value, index, all) => value && all.indexOf(value) === index);
-    let lastError: unknown = firstErr;
-    for (const fallback of candidates) {
-      log(`⚠ ${primary} unreachable, trying management VPN ${fallback}...`);
-      const conn2 = makeConn(fallback, username, password);
-      try {
-        await withTimeout(conn2.connect(), 12000);
-        log(`✓ Connected via management VPN ${fallback}`);
-        return { conn: conn2, via: fallback };
-      } catch (error) {
-        lastError = error;
-        try { conn2.close(); } catch { /* ignore */ }
-      }
-    }
-    throw lastError;
+  const candidates = [host || "", validVpnIp || ""];
+  const primaryVpnIp = validVpnIp || (isRouterManagementVpnIp(host) ? host : undefined);
+  if (primaryVpnIp && /^10\.8\.5\./.test(primaryVpnIp)) {
+    candidates.push(routerManagementBackupIp(primaryVpnIp));
   }
+  const uniqueCandidates = candidates
+    .filter((value, index, all) => value && all.indexOf(value) === index);
+  if (uniqueCandidates.length === 0) throw new Error("No public host or management VPN IP provided");
+
+  let lastError: unknown = new Error("No RouterOS connection attempts were made");
+  for (const candidate of uniqueCandidates) {
+    const candidateIsVpn = isRouterManagementVpnIp(candidate);
+    let forward: VpsTcpForward | undefined;
+    let conn: RouterOSAPI | undefined;
+    try {
+      if (candidateIsVpn) {
+        log(`▶ Connecting through the VPS management forward to ${candidate}:8728...`);
+        forward = await openVpsTcpForward(candidate, 8728, { timeoutMs: 12000 });
+        conn = makeConn(forward.host, username, password);
+      } else {
+        log(`▶ Connecting to ${candidate}:8728 as '${username || "admin"}'...`);
+        conn = makeConn(candidate, username, password);
+      }
+      await withTimeout(conn.connect(), 12000);
+      log(`✓ Connected via ${candidate}`);
+      return {
+        conn,
+        via: candidate,
+        closeForward: forward ? () => forward!.close() : undefined,
+      };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      log(`⚠ ${candidate} failed: ${message}`);
+      try { conn?.close(); } catch { /* ignore */ }
+      if (forward) await forward.close().catch(() => {});
+    }
+  }
+  throw lastError;
+}
+
+async function closeConnection(
+  conn: RouterOSAPI | undefined,
+  closeForward: (() => Promise<void>) | undefined,
+): Promise<void> {
+  try { conn?.close(); } catch { /* ignore */ }
+  if (closeForward) await closeForward().catch(() => {});
 }
 
 /* ─── Extract real client IP, unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) ─── */
@@ -165,9 +184,10 @@ async function bgAutoProbe(
   const key = hbKey();
   if (!url || !key) return;
   const enc = encodeURIComponent(token);
+  let conn: RouterOSAPI | undefined;
+  let closeForward: (() => Promise<void>) | undefined;
   try {
-    const conn = makeConn(host, username || "admin", token);
-    await withTimeout(conn.connect(), 10_000);
+    ({ conn, closeForward } = await connectWithFallback(host, undefined, username || "admin", token, () => {}));
     const resArr = await conn.write(["/system/resource/print"]);
     const sysRes = (Array.isArray(resArr) && resArr[0]) ? resArr[0] as Record<string, string> : {};
     let boardName = "";
@@ -176,7 +196,6 @@ async function bgAutoProbe(
       const rb = (Array.isArray(rbArr) && rbArr[0]) ? rbArr[0] as Record<string, string> : {};
       boardName = rb.model || rb["board-name"] || "";
     } catch { /* CHR/VM without routerboard */ }
-    conn.close();
     const model   = boardName || sysRes["board-name"] || "";
     const version = sysRes.version || "";
     console.log(`[auto-probe] ✓ ${host} — model=${model} ver=${version}`);
@@ -192,6 +211,8 @@ async function bgAutoProbe(
     );
   } catch (e) {
     console.warn(`[auto-probe] ${host} unreachable: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    await closeConnection(conn, closeForward);
   }
 }
 
@@ -274,8 +295,8 @@ router.get("/admin/server-info", async (_req, res): Promise<void> => {
    Pushes full hotspot setup config to router
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync", async (req, res): Promise<void> => {
-  const { host, username, password, cfg } = req.body as {
-    host: string; username: string; password: string;
+  const { host, bridgeIp, username, password, cfg } = req.body as {
+    host: string; bridgeIp?: string; username: string; password: string;
     cfg: {
       routerName: string; hotspotIp: string; dnsName: string;
       radiusIp: string; radiusSecret: string; bridgeInterface: string;
@@ -283,15 +304,14 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
     };
   };
 
-  if (!host || !cfg) { res.status(400).json({ ok: false, error: "host and cfg are required" }); return; }
+  if ((!host && !bridgeIp) || !cfg) { res.status(400).json({ ok: false, error: "host/bridgeIp and cfg are required" }); return; }
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
-  log(`▶ Connecting to ${host}:8728 as '${username || "admin"}'...`);
-
-  const conn = makeConn(host, username, password);
+  let conn: RouterOSAPI | undefined;
+  let closeForward: (() => Promise<void>) | undefined;
   try {
-    await withTimeout(conn.connect(), 12000);
+    ({ conn, closeForward } = await connectWithFallback(host || bridgeIp || "", bridgeIp, username, password, log));
     log(`✓ Connected`);
 
     log(`Setting identity → OcholaNet-${cfg.routerName}`);
@@ -340,13 +360,13 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
 
     await conn.write(["/log/info", `=message=OcholaNet: Hotspot synced on ${cfg.routerName}`]);
     log(`\n✅ Sync complete — ${cfg.routerName} (${host})`);
-    conn.close();
     res.json({ ok: true, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
-    try { conn.close(); } catch { /* ignore */ }
     res.json({ ok: false, error: connErr(host, msg), logs });
+  } finally {
+    await closeConnection(conn, closeForward);
   }
 });
 
@@ -377,8 +397,9 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
   const log = (msg: string) => logs.push(msg);
 
   let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   try {
-    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    ({ conn, closeForward } = await connectWithFallback(host, bridgeIp, username, password, log));
     log(`  pushing ${plans.length} plan profile(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
@@ -426,12 +447,12 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
 
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} plan profiles`]);
     log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
-    conn.close();
+    await closeConnection(conn, closeForward);
     res.json({ ok: true, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
   }
 });
@@ -457,8 +478,9 @@ router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
   const log = (msg: string) => logs.push(msg);
 
   let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   try {
-    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    ({ conn, closeForward } = await connectWithFallback(host, bridgeIp, username, password, log));
     log(`  pushing ${pools.length} IP pool(s)\n`);
 
     let created = 0, updated = 0;
@@ -479,12 +501,12 @@ router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
     }
 
     log(`\n✅ Done — ${created} created, ${updated} updated`);
-    conn.close();
+    await closeConnection(conn, closeForward);
     res.json({ ok: true, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
   }
 });
@@ -547,8 +569,9 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
   const log = (msg: string) => logs.push(msg);
 
   let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   try {
-    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    ({ conn, closeForward } = await connectWithFallback(host, bridgeIp, username, password, log));
     log(`  pushing ${users.length} user(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
@@ -603,12 +626,12 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
 
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} users`]);
     log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
-    conn.close();
+    await closeConnection(conn, closeForward);
     res.json({ ok: true, logs });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
   }
 });
@@ -668,9 +691,10 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
   const results: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }> = {};
   const logs: string[] = [];
   let conn: RouterOSAPI | undefined;
+  let closeForward: (() => Promise<void>) | undefined;
 
   try {
-    ({ conn } = await connectWithFallback(
+    ({ conn, closeForward } = await connectWithFallback(
       targetHost,
       targetBridgeIp,
       target.router_username || "admin",
@@ -802,7 +826,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
       return { count, logs: categoryLogs };
     });
 
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     const failed = categories.filter(category => !results[category]?.ok);
     res.status(failed.length ? 207 : 200).json({
       ok: failed.length === 0,
@@ -814,7 +838,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    try { conn?.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.status(503).json({
       ok: false,
       error: connErr(targetHost, message),
@@ -837,35 +861,24 @@ router.post("/admin/router/reboot", async (req, res): Promise<void> => {
   };
   if (!host) { res.status(400).json({ ok: false, error: "host is required" }); return; }
 
-  let conn = makeConn(host, username, password);
-  let connected = false;
+  let conn: RouterOSAPI | undefined;
+  let closeForward: (() => Promise<void>) | undefined;
   let via = host;
-
   try {
-    await withTimeout(conn.connect(), 8000);
-    connected = true;
-  } catch {
-    if (bridgeIp && bridgeIp !== host) {
-      try {
-        conn = makeConn(bridgeIp, username, password);
-        await withTimeout(conn.connect(), 8000);
-        connected = true;
-        via = bridgeIp;
-      } catch { /* both failed */ }
-    }
-  }
-
-  if (!connected) {
-    res.json({ ok: false, error: connErr(host, "Connection timed out") });
-    return;
-  }
-
-  try {
+    ({ conn, via, closeForward } = await connectWithFallback(
+      host,
+      bridgeIp,
+      username,
+      password,
+      () => {},
+    ));
     /* Send reboot — router disconnects immediately, so we don't wait for a response */
     conn.write(["/system/reboot"]).catch(() => { /* expected disconnect */ });
     res.json({ ok: true, via, message: `Reboot command sent to ${via}` });
   } catch (err) {
     res.json({ ok: false, error: connErr(host, err) });
+  } finally {
+    await closeConnection(conn, closeForward);
   }
 });
 
@@ -885,42 +898,14 @@ router.post("/admin/router/fix-api", async (req, res): Promise<void> => {
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
 
-  let conn = makeConn(host, username, password);
-  let connected = false;
+  let conn: RouterOSAPI | undefined;
+  let closeForward: (() => Promise<void>) | undefined;
   let via = host;
-
   try {
-    log(`▶ Connecting to ${host}:8728 as '${username || "admin"}'…`);
-    await withTimeout(conn.connect(), 8000);
-    connected = true;
-    log("✓ Connected");
-  } catch {
-    if (bridgeIp && bridgeIp !== host) {
-      try {
-        log(`▶ Retrying via VPN IP ${bridgeIp}…`);
-        conn = makeConn(bridgeIp, username, password);
-        await withTimeout(conn.connect(), 8000);
-        connected = true;
-        via = bridgeIp;
-        log("✓ Connected via VPN IP");
-      } catch { /* both failed */ }
-    }
-  }
-
-  if (!connected) {
-    res.json({
-      ok: false,
-      canConnect: false,
-      logs,
-      error: "Cannot reach router — run the commands manually in Winbox Terminal",
-    });
-    return;
-  }
-
-  try {
+    ({ conn, via, closeForward } = await connectWithFallback(host, bridgeIp, username, password, log));
     log("Enabling API service…");
     await conn.write(["/ip/service/set", "=numbers=api", "=disabled=no"]).catch(() => {
-      conn.write(["/ip/service/set", `=.id=[/ip/service/find name=api]`, "=disabled=no"]).catch(() => {});
+      conn!.write(["/ip/service/set", `=.id=[/ip/service/find name=api]`, "=disabled=no"]).catch(() => {});
     });
     log("✓ API service enabled");
 
@@ -942,11 +927,11 @@ router.post("/admin/router/fix-api", async (req, res): Promise<void> => {
     log("✓ Firewall rule applied");
 
     log("✅ Auto-fix complete — try syncing again");
-    try { conn.close(); } catch { /* ignore */ }
     res.json({ ok: true, canConnect: true, via, logs });
   } catch (err) {
-    try { conn.close(); } catch { /* ignore */ }
-    res.json({ ok: false, canConnect: true, logs, error: connErr(via, err) });
+    res.json({ ok: false, canConnect: false, logs, error: connErr(via, err) });
+  } finally {
+    await closeConnection(conn, closeForward);
   }
 });
 
@@ -970,36 +955,23 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
 
-  /* ── Try direct connection first, then VPN bridge IP as fallback ── */
-  let conn = makeConn(host, username, password);
+  /* ── Use the same VPS-forwarded VPN path as the other RouterOS routes. ── */
+  let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   let connectedVia = host;
-  let connected = false;
 
   try {
-    log(`▶ Probing ${host}:8728 as '${username || "admin"}'…`);
-    await withTimeout(conn.connect(), 12000);
-    connected = true;
-    log(`✓ Connected (direct)`);
-  } catch (directErr) {
-    const directMsg = directErr instanceof Error ? directErr.message : String(directErr);
-    log(`✗ Direct connection failed: ${directMsg}`);
-    if (bridgeIp) {
-      try {
-        log(`▶ Retrying via VPN bridge ${bridgeIp}:8728…`);
-        conn = makeConn(bridgeIp, username, password);
-        await withTimeout(conn.connect(), 12000);
-        connectedVia = `${bridgeIp} (VPN)`;
-        connected = true;
-        log(`✓ Connected via VPN bridge`);
-      } catch (bridgeErr) {
-        const bridgeMsg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
-        log(`✗ VPN bridge also failed: ${bridgeMsg}`);
-      }
-    }
-  }
-
-  if (!connected) {
-    res.json({ ok: false, error: `Cannot reach ${host}:8728 — check the IP and that API is enabled (port 8728 open, /ip/service api=yes)`, logs });
+    ({ conn, via: connectedVia, closeForward } = await connectWithFallback(
+      host,
+      bridgeIp,
+      username,
+      password,
+      log,
+    ));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`❌ ${message}`);
+    res.json({ ok: false, error: connErr(host, message), logs });
     return;
   }
 
@@ -1067,7 +1039,7 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
       log(`  (interface read failed)`);
     }
 
-    conn.close();
+    await closeConnection(conn, closeForward);
 
     /* ── Parse useful fields ── */
     const version   = sysRes.version        || "";
@@ -1118,7 +1090,7 @@ router.post("/admin/router/probe", async (req, res): Promise<void> => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(host, msg), logs });
   }
 });
@@ -1173,55 +1145,48 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
   /* ── Try each candidate in order ── */
   let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   let connectedVia = "";
-  let lastErr: unknown;
+  let connectedHost = "";
 
-  const toTry: Array<{ ip: string; label: string }> = [];
-  if (host && !isLanOnlyIp(host)) toTry.push({ ip: host, label: host });
-  if (configuredVpnIp && configuredVpnIp !== host)
-    toTry.push({ ip: configuredVpnIp, label: `${configuredVpnIp} (management VPN)` });
-  if (autoVpnIp && !toTry.find(t => t.ip === autoVpnIp))
-    toTry.push({ ip: autoVpnIp, label: `${autoVpnIp} (VPN tunnel)` });
-  if (cnVpnIp && !toTry.find(t => t.ip === cnVpnIp))
-    toTry.push({ ip: cnVpnIp, label: `${cnVpnIp} (VPN by CN)` });
+  try {
+    const connectionHost = host || configuredVpnIp || autoVpnIp || cnVpnIp || "";
+    const connectionVpnIp = configuredVpnIp || autoVpnIp || cnVpnIp || undefined;
+    ({ conn, via: connectedHost, closeForward } = await connectWithFallback(
+      connectionHost,
+      connectionVpnIp,
+      username,
+      password,
+      () => {},
+    ));
+    connectedVia = connectedHost;
 
-  for (const { ip, label } of toTry) {
-    try {
-      conn = makeConn(ip, username, password);
-      await withTimeout(conn.connect(), 8000);
-      connectedVia = label;
-
-      /* ── Save discovered VPN IP back to Supabase in background ── */
-      const HB_URL = hbUrl();
-      const HB_KEY = hbKey();
-      if (HB_URL && HB_KEY) {
-        if (ip === autoVpnIp && host) {
-          /* Found management VPN IP by matching WAN host → save as vpn_ip */
-          fetch(
-            `${HB_URL}/rest/v1/isp_routers?host=eq.${encodeURIComponent(host)}`,
-            { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ vpn_ip: ip }) }
-          ).catch(() => {});
-        } else if (ip === cnVpnIp && routerId) {
-          /* Found management VPN IP by CN (host was empty) → save it in the
-             dedicated VPN column; host remains the public/WAN field. */
-          fetch(
-            `${HB_URL}/rest/v1/isp_routers?id=eq.${routerId}`,
-            { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ vpn_ip: ip }) }
-          ).catch(() => {});
-        }
+    /* ── Save discovered VPN IP back to Supabase in background ── */
+    const HB_URL = hbUrl();
+    const HB_KEY = hbKey();
+    if (HB_URL && HB_KEY) {
+      if (connectedHost === autoVpnIp && host) {
+        fetch(
+          `${HB_URL}/rest/v1/isp_routers?host=eq.${encodeURIComponent(host)}`,
+          { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ vpn_ip: connectedHost }) }
+        ).catch(() => {});
+      } else if (connectedHost === cnVpnIp && routerId) {
+        fetch(
+          `${HB_URL}/rest/v1/isp_routers?id=eq.${routerId}`,
+          { method: "PATCH", headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ vpn_ip: connectedHost }) }
+        ).catch(() => {});
       }
-      break; /* connected — stop trying */
-    } catch (err) {
-      lastErr = err;
-      try { conn?.close(); } catch { /* ignore */ }
     }
+  } catch (err) {
+    const lastErr = err;
+    res.json({ ok: false, error: connErr(host, lastErr) });
+    return;
   }
 
   if (!connectedVia) {
-    /* All candidates failed */
-    res.json({ ok: false, error: connErr(host, lastErr) });
+    res.json({ ok: false, error: "No RouterOS connection path was available." });
     return;
   }
 
@@ -1245,7 +1210,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
       bridgePorts = (Array.isArray(bpArr) ? bpArr : []) as Record<string, string>[];
     } catch { /* ignore */ }
 
-    conn.close();
+    await closeConnection(conn, closeForward);
 
     res.json({
       ok: true,
@@ -1270,7 +1235,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(host, msg) });
   }
 });
@@ -1308,29 +1273,25 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     log(`   Bridge: ${bridge}`);
   }
 
-  let conn = makeConn(primaryHost, username, password);
+  let conn!: RouterOSAPI;
+  let closeForward: (() => Promise<void>) | undefined;
   let connectedVia = primaryHost;
   let connectedHost = primaryHost;
   let portOperationFailed = false;
 
   try {
-    try {
-      await withTimeout(conn.connect(), 12000);
-      log(`✓ Connected to ${primaryHost}`);
-    } catch (directErr) {
-      /* If primaryHost is already the management VPN IP, or the VPN IP is
-         different, try it as the alternate path. */
-      const altHost = validVpnIp && validVpnIp !== primaryHost ? validVpnIp : null;
-      if (altHost) {
-        conn = makeConn(altHost, username, password);
-        await withTimeout(conn.connect(), 12000);
-        connectedVia = `${altHost} (VPN)`;
-        connectedHost = altHost;
-        log(`✓ Connected via VPN tunnel (${altHost})`);
-      } else {
-        throw directErr;
-      }
-    }
+    const discoveredVpnIp = validVpnIp || undefined;
+    const connectionHost = host && !isLanOnlyIp(host)
+      ? host
+      : discoveredVpnIp || primaryHost;
+    ({ conn, via: connectedHost, closeForward } = await connectWithFallback(
+      connectionHost,
+      discoveredVpnIp,
+      username,
+      password,
+      log,
+    ));
+    connectedVia = connectedHost;
     void connectedVia;
 
     /* Remove ports */
@@ -1406,7 +1367,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
       }
     }
 
-    conn.close();
+    await closeConnection(conn, closeForward);
     log(portMembershipVerified
       ? `\n✅ Bridge port assignment complete`
       : `\n⚠️ Bridge port assignment was not fully verified`);
@@ -1426,7 +1387,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${enrichPermErr(err, username)}`);
-    try { conn.close(); } catch { /* ignore */ }
+    await closeConnection(conn, closeForward);
     res.json({ ok: false, error: connErr(primaryHost, msg), logs });
   }
 });
