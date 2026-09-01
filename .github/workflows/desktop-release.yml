@@ -1,0 +1,83 @@
+name: Desktop Releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'desktop-v*'
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    env:
+      EXPO_PUBLIC_API_BASE_URL: https://isplatty.org
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows packages
+        run: pnpm --filter @workspace/ocholasupernet-mobile run desktop:package:windows
+
+      - name: Upload unsigned Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocholasupernet-windows-unsigned
+          path: artifacts/ocholasupernet-mobile/release/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS installer
+    runs-on: macos-latest
+    env:
+      EXPO_PUBLIC_API_BASE_URL: https://isplatty.org
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS packages
+        run: pnpm --filter @workspace/ocholasupernet-mobile run desktop:package:macos
+
+      - name: Upload unsigned macOS packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocholasupernet-macos-unsigned
+          path: artifacts/ocholasupernet-mobile/release/*
+          if-no-files-found: error

@@ -1,0 +1,1 @@
+artifacts/ocholasupernet-mobile/release/linux-unpacked/electron filter=lfs diff=lfs merge=lfs -text

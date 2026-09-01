@@ -59,10 +59,53 @@ pnpm --filter @workspace/ocholasupernet-mobile exec eas build \
 
 ### Desktop
 
-`pnpm run build:desktop` creates a desktop-sized React Native Web export for
-packaging in the owner's preferred desktop shell. Desktop signing/notarization
-and any Windows/macOS shell account remain separate from app code and are not
-committed here. The native Android and iOS targets do not depend on Chrome.
+The desktop target uses Electron around the existing React Native Web export.
+Electron serves the export from a loopback address so the Expo `/mobile` base
+path continues to work in an installed app. The renderer has no Node.js access;
+the desktop shell only owns the window and local static-file server.
+
+```sh
+# Build the desktop web export
+pnpm run build:desktop
+
+# Open the exported app in Electron during development
+pnpm run desktop:dev
+
+# Build an unpacked Linux package for local smoke testing
+pnpm run desktop:package:dir
+
+# Run on the matching native runner for installers
+pnpm run desktop:package:windows
+pnpm run desktop:package:macos
+```
+
+The Windows command produces an NSIS installer and a portable executable. The
+macOS command produces a DMG and ZIP archive. Both commands write to
+`release/`, which is ignored as build output and is safe to remove between
+builds. `EXPO_PUBLIC_API_BASE_URL` can override the default
+`https://isplatty.org` API origin for a staging build; it is compiled into the
+web export and must be a public HTTPS origin reachable by the desktop machine.
+
+GitHub Actions includes a `Desktop Releases` workflow. Run it manually or push
+a tag matching `desktop-v*` to build unsigned Windows and macOS artifacts on
+their native runners. The workflow deliberately disables automatic signing so
+it can produce test packages without credentials.
+
+#### Signing and notarization
+
+Unsigned packages are suitable for internal testing only. A production Windows
+release needs a Microsoft code-signing certificate and protected CI
+credentials. A production macOS release needs an Apple Developer
+Developer ID Application certificate, an App Store Connect API key (or Apple
+ID app-specific password), and notarization access. Configure those in the
+CI secret store; never commit `.p12`, `.p8`, `.cer`, `.key`, or password files.
+The Electron builder supports the corresponding `CSC_LINK`, `CSC_KEY_PASSWORD`,
+`APPLE_API_KEY`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` environment
+variables when the owner is ready to enable trusted releases.
+
+Desktop packaging does not change the API, Android/iOS session contract, or
+native secure-storage behavior. The native Android and iOS targets do not
+depend on Chrome.
 
 ## Development
 

@@ -1,0 +1,40 @@
+appId: org.isplatty.ocholasupernet.desktop
+productName: OcholaSuperNet
+copyright: Copyright © 2026 OcholaSuperNet
+electronVersion: 44.0.0
+asar: true
+icon: assets/images/ocholasupernet-app-icon.png
+directories:
+  output: release
+  buildResources: assets/images
+files:
+  - dist/desktop/**/*
+  - electron/**/*
+  - package.json
+  - electron-builder.yml
+publish: null
+
+win:
+  target:
+    - nsis
+    - portable
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+mac:
+  category: public.app-category.business
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  category: Network
+  target:
+    - AppImage
+    - dir
