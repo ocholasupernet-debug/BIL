@@ -16,6 +16,7 @@ const apiRoot = resolve(import.meta.dirname, "..");
 const webRoot = resolve(apiRoot, "../ochola-supernet");
 const entry = resolve(webRoot, "src/pages/admin/HotspotSettings.tsx");
 const templatePath = resolve(webRoot, "public/hotspot/login.html");
+const mikrotikRoutePath = resolve(apiRoot, "src/routes/mikrotik-route.ts");
 
 async function loadExportBuilder() {
   const outdir = await mkdtemp(resolve(webRoot, ".hotspot-export-"));
@@ -203,4 +204,40 @@ test("export builder source keeps preview/download local-only", async () => {
   assert.match(previewActions, /new Blob\(\[html\]/);
   assert.match(previewActions, /URL\.createObjectURL/);
   assert.doesNotMatch(previewActions, /\/api\/admin\/|\/sync|router.*write/i);
+});
+
+test("deploy UI uses two confirmations and sends generated content through the dedicated route", async () => {
+  const source = await readFile(entry, "utf8");
+  const deployStart = source.indexOf("const handleDeploy");
+  const deployEnd = source.indexOf("const handlePreview");
+  assert.ok(deployStart >= 0 && deployEnd > deployStart, "deploy handler is present");
+  const deployActions = source.slice(deployStart, deployEnd);
+
+  assert.equal((deployActions.match(/window\.confirm/g) ?? []).length, 2);
+  assert.match(deployActions, /hotspot-portal\/deploy/);
+  assert.match(deployActions, /deploy\(false\)/);
+  assert.match(deployActions, /deploy\(true\)/);
+  assert.match(deployActions, /status === 409/);
+  assert.match(deployActions, /JSON\.stringify\(\{ adminId, html, overwrite \}\)/);
+  assert.doesNotMatch(deployActions, /routerSecret|routerPassword|paymentSecret|vpnPrivateKey/);
+});
+
+test("generated portal route keeps tenant scope and one-time source cleanup", async () => {
+  const source = await readFile(mikrotikRoutePath, "utf8");
+  const routeStart = source.indexOf('router.post("/router/:id/hotspot-portal/deploy"');
+  const routeEnd = source.indexOf('router.get("/router/:id/probe"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "generated portal route is present");
+  const route = source.slice(routeStart, routeEnd);
+
+  assert.match(route, /validateGeneratedHotspotPortal\(req\.body\?\.html\)/);
+  assert.match(route, /getRouterCreds\(id, adminId\)/);
+  assert.match(route, /\/api\/router-file-source\/\$\{token\}/);
+  assert.match(route, /pendingRouterFileSources\.delete\(token\)/);
+  assert.match(route, /overwrite/);
+  assert.match(route, /RouterFileExistsError/);
+  assert.doesNotMatch(route, /req\.body\?\.(?:password|secret|routerCredentials)/i);
+
+  const sourceHandler = source.slice(source.indexOf('router.get("/router-file-source/:token"'), routeStart);
+  assert.match(sourceHandler, /expiresAt <= Date\.now\(\)/);
+  assert.match(sourceHandler, /pendingRouterFileSources\.delete\(token\)/);
 });

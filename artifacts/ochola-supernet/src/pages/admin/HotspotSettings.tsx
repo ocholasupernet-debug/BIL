@@ -2,7 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { useBrand } from "@/context/BrandContext";
-import { supabase, ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId } from "@/lib/supabase";
+import {
+  supabase,
+  ADMIN_ID as AUTH_ADMIN_ID,
+  getSelectedTenantId,
+} from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye,
@@ -475,6 +479,7 @@ export default function HotspotSettings() {
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [deploying, setDeploying] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -578,6 +583,88 @@ export default function HotspotSettings() {
     }
   };
 
+  const handleDeploy = async () => {
+    const routerId = Number(settings.routerId);
+    const adminId = getSelectedTenantId();
+    if (!Number.isSafeInteger(routerId) || routerId < 1) {
+      setNotice({ type: "error", text: "Choose a linked router before deploying the portal." });
+      return;
+    }
+    if (!adminId) {
+      setNotice({ type: "error", text: "Sign in to an ISP account before deploying the portal." });
+      return;
+    }
+    if (!window.confirm(
+      "Deploy the current branded portal to this router? The server will transfer login.html, and an existing file will require a second replacement confirmation.",
+    )) return;
+
+    setDeploying(true);
+    setNotice(null);
+    try {
+      const html = await createExport();
+      if (!html) return;
+
+      const deploy = async (overwrite: boolean) => {
+        const headers = new Headers({ "Content-Type": "application/json" });
+        let token = "";
+        let role = "";
+        try {
+          token = localStorage.getItem("ochola_api_token")
+            || localStorage.getItem("ochola_superadmin_token")
+            || "";
+          role = localStorage.getItem("ochola_admin_role") || "isp_admin";
+        } catch {
+          /* The API also enforces tenant ownership server-side. */
+        }
+        if (token) headers.set("Authorization", `Bearer ${token}`);
+        if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
+        const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ adminId, html, overwrite }),
+        });
+        let data: {
+          error?: string;
+          destinationPath?: string;
+          replaced?: boolean;
+          existingFile?: { name: string; size: number; type: string };
+        } = {};
+        try {
+          data = await response.json();
+        } catch {
+          /* Use the HTTP status below when the server did not return JSON. */
+        }
+        return { response, data };
+      };
+
+      let result = await deploy(false);
+      if (result.response.status === 409 && result.data.existingFile) {
+        const existing = result.data.existingFile;
+        if (!window.confirm(
+          `${existing.name} already exists on the router (${existing.size} bytes). Replace it with this export?`,
+        )) {
+          setNotice({ type: "info", text: "Deployment cancelled. The existing router portal was left unchanged." });
+          return;
+        }
+        result = await deploy(true);
+      }
+
+      if (!result.response.ok) {
+        throw new Error(result.data.error ?? `Portal deployment failed (HTTP ${result.response.status})`);
+      }
+      setNotice({
+        type: "success",
+        text: result.data.replaced
+          ? `${result.data.destinationPath ?? "hotspot/login.html"} was replaced successfully.`
+          : `${result.data.destinationPath ?? "hotspot/login.html"} was deployed successfully.`,
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal could not be deployed." });
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   const handlePreview = async () => {
     setShowPreview(true);
     setPreviewLoading(true);
@@ -640,6 +727,9 @@ export default function HotspotSettings() {
             </button>
             <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting}>
               {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
+            </button>
+            <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting}>
+              {deploying ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {deploying ? "Deploying…" : "Deploy to router"}
             </button>
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
@@ -826,9 +916,9 @@ export default function HotspotSettings() {
                 <div><h2 className="hs-card-title">Safe publishing</h2><p className="hs-card-desc">Keep the write boundary clear.</p></div>
               </div>
               <div className="hs-side-body">
-                <div className="hs-status hs-status-info">
+                 <div className="hs-status hs-status-info">
                   <Info size={15} />
-                  <span>Download creates a local <strong>login.html</strong> only. It does not overwrite router files or change payment settings.</span>
+                   <span>Download keeps a local <strong>login.html</strong> copy. Deploy sends this exact export to the selected router only after confirmation; an existing file is never replaced without a second confirmation.</span>
                 </div>
               </div>
             </section>

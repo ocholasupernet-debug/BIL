@@ -39,6 +39,7 @@ import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementOvpnCredentials } from "../lib/router-management-vpn";
+import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 
 const router: IRouter = Router();
 
@@ -515,6 +516,97 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
   } finally {
     /* The source endpoint normally consumes this entry. Remove it here too
        when the router failed before making its fetch request. */
+    pendingRouterFileSources.delete(token);
+  }
+});
+
+/* ─── POST /api/router/:id/hotspot-portal/deploy ─────────────────────────── */
+/**
+ * Deploys the exact tenant-branded HTML generated in the browser. The
+ * browser sends only the artifact and tenant context; router credentials stay
+ * server-side. The artifact is exposed through the one-time source endpoint
+ * only while the atomic RouterOS transfer is in progress.
+ */
+router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const overwrite = req.body?.overwrite === true;
+  const directory = String(req.body?.destinationDirectory ?? "hotspot")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const portal = validateGeneratedHotspotPortal(req.body?.html);
+
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
+  if (!/^(?:(?:flash|disk1)\/)?hotspot$/i.test(directory)) {
+    res.status(400).json({ error: "Hotspot portals must be deployed to hotspot, flash/hotspot, or disk1/hotspot" });
+    return;
+  }
+
+  const origin = requestOrigin(req);
+  if (!origin.startsWith("https://")) {
+    res.status(400).json({ error: "Portal deployment requires an HTTPS public request origin." });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  cleanPendingRouterFileSources();
+  const token = randomBytes(24).toString("hex");
+  pendingRouterFileSources.set(token, {
+    content: portal.content,
+    contentType: "text/html; charset=utf-8",
+    fileName: "login.html",
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+
+  try {
+    const destinationPath = `${directory}/login.html`;
+    const result = await deployRouterFile(found.creds, {
+      destinationPath,
+      sourceUrl: `${origin}/api/router-file-source/${token}`,
+      overwrite,
+      uploadId: token.slice(0, 16),
+    });
+    logger.info({
+      routerId: id,
+      adminId,
+      destinationPath,
+      replaced: result.replaced,
+      size: result.size,
+    }, "Generated hotspot portal deployed");
+    res.status(201).json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      destinationPath: result.destinationPath,
+      size: result.size,
+      connectedHost: result.connectedHost,
+      replaced: result.replaced,
+      source: { name: "generated login.html", type: "hotspot", generated: true },
+    });
+  } catch (err) {
+    if (err instanceof RouterFileExistsError) {
+      res.status(409).json({
+        error: err.message,
+        code: err.code,
+        existingFile: {
+          name: err.existingFile.name,
+          type: err.existingFile.type,
+          size: err.existingFile.size,
+          creationTime: err.existingFile.creationTime,
+        },
+      });
+      return;
+    }
+    routerErrorResponse(res, err);
+  } finally {
     pendingRouterFileSources.delete(token);
   }
 });
