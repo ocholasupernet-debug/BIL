@@ -997,10 +997,11 @@ function buildMainhotspotRsc(
     }
 }`;
   };
-  const wireGuardAttempt = routerWireGuardUrl
+  const coexistenceFallbacksDisabled = installationMode === "coexist";
+  const wireGuardAttempt = !coexistenceFallbacksDisabled && routerWireGuardUrl
     ? `:if ($majorVersion >= 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n}`
     : "";
-  const ipsecAttempt = routerIpsecUrl
+  const ipsecAttempt = !coexistenceFallbacksDisabled && routerIpsecUrl
     ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")
     : "";
 
@@ -1048,8 +1049,8 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
     :local wireGuardUrl ""
     :local ipsecUrl ""
 ${openVpnSelection}
-    ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
-    ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
+    ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
+    ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
@@ -1642,20 +1643,22 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
           vpnProvisioningError = error instanceof Error ? error.message : String(error);
         }
 
-        /* Include both fallback attempts even when server-side readiness is
-           currently false. The router must trial each supported protocol and
-           advance only after that protocol actually fails. The protocol
-           endpoint returns a concrete failure when its server prerequisites
-           are unavailable, rather than silently removing the attempt. */
-        routerWireGuardUrl = fallbackUrl("wireguard");
-        routerIpsecUrl = fallbackUrl("ipsec");
+        /* Takeover may use the complete fallback chain. Coexistence is
+           intentionally OpenVPN-only: it must not add WireGuard or IPsec
+           resources to a router that already has an active configuration. */
+        if (installationMode === "takeover") {
+          routerWireGuardUrl = fallbackUrl("wireguard");
+          routerIpsecUrl = fallbackUrl("ipsec");
+        }
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
-        routerWireGuardUrl = fallbackUrl("wireguard");
-        routerIpsecUrl = fallbackUrl("ipsec");
+        if (installationMode === "takeover") {
+          routerWireGuardUrl = fallbackUrl("wireguard");
+          routerIpsecUrl = fallbackUrl("ipsec");
+        }
       }
     } else {
       const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
@@ -1875,6 +1878,14 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       res.status(400).type("text/plain").send(
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
         "# RouterOS major version is required. The installer must read /system resource version first and request ros-version=6 or ros-version=7.",
+      );
+      return;
+    }
+    if (installationMode === "coexist" && protocol !== "openvpn") {
+      res.status(410).type("text/plain").send(
+        "# OCHOLA_ROUTER_VPN_ERROR\n" +
+        "# WireGuard and IPsec fallbacks are disabled for coexistence installs. " +
+        "Use the OpenVPN management child or select takeover mode.",
       );
       return;
     }

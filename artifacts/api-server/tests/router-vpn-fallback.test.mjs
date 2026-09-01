@@ -186,6 +186,14 @@ test("coexistence fallback resources are router-specific", () => {
   assert.doesNotMatch(ipsec, /corebillingvpn IPsec management peer/);
 });
 
+test("coexistence installer is OpenVPN-only", () => {
+  assert.match(scriptsRoute, /const coexistenceFallbacksDisabled = installationMode === "coexist"/);
+  assert.match(scriptsRoute, /const wireGuardAttempt = !coexistenceFallbacksDisabled/);
+  assert.match(scriptsRoute, /const ipsecAttempt = !coexistenceFallbacksDisabled/);
+  assert.match(scriptsRoute, /if \(installationMode === "takeover"\) \{/);
+  assert.match(scriptsRoute, /WireGuard and IPsec fallbacks are disabled for coexistence installs/);
+});
+
 test("IPsec child verifies peer, identity, and policy resources without leaking secrets", () => {
   const script = mikrotik.generateRouterIpsecClientScript({
     endpoint: "ipsec.example.test",
