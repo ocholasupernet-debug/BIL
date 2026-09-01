@@ -3,7 +3,11 @@
  * Generates bash scripts to prepare the existing VPS OpenVPN server
  * to accept connections from MikroTik routers as OVPN clients.
  */
-import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import {
+  ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  type RouterManagementVpnRole,
+} from "./router-management-vpn.js";
 import { routerVpnPeerIp } from "./router-vpn-ip.js";
 
 export interface VpsOvpnSetupOptions {
@@ -21,6 +25,8 @@ export interface VpsOvpnSetupOptions {
   routerTunnelIp?: string;
   /** Router ID (for labelling) */
   routerId?: number;
+  /** Select the isolated backup management OpenVPN instance. */
+  vpnRole?: RouterManagementVpnRole;
 }
 
 function base64(value: string): string {
@@ -43,18 +49,24 @@ function base64(value: string): string {
 export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const {
     vpsPublicIp,
-    vpnPort       = ROUTER_MANAGEMENT_VPN.port,
+    vpnPort,
     vpnUsername   = "admin",
     vpnPassword   = "ochola",
-    tunnelBase    = ROUTER_MANAGEMENT_VPN.tunnelBase,
-    routerTunnelIp = `${ROUTER_MANAGEMENT_VPN.tunnelBase}.2`,
+    tunnelBase,
+    routerTunnelIp,
     routerId,
+    vpnRole = "primary",
   } = opts;
 
+  const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+  const serviceStem = vpnRole === "backup" ? "ochola-router-backup" : "ochola-router";
+  const selectedVpnPort = vpnPort ?? contract.port;
+  const selectedTunnelBase = tunnelBase ?? contract.tunnelBase;
+  const selectedRouterTunnelIp = routerTunnelIp ?? `${contract.tunnelBase}.2`;
   const tag       = routerId ? `router${routerId}` : "router";
-  const serverNet = `${tunnelBase}.0`;
-  const serverGw  = `${tunnelBase}.1`;
-  const routerPeerIp = routerVpnPeerIp(routerTunnelIp);
+  const serverNet = `${selectedTunnelBase}.0`;
+  const serverGw  = `${selectedTunnelBase}.1`;
+  const routerPeerIp = routerVpnPeerIp(selectedRouterTunnelIp);
   const usernameB64 = base64(vpnUsername);
   const passwordB64 = base64(vpnPassword);
 
@@ -63,9 +75,9 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
 # OcholaSupernet — VPS OpenVPN Server Setup for MikroTik Clients
 # Generated : ${new Date().toISOString()}
 # VPS IP    : ${vpsPublicIp}
-# VPN Port  : ${vpnPort}/tcp
+# VPN Port  : ${selectedVpnPort}/tcp
 # VPN User  : ${vpnUsername}  (router client account)
-# Router IP : ${routerTunnelIp}  (assigned inside tunnel)
+# Router IP : ${selectedRouterTunnelIp}  (assigned inside tunnel)
 #
 # This script prepares the EXISTING OpenVPN server on this VPS to
 # accept connections from a MikroTik router acting as an OVPN client.
@@ -77,11 +89,11 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
 set -euo pipefail
 
 BASE_OVPN_CONF="/etc/openvpn/server.conf"
-OVPN_CONF="${ROUTER_MANAGEMENT_VPN.configPath}"
+OVPN_CONF="${contract.configPath}"
 OVPN_DIR="/etc/openvpn"
-CCDDIR="${ROUTER_MANAGEMENT_VPN.ccdPath}" # isolated router client IPs
-AUTHFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}" # username:password auth file
-AUTHSCRIPT="${ROUTER_MANAGEMENT_VPN.authScriptPath}"
+CCDDIR="${contract.ccdPath}" # isolated router client IPs
+AUTHFILE="${contract.authFilePath}" # username:password auth file
+AUTHSCRIPT="${contract.authScriptPath}"
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 
 echo "──────────────────────────────────────────────────────────────"
@@ -131,7 +143,7 @@ else
 fi
 
 # ── 2. Patch: ensure proto tcp ───────────────────────────────────────────────
-echo "[2] Creating isolated router-management server on ${tunnelBase}.0:${vpnPort}..."
+echo "[2] Creating isolated router-management server on ${selectedTunnelBase}.0:${selectedVpnPort}..."
 if [ -f "$BASE_OVPN_CONF" ]; then
   conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
   CA_FILE="$(conf_value ca)"
@@ -163,9 +175,9 @@ if [ "$OPENVPN_MAJOR" -gt 2 ] || { [ "$OPENVPN_MAJOR" -eq 2 ] && [ "$OPENVPN_MIN
   OPENVPN_SUPPORTS_DATA_CIPHERS=true
 fi
 {
-  echo "port ${vpnPort}"
+  echo "port ${selectedVpnPort}"
   echo "proto tcp-server"
-  echo "dev tun-router"
+  echo "dev ${contract.interfaceName}"
   echo "server ${serverNet} 255.255.255.0"
   # RouterOS 6 expects the net30 point-to-point address form. The subnet
   # topology makes it interpret the pushed peer address as a /0 netmask.
@@ -176,7 +188,7 @@ fi
   [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
   [ "$DH_FILE" = "none" ] && echo "ecdh-curve prime256v1"
   echo "client-config-dir $CCDDIR"
-  echo "ifconfig-pool-persist ${ROUTER_MANAGEMENT_VPN.ippPath}"
+   echo "ifconfig-pool-persist ${contract.ippPath}"
   echo "keepalive 10 60"
   echo "persist-key"
   echo "persist-tun"
@@ -200,7 +212,7 @@ fi
      echo "# OpenVPN does not support data-ciphers; using legacy cipher only."
   fi
   echo "auth SHA1"
-  echo "status ${ROUTER_MANAGEMENT_VPN.statusPath}"
+  echo "status ${contract.statusPath}"
   echo "verb 3"
 } > "$OVPN_CONF"
 echo "    Dedicated config written: $OVPN_CONF"
@@ -220,7 +232,7 @@ echo "[5] Enabling username/password auth..."
 cat > "$AUTHSCRIPT" << 'AUTHEOF'
 #!/usr/bin/env bash
 # Simple username:password verifier for OpenVPN
-PASSFILE="${ROUTER_MANAGEMENT_VPN.authFilePath}"
+PASSFILE="${contract.authFilePath}"
 username="\${username:-\${1:-}}"
 password="\${password:-\${2:-}}"
 [ -f "$PASSFILE" ] || exit 1
@@ -241,30 +253,30 @@ printf '%s:%s\n' "$VPN_USERNAME" "$VPN_PASSWORD" >> "$AUTHFILE"
 echo "    User '${vpnUsername}' added to $AUTHFILE"
 
 # ── 7. Enable client-config-dir for static IP assignment ────────────────────
-echo "[7] Configuring static IP for router (${routerTunnelIp})..."
+echo "[7] Configuring static IP for router (${selectedRouterTunnelIp})..."
 mkdir -p "$CCDDIR"
 
 if ! grep -q "^client-config-dir" "$OVPN_CONF"; then
   echo "client-config-dir $CCDDIR" >> "$OVPN_CONF"
 fi
 if ! grep -q "^ifconfig-pool-persist" "$OVPN_CONF"; then
-  echo "ifconfig-pool-persist ${ROUTER_MANAGEMENT_VPN.ippPath}" >> "$OVPN_CONF"
+   echo "ifconfig-pool-persist ${contract.ippPath}" >> "$OVPN_CONF"
 fi
 
 # Static IP for the router client
 cat > "$CCDDIR/${vpnUsername}" << CCDEOF
 # Static tunnel IP and net30 peer for MikroTik router (${tag})
-ifconfig-push ${routerTunnelIp} ${routerPeerIp}
+ifconfig-push ${selectedRouterTunnelIp} ${routerPeerIp}
 CCDEOF
-echo "    Static IP ${routerTunnelIp} assigned to '${vpnUsername}'"
+echo "    Static IP ${selectedRouterTunnelIp} assigned to '${vpnUsername}'"
 
 # ── 8. Firewall: allow VPN port and API access from tunnel ──────────────────
 echo "[8] Opening firewall rules..."
 # Allow incoming OVPN connections
-iptables -I INPUT -p tcp --dport ${vpnPort} -j ACCEPT 2>/dev/null || true
+iptables -I INPUT -p tcp --dport ${selectedVpnPort} -j ACCEPT 2>/dev/null || true
 # Allow forwarding from the isolated router tunnel to enable API traffic
-iptables -I FORWARD -i tun-router -j ACCEPT 2>/dev/null || true
-iptables -I FORWARD -o tun-router -j ACCEPT 2>/dev/null || true
+iptables -I FORWARD -i ${contract.interfaceName} -j ACCEPT 2>/dev/null || true
+iptables -I FORWARD -o ${contract.interfaceName} -j ACCEPT 2>/dev/null || true
 
 # Persist iptables rules (Ubuntu/Debian)
 if command -v netfilter-persistent &>/dev/null; then
@@ -292,46 +304,46 @@ fi
 
 # ── 9. Restart only the dedicated router-management instance ────────────────
 echo "[9] Starting dedicated router-management OpenVPN..."
-$SUDO ln -sfn "$OVPN_CONF" "$OVPN_DIR/ochola-router.conf"
+$SUDO ln -sfn "$OVPN_CONF" "$OVPN_DIR/${serviceStem}.conf"
 service_started=false
-if $SUDO systemctl restart openvpn-server@ochola-router 2>/dev/null || $SUDO systemctl enable --now openvpn-server@ochola-router 2>/dev/null; then
+if $SUDO systemctl restart openvpn-server@${serviceStem} 2>/dev/null || $SUDO systemctl enable --now openvpn-server@${serviceStem} 2>/dev/null; then
   service_started=true
-elif $SUDO systemctl restart openvpn@ochola-router 2>/dev/null || $SUDO systemctl enable --now openvpn@ochola-router 2>/dev/null; then
+elif $SUDO systemctl restart openvpn@${serviceStem} 2>/dev/null || $SUDO systemctl enable --now openvpn@${serviceStem} 2>/dev/null; then
   service_started=true
 fi
 if [ "$service_started" != "true" ]; then
   echo "ERROR: Could not start the dedicated router-management OpenVPN service."
-  $SUDO systemctl status openvpn-server@ochola-router --no-pager 2>&1 | tail -n 40 || true
-  $SUDO systemctl status openvpn@ochola-router --no-pager 2>&1 | tail -n 40 || true
+  $SUDO systemctl status openvpn-server@${serviceStem} --no-pager 2>&1 | tail -n 40 || true
+  $SUDO systemctl status openvpn@${serviceStem} --no-pager 2>&1 | tail -n 40 || true
   exit 1
 fi
 
 sleep 2
-if ! $SUDO systemctl is-active --quiet openvpn-server@ochola-router 2>/dev/null && ! $SUDO systemctl is-active --quiet openvpn@ochola-router 2>/dev/null; then
+if ! $SUDO systemctl is-active --quiet openvpn-server@${serviceStem} 2>/dev/null && ! $SUDO systemctl is-active --quiet openvpn@${serviceStem} 2>/dev/null; then
   echo "ERROR: The dedicated router-management OpenVPN service is not active after startup."
-  $SUDO journalctl -u openvpn-server@ochola-router -u openvpn@ochola-router -n 60 --no-pager 2>&1 || true
+  $SUDO journalctl -u openvpn-server@${serviceStem} -u openvpn@${serviceStem} -n 60 --no-pager 2>&1 || true
   exit 1
 fi
-if command -v ss >/dev/null 2>&1 && ! $SUDO ss -ltnH | awk '$4 ~ /:'"${vpnPort}"'$/ { found=1 } END { exit(found ? 0 : 1) }'; then
-  echo "ERROR: OpenVPN service is active but TCP port ${vpnPort} is not listening."
-  $SUDO journalctl -u openvpn-server@ochola-router -u openvpn@ochola-router -n 60 --no-pager 2>&1 || true
+if command -v ss >/dev/null 2>&1 && ! $SUDO ss -ltnH | awk '$4 ~ /:'"${selectedVpnPort}"'$/ { found=1 } END { exit(found ? 0 : 1) }'; then
+  echo "ERROR: OpenVPN service is active but TCP port ${selectedVpnPort} is not listening."
+  $SUDO journalctl -u openvpn-server@${serviceStem} -u openvpn@${serviceStem} -n 60 --no-pager 2>&1 || true
   exit 1
 fi
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo " Setup complete. Verify:"
-echo "   systemctl status openvpn-server@ochola-router"
-echo "   ip addr show tun-router    # should show ${serverGw}"
+echo "   systemctl status openvpn-server@${serviceStem}"
+echo "   ip addr show ${contract.interfaceName}    # should show ${serverGw}"
 echo ""
 echo " Now import the RouterOS client script on the router:"
 echo "   /import router-as-client${routerId ?? ""}.rsc"
 echo ""
 echo " After router connects, verify from this VPS:"
-echo "   ping ${routerTunnelIp}                    # router tunnel IP"
-echo "   curl -s http://${routerTunnelIp}:8728      # router API"
+echo "   ping ${selectedRouterTunnelIp}                    # router tunnel IP"
+echo "   curl -s http://${selectedRouterTunnelIp}:8728      # router API"
 echo ""
 echo " Set in OcholaSupernet backend:"
-echo "   MIKROTIK_BRIDGE_IP=${routerTunnelIp}"
+echo "   MIKROTIK_BRIDGE_IP=${selectedRouterTunnelIp}"
 echo "══════════════════════════════════════════════════════════════"
 `;
 }
@@ -343,12 +355,17 @@ echo "════════════════════════�
 export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
   const {
     vpsPublicIp,
-    vpnPort         = ROUTER_MANAGEMENT_VPN.port,
+    vpnPort,
     vpnUsername     = "admin",
-    tunnelBase      = ROUTER_MANAGEMENT_VPN.tunnelBase,
-    routerTunnelIp  = `${ROUTER_MANAGEMENT_VPN.tunnelBase}.2`,
+    tunnelBase,
+    routerTunnelIp,
     routerId,
+    vpnRole = "primary",
   } = opts;
+  const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+  const selectedVpnPort = vpnPort ?? contract.port;
+  const selectedTunnelBase = tunnelBase ?? contract.tunnelBase;
+  const selectedRouterTunnelIp = routerTunnelIp ?? `${contract.tunnelBase}.2`;
 
   return {
     architecture: "router-as-client",
@@ -357,19 +374,19 @@ export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
       "The backend API server uses the router's tunnel IP to reach the RouterOS API.",
     vpsServer: {
       publicIp:   vpsPublicIp,
-      port:       vpnPort,
+      port:       selectedVpnPort,
       protocol:   "TCP",
-      tunnelIp:   `${tunnelBase}.1`,
+      tunnelIp:   `${selectedTunnelBase}.1`,
       role:       "OpenVPN SERVER (already running)",
     },
     routerClient: {
       vpnUser:    vpnUsername,
-      tunnelIp:   routerTunnelIp,
+      tunnelIp:   selectedRouterTunnelIp,
       role:       "OpenVPN CLIENT (connects to VPS)",
       routerId,
     },
     backendConfig: {
-      MIKROTIK_BRIDGE_IP:  routerTunnelIp,
+      MIKROTIK_BRIDGE_IP:  selectedRouterTunnelIp,
       MIKROTIK_PORT:       "8728",
       MIKROTIK_USE_SSL:    "false",
     },
@@ -377,8 +394,8 @@ export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
       `1. Run vps-ovpn-setup.sh on the VPS (${vpsPublicIp}) as root`,
       `2. Download router-as-client${routerId ?? ""}.rsc from the API`,
       `3. Import the script on the router: /import router-as-client${routerId ?? ""}.rsc`,
-      `4. Verify: ping ${routerTunnelIp} from the VPS`,
-      `5. Set MIKROTIK_BRIDGE_IP=${routerTunnelIp} in OcholaSupernet`,
+      `4. Verify: ping ${selectedRouterTunnelIp} from the VPS`,
+      `5. Set MIKROTIK_BRIDGE_IP=${selectedRouterTunnelIp} in OcholaSupernet`,
     ],
   };
 }

@@ -3,8 +3,8 @@ import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
-import { isRouterVpnIp } from "../lib/router-vpn-ip.js";
-import { routerManagementOvpnCredentials } from "../lib/router-management-vpn.js";
+import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
+import { routerManagementBackupIp, routerManagementOvpnCredentials } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -68,7 +68,7 @@ async function connectWithFallback(
   password: string,
   log: (msg: string) => void,
 ): Promise<{ conn: RouterOSAPI; via: string }> {
-  const validVpnIp = vpnIp && isRouterVpnIp(vpnIp) ? vpnIp : undefined;
+  const validVpnIp = vpnIp && isRouterManagementVpnIp(vpnIp) ? vpnIp : undefined;
   const primary = host || validVpnIp || "";
   if (!primary) throw new Error("No public host or management VPN IP provided");
 
@@ -79,13 +79,24 @@ async function connectWithFallback(
     log(`✓ Connected via ${primary}`);
     return { conn, via: primary };
   } catch (firstErr) {
-    const fallback = validVpnIp && validVpnIp !== primary ? validVpnIp : null;
-    if (!fallback) throw firstErr;
-    log(`⚠ ${primary} unreachable, trying management VPN ${fallback}...`);
-    const conn2 = makeConn(fallback, username, password);
-    await withTimeout(conn2.connect(), 12000);
-    log(`✓ Connected via management VPN ${fallback}`);
-    return { conn: conn2, via: fallback };
+    const candidates = [
+      validVpnIp && validVpnIp !== primary ? validVpnIp : "",
+      validVpnIp && /^10\.8\.5\./.test(validVpnIp) ? routerManagementBackupIp(validVpnIp) : "",
+    ].filter((value, index, all) => value && all.indexOf(value) === index);
+    let lastError: unknown = firstErr;
+    for (const fallback of candidates) {
+      log(`⚠ ${primary} unreachable, trying management VPN ${fallback}...`);
+      const conn2 = makeConn(fallback, username, password);
+      try {
+        await withTimeout(conn2.connect(), 12000);
+        log(`✓ Connected via management VPN ${fallback}`);
+        return { conn: conn2, via: fallback };
+      } catch (error) {
+        lastError = error;
+        try { conn2.close(); } catch { /* ignore */ }
+      }
+    }
+    throw lastError;
   }
 }
 
@@ -1132,11 +1143,11 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
                     host is empty, e.g. brand-new router whose host was never set)
      ─────────────────────────────────────────────────────────── */
   const vpnClients = readVpnClients();
-  const configuredVpnIp = isRouterVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : null;
+  const configuredVpnIp = isRouterManagementVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : null;
   const discoveredByHost = host ? vpnIpFor(host, vpnClients) : null;
   const discoveredByCn = routerCn ? vpnIpFor(routerCn, vpnClients) : null;
-  const autoVpnIp = discoveredByHost && isRouterVpnIp(discoveredByHost) ? discoveredByHost : null;
-  const cnVpnIp = discoveredByCn && isRouterVpnIp(discoveredByCn) ? discoveredByCn : null;
+  const autoVpnIp = discoveredByHost && isRouterManagementVpnIp(discoveredByHost) ? discoveredByHost : null;
+  const cnVpnIp = discoveredByCn && isRouterManagementVpnIp(discoveredByCn) ? discoveredByCn : null;
 
   /* Require at least one usable address */
   if (!host && !configuredVpnIp && !autoVpnIp && !cnVpnIp) {
@@ -1279,7 +1290,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
 
   /* Keep the request field for compatibility, but never use the router's
      192.168.88.x LAN gateway as a tunnel endpoint. */
-  const validVpnIp = isRouterVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : "";
+  const validVpnIp = isRouterManagementVpnIp(bridgeIp ?? "") ? bridgeIp!.trim() : "";
   const primaryHost = host || validVpnIp || "";
   if (!primaryHost || !bridge) {
     res.status(400).json({ ok: false, logs: ["❌ public host or 10.8.5.x management VPN IP and bridge name are required"], error: "public host or management VPN IP and bridge are required" });

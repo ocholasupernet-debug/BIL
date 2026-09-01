@@ -263,8 +263,8 @@ export async function openVpsTcpForward(
   options: { timeoutMs?: number } = {},
 ): Promise<VpsTcpForward> {
   const host = remoteHost.trim();
-  if (!/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(host)) {
-    throw new Error("VPS TCP forwarding is restricted to a router management 10.8.5.x address.");
+  if (!/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(host)) {
+    throw new Error("VPS TCP forwarding is restricted to a router management 10.8.5.x or 10.8.6.x address.");
   }
   if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
     throw new Error("VPS TCP forwarding requires a valid remote port.");

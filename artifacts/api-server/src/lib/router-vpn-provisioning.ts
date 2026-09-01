@@ -3,6 +3,9 @@ import { generateRouterIpsecClientScript, generateRouterWireGuardClientScript } 
 import { generateWireGuardKeyPair } from "./vpn-management-service.js";
 import {
   ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  routerManagementBackupIp,
+  type RouterManagementVpnRole,
   routerManagementOvpnCredentials,
 } from "./router-management-vpn.js";
 import { encryptVpnSecret, decryptVpnSecret, type EncryptedSecret } from "./vpn-crypto.js";
@@ -84,8 +87,8 @@ function b64(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
 }
 
-function validRouterIp(value: string): boolean {
-  return new RegExp(`^${ROUTER_MANAGEMENT_VPN.tunnelBase}\\.(?:[2-9]|[1-9]\\d|1\\d\\d|2[0-4]\\d|25[0-4])$`).test(value);
+function validRouterIp(value: string, tunnelBase: string = ROUTER_MANAGEMENT_VPN.tunnelBase): boolean {
+  return new RegExp(`^${tunnelBase}\\.(?:[2-9]|[1-9]\\d|1\\d\\d|2[0-4]\\d|25[0-4])$`).test(value);
 }
 
 function safeFailure(result: { stderr: string; stdout: string; error?: string }, secrets: string[]): string {
@@ -446,7 +449,7 @@ export async function provisionRouterManagementVpn(input: {
   return operation;
 }
 
-const openVpnLocks = new Map<number, Promise<{
+const openVpnLocks = new Map<string, Promise<{
   ready: true;
   endpoint: string;
   assignedIp: string;
@@ -467,12 +470,41 @@ export async function provisionRouterManagementOpenVpn(input: {
   assignedIp: string;
   username: string;
 }> {
-  const existing = openVpnLocks.get(input.routerId);
+  return provisionRouterManagementOpenVpnInstance(input, "primary");
+}
+
+export async function provisionRouterManagementOpenVpnBackup(input: {
+  routerId: number;
+  routerName: string;
+  routerIp: string;
+}): Promise<{
+  ready: true;
+  endpoint: string;
+  assignedIp: string;
+  username: string;
+}> {
+  return provisionRouterManagementOpenVpnInstance(input, "backup");
+}
+
+async function provisionRouterManagementOpenVpnInstance(input: {
+  routerId: number;
+  routerName: string;
+  routerIp: string;
+}, vpnRole: RouterManagementVpnRole): Promise<{
+  ready: true;
+  endpoint: string;
+  assignedIp: string;
+  username: string;
+}> {
+  const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+  const assignedIp = vpnRole === "backup" ? routerManagementBackupIp(input.routerIp) : input.routerIp;
+  const lockKey = `${input.routerId}:${vpnRole}`;
+  const existing = openVpnLocks.get(lockKey);
   if (existing) return existing;
 
   const operation = (async () => {
-    if (!validRouterIp(input.routerIp)) {
-      throw new Error(`Router VPN address is outside the isolated ${ROUTER_MANAGEMENT_VPN.network} pool.`);
+    if (!validRouterIp(assignedIp, contract.tunnelBase)) {
+      throw new Error(`Router VPN address is outside the isolated ${contract.network} pool.`);
     }
     if (!vpsSshConfigured()) {
       throw new Error("VPS SSH deployment is not configured; set VPS_HOST, VPS_USER, and a VPS deployment key.");
@@ -482,12 +514,13 @@ export async function provisionRouterManagementOpenVpn(input: {
     const credentials = routerManagementOvpnCredentials(input.routerName);
     const script = generateVpsOvpnSetupScript({
       vpsPublicIp: endpoint,
-      vpnPort: ROUTER_MANAGEMENT_VPN.port,
+      vpnPort: contract.port,
       vpnUsername: credentials.username,
       vpnPassword: credentials.password,
-      tunnelBase: ROUTER_MANAGEMENT_VPN.tunnelBase,
-      routerTunnelIp: input.routerIp,
+      tunnelBase: contract.tunnelBase,
+      routerTunnelIp: assignedIp,
       routerId: input.routerId,
+      vpnRole,
     });
     const result = await runVpsScript(script, { timeoutMs: 180_000 });
     if (!result.ok) {
@@ -496,12 +529,12 @@ export async function provisionRouterManagementOpenVpn(input: {
     return {
       ready: true as const,
       endpoint,
-      assignedIp: input.routerIp,
+      assignedIp,
       username: credentials.username,
     };
-  })().finally(() => openVpnLocks.delete(input.routerId));
+  })().finally(() => openVpnLocks.delete(lockKey));
 
-  openVpnLocks.set(input.routerId, operation);
+  openVpnLocks.set(lockKey, operation);
   return operation;
 }
 

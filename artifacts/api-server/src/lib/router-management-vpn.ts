@@ -28,6 +28,44 @@ export const ROUTER_MANAGEMENT_VPN = {
   ],
 } as const;
 
+/** Isolated OpenVPN backup for router management. The legacy end-user proxy
+ * service on TCP 1195 / 10.9.0.0/24 is intentionally not reused. */
+export const ROUTER_MANAGEMENT_VPN_BACKUP = {
+  port: 1197,
+  protocol: "tcp",
+  tunnelBase: "10.8.6",
+  network: "10.8.6.0/24",
+  gateway: "10.8.6.1",
+  interfaceName: "tun-router-backup",
+  configPath: "/etc/openvpn/server/ochola-router-backup.conf",
+  authFilePath: "/etc/openvpn/router-backup-passwd",
+  authScriptPath: "/etc/openvpn/verify-router-backup-pass.sh",
+  ccdPath: "/etc/openvpn/server/ochola-router-backup-ccd",
+  statusPath: "/var/log/openvpn/ochola-router-backup-status.log",
+  ippPath: "/etc/openvpn/router-backup-ipp.txt",
+  easyRsaPath: "/etc/openvpn/easy-rsa/easyrsa",
+  caPaths: [
+    "/etc/openvpn/easy-rsa/pki/ca.crt",
+    "/etc/openvpn/ca.crt",
+  ],
+} as const;
+
+export type RouterManagementVpnRole = "primary" | "backup";
+
+export function routerManagementVpnContract(role: RouterManagementVpnRole = "primary") {
+  return role === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+}
+
+/** Map a primary management address to the same router's backup address. */
+export function routerManagementBackupIp(primaryIp: string): string {
+  const match = /^10\.8\.5\.(\d+)$/.exec(String(primaryIp ?? "").trim());
+  const host = match ? Number(match[1]) : NaN;
+  if (!Number.isInteger(host) || host < 2 || host > 254) {
+    throw new Error(`Router management address cannot map to the backup pool: ${primaryIp}`);
+  }
+  return `10.8.6.${host}`;
+}
+
 export interface RouterManagementOvpnCredentials {
   username: string;
   password: string;

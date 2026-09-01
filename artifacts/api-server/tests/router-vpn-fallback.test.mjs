@@ -281,6 +281,15 @@ test("router-management VPN contract is consistent and defaults to TCP 1196", ()
   delete process.env.ROUTER_OPENVPN_PORT;
 });
 
+test("router-management backup is isolated on TCP 1197 and maps router addresses", () => {
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN_BACKUP.port, 1197);
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN_BACKUP.network, "10.8.6.0/24");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN_BACKUP.interfaceName, "tun-router-backup");
+  assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN_BACKUP.authFilePath, "/etc/openvpn/router-backup-passwd");
+  assert.equal(vpnContract.routerManagementBackupIp("10.8.5.42"), "10.8.6.42");
+  assert.throws(() => vpnContract.routerManagementBackupIp("10.9.0.42"), /backup pool/);
+});
+
 test("VPS setup and runtime status readers use the same management paths", () => {
   const setup = vpnUtils.generateVpsOvpnSetupScript({ vpsPublicIp: "vpn.example.test" });
   assert.match(setup, /VPN Port  : 1196\/tcp/);
@@ -310,4 +319,18 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(scriptsRoute, /routerManagementVpnPortForRouter\(routerId\)/);
   assert.match(scriptsRoute, /if \(!readiness\.endpointConfigured\)/);
   assert.match(scriptsRoute, /The OpenVPN server may be hosted separately/);
+  const backupSetup = vpnUtils.generateVpsOvpnSetupScript({
+    vpsPublicIp: "vpn.example.test",
+    vpnRole: "backup",
+  });
+  assert.match(backupSetup, /VPN Port  : 1197\/tcp/);
+  assert.match(backupSetup, /server\/ochola-router-backup\.conf/);
+  assert.match(backupSetup, /router-backup-passwd/);
+  assert.match(backupSetup, /server\/ochola-router-backup-ccd/);
+  assert.match(backupSetup, /ochola-router-backup-status\.log/);
+  assert.match(backupSetup, /dev tun-router-backup/);
+  assert.match(backupSetup, /ifconfig-push 10\.8\.6\.2 10\.8\.6\.3/);
+  assert.doesNotMatch(backupSetup, /ochola-router\.conf"/);
+  assert.match(scriptsRoute, /openvpn-backup/);
+  assert.match(scriptsRoute, /routerManagementBackupIp\(tunnelRouterIp\)/);
 });

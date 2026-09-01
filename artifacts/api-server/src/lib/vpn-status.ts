@@ -7,10 +7,11 @@
  * to the VPN tunnel IP when a router's WAN/LAN IP is unreachable.
  */
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import { ROUTER_MANAGEMENT_VPN, ROUTER_MANAGEMENT_VPN_BACKUP } from "./router-management-vpn.js";
 
 const STATUS_PATHS = [
   ROUTER_MANAGEMENT_VPN.statusPath,
+  ROUTER_MANAGEMENT_VPN_BACKUP.statusPath,
   "/etc/openvpn/openvpn-status.log",
   "/etc/openvpn/server/openvpn-status.log",
   "/var/log/openvpn/openvpn-status.log",
@@ -19,6 +20,7 @@ const STATUS_PATHS = [
 
 const IPP_PATHS = [
   ROUTER_MANAGEMENT_VPN.ippPath,
+  ROUTER_MANAGEMENT_VPN_BACKUP.ippPath,
   "/etc/openvpn/server/ipp.txt",
   "/etc/openvpn/ipp.txt",
   "/var/log/openvpn/ipp.txt",
@@ -116,10 +118,14 @@ export function syncIppEntry(clientName: string, ip: string): boolean {
   const address = ip.trim();
   if (!name || !/^10\./.test(address)) return false;
   try {
-    const legacyPaths = IPP_PATHS.filter(candidate => candidate !== ROUTER_MANAGEMENT_VPN.ippPath);
-    const path = address.startsWith(`${ROUTER_MANAGEMENT_VPN.tunnelBase}.`)
+    const managementPaths: string[] = [ROUTER_MANAGEMENT_VPN.ippPath, ROUTER_MANAGEMENT_VPN_BACKUP.ippPath];
+    const legacyPaths = IPP_PATHS.filter(candidate => !managementPaths.includes(candidate));
+    const managementPath = address.startsWith(`${ROUTER_MANAGEMENT_VPN.tunnelBase}.`)
       ? ROUTER_MANAGEMENT_VPN.ippPath
-      : legacyPaths.find(candidate => existsSync(candidate)) ?? legacyPaths[0];
+      : address.startsWith(`${ROUTER_MANAGEMENT_VPN_BACKUP.tunnelBase}.`)
+        ? ROUTER_MANAGEMENT_VPN_BACKUP.ippPath
+        : null;
+    const path = managementPath ?? legacyPaths.find(candidate => existsSync(candidate)) ?? legacyPaths[0];
     const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
     const lines = content
       .split("\n")

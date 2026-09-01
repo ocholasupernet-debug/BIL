@@ -1,7 +1,12 @@
 import * as net from "net";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
-import { ROUTER_MANAGEMENT_VPN } from "./router-management-vpn.js";
+import {
+  ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  routerManagementBackupIp,
+  type RouterManagementVpnRole,
+} from "./router-management-vpn.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
@@ -254,7 +259,7 @@ async function connectWithRetry(
 
   const hosts: Array<{ host: string; label: string; isVpn: boolean }> = [];
 
-  const isVpnIp = (ip: string) => /^10\.8\.5\./.test(ip);
+  const isVpnIp = (ip: string) => /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(ip);
 
   if (creds.host) {
     const vpn = isVpnIp(creds.host);
@@ -264,9 +269,17 @@ async function connectWithRetry(
         ? `${creds.host} (⚠ LAN IP — only reachable on local network)`
         : creds.host;
     hosts.push({ host: creds.host, label, isVpn: vpn });
+    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
+      const backupIp = routerManagementBackupIp(creds.host);
+      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    }
   }
   if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
     hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
+      const backupIp = routerManagementBackupIp(creds.bridgeIp);
+      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    }
   }
 
   if (hosts.length === 0) {
@@ -2133,6 +2146,8 @@ export interface RouterAsClientOptions {
   installationMode?: "coexist" | "takeover";
   /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
   routerOsMajor?: number;
+  /** Select the isolated backup management OpenVPN instance. */
+  vpnRole?: RouterManagementVpnRole;
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2225,6 +2240,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerId,
     installationMode = "takeover",
     routerOsMajor = 6,
+    vpnRole = "primary",
   } = opts;
 
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
@@ -2238,12 +2254,14 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
      OpenVPN-compatible "aes128-cbc" value. Do not put both spellings in one
      script: RouterOS parses the whole command before on-error can run. */
   const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
+  const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+  const roleSuffix = vpnRole === "backup" ? "-backup" : "";
   const interfaceName = coexistence && routerId
-    ? `ochola-mgmt-vpn-${routerId}`
-    : "corebillingvpn";
+    ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
+    : `corebillingvpn${roleSuffix}`;
   const tag = coexistence && routerId
-    ? `ochola-mgmt-vpn-${routerId}`
-    : "corebillingvpn";
+    ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
+    : `corebillingvpn${roleSuffix}`;
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
@@ -2300,7 +2318,7 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 # Generated  : ${new Date().toISOString()}
 # Architecture: Router connects TO VPS (VPS is the OVPN server)
 #
-# VPS OVPN server : ${endpoint}:${port}/tcp  (tun-router ${tunnelVpsIp})
+# VPS OVPN server : ${endpoint}:${port}/tcp  (${contract.interfaceName} ${tunnelVpsIp})
 # Router tunnel IP: ${tunnelRouterIp}  (assigned by VPS server after connect)
 # VPN user        : ${safeVpnUsername}
 # OpenVPN cipher  : ${openVpnCipher} / auth=sha1
@@ -2310,9 +2328,9 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 #   - Backend: set MIKROTIK_BRIDGE_IP=${tunnelRouterIp}
 #   - API reaches router at ${tunnelRouterIp}:8728
 #
-# REQUIREMENTS on VPS side (run vps-ovpn-setup.sh first):
+# REQUIREMENTS on VPS side (run the dedicated router-management OpenVPN setup first):
 #   - VPS OpenVPN server must use proto tcp
-#   - User '${vpnUsername}' must be added to /etc/openvpn/easy-rsa or auth file
+#   - User '${vpnUsername}' must be added to the dedicated router-management auth file
 #   - tls-auth should be disabled or compatible with MikroTik
 #
 # USAGE: /import router-as-client${routerId ?? ""}.rsc

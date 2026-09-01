@@ -15,6 +15,8 @@ import { readIppEntries } from "../lib/vpn-status.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
   ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  routerManagementBackupIp,
   routerManagementOvpnCredentials,
   routerManagementVpnPortForRouter,
   routerManagementVpnReadiness,
@@ -27,6 +29,7 @@ import {
 import {
   generatedRouterVpnChildScript,
   provisionRouterManagementOpenVpn,
+  provisionRouterManagementOpenVpnBackup,
   routerFallbackMaterial,
 } from "../lib/router-vpn-provisioning.js";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
@@ -859,6 +862,7 @@ function buildMainhotspotRsc(
   heartbeatUrl: string = "",
   installerUrl: string = "",
   routerVpnUrl: string = "",
+  routerVpnBackupUrl: string = "",
   routerWireGuardUrl: string = "",
   routerIpsecUrl: string = "",
   routerVpnIp: string = "",
@@ -893,6 +897,7 @@ function buildMainhotspotRsc(
   const safeHeartbeatUrl = rscEscape(heartbeatUrl);
   const safeInstallerUrl = rscEscape(installerUrl);
   const safeRouterVpnUrl = rscEscape(routerVpnUrl);
+  const safeRouterVpnBackupUrl = rscEscape(routerVpnBackupUrl);
   const safeRouterWireGuardUrl = rscEscape(routerWireGuardUrl);
   const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
@@ -920,9 +925,12 @@ function buildMainhotspotRsc(
   const openVpnSelection = routerVpnUrl
     ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
     : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
+  const openVpnBackupSelection = routerVpnBackupUrl
+    ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
+    : `:set openVpnBackupUrl ""`;
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
-    const failureDiagnostics = protocol === "openvpn"
+    const failureDiagnostics = protocol.startsWith("openvpn")
       ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
          :do {
              :local ovpnIds [/interface ovpn-client find]
@@ -1051,12 +1059,15 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
 }
 :if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
 :local openVpnUrl ""
+ :local openVpnBackupUrl ""
     :local wireGuardUrl ""
     :local ipsecUrl ""
 ${openVpnSelection}
+${openVpnBackupSelection}
     ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
     ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 :if (!$vpnConfigured) do={
@@ -1135,7 +1146,7 @@ ${safeHeartbeatUrl ? `:do {
 # Router: ${safeRouterName || "new router"}
 #
 # INSTALL BUNDLE — downloaded in this order:
-#   1. router VPN child scripts                 (OpenVPN → WireGuard → IPsec)
+#   1. router VPN child scripts                 (OpenVPN → backup OpenVPN → WireGuard → IPsec)
 #   2. hotspotsetup.rsc -> hotspotsetup.rsc  (required)
 #   3. pppoesetup.rsc   -> pppoesetup.rsc     (required)
 #   4. users.rsc        -> users.rsc          (required)
@@ -1190,10 +1201,12 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :put "======================================================"
 
 # --- Ordered router-management VPN fallback -----------------------------------
-# Attempts OpenVPN first, then WireGuard, then IPsec. Each child must verify
+# Attempts primary OpenVPN first, then isolated backup OpenVPN, then WireGuard and IPsec. Each child must verify
 # its own resources; a successful child prevents all later children from running.
 :local openVpnUrl
 ${openVpnSelection}
+ :local openVpnBackupUrl
+${openVpnBackupSelection}
   :local wireGuardUrl ""
   :local ipsecUrl ""
 :local vpnConfigured false
@@ -1202,6 +1215,7 @@ ${openVpnSelection}
   ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
   ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt}
 ${ipsecAttempt}
 :if (!$vpnConfigured) do={
@@ -1571,6 +1585,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   let heartbeatUrl = "";
   let installerUrl = "";
   let routerVpnUrl = "";
+  let routerVpnBackupUrl = "";
   let routerWireGuardUrl = "";
   let routerIpsecUrl = "";
   let coexistenceHotspotUrl = "";
@@ -1629,6 +1644,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
            fresh scoped grant when they start another install. */
         installerUrl = "";
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
+        routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
         coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
@@ -1647,6 +1663,18 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
         } catch (error) {
           vpnProvisioningError = error instanceof Error ? error.message : String(error);
         }
+        try {
+          await provisionRouterManagementOpenVpnBackup({
+            routerId: Number(rid),
+            routerName: currentRouter.name,
+            routerIp: assignedIp,
+          });
+        } catch (error) {
+          const backupError = error instanceof Error ? error.message : String(error);
+          vpnProvisioningError = vpnProvisioningError
+            ? `${vpnProvisioningError}; backup: ${backupError}`
+            : `backup: ${backupError}`;
+        }
 
         /* Takeover may use the complete fallback chain. Coexistence is
            intentionally OpenVPN-only: it must not add WireGuard or IPsec
@@ -1659,7 +1687,6 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
         );
         companyName = admins[0]?.name || companyName;
-        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         if (installationMode === "takeover") {
           routerWireGuardUrl = fallbackUrl("wireguard");
           routerIpsecUrl = fallbackUrl("ipsec");
@@ -1699,6 +1726,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       heartbeatUrl,
       installerUrl,
       routerVpnUrl,
+       routerVpnBackupUrl,
       routerWireGuardUrl,
       routerIpsecUrl,
       routerVpnIp,
@@ -1787,11 +1815,11 @@ router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Pr
    install script therefore fetches this authenticated, router-specific
    bootstrap first. Its token is already bound to the router and is used as
    the unique VPN password, so no placeholder credential is embedded. */
-type RouterVpnProtocol = "openvpn" | "wireguard" | "ipsec";
+type RouterVpnProtocol = "openvpn" | "openvpn-backup" | "wireguard" | "ipsec";
 
 function requestedRouterVpnProtocol(value: unknown): RouterVpnProtocol {
   const protocol = String(value ?? "openvpn").trim().toLowerCase();
-  if (protocol === "openvpn" || protocol === "wireguard" || protocol === "ipsec") return protocol;
+  if (protocol === "openvpn" || protocol === "openvpn-backup" || protocol === "wireguard" || protocol === "ipsec") return protocol;
   throw new Error("Unsupported router VPN protocol");
 }
 
@@ -1886,7 +1914,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
       );
       return;
     }
-    if (installationMode === "coexist" && protocol !== "openvpn") {
+    if (installationMode === "coexist" && !protocol.startsWith("openvpn")) {
       res.status(410).type("text/plain").send(
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
         "# WireGuard and IPsec fallbacks are disabled for coexistence installs. " +
@@ -1896,8 +1924,9 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
     }
     let script: string;
 
-    if (protocol === "openvpn") {
+    if (protocol === "openvpn" || protocol === "openvpn-backup") {
       const openVpnCredentials = routerManagementOvpnCredentials(rows[0].name);
+      const isBackup = protocol === "openvpn-backup";
       const readiness = routerManagementVpnReadiness();
       if (!readiness.endpointConfigured) {
         res.status(503).type("text/plain").send(
@@ -1915,7 +1944,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         );
         return;
       }
-      const vpnPort = routerManagementVpnPortForRouter(routerId);
+       const vpnPort = isBackup ? ROUTER_MANAGEMENT_VPN_BACKUP.port : routerManagementVpnPortForRouter(routerId);
       const readinessWarning = readiness.ready
         ? ""
         : `# WARNING: API could not verify local OpenVPN files (${readiness.missing.join(", ")}).\n` +
@@ -1925,13 +1954,14 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
         vpnPort,
         vpnUsername: openVpnCredentials.username,
         vpnPassword: openVpnCredentials.password,
-        tunnelRouterIp,
-        tunnelVpsIp: ROUTER_VPN_GATEWAY,
+         tunnelRouterIp: isBackup ? routerManagementBackupIp(tunnelRouterIp) : tunnelRouterIp,
+         tunnelVpsIp: isBackup ? ROUTER_MANAGEMENT_VPN_BACKUP.gateway : ROUTER_VPN_GATEWAY,
         routerId,
         installationMode,
         routerOsMajor,
+         vpnRole: isBackup ? "backup" : "primary",
       });
-      script = readinessWarning + script;
+       script = (isBackup ? "" : readinessWarning) + script;
     } else if (protocol === "wireguard") {
       const material = await routerFallbackMaterial(routerId, "wireguard");
       const endpoint = material?.endpoint || routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);

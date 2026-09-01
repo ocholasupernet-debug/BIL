@@ -191,9 +191,9 @@ function rowToCreds(row: SbRouter): RouterCredentials {
   };
 }
 
-/* ── Management VPN helper: persistent router addresses are 10.8.5.x ───── */
+/* ── Management VPN helper: primary 10.8.5.x, isolated backup 10.8.6.x ── */
 function isManagementVpnIp(ip: string): boolean {
-  return /^10\.8\.5\.\d+$/.test(ip);
+  return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(ip);
 }
 
 /* ── True if IP is a LAN-only address unreachable from VPS ──────────────── */
@@ -1042,7 +1042,7 @@ router.post("/router/test-raw", async (req, res): Promise<void> => {
      If bridgeIp is already a management VPN IP (10.8.5.x) use it as-is.
      Otherwise look up the tunnel IP by the router's WAN/host IP so
      withConn() can try the VPN path first (avoids 6-second WAN timeout). */
-  const isVpnAddr = (ip: string) => /^10\.8\.5\./.test(ip);
+   const isVpnAddr = (ip: string) => /^10\.8\.[56]\./.test(ip);
   let resolvedBridgeIp = bridgeIp?.trim() || undefined;
   if (!resolvedBridgeIp || !isVpnAddr(resolvedBridgeIp)) {
     const vpnClients = readVpnClients();

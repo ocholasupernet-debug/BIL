@@ -8,11 +8,19 @@
  */
 export const ROUTER_VPN_SUBNET = "10.8.5";
 export const ROUTER_VPN_GATEWAY = `${ROUTER_VPN_SUBNET}.1`;
+export const ROUTER_VPN_BACKUP_SUBNET = "10.8.6";
+export const ROUTER_VPN_BACKUP_GATEWAY = `${ROUTER_VPN_BACKUP_SUBNET}.1`;
 
 export function isRouterVpnIp(value: string | null | undefined): boolean {
   return new RegExp(`^${ROUTER_VPN_SUBNET}\\.([2-9]|[1-9]\\d|1\\d\\d|2[0-4]\\d|25[0-4])$`).test(
     (value ?? "").trim(),
   );
+}
+
+export function isRouterManagementVpnIp(value: string | null | undefined): boolean {
+  const ip = (value ?? "").trim();
+  return isRouterVpnIp(ip)
+    || new RegExp(`^${ROUTER_VPN_BACKUP_SUBNET}\\.([2-9]|[1-9]\\d|1\\d\\d|2[0-4]\\d|25[0-4])$`).test(ip);
 }
 
 /**
@@ -21,12 +29,13 @@ export function isRouterVpnIp(value: string | null | undefined): boolean {
  * each client address has the adjacent address as its point-to-point peer.
  */
 export function routerVpnPeerIp(value: string): string {
-  const match = new RegExp(`^${ROUTER_VPN_SUBNET}\\.(\\d+)$`).exec(value.trim());
-  const host = match ? Number(match[1]) : NaN;
+  const match = /^(10\.8\.[56])\.(\d+)$/.exec(value.trim());
+  const subnet = match?.[1] ?? "";
+  const host = match ? Number(match[2]) : NaN;
   if (!Number.isInteger(host) || host < 2 || host > 253) {
     throw new Error(`Router management address cannot form a net30 peer: ${value}`);
   }
-  return `${ROUTER_VPN_SUBNET}.${host % 2 === 0 ? host + 1 : host - 1}`;
+  return `${subnet}.${host % 2 === 0 ? host + 1 : host - 1}`;
 }
 
 /**
