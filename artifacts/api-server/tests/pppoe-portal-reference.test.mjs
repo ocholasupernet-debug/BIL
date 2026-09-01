@@ -40,10 +40,10 @@ const server = await new Promise(resolve => {
 });
 const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-function request(pathname, host) {
+function request(pathname, host, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const request = httpRequest(`${baseUrl}${pathname}`, {
-      headers: { Host: host },
+      headers: { Host: host, ...extraHeaders },
     }, response => {
       const chunks = [];
       response.on("data", chunk => chunks.push(chunk));
@@ -64,6 +64,12 @@ function request(pathname, host) {
 let customerStatus = "expired";
 globalThis.fetch = async input => {
   const url = new URL(String(input));
+  if (url.pathname.endsWith("/isp_routers") && url.searchParams.get("router_secret") === "eq.wrong-secret") {
+    return new Response("[]", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
   const rows = url.pathname.endsWith("/isp_admins")
     ? [{ id: 7, subdomain: "tenant", is_active: true }]
     : url.pathname.endsWith("/isp_routers")
@@ -147,18 +153,57 @@ test("the access endpoint enforces tenant, router, and live subscription status"
   customerStatus = "paused";
   const wrongTenant = await request(`/public/pppoe-portal/access?ref=${encodeURIComponent(token)}`, "another.isplatty.org");
   assert.equal(wrongTenant.status, 404);
+
+  const malformed = await request("/public/pppoe-portal/access?ref=not-a-reference", "tenant.isplatty.org");
+  assert.equal(malformed.status, 404);
+
+  const expiredToken = signBody({
+    purpose: "pppoe-expired-portal",
+    customerId: 101,
+    adminId: 7,
+    routerId: 42,
+    issuedAt: Date.now() - auth.PPPOE_PORTAL_REFERENCE_TTL_MS - 1,
+    nonce: "expired-staging-reference",
+  });
+  const expired = await request(`/public/pppoe-portal/access?ref=${encodeURIComponent(expiredToken)}`, "tenant.isplatty.org");
+  assert.equal(expired.status, 404);
 });
 
 test("the router handoff keeps router credentials out of the customer redirect", async () => {
-  customerStatus = "paused";
-  const handoff = await request(
+  for (const status of ["expired", "paused"]) {
+    customerStatus = status;
+    const handoff = await request(
+      `/public/pppoe-portal/handoff/42?token=${encodeURIComponent("router-secret")}&username=subscriber`,
+      "tenant.isplatty.org",
+      { "X-Forwarded-Proto": "https" },
+    );
+    assert.equal(handoff.status, 302);
+    const location = handoff.headers.location;
+    assert.match(location, /^https:\/\/tenant\.isplatty\.org\/pppoe-login\?ref=/);
+    assert.doesNotMatch(location, /router-secret|subscriber|pppoe-password|password/);
+  }
+
+  customerStatus = "active";
+  const active = await request(
     `/public/pppoe-portal/handoff/42?token=${encodeURIComponent("router-secret")}&username=subscriber`,
     "tenant.isplatty.org",
   );
-  assert.equal(handoff.status, 302);
-  const location = handoff.headers.location;
-  assert.match(location, /\/pppoe-login\?ref=/);
-  assert.doesNotMatch(location, /router-secret|subscriber/);
+  assert.equal(active.status, 302);
+  assert.doesNotMatch(active.headers.location, /ref=/);
+
+  const invalidSecret = await request(
+    `/public/pppoe-portal/handoff/42?token=${encodeURIComponent("wrong-secret")}&username=subscriber`,
+    "tenant.isplatty.org",
+  );
+  assert.equal(invalidSecret.status, 302);
+  assert.doesNotMatch(invalidSecret.headers.location, /ref=/);
+
+  const malformedRouter = await request(
+    "/public/pppoe-portal/handoff/not-a-router?token=router-secret&username=subscriber",
+    "tenant.isplatty.org",
+  );
+  assert.equal(malformedRouter.status, 302);
+  assert.doesNotMatch(malformedRouter.headers.location, /ref=/);
 });
 
 test.after(() => {
