@@ -162,6 +162,30 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
+test("coexistence fallback resources are router-specific", () => {
+  const wireguard = mikrotik.generateRouterWireGuardClientScript({
+    endpoint: "wg.example.test",
+    serverPublicKey: "A".repeat(43),
+    clientPrivateKey: "B".repeat(43),
+    tunnelRouterIp: "10.8.5.42",
+    tunnelVpsIp: "10.8.5.1",
+    routerId: 42,
+    installationMode: "coexist",
+  });
+  const ipsec = mikrotik.generateRouterIpsecClientScript({
+    endpoint: "ipsec.example.test",
+    preSharedKey: "router-secret",
+    tunnelRouterIp: "10.8.5.42",
+    tunnelVpsIp: "10.8.5.1",
+    routerId: 42,
+    installationMode: "coexist",
+  });
+  assert.match(wireguard, /ochola-mgmt-wg-42/);
+  assert.match(ipsec, /ochola-mgmt-ipsec-42/);
+  assert.doesNotMatch(wireguard, /corebillingvpn WireGuard management peer/);
+  assert.doesNotMatch(ipsec, /corebillingvpn IPsec management peer/);
+});
+
 test("IPsec child verifies peer, identity, and policy resources without leaking secrets", () => {
   const script = mikrotik.generateRouterIpsecClientScript({
     endpoint: "ipsec.example.test",
@@ -173,6 +197,8 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.match(script, /\/ip ipsec peer add/);
   assert.match(script, /\/ip ipsec identity add/);
   assert.match(script, /\/ip ipsec policy add/);
+  assert.match(script, /address=ipsec\.example\.test exchange-mode=ike2/);
+  assert.doesNotMatch(script, /address=ipsec\.example\.test\/32/);
   assert.match(script, /IPsec policy was not verified/);
   assert.match(script, /a-secret-with-\\"quotes\\"/);
   assert.match(scriptsRoute, /server-side prerequisites/);
@@ -217,8 +243,10 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
   assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
+  assert.match(scriptsRoute, /:local importError \$error/);
+  assert.match(scriptsRoute, /:local attemptPhase "start"/);
   assert.match(scriptsRoute, /server rejected \$\{label\}/);
-  assert.match(scriptsRoute, /child script import failed/);
+  assert.match(scriptsRoute, /child import/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
 

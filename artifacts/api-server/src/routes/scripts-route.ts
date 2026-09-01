@@ -938,6 +938,7 @@ function buildMainhotspotRsc(
          :do { /log print where topics~"ovpn" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
       : "";
     return `:if (!$vpnConfigured) do={
+    :local attemptPhase "start"
     :do {
         :global ocholaVpnChildError
         :set ocholaVpnChildError ""
@@ -947,11 +948,14 @@ function buildMainhotspotRsc(
         $pg 1 "vpn-${protocol}" "downloading" ""
         :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${tempFileName}"] } on-error={}
+         :set attemptPhase "download"
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+         :set attemptPhase "download verification"
         ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
         :delay 2s
          :if ($majorVersion >= 7) do={
              :local preflightError ""
+              :set attemptPhase "RouterOS 7 dry-run"
              :do {
                  /import "${tempFileName}" verbose=yes dry-run
              } on-error={
@@ -962,13 +966,13 @@ function buildMainhotspotRsc(
                  :error $ocholaVpnChildError
              }
          }
+         :set attemptPhase "child import"
         :do {
             /import "${tempFileName}" verbose=yes
         } on-error={
-            :local importError ""
-            :do { :set importError $error } on-error={}
+            :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
-            :if ([:len $importError] = 0) do={ :set importError "${protocol}: child script import failed; inspect failed-${fileName} and /log for the exact RouterOS command." }
+            :if ([:len $importError] = 0) do={ :set importError "${protocol}: $attemptPhase failed; inspect failed-${fileName} and /log for the exact RouterOS command." }
             :set ocholaVpnChildError $importError
             :error $importError
         }
@@ -982,7 +986,7 @@ function buildMainhotspotRsc(
     } on-error={
         :local vpnError $ocholaVpnChildError
         :if ([:len $vpnError] = 0) do={
-            :set vpnError "${protocol}: child script import failed. Check failed-${fileName} and /log for the RouterOS error."
+            :set vpnError "${protocol}: $attemptPhase failed. Check failed-${fileName} and /log for the RouterOS error."
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
         ${failureDiagnostics}

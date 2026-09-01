@@ -2409,9 +2409,9 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
     routerId,
     installationMode = "takeover",
   } = opts;
-  const tag = "corebillingvpn";
-  const interfaceName = "ochola-wg";
   const coexistence = installationMode === "coexist";
+  const tag = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "corebillingvpn";
+  const interfaceName = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "ochola-wg";
   const preparation = coexistence
     ? `:if ([:len [/interface wireguard find where name="${interfaceName}"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — ${interfaceName} already exists."; :error $ocholaVpnChildError }
 :if ([:len [/interface wireguard peers find where comment="${tag} WireGuard management peer"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required WireGuard peer already exists."; :error $ocholaVpnChildError }
@@ -2458,17 +2458,16 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
   } = opts;
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
-  const tag = "corebillingvpn";
+  const coexistence = installationMode === "coexist";
+  const tag = coexistence && routerId ? `ochola-mgmt-ipsec-${routerId}` : "corebillingvpn";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
   const identityIds = routerId
     ? ` my-id=fqdn:router-${routerId} remote-id=fqdn:ochola-router-${routerId}-server`
     : "";
-  const endpointPrefix = endpoint.includes(":") ? `${endpoint}/128` : `${endpoint}/32`;
   const safePreSharedKey = preSharedKey
     .replace(/[\u0000-\u001F\u007F]/g, "")
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"');
-  const coexistence = installationMode === "coexist";
   const preparation = coexistence
     ? `:if ([:len [/ip ipsec peer find where name="${peerName}"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — ${peerName} already exists."; :error $ocholaVpnChildError }
 :if ([:len [/ip ipsec peer find where comment="${tag} IPsec management peer"]] > 0) do={ :set ocholaVpnChildError "${tag}: coexistence conflict — the required IPsec peer already exists."; :error $ocholaVpnChildError }
@@ -2503,7 +2502,7 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
 :set ocholaVpnChildError ""
 ${preparation}
 ${ipsecVariantNote}
-:do { /ip ipsec peer add name="${peerName}" address=${endpointPrefix} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
+:do { /ip ipsec peer add name="${peerName}" address=${endpoint} exchange-mode=ike2 disabled=no comment="${tag} IPsec management peer" } on-error={ :set ocholaVpnChildError "${tag}: IPsec peer creation failed: RouterOS rejected the peer command." ; :error $ocholaVpnChildError }
 ${ipsecOptionalSettings}
 :do { /ip ipsec identity add peer="${peerName}" auth-method=pre-shared-key secret="${safePreSharedKey}"${identityIds} comment="${tag} IPsec management identity" } on-error={ :set ocholaVpnChildError "${tag}: IPsec identity creation failed: RouterOS rejected the identity command." ; :error $ocholaVpnChildError }
 :do { /ip ipsec policy add src-address=${tunnelRouterIp}/32 dst-address=${tunnelVpsIp}/32 tunnel=yes sa-src-address=0.0.0.0 sa-dst-address=${endpoint} proposal=default comment="${tag} IPsec management policy" } on-error={ :set ocholaVpnChildError "${tag}: IPsec policy creation failed: RouterOS rejected the policy command." ; :error $ocholaVpnChildError }
