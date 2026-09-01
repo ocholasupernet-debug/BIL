@@ -49,6 +49,10 @@ test("generated fallback children receive the requested installation mode", () =
   assert.match(provisioning, /routerId,\s*installationMode,\s*\}\);/);
 });
 
+test("child import failures preserve the RouterOS error and phase", () => {
+  assert.match(provisioning, /routerOsMajor = 6,\s*installationMode: "coexist" \| "takeover" = "takeover"/);
+});
+
 test("legacy and migration VPN networks remain explicitly separate", () => {
   assert.match(provisioning, /customer OpenVPN \(1194\/10\.8\.0\.x\)/);
   assert.match(provisioning, /migration VPN \(temporary leases\)/);
