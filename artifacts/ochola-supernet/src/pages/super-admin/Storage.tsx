@@ -56,7 +56,7 @@ interface CleanupRequest {
 
 interface PhysicalSource {
   source: string;
-  status: "available" | "partial" | "unavailable";
+  status: "available" | "partial" | "unavailable" | "stale";
   measurementKind: string;
   usedBytes: number | null;
   capacityBytes: number | null;
@@ -95,6 +95,11 @@ interface StorageData {
       measuredAt: string | null;
       error: string | null;
     };
+    freshness: {
+      collectionIntervalMinutes: number;
+      staleAfterMinutes: number;
+      checkedAt: string;
+    };
     physicalSources: PhysicalSource[];
   };
   usage: AdminUsage[];
@@ -121,6 +126,10 @@ function sourceLabel(source: string): string {
     supabase_storage: "Supabase Storage",
     vps_filesystem: "VPS filesystem",
   }[source] || source;
+}
+
+function statusColor(status: PhysicalSource["status"]): string {
+  return status === "available" ? C.green : status === "partial" || status === "stale" ? C.amber : C.red;
 }
 
 function countdown(value: string, now: number): string {
@@ -375,7 +384,9 @@ export default function SuperAdminStorage() {
 
             <div style={{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.2)", borderRadius: 10, padding: "11px 14px", color: C.sub, fontSize: 11, lineHeight: 1.5, marginBottom: 20 }}>
               <strong style={{ color: C.amber }}>Measurement boundary:</strong> {data.measurement.notes.join(" ")}
-              <span style={{ display: "block", color: C.muted, marginTop: 3 }}>Last measured {formatDate(data.measuredAt)}.</span>
+              <span style={{ display: "block", color: C.muted, marginTop: 3 }}>
+                Server collector runs every {data.measurement.freshness.collectionIntervalMinutes} minutes; readings become stale after {data.measurement.freshness.staleAfterMinutes} minutes. Freshness checked {formatDate(data.measurement.freshness.checkedAt)}.
+              </span>
             </div>
 
             <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
@@ -385,13 +396,13 @@ export default function SuperAdminStorage() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
                 {data.measurement.physicalSources.map(source => {
-                  const statusColor = source.status === "available" ? C.green : source.status === "partial" ? C.amber : C.red;
+                  const sourceStatusColor = statusColor(source.status);
                   const buckets = source.details.buckets ?? [];
                   return (
                     <div key={source.source} style={{ background: "rgba(0,0,0,0.16)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 13 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                         <strong style={{ color: "white", fontSize: 12 }}>{sourceLabel(source.source)}</strong>
-                        <span style={{ color: statusColor, fontSize: 9, fontWeight: 800, textTransform: "uppercase" }}>{source.status}</span>
+                        <span style={{ color: sourceStatusColor, fontSize: 9, fontWeight: 800, textTransform: "uppercase" }}>{source.status}</span>
                       </div>
                       <p style={{ color: C.muted, fontSize: 10, margin: "6px 0 10px" }}>{source.measurementKind}</p>
                       <div style={{ color: source.usedBytes === null ? C.amber : C.accent, fontWeight: 800, fontSize: 16 }}>{formatBytes(source.usedBytes)} used</div>
@@ -401,7 +412,7 @@ export default function SuperAdminStorage() {
                         {source.freeBytes === null ? "Free: unavailable" : `Free: ${formatBytes(source.freeBytes)}`}
                       </div>
                       <div style={{ color: C.muted, fontSize: 9, marginTop: 8 }}>Measured {formatDate(source.measuredAt)}</div>
-                      {source.error && <div style={{ color: C.red, fontSize: 10, marginTop: 7 }}>{source.error}</div>}
+                      {source.error && <div style={{ color: sourceStatusColor, fontSize: 10, marginTop: 7 }}>{source.error}</div>}
                       {buckets.length > 0 && <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 9, paddingTop: 8 }}>
                         {buckets.map(bucket => <div key={bucket.bucket} style={{ display: "flex", justifyContent: "space-between", color: bucket.status === "available" ? C.sub : C.red, fontSize: 10, padding: "2px 0" }}><span>{bucket.bucket}</span><span>{bucket.status === "available" ? formatBytes(bucket.usedBytes) : "unavailable"}</span></div>)}
                       </div>}

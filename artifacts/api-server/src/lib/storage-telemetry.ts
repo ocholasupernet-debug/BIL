@@ -1,7 +1,7 @@
 import { Client } from "pg";
 import { runVpsScript, vpsSshConfigured } from "./vps-ssh.js";
 
-export type TelemetryStatus = "available" | "partial" | "unavailable";
+export type TelemetryStatus = "available" | "partial" | "unavailable" | "stale";
 
 export interface StorageTelemetry {
   source: string;

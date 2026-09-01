@@ -22,6 +22,7 @@ test("storage governance persists capacity, tenant estimates, notices, requests,
   assert.match(migration, /platform_execute_storage_cleanup/);
   assert.match(migration, /platform_storage_physical_usage/);
   assert.match(migration, /measurement_kind/);
+  assert.match(migration, /'stale'/);
 });
 
 test("cleanup scope is explicitly limited to aged migration artifacts", () => {
@@ -53,9 +54,15 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(route, /measureSupabaseDatabase/);
   assert.match(route, /measureSupabaseStorage/);
   assert.match(route, /measureVpsDisk/);
+  assert.match(route, /STORAGE_TELEMETRY_COLLECTION_INTERVAL_MINUTES/);
+  assert.match(route, /markStalePhysicalMeasurements/);
+  assert.match(route, /collectPhysicalMeasurements/);
+  assert.match(route, /No server-side telemetry reading has been recorded yet/);
   assert.match(route, /Provider capacity/);
   assert.match(route, /Unavailable sources are never included/);
   assert.match(storageUi, /Connected physical storage sources/);
   assert.match(storageUi, /sourceLabel/);
+  assert.match(storageUi, /readings become stale after/);
+  assert.match(storageUi, /statusColor/);
   assert.match(storageUi, /Measured \{formatDate\(source\.measuredAt\)\}/);
 });

@@ -28,7 +28,7 @@ create index if not exists platform_storage_usage_measured_idx
 -- estimates because the two measurements have different meanings.
 create table if not exists platform_storage_physical_usage (
   source            text primary key,
-  status            text not null check (status in ('available', 'partial', 'unavailable')),
+  status            text not null check (status in ('available', 'partial', 'unavailable', 'stale')),
   measurement_kind  text not null,
   used_bytes        bigint check (used_bytes is null or used_bytes >= 0),
   capacity_bytes    bigint check (capacity_bytes is null or capacity_bytes >= 0),
@@ -37,6 +37,11 @@ create table if not exists platform_storage_physical_usage (
   measured_at       timestamptz,
   error             text
 );
+alter table platform_storage_physical_usage
+  drop constraint if exists platform_storage_physical_usage_status_check;
+alter table platform_storage_physical_usage
+  add constraint platform_storage_physical_usage_status_check
+  check (status in ('available', 'partial', 'unavailable', 'stale'));
 create index if not exists platform_storage_physical_measured_idx
   on platform_storage_physical_usage(measured_at desc);
 

@@ -4,6 +4,7 @@ import {
   sbDelete,
   sbInsertStrict,
   sbRpc,
+  sbSelect,
   sbSelectStrict,
   sbUpdateStrict,
   sbUpsertStrict,
@@ -22,6 +23,16 @@ const router: IRouter = Router();
 const CLEANUP_SCOPE = "expired_migration_artifacts";
 const RETENTION_DAYS = 30;
 const MAX_REASON_LENGTH = 500;
+const TELEMETRY_COLLECTION_INTERVAL_MINUTES = positiveIntegerEnv(
+  "STORAGE_TELEMETRY_COLLECTION_INTERVAL_MINUTES",
+  15,
+);
+const TELEMETRY_STALE_AFTER_MINUTES = Math.max(
+  TELEMETRY_COLLECTION_INTERVAL_MINUTES,
+  positiveIntegerEnv("STORAGE_TELEMETRY_STALE_AFTER_MINUTES", 60),
+);
+const TELEMETRY_COLLECTION_INTERVAL_MS = TELEMETRY_COLLECTION_INTERVAL_MINUTES * 60_000;
+const TELEMETRY_STALE_AFTER_MS = TELEMETRY_STALE_AFTER_MINUTES * 60_000;
 
 type CleanupStatus = "pending" | "processing" | "cancelled" | "completed" | "failed";
 
@@ -30,6 +41,18 @@ interface MeasureRow {
   source: string;
   bytes: number | string;
   row_count: number | string;
+}
+
+interface PhysicalUsageRow {
+  source: string;
+  status: "available" | "partial" | "unavailable" | "stale";
+  measurement_kind: string;
+  used_bytes: number | string | null;
+  capacity_bytes: number | string | null;
+  free_bytes: number | string | null;
+  details: Record<string, unknown> | null;
+  measured_at: string | null;
+  error: string | null;
 }
 
 interface CleanupCandidate {
@@ -64,6 +87,11 @@ interface CleanupRequest {
 function asNumber(value: number | string | null | undefined): number {
   const result = typeof value === "number" ? value : Number(value);
   return Number.isFinite(result) ? result : 0;
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 function parsePositiveId(value: unknown): number | null {
@@ -170,18 +198,25 @@ async function measureAndPersist(): Promise<MeasureRow[]> {
   return rows;
 }
 
-function physicalPublic(measurement: StorageTelemetry) {
+function physicalPublic(measurement: StorageTelemetry | PhysicalUsageRow) {
+  const persisted = "measurement_kind" in measurement;
   return {
     source: measurement.source,
     status: measurement.status,
-    measurementKind: measurement.measurementKind,
-    usedBytes: measurement.usedBytes,
-    capacityBytes: measurement.capacityBytes,
-    freeBytes: measurement.freeBytes,
-    measuredAt: measurement.measuredAt,
+    measurementKind: persisted ? measurement.measurement_kind : measurement.measurementKind,
+    usedBytes: persisted ? toNullableNumber(measurement.used_bytes) : measurement.usedBytes,
+    capacityBytes: persisted ? toNullableNumber(measurement.capacity_bytes) : measurement.capacityBytes,
+    freeBytes: persisted ? toNullableNumber(measurement.free_bytes) : measurement.freeBytes,
+    measuredAt: persisted ? measurement.measured_at : measurement.measuredAt,
     error: measurement.error,
     details: measurement.details ?? {},
   };
+}
+
+function toNullableNumber(value: number | string | null | undefined): number | null {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Promise<void> {
@@ -205,6 +240,77 @@ async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Pr
     logger.warn("[super-admin/storage] physical telemetry snapshot could not be persisted");
   }
 }
+
+async function loadPhysicalMeasurements(): Promise<ReturnType<typeof physicalPublic>[]> {
+  const rows = await sbSelect<PhysicalUsageRow>(
+    "platform_storage_physical_usage",
+    "select=source,status,measurement_kind,used_bytes,capacity_bytes,free_bytes,details,measured_at,error&order=source.asc",
+  );
+  const bySource = new Map(rows.map(row => [row.source, row]));
+  return ["supabase_postgres", "supabase_storage", "vps_filesystem"].map(source => {
+    const row = bySource.get(source);
+    if (row) return physicalPublic(row);
+    return physicalPublic({
+      source,
+      status: "unavailable",
+      measurementKind: source === "supabase_storage" ? "storage_object_bytes" : source === "vps_filesystem" ? "filesystem_df" : "database_physical_size",
+      usedBytes: null,
+      capacityBytes: null,
+      freeBytes: null,
+      measuredAt: null,
+      error: "No server-side telemetry reading has been recorded yet.",
+      details: {},
+    });
+  });
+}
+
+async function markStalePhysicalMeasurements(): Promise<void> {
+  if (!supabaseServiceRoleConfigured) return;
+  try {
+    const rows = await sbSelect<Pick<PhysicalUsageRow, "source" | "status" | "measured_at">>(
+      "platform_storage_physical_usage",
+      "select=source,status,measured_at",
+    );
+    const cutoff = Date.now() - TELEMETRY_STALE_AFTER_MS;
+    await Promise.all(rows
+      .filter(row => row.status !== "stale" && row.measured_at && new Date(row.measured_at).getTime() < cutoff)
+      .map(row => sbUpdateStrict(
+        "platform_storage_physical_usage",
+        `source=eq.${encodeURIComponent(row.source)}`,
+        {
+          status: "stale",
+          error: "This reading is older than the configured freshness window.",
+        },
+      )));
+  } catch (error) {
+    logger.warn({ err: error }, "[super-admin/storage] freshness check unavailable");
+  }
+}
+
+async function collectPhysicalMeasurements(): Promise<void> {
+  if (!supabaseServiceRoleConfigured) return;
+  try {
+    const measurements = await Promise.all([
+      measureSupabaseDatabase(),
+      measureSupabaseStorage(),
+      measureVpsDisk(),
+    ]);
+    await persistPhysicalMeasurements(measurements);
+  } catch (error) {
+    logger.warn({ err: error }, "[super-admin/storage] server telemetry collection failed");
+  }
+}
+
+async function runTelemetryCycle(): Promise<void> {
+  await collectPhysicalMeasurements();
+  await markStalePhysicalMeasurements();
+}
+
+const telemetryWorker = setInterval(() => {
+  void runTelemetryCycle();
+}, TELEMETRY_COLLECTION_INTERVAL_MS);
+telemetryWorker.unref?.();
+void runTelemetryCycle();
 
 async function getCleanupRequest(id: number): Promise<CleanupRequest | null> {
   const rows = await sbSelectStrict<CleanupRequest>(
@@ -299,12 +405,7 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
     } catch {
       tenantMeasurementError = "Tenant row-payload measurement is unavailable.";
     }
-    const physicalMeasurements = await Promise.all([
-      measureSupabaseDatabase(),
-      measureSupabaseStorage(),
-      measureVpsDisk(),
-    ]);
-    await persistPhysicalMeasurements(physicalMeasurements);
+    const physicalMeasurements = await loadPhysicalMeasurements();
     const [settings, admins, candidates, requests] = await Promise.all([
       sbSelectStrict<{ capacity_bytes: number | string | null; updated_at: string }>(
         "platform_storage_settings",
@@ -367,7 +468,12 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
           measuredAt: tenantMeasurementError ? null : measuredAt,
           error: tenantMeasurementError,
         },
-        physicalSources: physicalMeasurements.map(physicalPublic),
+        physicalSources: physicalMeasurements,
+        freshness: {
+          collectionIntervalMinutes: TELEMETRY_COLLECTION_INTERVAL_MINUTES,
+          staleAfterMinutes: TELEMETRY_STALE_AFTER_MINUTES,
+          checkedAt: measuredAt,
+        },
         notes: [
           "Tenant bytes are row-payload estimates and are not physical database usage.",
           "Supabase Postgres and VPS filesystem measurements are physical-source readings; Supabase Storage reports logical object bytes.",
