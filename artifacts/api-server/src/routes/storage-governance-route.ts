@@ -33,6 +33,8 @@ const TELEMETRY_STALE_AFTER_MINUTES = Math.max(
 );
 const TELEMETRY_COLLECTION_INTERVAL_MS = TELEMETRY_COLLECTION_INTERVAL_MINUTES * 60_000;
 const TELEMETRY_STALE_AFTER_MS = TELEMETRY_STALE_AFTER_MINUTES * 60_000;
+const HISTORY_WINDOW_DAYS = 30;
+const HISTORY_LIMIT = 1_000;
 
 type CleanupStatus = "pending" | "processing" | "cancelled" | "completed" | "failed";
 
@@ -53,6 +55,19 @@ interface PhysicalUsageRow {
   details: Record<string, unknown> | null;
   measured_at: string | null;
   error: string | null;
+}
+
+interface PhysicalUsageHistoryRow extends PhysicalUsageRow {
+  captured_at: string;
+}
+
+interface TenantUsageHistoryRow {
+  status: "available" | "unavailable";
+  used_bytes: number | string | null;
+  row_count: number | string | null;
+  measured_at: string | null;
+  error: string | null;
+  captured_at: string;
 }
 
 interface CleanupCandidate {
@@ -221,10 +236,23 @@ function toNullableNumber(value: number | string | null | undefined): number | n
 
 async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Promise<void> {
   if (!supabaseServiceRoleConfigured) return;
-  const results = await Promise.allSettled(measurements.map(measurement => sbUpsertStrict(
-    "platform_storage_physical_usage",
-    "source",
-    {
+  const results = await Promise.all(measurements.map(measurement => Promise.allSettled([
+    sbUpsertStrict(
+      "platform_storage_physical_usage",
+      "source",
+      {
+        source: measurement.source,
+        status: measurement.status,
+        measurement_kind: measurement.measurementKind,
+        used_bytes: measurement.usedBytes,
+        capacity_bytes: measurement.capacityBytes,
+        free_bytes: measurement.freeBytes,
+        details: measurement.details ?? {},
+        measured_at: measurement.measuredAt,
+        error: measurement.error,
+      },
+    ),
+    sbInsertStrict("platform_storage_physical_usage_history", {
       source: measurement.source,
       status: measurement.status,
       measurement_kind: measurement.measurementKind,
@@ -234,11 +262,95 @@ async function persistPhysicalMeasurements(measurements: StorageTelemetry[]): Pr
       details: measurement.details ?? {},
       measured_at: measurement.measuredAt,
       error: measurement.error,
-    },
-  )));
-  if (results.some(result => result.status === "rejected")) {
+    }),
+  ])));
+  if (results.flat().some(result => result.status === "rejected")) {
     logger.warn("[super-admin/storage] physical telemetry snapshot could not be persisted");
   }
+}
+
+async function persistTenantUsageHistory(snapshot: {
+  status: "available" | "unavailable";
+  usedBytes: number | null;
+  rowCount: number | null;
+  measuredAt: string | null;
+  error: string | null;
+}): Promise<void> {
+  if (!supabaseServiceRoleConfigured) return;
+  try {
+    await sbInsertStrict("platform_storage_tenant_usage_history", {
+      status: snapshot.status,
+      used_bytes: snapshot.usedBytes,
+      row_count: snapshot.rowCount,
+      measured_at: snapshot.measuredAt,
+      error: snapshot.error,
+    });
+  } catch {
+    logger.warn("[super-admin/storage] tenant usage history could not be persisted");
+  }
+}
+
+async function loadStorageHistory(): Promise<{
+  physical: Array<ReturnType<typeof physicalPublic> & { capturedAt: string }>;
+  tenant: Array<{
+    status: TenantUsageHistoryRow["status"];
+    usedBytes: number | null;
+    rowCount: number | null;
+    measuredAt: string | null;
+    capturedAt: string;
+    error: string | null;
+  }>;
+}> {
+  const since = encodeURIComponent(new Date(Date.now() - HISTORY_WINDOW_DAYS * 86_400_000).toISOString());
+  const [physicalRows, tenantRows] = await Promise.all([
+    sbSelect<PhysicalUsageHistoryRow>(
+      "platform_storage_physical_usage_history",
+      `select=source,status,measurement_kind,used_bytes,capacity_bytes,free_bytes,details,measured_at,error,captured_at&captured_at=gte.${since}&order=captured_at.asc&limit=${HISTORY_LIMIT}`,
+    ),
+    sbSelect<TenantUsageHistoryRow>(
+      "platform_storage_tenant_usage_history",
+      `select=status,used_bytes,row_count,measured_at,error,captured_at&captured_at=gte.${since}&order=captured_at.asc&limit=${HISTORY_LIMIT}`,
+    ),
+  ]);
+  return {
+    physical: physicalRows.map(row => ({ ...physicalPublic(row), capturedAt: row.captured_at })),
+    tenant: tenantRows.map(row => ({
+      status: row.status,
+      usedBytes: toNullableNumber(row.used_bytes),
+      rowCount: toNullableNumber(row.row_count),
+      measuredAt: row.measured_at,
+      capturedAt: row.captured_at,
+      error: row.error,
+    })),
+  };
+}
+
+function buildCapacityForecast(
+  points: Array<{ status: TenantUsageHistoryRow["status"]; usedBytes: number | null; capturedAt: string }>,
+  capacityBytes: number | null,
+) {
+  const valid = points
+    .filter(point => point.status === "available" && point.usedBytes !== null && Number.isFinite(new Date(point.capturedAt).getTime()))
+    .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
+  if (capacityBytes === null) {
+    return { status: "unavailable", source: "tenant_row_payload_history", validPoints: valid.length, trendBytesPerDay: null, projectedFullAt: null, reason: "A platform capacity budget is not configured." };
+  }
+  if (valid.length < 2) {
+    return { status: "insufficient_data", source: "tenant_row_payload_history", validPoints: valid.length, trendBytesPerDay: null, projectedFullAt: null, reason: "At least two available tenant measurements are required." };
+  }
+  const first = valid[0];
+  const last = valid[valid.length - 1];
+  const days = (new Date(last.capturedAt).getTime() - new Date(first.capturedAt).getTime()) / 86_400_000;
+  if (!Number.isFinite(days) || days <= 0) {
+    return { status: "insufficient_data", source: "tenant_row_payload_history", validPoints: valid.length, trendBytesPerDay: null, projectedFullAt: null, reason: "Available measurements do not span enough time." };
+  }
+  const trendBytesPerDay = (last.usedBytes! - first.usedBytes!) / days;
+  if (trendBytesPerDay <= 0) {
+    return { status: "not_growing", source: "tenant_row_payload_history", validPoints: valid.length, trendBytesPerDay, projectedFullAt: null, reason: "Available tenant usage is flat or decreasing." };
+  }
+  const remaining = Math.max(0, capacityBytes - last.usedBytes!);
+  const projectedFullAt = new Date(new Date(last.capturedAt).getTime() + (remaining / trendBytesPerDay) * 86_400_000).toISOString();
+  return { status: "available", source: "tenant_row_payload_history", validPoints: valid.length, trendBytesPerDay, projectedFullAt, reason: null };
 }
 
 async function loadPhysicalMeasurements(): Promise<ReturnType<typeof physicalPublic>[]> {
@@ -405,8 +517,22 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
     } catch {
       tenantMeasurementError = "Tenant row-payload measurement is unavailable.";
     }
-    const physicalMeasurements = await loadPhysicalMeasurements();
-    const [settings, admins, candidates, requests] = await Promise.all([
+    const measuredAt = new Date().toISOString();
+    const tenantHistoryUsedBytes = tenantMeasurementError
+      ? null
+      : measured.reduce((sum, row) => sum + Math.max(0, Math.floor(asNumber(row.bytes))), 0);
+    const tenantHistoryRowCount = tenantMeasurementError
+      ? null
+      : measured.reduce((sum, row) => sum + Math.max(0, Math.floor(asNumber(row.row_count))), 0);
+    await persistTenantUsageHistory({
+      status: tenantMeasurementError ? "unavailable" : "available",
+      usedBytes: tenantHistoryUsedBytes,
+      rowCount: tenantHistoryRowCount,
+      measuredAt: tenantMeasurementError ? null : measuredAt,
+      error: tenantMeasurementError,
+    });
+    const [physicalMeasurements, settings, admins, candidates, requests, history] = await Promise.all([
+      loadPhysicalMeasurements(),
       sbSelectStrict<{ capacity_bytes: number | string | null; updated_at: string }>(
         "platform_storage_settings",
         "id=eq.1&select=capacity_bytes,updated_at&limit=1",
@@ -420,6 +546,7 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
         "platform_storage_cleanup_requests",
         "select=*&order=created_at.desc&limit=200",
       ),
+      loadStorageHistory(),
     ]);
 
     const byAdmin = new Map<number, { bytes: number; rows: number; breakdown: Record<string, { bytes: number; rows: number }> }>();
@@ -441,7 +568,6 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
       rowCount: tenantMeasurementError ? null : byAdmin.get(admin.id)?.rows ?? 0,
       breakdown: byAdmin.get(admin.id)?.breakdown ?? {},
     }));
-    const measuredAt = new Date().toISOString();
     const totalUsedBytes = tenantMeasurementError
       ? null
       : usage.reduce((sum, admin) => sum + (admin.bytes ?? 0), 0);
@@ -449,6 +575,7 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
     const freeBytes = capacityBytes == null || totalUsedBytes == null
       ? null
       : Math.max(0, capacityBytes - totalUsedBytes);
+    const forecast = buildCapacityForecast(history.tenant, capacityBytes);
     const candidateRows = candidates.map(candidate => ({
       ...candidate,
       bytes: asNumber(candidate.bytes),
@@ -497,6 +624,12 @@ router.get("/super-admin/storage", async (req, res): Promise<void> => {
       usagePercent: capacityBytes && capacityBytes > 0 && totalUsedBytes !== null
         ? Math.min(100, (totalUsedBytes / capacityBytes) * 100)
         : null,
+      history: {
+        windowDays: HISTORY_WINDOW_DAYS,
+        physical: history.physical,
+        tenant: history.tenant,
+      },
+      forecast,
       usage,
       candidates: candidateRows,
       requests,

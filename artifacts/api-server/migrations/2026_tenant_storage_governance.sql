@@ -45,6 +45,36 @@ alter table platform_storage_physical_usage
 create index if not exists platform_storage_physical_measured_idx
   on platform_storage_physical_usage(measured_at desc);
 
+create table if not exists platform_storage_physical_usage_history (
+  id                bigserial primary key,
+  source            text not null,
+  status            text not null check (status in ('available', 'partial', 'unavailable', 'stale')),
+  measurement_kind  text not null,
+  used_bytes        bigint check (used_bytes is null or used_bytes >= 0),
+  capacity_bytes    bigint check (capacity_bytes is null or capacity_bytes >= 0),
+  free_bytes        bigint check (free_bytes is null or free_bytes >= 0),
+  details           jsonb not null default '{}'::jsonb,
+  measured_at       timestamptz,
+  error             text,
+  captured_at       timestamptz not null default now()
+);
+create index if not exists platform_storage_physical_history_source_idx
+  on platform_storage_physical_usage_history(source, captured_at asc);
+create index if not exists platform_storage_physical_history_captured_idx
+  on platform_storage_physical_usage_history(captured_at desc);
+
+create table if not exists platform_storage_tenant_usage_history (
+  id             bigserial primary key,
+  status         text not null check (status in ('available', 'unavailable')),
+  used_bytes     bigint check (used_bytes is null or used_bytes >= 0),
+  row_count      bigint check (row_count is null or row_count >= 0),
+  measured_at    timestamptz,
+  error          text,
+  captured_at    timestamptz not null default now()
+);
+create index if not exists platform_storage_tenant_history_captured_idx
+  on platform_storage_tenant_usage_history(captured_at desc);
+
 create table if not exists platform_storage_cleanup_requests (
   id                bigserial primary key,
   admin_id          bigint not null references isp_admins(id) on delete restrict,
@@ -101,6 +131,9 @@ create index if not exists platform_storage_audit_created_idx
 
 alter table platform_storage_settings enable row level security;
 alter table platform_storage_usage enable row level security;
+alter table platform_storage_physical_usage enable row level security;
+alter table platform_storage_physical_usage_history enable row level security;
+alter table platform_storage_tenant_usage_history enable row level security;
 alter table platform_storage_cleanup_requests enable row level security;
 alter table platform_admin_notifications enable row level security;
 alter table platform_storage_audit_logs enable row level security;
@@ -108,12 +141,16 @@ alter table platform_storage_audit_logs enable row level security;
 revoke all on table platform_storage_settings from anon, authenticated;
 revoke all on table platform_storage_usage from anon, authenticated;
 revoke all on table platform_storage_physical_usage from anon, authenticated;
+revoke all on table platform_storage_physical_usage_history from anon, authenticated;
+revoke all on table platform_storage_tenant_usage_history from anon, authenticated;
 revoke all on table platform_storage_cleanup_requests from anon, authenticated;
 revoke all on table platform_admin_notifications from anon, authenticated;
 revoke all on table platform_storage_audit_logs from anon, authenticated;
 grant select, insert, update on table platform_storage_settings to service_role;
 grant select, insert, update, delete on table platform_storage_usage to service_role;
 grant select, insert, update, delete on table platform_storage_physical_usage to service_role;
+grant select, insert, update, delete on table platform_storage_physical_usage_history to service_role;
+grant select, insert, update, delete on table platform_storage_tenant_usage_history to service_role;
 grant select, insert, update, delete on table platform_storage_cleanup_requests to service_role;
 grant select, insert, update, delete on table platform_admin_notifications to service_role;
 grant select, insert on table platform_storage_audit_logs to service_role;

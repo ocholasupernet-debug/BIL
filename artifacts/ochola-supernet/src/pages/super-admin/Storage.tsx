@@ -4,6 +4,10 @@ import {
   AlertTriangle, CheckCircle2, Clock3, Database, HardDrive, Loader2,
   RefreshCw, ShieldCheck, Trash2, UserRound, XCircle,
 } from "lucide-react";
+import {
+  CartesianGrid, Line, LineChart, Legend, ResponsiveContainer,
+  Tooltip, XAxis, YAxis,
+} from "recharts";
 
 const C = {
   card: "rgba(255,255,255,0.04)",
@@ -76,6 +80,28 @@ interface PhysicalSource {
   };
 }
 
+interface PhysicalHistoryPoint extends PhysicalSource {
+  capturedAt: string;
+}
+
+interface TenantHistoryPoint {
+  status: "available" | "unavailable";
+  usedBytes: number | null;
+  rowCount: number | null;
+  measuredAt: string | null;
+  capturedAt: string;
+  error: string | null;
+}
+
+interface CapacityForecast {
+  status: "available" | "unavailable" | "insufficient_data" | "not_growing";
+  source: string;
+  validPoints: number;
+  trendBytesPerDay: number | null;
+  projectedFullAt: string | null;
+  reason: string | null;
+}
+
 interface StorageData {
   measuredAt: string;
   capacityBytes: number | null;
@@ -102,6 +128,12 @@ interface StorageData {
     };
     physicalSources: PhysicalSource[];
   };
+  history: {
+    windowDays: number;
+    physical: PhysicalHistoryPoint[];
+    tenant: TenantHistoryPoint[];
+  };
+  forecast: CapacityForecast;
   usage: AdminUsage[];
   candidates: Candidate[];
   requests: CleanupRequest[];
@@ -130,6 +162,16 @@ function sourceLabel(source: string): string {
 
 function statusColor(status: PhysicalSource["status"]): string {
   return status === "available" ? C.green : status === "partial" || status === "stale" ? C.amber : C.red;
+}
+
+function historySeriesKey(source: string): "postgres" | "storage" | "vps" | null {
+  return source === "supabase_postgres" ? "postgres" : source === "supabase_storage" ? "storage" : source === "vps_filesystem" ? "vps" : null;
+}
+
+function formatRate(value: number | null): string {
+  if (value === null) return "Unavailable";
+  if (value === 0) return "0 B/day";
+  return `${value > 0 ? "+" : "-"}${formatBytes(Math.abs(value))}/day`;
 }
 
 function countdown(value: string, now: number): string {
@@ -243,6 +285,25 @@ export default function SuperAdminStorage() {
   const selectedCandidates = (data?.candidates ?? []).filter(candidate => selectedCandidateIds.includes(candidate.id));
   const pendingRequests = (data?.requests ?? []).filter(request => request.status === "pending" || request.status === "processing");
   const history = (data?.requests ?? []).filter(request => request.status !== "pending" && request.status !== "processing");
+  const trendData = useMemo(() => {
+    if (!data) return [];
+    const byTimestamp = new Map<number, { timestamp: number; postgres?: number; storage?: number; vps?: number; tenant?: number }>();
+    const add = (capturedAt: string, key: "postgres" | "storage" | "vps" | "tenant", value: number) => {
+      const timestamp = new Date(capturedAt).getTime();
+      if (!Number.isFinite(timestamp)) return;
+      const point = byTimestamp.get(timestamp) ?? { timestamp };
+      point[key] = value;
+      byTimestamp.set(timestamp, point);
+    };
+    data.history.physical.forEach(point => {
+      const key = point.status === "available" && point.usedBytes !== null ? historySeriesKey(point.source) : null;
+      if (key) add(point.capturedAt, key, point.usedBytes!);
+    });
+    data.history.tenant.forEach(point => {
+      if (point.status === "available" && point.usedBytes !== null) add(point.capturedAt, "tenant", point.usedBytes);
+    });
+    return [...byTimestamp.values()].sort((a, b) => a.timestamp - b.timestamp);
+  }, [data]);
 
   const toggleCandidate = (candidate: Candidate) => {
     if (selectedAdminId !== null && selectedAdminId !== candidate.admin_id) {
@@ -416,6 +477,66 @@ export default function SuperAdminStorage() {
                       {buckets.length > 0 && <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 9, paddingTop: 8 }}>
                         {buckets.map(bucket => <div key={bucket.bucket} style={{ display: "flex", justifyContent: "space-between", color: bucket.status === "available" ? C.sub : C.red, fontSize: 10, padding: "2px 0" }}><span>{bucket.bucket}</span><span>{bucket.status === "available" ? formatBytes(bucket.usedBytes) : "unavailable"}</span></div>)}
                       </div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+              <div style={{ marginBottom: 14 }}>
+                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Storage history &amp; capacity trends</h2>
+                <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Last {data.history.windowDays} days of server snapshots. Only available samples are plotted; partial, stale, and unavailable samples are kept in the status ledger and never treated as zero.</p>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.55fr) minmax(240px, 0.75fr)", gap: 18, alignItems: "stretch" }}>
+                <div style={{ minWidth: 0, minHeight: 300 }}>
+                  {trendData.length < 2 ? (
+                    <div style={{ height: 300, display: "grid", placeItems: "center", color: C.muted, fontSize: 12, border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+                      Not enough available history samples to draw a trend.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={trendData} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
+                        <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                        <XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} tickFormatter={value => new Date(Number(value)).toLocaleDateString("en-KE", { month: "short", day: "numeric" })} stroke={C.muted} tick={{ fontSize: 10 }} />
+                        <YAxis tickFormatter={value => formatBytes(Number(value))} stroke={C.muted} tick={{ fontSize: 10 }} width={68} />
+                        <Tooltip labelFormatter={value => new Date(Number(value)).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" })} formatter={(value, name) => [formatBytes(Number(value)), ({ postgres: "Supabase Postgres", storage: "Supabase Storage objects", vps: "VPS filesystem", tenant: "Tenant row estimate" } as Record<string, string>)[String(name)] || String(name)]} contentStyle={{ background: "#17151b", border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 11 }} />
+                        <Legend formatter={value => ({ postgres: "Supabase Postgres", storage: "Storage objects", vps: "VPS filesystem", tenant: "Tenant estimate" } as Record<string, string>)[String(value)] || String(value)} wrapperStyle={{ fontSize: 10 }} />
+                        <Line type="monotone" dataKey="postgres" stroke="#60a5fa" strokeWidth={2} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="storage" stroke="#c084fc" strokeWidth={2} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="vps" stroke="#4ade80" strokeWidth={2} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="tenant" stroke={C.accent} strokeWidth={2} dot={false} connectNulls={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+                <div style={{ background: "rgba(0,0,0,0.16)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+                  <div style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>Capacity forecast</div>
+                  <strong style={{ display: "block", color: data.forecast.status === "available" ? C.accent : C.amber, fontSize: 17, marginTop: 9 }}>
+                    {data.forecast.status === "available" ? (data.forecast.projectedFullAt ? formatDate(data.forecast.projectedFullAt) : "At capacity") : data.forecast.status === "not_growing" ? "Not growing" : "Unavailable"}
+                  </strong>
+                  <p style={{ color: C.sub, fontSize: 11, lineHeight: 1.5, margin: "8px 0 0" }}>{data.forecast.reason || "Projected date uses the trend from available tenant row-estimate samples only."}</p>
+                  <div style={{ color: C.muted, fontSize: 10, marginTop: 12 }}>Valid samples: {data.forecast.validPoints}</div>
+                  <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>Trend: {formatRate(data.forecast.trendBytesPerDay)}</div>
+                  <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>Forecast source: tenant row estimates</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginTop: 14 }}>
+                {[
+                  ["supabase_postgres", data.history.physical.filter(point => point.source === "supabase_postgres")],
+                  ["supabase_storage", data.history.physical.filter(point => point.source === "supabase_storage")],
+                  ["vps_filesystem", data.history.physical.filter(point => point.source === "vps_filesystem")],
+                  ["tenant_row_estimate", data.history.tenant],
+                ].map(([source, points]) => {
+                  const statuses = (points as Array<{ status: string }>).reduce<Record<string, number>>((counts, point) => {
+                    counts[point.status] = (counts[point.status] || 0) + 1;
+                    return counts;
+                  }, {});
+                  return (
+                    <div key={source as string} style={{ background: "rgba(0,0,0,0.12)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 9, fontSize: 10 }}>
+                      <strong style={{ display: "block", color: "white", marginBottom: 6 }}>{source === "tenant_row_estimate" ? "Tenant estimate" : sourceLabel(source as string)}</strong>
+                      {["available", "partial", "stale", "unavailable"].map(status => statuses[status] ? <span key={status} style={{ color: status === "available" ? C.green : status === "unavailable" ? C.red : C.amber, display: "block" }}>{status}: {statuses[status]}</span> : null)}
+                      {!Object.keys(statuses).length && <span style={{ color: C.muted }}>No samples</span>}
                     </div>
                   );
                 })}

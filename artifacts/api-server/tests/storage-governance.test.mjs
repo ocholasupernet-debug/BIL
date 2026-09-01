@@ -14,6 +14,8 @@ test("storage governance persists capacity, tenant estimates, notices, requests,
     "platform_storage_cleanup_requests",
     "platform_admin_notifications",
     "platform_storage_audit_logs",
+    "platform_storage_physical_usage_history",
+    "platform_storage_tenant_usage_history",
   ]) {
     assert.match(migration, new RegExp(`create table if not exists ${table}`));
   }
@@ -58,6 +60,10 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(route, /markStalePhysicalMeasurements/);
   assert.match(route, /collectPhysicalMeasurements/);
   assert.match(route, /No server-side telemetry reading has been recorded yet/);
+  assert.match(route, /platform_storage_physical_usage_history/);
+  assert.match(route, /platform_storage_tenant_usage_history/);
+  assert.match(route, /buildCapacityForecast/);
+  assert.match(route, /point\.status === "available"/);
   assert.match(route, /Provider capacity/);
   assert.match(route, /Unavailable sources are never included/);
   assert.match(storageUi, /Connected physical storage sources/);
@@ -65,4 +71,7 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(storageUi, /readings become stale after/);
   assert.match(storageUi, /statusColor/);
   assert.match(storageUi, /Measured \{formatDate\(source\.measuredAt\)\}/);
+  assert.match(storageUi, /Storage history &amp; capacity trends/);
+  assert.match(storageUi, /Only available samples are plotted/);
+  assert.match(storageUi, /Capacity forecast/);
 });
