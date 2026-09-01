@@ -81,8 +81,8 @@ pnpm run desktop:package:macos
 
 The Windows command produces an NSIS installer and a portable executable. The
 macOS command produces a DMG and ZIP archive. Both commands write to
-`release/`, which is ignored as build output and is safe to remove between
-builds. `EXPO_PUBLIC_API_BASE_URL` can override the default
+`desktop-releases/`, which is ignored as build output and is safe to remove
+between builds. `EXPO_PUBLIC_API_BASE_URL` can override the default
 `https://isplatty.org` API origin for a staging build; it is compiled into the
 web export and must be a public HTTPS origin reachable by the desktop machine.
 

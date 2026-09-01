@@ -45,7 +45,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ocholasupernet-windows-unsigned
-          path: artifacts/ocholasupernet-mobile/release/*
+          path: artifacts/ocholasupernet-mobile/desktop-releases/*
           if-no-files-found: error
 
   macos:
@@ -79,5 +79,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ocholasupernet-macos-unsigned
-          path: artifacts/ocholasupernet-mobile/release/*
+          path: artifacts/ocholasupernet-mobile/desktop-releases/*
           if-no-files-found: error
