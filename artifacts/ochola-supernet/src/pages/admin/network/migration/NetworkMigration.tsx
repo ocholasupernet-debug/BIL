@@ -25,13 +25,11 @@ import {
   X,
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { NetworkTabs } from "../NetworkTabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   analyzeSource,
   createCollectorSession,
   createMigrationTunnel,
-  exportSource,
   fetchRouters,
   getCollectorSessionStatus,
   getMigrationTunnelStatus,
@@ -96,18 +94,6 @@ function CardHead({
   );
 }
 
-function Boundary() {
-  return (
-    <div className="migration-boundary">
-      <ShieldAlert size={17} />
-      <div>
-        <strong>Strict read-only guarantee</strong>
-        <p>The source router is never modified. The temporary tunnel expires automatically. Target selection performs identity checks only; dry run performs zero RouterOS calls.</p>
-      </div>
-    </div>
-  );
-}
-
 export default function NetworkMigration() {
   const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(1);
@@ -125,6 +111,8 @@ export default function NetworkMigration() {
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const [copied, setCopied] = useState("");
+  const [sourceVerification, setSourceVerification] = useState<{ identity?: { name?: string; version?: string; boardName?: string }; details?: string } | null>(null);
+  const [verificationError, setVerificationError] = useState("");
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["migration-routers"],
     queryFn: fetchRouters,
@@ -181,6 +169,9 @@ export default function NetworkMigration() {
     mutationFn: getCollectorSessionStatus,
     onSuccess: data => {
       setCollector(current => current ? { ...current, ...data } : current);
+      if (data.tunnel?.status) {
+        setTunnel(current => current ? { ...current, status: data.tunnel.status } : current);
+      }
       if (data.migrationId && data.summary && data.findings) {
         setMigrationId(data.migrationId);
         setExportData({
@@ -191,6 +182,7 @@ export default function NetworkMigration() {
           summary: data.summary,
           findings: data.findings,
         });
+        setCurrentStep(2);
       }
     },
     onError: (error: any) => toast({ title: "Collection status unavailable", description: error.message, variant: "destructive" }),
@@ -212,21 +204,22 @@ export default function NetworkMigration() {
     onError: (error: any) => toast({ title: "Migration tunnel could not be created", description: error.message, variant: "destructive" }),
   });
 
-  const exportMutation = useMutation({
-    mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => exportSource(routerId, tunnelId),
-    onSuccess: data => {
-      setMigrationId(data.id);
-      setExportData(data);
-      setCurrentStep(2);
-      toast({ title: "Source export saved", description: `Read-only export completed through ${data.tunnel?.address ?? "the temporary tunnel"}.` });
-    },
-    onError: (error: any) => toast({ title: "Source export failed", description: error.message, variant: "destructive" }),
-  });
-
-  const analyzeMutation = useMutation({
+  const verifyConnectionMutation = useMutation({
     mutationFn: ({ routerId, tunnelId }: { routerId: number; tunnelId: string }) => analyzeSource(routerId, tunnelId),
-    onSuccess: (_data, variables) => exportMutation.mutate(variables),
-    onError: (error: any) => toast({ title: "Tunnel verification failed", description: error.message, variant: "destructive" }),
+    onSuccess: data => {
+      setVerificationError("");
+      setSourceVerification(data);
+      setTunnel(current => current ? { ...current, status: "connected" } : current);
+      toast({
+        title: "RouterOS connection verified",
+        description: `Authenticated through the temporary tunnel${data.identity?.name ? ` as ${data.identity.name}` : ""}. The read-only export script is now unlocked.`,
+      });
+    },
+    onError: (error: any) => {
+      const message = error instanceof Error ? error.message : "The source router could not be authenticated.";
+      setVerificationError(message);
+      toast({ title: "RouterOS connection failed", description: message, variant: "destructive" });
+    },
   });
 
   useEffect(() => {
@@ -256,9 +249,6 @@ export default function NetworkMigration() {
         tunnelId: tunnel.leaseId,
       });
       return;
-    }
-    if (!migrationId && !analyzeMutation.isPending && !exportMutation.isPending) {
-      analyzeMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId });
     }
   };
 
@@ -302,7 +292,7 @@ export default function NetworkMigration() {
   });
 
   const isBusy = collectorMutation.isPending || collectorStatusMutation.isPending || tunnelMutation.isPending ||
-    analyzeMutation.isPending || exportMutation.isPending || targetMutation.isPending ||
+    verifyConnectionMutation.isPending || targetMutation.isPending ||
     dryRunMutation.isPending || importMutation.isPending || reportMutation.isPending;
   const tunnelSecondsRemaining = tunnel
     ? Math.max(0, Math.floor((new Date(tunnel.expiresAt).getTime() - clock) / 1000))
@@ -346,29 +336,28 @@ export default function NetworkMigration() {
 
   const downloadScriptsBundle = () => {
     const connectionCommand = collector?.tunnelCommand || tunnel?.command || "";
-    const tunnelScript = tunnel?.scriptUrl
-      ? `# 1. Connection script\n# Downloaded from ${tunnel.scriptUrl}\n\n${connectionCommand}`
-      : `# 1. Connection script\n\n${connectionCommand}`;
-    const exportScript = collector?.scriptUrl
-      ? `# 2. Read-only export script\n# Downloaded from ${collector.scriptUrl}\n\n${collector.command || ""}`
-      : `# 2. Read-only export script\n\n${collector?.command || ""}`;
-    const blob = new Blob([
+    const bundle = [
       "# OcholaSupernet router migration script bundle\n",
       "# Run script 1 first, wait for the tunnel, then run script 2.\n\n",
-      tunnelScript,
+      "# 1. Connection script\n\n",
+      connectionCommand,
       "\n\n============================================================\n\n",
-      exportScript,
+      "# 2. Read-only export script\n\n",
+      collector?.command || "",
       "\n",
-    ], { type: "text/plain;charset=utf-8" });
+    ].join("");
+    downloadText(bundle, "ocholasupernet-router-migration-scripts.rsc");
+  };
+
+  const downloadText = (value: string, filename: string) => {
+    const blob = new Blob([value], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "ocholasupernet-router-migration-scripts.txt";
+    anchor.download = filename;
     anchor.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
-
-  const downloadUrl = (url: string) => `${url}${url.includes("?") ? "&" : "?"}download=1`;
 
   const resetSource = (value: string) => {
     setSourceRouterId(value ? Number(value) : null);
@@ -379,6 +368,8 @@ export default function NetworkMigration() {
     setDryRunData(null);
     setReportData(null);
     setTargetRouterId(null);
+    setSourceVerification(null);
+    setVerificationError("");
     setCurrentStep(1);
   };
 
@@ -406,6 +397,7 @@ export default function NetworkMigration() {
   const renderStage = () => {
     if (currentStep === 1) {
       const tunnelCommand = collector?.tunnelCommand || tunnel?.command;
+      const ExportNoteIcon = connectionConfirmed ? CheckCircle2 : LockKeyhole;
       return (
         <div className="migration-stack">
           <section className="migration-card">
@@ -479,6 +471,28 @@ export default function NetworkMigration() {
                       <div><div className="migration-detail-label">Expires</div><div className="migration-detail-value green">{new Date(tunnel.expiresAt).toLocaleTimeString()}</div></div>
                     </div>
                   </div>
+                   {sourceVerification && (
+                     <div className="migration-verification" role="status">
+                       <CheckCircle2 size={15} />
+                       <div>
+                         <strong>RouterOS API verified</strong>
+                         <span>
+                           {sourceVerification.identity?.name || sourceRouter?.name || "Source router"}
+                           {sourceVerification.identity?.version ? ` · RouterOS ${sourceVerification.identity.version}` : ""}
+                           {sourceVerification.identity?.boardName ? ` · ${sourceVerification.identity.boardName}` : ""}
+                         </span>
+                       </div>
+                     </div>
+                   )}
+                   {verificationError && (
+                     <div className="migration-verification error" role="alert">
+                       <AlertTriangle size={15} />
+                       <div>
+                         <strong>RouterOS connection could not be verified</strong>
+                         <span>{verificationError}</span>
+                       </div>
+                     </div>
+                   )}
 
                   <div className="migration-section-heading">
                     <h3>Two-script handoff</h3>
@@ -500,35 +514,35 @@ export default function NetworkMigration() {
                            <strong>{connectionConfirmed ? "Connection successful — export is ready" : "Run the connection script above"}</strong>
                            <span>{connectionConfirmed ? "The source router is reachable through the temporary tunnel. You can now run script 2." : "The export script stays locked until this page confirms the source router connection."}</span>
                          </div>
-                         {!connectionConfirmed && <button className="migration-button ghost" onClick={() => tunnelStatusQuery.refetch()} disabled={isBusy}><RefreshCw size={12} /> Check connection</button>}
+                         {!connectionConfirmed && <button
+                           className="migration-button ghost"
+                           onClick={() => sourceRouterId && tunnel && verifyConnectionMutation.mutate({ routerId: sourceRouterId, tunnelId: tunnel.leaseId })}
+                           disabled={isBusy || tunnelSecondsRemaining <= 0}
+                         >
+                           <RefreshCw size={12} className={verifyConnectionMutation.isPending ? "animate-spin" : ""} /> Verify RouterOS API
+                         </button>}
                        </div>
-                       {connectionConfirmed && collector?.command ? (
+                       {collector?.command ? (
                          <>
-                           <div className="migration-script export-ready">
+                           <div className={`migration-script ${connectionConfirmed ? "export-ready" : "export-locked"}`}>
                              <div className="migration-script-head">
-                               <div className="migration-script-label"><span>2</span>Read-only export script — run second</div>
+                                <div className="migration-script-label"><span>2</span>Read-only export script — {connectionConfirmed ? "run second" : "locked until verified"}</div>
                                <button className="migration-copy-button" onClick={() => copyText(collector.command, "Export command")}><Clipboard size={11} />{copied === "Export command" ? "Copied" : "Copy"}</button>
                              </div>
                              <pre>{collector.command}</pre>
-                             <div className="migration-script-note"><CheckCircle2 size={11} />Reads and uploads configuration only. The source router is never modified by the export.</div>
+                              <div className="migration-script-note"><ExportNoteIcon size={11} />{connectionConfirmed ? "Reads and uploads configuration only. The source router is never modified by the export." : "Visible now for handoff, but the server will reject it until the RouterOS API connection is verified."}</div>
+                              <div className="migration-script-downloads">
+                                <button className="migration-copy-button" onClick={() => downloadText(collector.command, "router-migration-export.rsc")}><Download size={11} />Download export</button>
+                              </div>
                            </div>
                            <div className="migration-action-group">
                              <button className="migration-button ghost" onClick={() => copyText(`${tunnelCommand}\n\n${collector.command}`, "Both scripts")}><Clipboard size={12} /> Copy both scripts</button>
                              <button className="migration-button ghost" onClick={downloadScriptsBundle}><Download size={12} /> Download both</button>
-                             {(collector.tunnelScriptUrl || tunnel?.scriptUrl) && <a className="migration-button ghost" href={downloadUrl(collector.tunnelScriptUrl || tunnel?.scriptUrl || "")} download="router-migration-tunnel.rsc"><Download size={12} /> Download connection</a>}
-                             <a className="migration-button ghost" href={downloadUrl(collector.scriptUrl)} download="router-migration-export.rsc"><Download size={12} /> Download export</a>
+                              <button className="migration-button ghost" onClick={() => downloadText(tunnelCommand, "router-migration-tunnel.rsc")}><Download size={12} /> Download connection</button>
                            </div>
                          </>
-                       ) : connectionConfirmed ? (
-                         <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the read-only export script…</div>
                        ) : (
-                         <div className="migration-script export-locked">
-                           <div className="migration-script-head">
-                             <div className="migration-script-label"><span>2</span>Read-only export script — locked</div>
-                             <LockKeyhole size={13} />
-                           </div>
-                           <div className="migration-locked-copy">Run script 1 and wait for the green connection confirmation. The export command will appear here automatically.</div>
-                         </div>
+                         <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the read-only export script…</div>
                        )}
                     </div>
                   ) : (
@@ -714,62 +728,14 @@ export default function NetworkMigration() {
           </div>
         </div>
 
-        <NetworkTabs active="migration" />
-
-        <div className="migration-context">
-           <div className="migration-node"><div className="migration-node-label">Source / read-only</div><div className="migration-node-name">{sourceRouter?.name || sourceLabel || "Select a source router"}</div><div className="migration-node-meta">{sourceRouter ? <><span>{sourceRouter.host} · {sourceRouter.status}</span>{sourceRouter.vpn_ip && <><span> · </span><code>{sourceRouter.vpn_ip}</code></>}</> : "No source contacted yet"}</div></div>
-          <div className="migration-context-arrow"><ArrowRight size={13} /></div>
-          <div className="migration-node"><div className="migration-node-label">Target / pending</div><div className="migration-node-name">{targetRouter?.name || "Select after review"}</div><div className="migration-node-meta">{targetRouter ? `${targetRouter.host} · ${targetRouter.status}` : "No target contacted yet"}</div></div>
-          <div className="migration-context-state"><ShieldCheck size={12} />{currentStep < 6 ? "No target writes" : "Write boundary"}</div>
+        <div className="migration-progress" aria-live="polite">
+          <span>Stage {currentStep} of {STEPS.length}</span>
+          <strong>{STEPS[currentStep - 1]?.label}</strong>
+          <span>{currentStep < 6 ? "No target writes" : "Write boundary"}</span>
         </div>
-
-        <div className="migration-stepper" aria-label="Migration progress">
-          {STEPS.map((step, index) => {
-            const done = step.id < currentStep;
-            const active = step.id === currentStep;
-            const Icon = step.icon;
-            return (
-              <React.Fragment key={step.id}>
-                <button className={`migration-step ${done ? "done" : ""} ${active ? "active" : ""}`} onClick={() => step.id <= currentStep && setCurrentStep(step.id)} disabled={step.id > currentStep} aria-current={active ? "step" : undefined}>
-                  <span className="migration-step-number">{done ? <Check size={12} /> : <Icon size={12} />}</span><span className="migration-step-name">{step.label}</span>
-                </button>
-                {index < STEPS.length - 1 && <span className={`migration-step-connector ${done ? "done" : ""}`} />}
-              </React.Fragment>
-            );
-          })}
-        </div>
-
-        <Boundary />
 
         <div className="migration-workspace">
-          <div>{renderStage()}</div>
-          <aside className="migration-aside">
-            <section className="migration-card">
-              <CardHead icon={FileCheck2} title="Operator runbook" description="Keep the handoff in this order." />
-              <div className="migration-list">
-                <div className="migration-list-item"><span className="migration-list-number">01</span><div><strong>Connect first</strong><p>Run the tunnel script on the selected source and wait for connected status.</p></div></div>
-                <div className="migration-list-item"><span className="migration-list-number">02</span><div><strong>Export second</strong><p>Run the separate export script. It reads configuration and uploads the sealed package.</p></div></div>
-                <div className="migration-list-item"><span className="migration-list-number">03</span><div><strong>Review before writing</strong><p>Choose a target, approve the dry run, then confirm the final import phrase.</p></div></div>
-              </div>
-            </section>
-            <section className="migration-card">
-              <CardHead icon={ShieldCheck} iconTone="green" title="Audit guardrails" description="Boundaries enforced by the workflow." />
-              <div className="migration-guardrails">
-                <div className="migration-guardrail"><CheckCircle2 size={12} />Source access is read-only.</div>
-                <div className="migration-guardrail"><CheckCircle2 size={12} />Tunnel lease: 60 minutes maximum.</div>
-                <div className="migration-guardrail"><CheckCircle2 size={12} />Target writes require exact phrase.</div>
-                <div className="migration-guardrail"><CheckCircle2 size={12} />Recovery state captured before import.</div>
-              </div>
-            </section>
-            <section className="migration-card">
-              <CardHead icon={Activity} title="Session telemetry" description="Live record for this migration." />
-              <div className="migration-session">
-                <div className="migration-session-line"><span>Session status</span><strong style={{ color: tunnel ? "var(--isp-green)" : "var(--isp-text-muted)" }}>{tunnel ? tunnel.status.toUpperCase() : "NOT STARTED"}</strong></div>
-                <div className="migration-session-line"><span>Collector</span><strong>{collector ? collector.status.toUpperCase() : "—"}</strong></div>
-                <div className="migration-session-line"><span>Last stage</span><strong>{currentStep} / 7</strong></div>
-              </div>
-            </section>
-          </aside>
+          {renderStage()}
         </div>
 
         {currentStep < 7 && (
@@ -795,13 +761,6 @@ export default function NetworkMigration() {
           </div>
         )}
         {copied && <div className="migration-toast" role="status">{copied} copied to clipboard</div>}
-         <div className="migration-vpn-summary">
-           <div>
-             <strong>Permanent router VPN address</strong>
-             <span>Assigned from the OpenVPN management pool and written to ipp.txt after the router connects.</span>
-           </div>
-           <code>{sourceRouter?.vpn_ip || tunnel?.tunnelAddress || "Assigned when configuration is generated"}</code>
-         </div>
       </div>
     </AdminLayout>
   );

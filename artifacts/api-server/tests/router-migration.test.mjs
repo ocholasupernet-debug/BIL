@@ -152,3 +152,11 @@ test("migration browser API uses the signed-in session without tenant headers", 
   assert.match(api, /Authorization: `Bearer \$\{token\}`/);
   assert.doesNotMatch(api, /X-Impersonated-Admin-Id/);
 });
+test("collector handoff requires the authenticated RouterOS preflight", async () => {
+  const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
+  assert.equal((route.match(/if \(!tunnel \|\| tunnel\.status !== "connected"\)/g) || []).length, 2);
+  const page = await readFile("../ochola-supernet/src/pages/admin/network/migration/NetworkMigration.tsx", "utf8");
+  assert.match(page, /Verify RouterOS API/);
+  assert.match(page, /Download both/);
+  assert.match(page, /setCurrentStep\(2\)/);
+});

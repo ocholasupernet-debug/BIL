@@ -338,7 +338,7 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
         `id=eq.${positive(session.tunnel_lease_id)}&select=*&limit=1`,
       );
       tunnel = leases[0];
-      if (!tunnel || !["script_issued", "connected", "exported"].includes(tunnel.status)) {
+      if (!tunnel || tunnel.status !== "connected") {
         throw new Error("The migration tunnel is no longer available.");
       }
       if (new Date(tunnel.expires_at).getTime() <= Date.now()) {
@@ -530,7 +530,7 @@ router.get("/router-migrations/collector-script", async (req, res) => {
         `id=eq.${positive(session.tunnel_lease_id)}&admin_id=eq.${session.admin_id}&select=*&limit=1`,
       );
       const tunnel = leases[0];
-      if (!tunnel || !["script_issued", "connected", "exported"].includes(tunnel.status)) {
+      if (!tunnel || tunnel.status !== "connected") {
         res.status(409).send("# Run the migration tunnel script first or start a new tunnel session.");
         return;
       }
@@ -763,7 +763,7 @@ router.post("/router-migrations/analyze", async (req, res) => guarded(req, async
   const tunnel = await tunnelFor(sourceRouterId, a, req.body.tunnelId ? positive(req.body.tunnelId) : undefined);
   for (const command of ["/system/identity/print", "/system/resource/print", "/system/routerboard/print", "/system/license/print"]) assertSourceCommand(command);
   await requireLeasedApiConnection(source, a, tunnel);
-  const observed = await observeDevice({ ...source, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip });
+  const observed = await observeDevice({ ...source, host: tunnel.assigned_ip, bridge_ip: tunnel.assigned_ip, vpn_ip: tunnel.assigned_ip });
   res.json({
     compatible: true,
     details: `Read-only compatibility analysis completed through the ${tunnel.assigned_ip} migration tunnel.`,
