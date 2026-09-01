@@ -139,15 +139,15 @@ function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
 /* ─── Timeout helper ─────────────────────────────────────────────────────── */
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`Operation timed out after ${ms / 1000}s`)),
-        ms
-      )
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Operation timed out after ${ms / 1000}s`)),
+      ms
+    );
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 /* ─── TCP port probe ─────────────────────────────────────────────────────── */
