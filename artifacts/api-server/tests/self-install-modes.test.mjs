@@ -21,6 +21,7 @@ await build({
 const mikrotik = await import(path.resolve(outdir, "mikrotik.cjs"));
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const bridgeRoute = await readFile("src/routes/bridge-route.ts", "utf8");
+const routersRoute = await readFile("src/routes/routers-route.ts", "utf8");
 const selfInstall = await readFile("../ochola-supernet/src/pages/admin/network/SelfInstall.tsx", "utf8");
 /* esbuild's bundled pino logger starts a worker after module evaluation.
    Removing the output directory immediately can race that worker; clean up
@@ -109,8 +110,8 @@ test("router names require the tenant prefix", () => {
 
 test("coexistence provisions an owned hotspot bridge without reusing shared service resources", () => {
   assert.match(scriptsRoute, /function coexistenceBridgeName\(routerId: number\)/);
-  assert.match(scriptsRoute, /return "co-hotspot-bridge"/);
-  assert.match(scriptsRoute, /legacyBridgeName "co-hotspot-bridge-\$\{routerId\}"/);
+  assert.match(scriptsRoute, /return `co-hotspot-bridge-\$\{routerId\}`/);
+  assert.match(scriptsRoute, /legacyBridgeName "co-hotspot-bridge"/);
   assert.match(scriptsRoute, /olderBridgeName "ochola-hs-\$\{routerId\}"/);
   assert.match(scriptsRoute, /interface bridge set \$legacyBridge name=\$bridgeName/);
   assert.match(scriptsRoute, /ochola-hs-pool-\$\{routerId\}/);
@@ -128,6 +129,10 @@ test("coexistence port changes reject foreign bridge ownership before assignBrid
   assert.ok(guard >= 0 && assign > guard, "foreign-port guard must run before RouterOS assignment");
   assert.match(bridgeRoute, /Coexistence will not move ports already assigned to another billing bridge/);
   assert.match(bridgeRoute, /Coexistence can only use the isolated Ochola bridge/);
+  assert.match(bridgeRoute, /return `co-hotspot-bridge-\$\{routerId\}`/);
+  assert.match(routersRoute, /function coexistenceBridgeName\(routerId: number\)/);
+  assert.match(routersRoute, /const expectedBridge = coexistenceBridgeName\(routerId\)/);
   assert.match(selfInstall, /Other billing · \$\{currentBridge\}/);
   assert.match(selfInstall, /installationMode,\s*addPorts/);
+  assert.match(selfInstall, /return `co-hotspot-bridge-\$\{routerId\}`/);
 });

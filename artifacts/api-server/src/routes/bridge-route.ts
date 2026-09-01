@@ -59,7 +59,7 @@ type StoredRouter = {
 };
 
 function coexistenceBridgeName(routerId: number): string {
-  return "co-hotspot-bridge";
+  return `co-hotspot-bridge-${routerId}`;
 }
 
 async function storedRouterCredentials(

@@ -462,7 +462,7 @@ function safeRm(cmd: string): string {
 }
 
 function coexistenceBridgeName(routerId: number): string {
-  return "co-hotspot-bridge";
+  return `co-hotspot-bridge-${routerId}`;
 }
 
 function coexistenceGateway(routerId: number): string {
@@ -517,7 +517,7 @@ function buildCoexistenceHotspotRsc(
     `:do {`,
     `:put "COEXISTENCE SERVICE — ${safe(companyName)}"`,
     `:local bridgeName "${safe(bridgeName)}"`,
-    `:local legacyBridgeName "co-hotspot-bridge-${routerId}"`,
+    `:local legacyBridgeName "co-hotspot-bridge"`,
     `:local olderBridgeName "ochola-hs-${routerId}"`,
     `:local bridgeTag "${safe(tag)}"`,
     `:local gateway "${safe(gateway)}"`,

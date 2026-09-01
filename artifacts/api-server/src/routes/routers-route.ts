@@ -8,6 +8,10 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 
+function coexistenceBridgeName(routerId: number): string {
+  return `co-hotspot-bridge-${routerId}`;
+}
+
 /* ── TCP reachability probe — tries common MikroTik ports ───────────────────
  * Returns the first port that responds, or null if all fail.
  * Used as a fallback when the RouterOS API (8728) is unavailable.
@@ -278,7 +282,7 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
         return;
       }
       if (installationMode === "coexist") {
-        const expectedBridge = "co-hotspot-bridge";
+        const expectedBridge = coexistenceBridgeName(routerId);
         if (bridgeName !== expectedBridge) {
           res.status(400).json({
             ok: false,
