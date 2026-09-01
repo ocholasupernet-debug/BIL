@@ -9,6 +9,16 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+/* Router-served captive portals are fetched from the same tenant hostname as
+   the installer. In nginx mode every request is proxied to this API, so the
+   portal directory must be mounted here as well as through the frontend's
+   built static files. */
+const hotspotStaticDir = [
+  path.resolve(process.cwd(), "artifacts/ochola-supernet/public/hotspot"),
+  path.resolve(process.cwd(), "../ochola-supernet/public/hotspot"),
+  path.resolve(process.cwd(), "../../artifacts/ochola-supernet/public/hotspot"),
+].find(candidate => existsSync(candidate));
+
 app.use(
   pinoHttp({
     logger,
@@ -33,6 +43,13 @@ app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+
+if (hotspotStaticDir) {
+  app.use("/hotspot", express.static(hotspotStaticDir, {
+    fallthrough: false,
+    maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+  }));
+}
 
 /* Also serve /scripts/* at the root path (no /api prefix) so MikroTik
    routers can fetch mainhotspot.rsc and the sub-scripts exactly as the

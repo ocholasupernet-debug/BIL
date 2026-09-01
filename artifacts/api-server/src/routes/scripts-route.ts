@@ -437,7 +437,7 @@ function portalFetch(
   filename: string,
   fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS,
 ): string {
-  const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const variableName = `portalPath${subpath.replace(/[^a-zA-Z0-9]/g, "_")}`;
   return `:local ${variableName} ($hsdir . "/${subpath}")
 :do {
     /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${fetchOptions}
@@ -644,6 +644,30 @@ function buildCoexistenceHotspotRsc(
     ``,
     `# Add plan profiles only when absent; never overwrite a profile owned by another system.`,
   ];
+
+  /* The HTML pages reference these assets by relative path. Download the
+     complete portal tree into the isolated hotspot directory so the
+     coexistence service does not depend on another billing system's files. */
+  const portalAssets = [
+    "css/style.css",
+    "img/password.svg",
+    "img/user.svg",
+    "favicon.ico",
+    "radvert.html",
+    "errors.txt",
+    "sweetalert2.js",
+    "tailwind.js",
+    "xml/alogin.html",
+    "xml/error.html",
+    "xml/flogout.html",
+    "xml/login.html",
+    "xml/logout.html",
+    "xml/rlogin.html",
+    "xml/WISPAP.xsd",
+  ];
+  for (const asset of portalAssets) {
+    lines.push(portalFetch(`${portalBase}/hotspot/${asset}`, asset, asset, fetchOptions));
+  }
 
   for (const plan of plans) {
     const profile = slugify(plan.name).slice(0, 40) || "default";
@@ -928,8 +952,14 @@ function buildMainhotspotRsc(
   const openVpnBackupSelection = routerVpnBackupUrl
     ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
     : `:set openVpnBackupUrl ""`;
-  const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
+  const vpnAttempt = (
+    protocol: string,
+    urlVariable: string,
+    fileName: string,
+    independent = false,
+  ): string => {
     const tempFileName = `${fileName}.download`;
+    const attemptWrapper = independent ? ":do {" : ":if (!$vpnConfigured) do={";
     const failureDiagnostics = protocol.startsWith("openvpn")
       ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
          :do {
@@ -945,7 +975,7 @@ function buildMainhotspotRsc(
          :put "  Recent RouterOS OpenVPN log entries (if supported):"
          :do { /log print where topics~"ovpn" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
       : "";
-    return `:if (!$vpnConfigured) do={
+    return `${attemptWrapper}
     :local attemptPhase "start"
     :do {
         :global ocholaVpnChildError
@@ -988,7 +1018,8 @@ function buildMainhotspotRsc(
         :do { /file remove [find name="${fileName}"] } on-error={}
         /file set [find name="${tempFileName}"] name="${fileName}"
         :set vpnConfigured true
-        :set vpnProtocol "${protocol}"
+        :if ([:len $vpnProtocols] = 0) do={ :set vpnProtocol "${protocol}" }
+        :set vpnProtocols ($vpnProtocols . "${protocol},")
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
         $pg 1 "vpn-${protocol}" "applied" ""
     } on-error={
@@ -1044,6 +1075,7 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
 
 :local vpnConfigured false
 :local vpnProtocol ""
+:local vpnProtocols ""
 :local vpnFailureSummary ""
 :local routerOsVersion [/system resource get version]
 :local routerOsMajorDigit [:pick $routerOsVersion 0 1]
@@ -1066,8 +1098,8 @@ ${openVpnSelection}
 ${openVpnBackupSelection}
     ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
     ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
-${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
-${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc")}
+${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc", true)}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc", true)}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
 :if (!$vpnConfigured) do={
@@ -1075,8 +1107,8 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
     $pg 1 "coexistence" "failed" $vpnFailureSummary
     :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
 }
-:put ("COEXISTENCE VPN READY — " . $vpnProtocol . " added; existing customer configuration was not replaced.")
-$pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
+:put ("COEXISTENCE VPN READY — " . $vpnProtocols . " added; existing customer configuration was not replaced.")
+$pg 1 "coexistence-vpn" "applied" ("management-vpns=" . $vpnProtocols)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
 :local coexistenceBundleBytes ""
@@ -1211,6 +1243,7 @@ ${openVpnBackupSelection}
   :local ipsecUrl ""
 :local vpnConfigured false
 :local vpnProtocol ""
+:local vpnProtocols ""
 :local vpnFailureSummary ""
   ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
   ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
