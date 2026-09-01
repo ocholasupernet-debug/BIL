@@ -94,6 +94,10 @@ test("coexistence installs independent primary and backup management OpenVPN cli
 });
 
 test("coexistence bundle includes the portal assets referenced by its HTML files", () => {
+  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/css"\) type=directory/);
+  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/img"\) type=directory/);
+  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/xml"\) type=directory/);
+  assert.match(scriptsRoute, /api\/public\/typography\?adminId=\$\{adminId\}/);
   for (const asset of [
     "css/style.css",
     "img/password.svg",

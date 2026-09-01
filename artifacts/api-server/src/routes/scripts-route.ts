@@ -487,6 +487,7 @@ type CoexistenceHotspotPlan = {
 function buildCoexistenceHotspotRsc(
   origin: string,
   routerId: number,
+  adminId: number,
   routerName: string,
   companyName: string,
   plans: CoexistenceHotspotPlan[],
@@ -631,6 +632,12 @@ function buildCoexistenceHotspotRsc(
     `:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/${portalDir}") }`,
     `:do { /file add name=$hsdir type=directory } on-error={}`,
     `:do { /file make-dir $hsdir } on-error={}`,
+    `:do { /file add name=($hsdir . "/css") type=directory } on-error={}`,
+    `:do { /file make-dir ($hsdir . "/css") } on-error={}`,
+    `:do { /file add name=($hsdir . "/img") type=directory } on-error={}`,
+    `:do { /file make-dir ($hsdir . "/img") } on-error={}`,
+    `:do { /file add name=($hsdir . "/xml") type=directory } on-error={}`,
+    `:do { /file make-dir ($hsdir . "/xml") } on-error={}`,
     `:put ("Portal directory: " . $hsdir)`,
     portalFetch(`${portalBase}/hotspot/login.html`, "login.html", "login.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/alogin.html`, "alogin.html", "alogin.html", fetchOptions),
@@ -641,6 +648,7 @@ function buildCoexistenceHotspotRsc(
     portalFetch(`${portalBase}/hotspot/error.html`, "error.html", "error.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/md5.js`, "md5.js", "md5.js", fetchOptions),
     portalFetch(`${portalBase}/hotspot/api.json`, "api.json", "api.json", fetchOptions),
+    portalFetch(`${portalBase}/api/public/typography?adminId=${adminId}`, "typography.json", "typography.json", fetchOptions),
     ``,
     `# Add plan profiles only when absent; never overwrite a profile owned by another system.`,
   ];
@@ -2785,6 +2793,7 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     const content = buildCoexistenceHotspotRsc(
       origin,
       currentRouter.id,
+      currentRouter.admin_id,
       currentRouter.name,
       admins[0]?.name || "ISPlatty",
       plans,
