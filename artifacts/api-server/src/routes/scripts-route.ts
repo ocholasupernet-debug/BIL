@@ -984,9 +984,14 @@ function buildMainhotspotRsc(
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
         $pg 1 "vpn-${protocol}" "applied" ""
     } on-error={
+        :local rawVpnError $error
         :local vpnError $ocholaVpnChildError
         :if ([:len $vpnError] = 0) do={
-            :set vpnError "${protocol}: $attemptPhase failed. Check failed-${fileName} and /log for the RouterOS error."
+            :if ([:len $rawVpnError] > 0) do={
+                :set vpnError ("${protocol}: " . $attemptPhase . " failed: " . $rawVpnError)
+            } else={
+                :set vpnError "${protocol}: $attemptPhase failed. Check failed-${fileName} and /log for the RouterOS error."
+            }
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
         ${failureDiagnostics}
