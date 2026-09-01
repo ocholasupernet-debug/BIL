@@ -19,6 +19,13 @@ const routerOsVersion = (process.env["HOTSPOT_STAGING_ROUTEROS_VERSION"] ?? "").
 const apiOrigin = (process.env["HOTSPOT_STAGING_API_ORIGIN"] ?? "").trim().replace(/\/+$/, "");
 const destinationPath = (process.env["HOTSPOT_STAGING_DESTINATION"] ?? "hotspot/login.html").trim();
 const overwrite = process.env["HOTSPOT_STAGING_ALLOW_REPLACE"] === "1";
+const generatedDeployEnabled = process.env["HOTSPOT_PORTAL_DEPLOY_LIVE_STAGING"] === "1";
+const generatedDeployAck = process.env["HOTSPOT_PORTAL_STAGING_ACK"] ?? "";
+const generatedApiOrigin = (process.env["HOTSPOT_PORTAL_STAGING_API_ORIGIN"] ?? "").trim().replace(/\/+$/, "");
+const generatedRouterId = (process.env["HOTSPOT_PORTAL_STAGING_ROUTER_ID"] ?? "").trim();
+const generatedAdminId = (process.env["HOTSPOT_PORTAL_STAGING_ADMIN_ID"] ?? "").trim();
+const generatedApiToken = process.env["HOTSPOT_PORTAL_STAGING_API_TOKEN"] ?? "";
+const generatedAllowReplace = process.env["HOTSPOT_PORTAL_STAGING_ALLOW_REPLACE"] === "1";
 
 function isPublicHttpsOrigin(value: string): boolean {
   try {
@@ -113,4 +120,132 @@ test("uploads the generated hotspot portal to a disposable RouterOS staging rout
   assert.ok(uploaded, `RouterOS ${routerOsVersion} did not list ${destinationPath} after upload`);
   assert.equal(uploaded.size, result.size);
   if (!overwrite) assert.equal(result.replaced, false);
+});
+
+test("deploys the exact generated branded portal through the tenant endpoint", {
+  skip: !generatedDeployEnabled
+    ? "Set HOTSPOT_PORTAL_DEPLOY_LIVE_STAGING=1 with explicit non-production endpoint values to run this live smoke test."
+    : false,
+}, async () => {
+  assert.equal(
+    generatedDeployAck,
+    "NON_PRODUCTION_ROUTER_CONFIRMED",
+    "generated portal smoke test requires explicit non-production router confirmation",
+  );
+  assert.ok(
+    isNonProductionSource(generatedApiOrigin),
+    "generated portal API origin must be HTTPS on an explicitly staging host",
+  );
+  assert.match(generatedRouterId, /^[1-9]\d*$/, "staging router id is required");
+  assert.match(generatedAdminId, /^[1-9]\d*$/, "staging administrator id is required");
+  if (generatedAllowReplace) {
+    assert.equal(
+      process.env["HOTSPOT_PORTAL_STAGING_OVERWRITE_ACK"],
+      "ALLOW_STAGING_LOGIN_REPLACEMENT",
+      "replacing an existing staging login.html requires explicit confirmation",
+    );
+  }
+
+  const template = await readFile(
+    resolve(import.meta.dirname, "../../ochola-supernet/public/hotspot/login.html"),
+    "utf8",
+  );
+  const generatedConfig = {
+    apiBase: generatedApiOrigin,
+    ispName: "Staging Portal ISP",
+    tagline: "Disposable RouterOS verification",
+    logoUrl: "",
+    advertUrl: "",
+    advertEnabled: false,
+    advertPosition: "Bottom",
+    vouchersEnabled: true,
+    freeTrialEnabled: true,
+    announcement: "Non-production smoke test",
+  };
+  const generatedHtml = template
+    .replace(
+      "</head>",
+      `<script>window.__HOTSPOT_CONFIG__=${JSON.stringify(generatedConfig)};</script>\n</head>`,
+    )
+    .replace(/\$\(login-title\)/g, "Staging Portal ISP");
+  for (const macro of ["$(link-login-only)", "$(link-orig)", "$(if error)", "$(endif error)", "$(username)"]) {
+    assert.ok(generatedHtml.includes(macro), `generated export lost RouterOS macro ${macro}`);
+  }
+  assert.match(generatedHtml, /window\.__HOTSPOT_CONFIG__=/);
+  assert.doesNotMatch(generatedHtml, /router[_-]?secret|vpn[_-]?private|session[_-]?secret/i);
+
+  const request = async (path: string, init: RequestInit = {}): Promise<{ response: Response; data: Record<string, unknown> }> => {
+    const headers = new Headers(init.headers);
+    headers.set("Content-Type", "application/json");
+    if (generatedApiToken) headers.set("Authorization", `Bearer ${generatedApiToken}`);
+    const response = await fetch(`${generatedApiOrigin}${path}`, { ...init, headers });
+    let data: Record<string, unknown> = {};
+    try {
+      data = await response.json() as Record<string, unknown>;
+    } catch {
+      /* Keep the status as the failure detail when the endpoint is unavailable. */
+    }
+    return { response, data };
+  };
+
+  const listFiles = async (): Promise<Array<{ name: string; size: number; id?: string }>> => {
+    const result = await request(
+      `/api/router/${generatedRouterId}/files?adminId=${encodeURIComponent(generatedAdminId)}`,
+    );
+    assert.equal(result.response.status, 200, `router file metadata request failed with HTTP ${result.response.status}`);
+    return Array.isArray(result.data.files) ? result.data.files as Array<{ name: string; size: number; id?: string }> : [];
+  };
+
+  const deployGenerated = async (allowOverwrite: boolean) => request(
+    `/api/router/${generatedRouterId}/hotspot-portal/deploy`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        adminId: Number(generatedAdminId),
+        html: generatedHtml,
+        overwrite: allowOverwrite,
+      }),
+    },
+  );
+
+  const before = (await listFiles()).find(file => file.name === "hotspot/login.html");
+  const first = await deployGenerated(false);
+  if (before) {
+    assert.equal(first.response.status, 409, "an existing staging login.html must produce a conflict before replacement");
+    assert.ok(first.data.existingFile, "conflict response must identify the existing file");
+
+    /* This is the live equivalent of declining the UI's second confirmation:
+       no overwrite request is sent, and the existing metadata must not move. */
+    const afterCancel = (await listFiles()).find(file => file.name === "hotspot/login.html");
+    assert.deepEqual(afterCancel, before, "declining replacement must leave the existing portal unchanged");
+
+    if (!generatedAllowReplace) return;
+    const replacement = await deployGenerated(true);
+    assert.equal(replacement.response.status, 201);
+    assert.equal(replacement.data.replaced, true);
+  } else {
+    assert.equal(first.response.status, 201, `initial generated deployment failed with HTTP ${first.response.status}`);
+    assert.equal(first.data.replaced, false);
+  }
+
+  const uploaded = (await listFiles()).find(file => file.name === "hotspot/login.html");
+  assert.ok(uploaded, "RouterOS did not list the generated hotspot login.html");
+  assert.equal(uploaded.size, Buffer.byteLength(generatedHtml, "utf8"));
+  assert.doesNotMatch(JSON.stringify(first.data), /router[_-]?secret|password|vpn[_-]?private|session[_-]?secret/i);
+
+  /* Invalid generated content must fail before any replacement write. */
+  const invalid = await request(
+    `/api/router/${generatedRouterId}/hotspot-portal/deploy`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        adminId: Number(generatedAdminId),
+        html: generatedHtml.replace("$(link-orig)", ""),
+        overwrite: true,
+      }),
+    },
+  );
+  assert.equal(invalid.response.status, 400);
+  const afterFailedReplacement = (await listFiles()).find(file => file.name === "hotspot/login.html");
+  assert.deepEqual(afterFailedReplacement, uploaded, "a rejected replacement must leave the uploaded portal unchanged");
 });
