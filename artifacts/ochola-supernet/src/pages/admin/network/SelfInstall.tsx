@@ -1097,10 +1097,16 @@ export default function SelfInstall() {
                   <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>
                     1. {certificateMode === "verified" ? "Install HTTPS trust and download configuration" : "Download configuration without certificate validation"}
                   </div>
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
-                    <code style={{ color: "#7dd3fc", fontSize: ".7rem", lineHeight: 1.55, wordBreak: "break-all", flex: 1 }}>{fetchCommand}</code>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
+                    <span style={{ color: "#94a3b8", fontSize: ".7rem", lineHeight: 1.45, flex: 1 }}>
+                      {certificateMode === "verified" ? "Secure download command ready." : "Fallback download command ready."}
+                    </span>
                     <CopyButton text={fetchCommand} />
                   </div>
+                  <details style={{ marginTop: ".4rem", color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                    <summary style={{ cursor: "pointer", color: "#93c5fd", fontWeight: 700 }}>Show full command</summary>
+                    <code style={{ display: "block", marginTop: ".4rem", background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem", color: "#7dd3fc", lineHeight: 1.55, wordBreak: "break-all" }}>{fetchCommand}</code>
+                  </details>
                 </div>
                 {certificateMode === "unverified" && (
                   <div style={{ color: "#fbbf24", fontSize: ".7rem", lineHeight: 1.5 }}>

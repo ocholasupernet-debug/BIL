@@ -182,6 +182,14 @@ test("main coexistence diagnostics exclude unrelated billing OpenVPN clients and
   assert.match(scriptsRoute, /\.set\("Cache-Control", "no-store"\)\n    \.set\("Pragma", "no-cache"\)/);
 });
 
+test("main installer keeps routine terminal output quiet but preserves failures and completion", () => {
+  assert.doesNotMatch(scriptsRoute, /:put "\[2\/7\] Downloading hotspot configuration/);
+  assert.doesNotMatch(scriptsRoute, /:put "      Hotspot configuration applied; saved as hotspotsetup\.rsc\."/);
+  assert.doesNotMatch(scriptsRoute, /all configurations completed successfully/);
+  assert.match(scriptsRoute, /:put "\$\{safeCompanyName\}: setup complete\."/);
+  assert.match(scriptsRoute, /:put \("  WARN \[vpn-\$\{protocol\}\] FAILED: " \. \$vpnError\)/);
+});
+
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {
   const script = mikrotik.generateRouterWireGuardClientScript({
     endpoint: "wg.example.test",
