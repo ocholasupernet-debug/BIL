@@ -2270,35 +2270,23 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :if ([:len $existingOvpnIds] > 0) do={
     :local existingOvpnId [:pick $existingOvpnIds 0]
     :local existingOvpnComment [/interface ovpn-client get $existingOvpnId comment]
-    :local existingOvpnRunning [/interface ovpn-client get $existingOvpnId running]
     :if ($existingOvpnComment = "${tag} VPS tunnel") do={
-        :if (!$existingOvpnRunning) do={
-            :do { /interface ovpn-client remove $existingOvpnId } on-error={
-                :set ocholaVpnChildError "${tag}: could not remove the previous incomplete management interface; nothing was replaced."
-                :error $ocholaVpnChildError
-            }
-        } else={
-            :set reuseExistingOvpn true
-            :put "${tag}: existing active management VPN reused for retry."
+        :do { /interface ovpn-client remove $existingOvpnId } on-error={
+            :set ocholaVpnChildError "${tag}: could not replace the previous owned management interface; nothing foreign was changed."
+            :error $ocholaVpnChildError
         }
     } else={
         :set ocholaVpnChildError "${tag}: coexistence conflict - an active or foreign ${interfaceName} interface was found; nothing was replaced."
         :error $ocholaVpnChildError
     }
-}
-:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
-    :error $ocholaVpnChildError
 }`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence
-    ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
-:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
-:if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." } }
-:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }`
+    ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :put "${tag}: warning - API firewall rule was not added; the VPN interface remains installed." } }
+:if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :put "${tag}: warning - ping firewall rule was not added; the VPN interface remains installed." } }`
     : `/ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
@@ -2335,55 +2323,27 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 :local ovpnError ""
-:local reuseExistingOvpn false
-:if ([:len "$ocholaVpnChildError"] = 0) do={
 ${resourcePreparation}
-}
-:if (!$reuseExistingOvpn) do={
- :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
+:do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
     :local routerError ""
     :do { :set routerError $error } on-error={}
     :set ovpnError "RouterOS rejected the OpenVPN client add command"
     :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
- }
 }
 :if ([:len $ovpnError] > 0) do={
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError
 }
-:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
-:local ovpnRunning false
-:for attempt from=1 to=12 do={
-    :if (!$ovpnRunning) do={
-        :delay 5s
-        :if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] > 0) do={
-            :set ovpnRunning true
-        }
-    }
-}
-:if (!$ovpnRunning) do={
-    :put "${tag}: OpenVPN did not reach running=yes before the 60s timeout."
-    :put "${tag}: Safe interface diagnostics (credentials are intentionally omitted):"
-    :do {
-        :local ovpnIds [/interface ovpn-client find where name="${interfaceName}"]
-        :if ([:len $ovpnIds] > 0) do={
-            :local ovpnId [:pick $ovpnIds 0]
-            :put ("  name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
-        } else={
-            :put "  interface was not found after the add command."
-        }
-    } on-error={ :put "${tag}: could not read the OpenVPN interface state." }
-    :put "${tag}: Recent RouterOS OpenVPN log entries (if supported):"
-    :do { /log print where topics~"ovpn" } on-error={ :put "${tag}: RouterOS did not expose filtered OpenVPN logs." }
-    :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session within 60 seconds. Review the safe interface diagnostics and OpenVPN log output above for reachability, TLS, authentication, certificate, or server-readiness errors."
-    :error $ocholaVpnChildError
-} else={
-    :put "${tag}: OVPN client is running."
-}
-
 :if ([:len [/interface ovpn-client find where name="${interfaceName}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: OVPN client interface was not created after importing the child script."
     :error $ocholaVpnChildError
+}
+:local createdOvpnId [:pick [/interface ovpn-client find where name="${interfaceName}"] 0]
+:local createdOvpnRunning false
+:do { :set createdOvpnRunning [/interface ovpn-client get $createdOvpnId running] } on-error={}
+:put ("${tag}: OpenVPN client installed; running=" . $createdOvpnRunning . ", cipher=${openVpnCipher}, protocol=tcp.")
+:if ($createdOvpnRunning = false) do={
+    :put "${tag}: warning - interface is installed but not connected yet; check VPS reachability and OpenVPN logs."
 }
 
 # -- Step 2: Allow API access from VPN tunnel ---------------------------------
@@ -2391,9 +2351,11 @@ ${resourcePreparation}
 /ip firewall filter
 ${firewallPreparation}
 
-# -- Step 4: Ensure API service is enabled ------------------------------------
-/ip service
-enable api
+# -- Step 4: Preserve API service state ---------------------------------------
+${coexistence
+    ? `:put "${tag}: coexistence mode preserved the existing RouterOS API service state."`
+    : `/ip service
+enable api`}
 # enable api-ssl   # uncomment for port 8729 encrypted API
 
 # -- Step 5: Verify the interface came up -------------------------------------

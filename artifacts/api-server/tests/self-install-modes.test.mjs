@@ -38,9 +38,10 @@ test("coexistence OpenVPN removes only its exact stale client and preserves fire
   });
   assert.match(script, /coexistence conflict/);
   assert.match(script, /interface ovpn-client add name="corebillingvpn"/);
-  assert.match(script, /previous incomplete management interface/);
+  assert.match(script, /previous owned management interface/);
   assert.match(script, /existingOvpnComment/);
-  assert.match(script, /existingOvpnRunning/);
+  assert.doesNotMatch(script, /existingOvpnRunning/);
+  assert.doesNotMatch(script, /reuseExistingOvpn/);
   assert.match(script, /interface ovpn-client remove/);
   assert.doesNotMatch(script, /ip firewall filter remove/);
 });

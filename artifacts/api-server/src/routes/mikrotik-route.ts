@@ -38,7 +38,12 @@ import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
-import { routerManagementOvpnCredentials } from "../lib/router-management-vpn";
+import {
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  routerManagementBackupIp,
+  routerManagementOvpnCredentials,
+  routerManagementVpnPortForRouter,
+} from "../lib/router-management-vpn";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 
 const router: IRouter = Router();
@@ -757,18 +762,33 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     return;
   }
 
-  const script = generateRouterAsClientScript({
+  const primaryScript = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
+    vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : routerManagementVpnPortForRouter(id),
     vpnUsername: openVpnCredentials.username,
     vpnPassword: openVpnCredentials.password,
     tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
     routerOsMajor,
+    installationMode: "coexist",
   });
+  const backupScript = generateRouterAsClientScript({
+    vpsPublicIp: vpsIp,
+    routerId: id,
+    vpnPort: ROUTER_MANAGEMENT_VPN_BACKUP.port,
+    vpnUsername: openVpnCredentials.username,
+    vpnPassword: openVpnCredentials.password,
+    tunnelRouterIp: routerManagementBackupIp(tunnelRouterIp),
+    tunnelVpsIp: ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
+    routerOsMajor,
+    installationMode: "coexist",
+    vpnRole: "backup",
+  });
+  const script = `${primaryScript}\n${backupScript}`;
 
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="router-as-client${id}.rsc"`

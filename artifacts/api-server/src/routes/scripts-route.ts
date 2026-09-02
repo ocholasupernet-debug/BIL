@@ -1100,12 +1100,18 @@ ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc", true, ma
 ${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc", true, `${managementInterfaceName}-backup`)}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
-:if (!$vpnConfigured) do={
-    :put ("COEXISTENCE STOPPED — no management VPN was installed. " . $vpnFailureSummary)
+:if ([:len [/interface ovpn-client find where name="${managementInterfaceName}"]] = 0) do={
+    :put ("COEXISTENCE STOPPED - primary management OpenVPN interface is missing. " . $vpnFailureSummary)
     $pg 1 "coexistence" "failed" $vpnFailureSummary
-    :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
+    :error ("Coexistence stopped: primary management OpenVPN interface was not created. " . $vpnFailureSummary)
 }
-:put "Management VPN ready; existing customer configuration was not replaced."
+:if ([:len [/interface ovpn-client find where name="${managementInterfaceName}-backup"]] = 0) do={
+    :put ("COEXISTENCE STOPPED - backup management OpenVPN interface is missing. " . $vpnFailureSummary)
+    $pg 1 "coexistence" "failed" $vpnFailureSummary
+    :error ("Coexistence stopped: backup management OpenVPN interface was not created. " . $vpnFailureSummary)
+}
+:set vpnConfigured true
+:put "Both management OpenVPN interfaces are installed; existing customer configuration was not replaced."
 $pg 1 "coexistence-vpn" "applied" ("management-vpns=" . $vpnProtocols)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.

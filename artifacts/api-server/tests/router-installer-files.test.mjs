@@ -105,7 +105,7 @@ test("coexistence installs independent primary and backup management OpenVPN cli
   assert.match(scriptsRoute, /:set vpnProtocols \(\$vpnProtocols \. "\$\{protocol\},"\)/);
   assert.match(scriptsRoute, /vpnAttempt\("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn\.rsc", true/);
   assert.match(scriptsRoute, /vpnAttempt\("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup\.rsc", true/);
-  assert.match(scriptsRoute, /Management VPN ready; existing customer configuration was not replaced/);
+  assert.match(scriptsRoute, /Both management OpenVPN interfaces are installed; existing customer configuration was not replaced/);
 });
 
 test("coexistence bundle includes the portal assets referenced by its HTML files", () => {

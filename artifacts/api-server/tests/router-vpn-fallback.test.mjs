@@ -27,6 +27,7 @@ const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const mikrotikRoute = await readFile("src/routes/mikrotik-route.ts", "utf8");
 const provisioningRoute = await readFile("src/lib/router-vpn-provisioning.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
@@ -81,7 +82,7 @@ test("admin RouterOS operations forward management VPN connections through the V
   assert.doesNotMatch(adminRoutes, /new RouterOSAPI/, "admin routes must not instantiate RouterOSAPI directly");
 });
 
-test("OpenVPN child fails loudly when the client is not created or running", () => {
+test("OpenVPN child fails if creation fails but remains installed while connectivity is pending", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
     vpnPort: 1196,
@@ -93,14 +94,15 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   });
   assert.match(script, /\/interface ovpn-client add name="corebillingvpn"/);
   assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
-  assert.match(script, /name="corebillingvpn" && running=yes/);
   assert.match(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
-  assert.match(script, /did not establish a running session within 60 seconds/);
-  assert.match(script, /Safe interface diagnostics/);
-  assert.match(script, /Recent RouterOS OpenVPN log entries/);
+  assert.match(script, /OpenVPN client installed; running=/);
+  assert.match(script, /interface is installed but not connected yet/);
+  assert.doesNotMatch(script, /:if \(!\$createdOvpnRunning\)/);
+  assert.match(script, /:if \(\$createdOvpnRunning = false\)/);
+  assert.doesNotMatch(script, /did not establish a running session within 60 seconds/);
   assert.match(script, /ocholaVpnChildError/);
   assert.doesNotMatch(script, /on-error=\{ :set ovpnError \$error \}/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
@@ -166,10 +168,12 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
   });
   assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
-  assert.match(script, /previous incomplete management interface/);
+  assert.match(script, /previous owned management interface/);
   assert.match(script, /active or foreign ochola-mgmt-vpn-42 interface/);
   assert.match(script, /existingOvpnComment/);
-  assert.match(script, /existingOvpnRunning/);
+  assert.doesNotMatch(script, /existingOvpnRunning/);
+  assert.doesNotMatch(script, /reuseExistingOvpn/);
+  assert.doesNotMatch(script, /name="ochola-mgmt-vpn-42" && running=yes/);
   assert.match(script, /interface ovpn-client find where name="ochola-mgmt-vpn-42"/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
@@ -345,6 +349,15 @@ test("router-management backup is isolated on TCP 1197 and maps router addresses
   assert.equal(vpnContract.ROUTER_MANAGEMENT_VPN_BACKUP.authFilePath, "/etc/openvpn/router-backup-passwd");
   assert.equal(vpnContract.routerManagementBackupIp("10.8.5.42"), "10.8.6.42");
   assert.throws(() => vpnContract.routerManagementBackupIp("10.9.0.42"), /backup pool/);
+});
+
+test("standalone router client download installs the same primary and backup pair", () => {
+  assert.match(mikrotikRoute, /routerManagementVpnPortForRouter\(id\)/);
+  assert.match(mikrotikRoute, /ROUTER_MANAGEMENT_VPN_BACKUP\.port/);
+  assert.match(mikrotikRoute, /routerManagementBackupIp\(tunnelRouterIp\)/);
+  assert.match(mikrotikRoute, /vpnRole: "backup"/);
+  assert.match(mikrotikRoute, /installationMode: "coexist"/);
+  assert.match(mikrotikRoute, /no-store, no-cache, must-revalidate/);
 });
 
 test("VPS setup and runtime status readers use the same management paths", () => {
