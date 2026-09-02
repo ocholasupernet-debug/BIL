@@ -38,14 +38,8 @@ import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
-import {
-  ROUTER_MANAGEMENT_VPN_BACKUP,
-  routerManagementBackupIp,
-  routerManagementOvpnCredentials,
-  routerManagementVpnPortForRouter,
-} from "../lib/router-management-vpn";
+import { routerManagementOvpnCredentials } from "../lib/router-management-vpn";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
-import { authenticatedAdminId, requireAdmin } from "../lib/api-auth";
 
 const router: IRouter = Router();
 
@@ -161,7 +155,6 @@ interface SbRouter {
   router_secret: string | null;
   token?: string | null;
   status: string;
-  ros_version?: string | null;
 }
 
 /* ─── Build MikroTik credentials from a Supabase row ────────────────────── */
@@ -219,7 +212,7 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status,ros_version&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !isManagementVpnIp(row.vpn_ip ?? "") && !isManagementVpnIp(row.bridge_ip ?? ""))) return null;
@@ -731,14 +724,11 @@ router.get("/probe", async (req, res): Promise<void> => {
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
-router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Promise<void> => {
-  const id = parseInt(String(req.params.id), 10);
+router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
-  const adminId = authenticatedAdminId(req);
-  if (!adminId) { res.status(401).json({ error: "Authentication required" }); return; }
-
-  const found = await getRouterCreds(id, adminId);
+  const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
@@ -753,46 +743,18 @@ router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Pro
 
   const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
-  const requestedVersion = String(req.query["ros-version"] ?? found.row.ros_version ?? "").trim();
-  const routerOsMajor = requestedVersion.startsWith("7")
-    ? 7
-    : requestedVersion.startsWith("6")
-      ? 6
-      : null;
-  if (!routerOsMajor) {
-    res.status(400).type("text/plain").send(
-      "# RouterOS major version is required. Pass ?ros-version=6 or ?ros-version=7, or first record the router version.",
-    );
-    return;
-  }
 
-  const primaryScript = generateRouterAsClientScript({
+  const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort ? parseInt(String(req.query.vpnPort), 10) : routerManagementVpnPortForRouter(id),
+    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
     vpnUsername: openVpnCredentials.username,
     vpnPassword: openVpnCredentials.password,
     tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
-    routerOsMajor,
-    installationMode: "coexist",
   });
-  const backupScript = generateRouterAsClientScript({
-    vpsPublicIp: vpsIp,
-    routerId: id,
-    vpnPort: ROUTER_MANAGEMENT_VPN_BACKUP.port,
-    vpnUsername: openVpnCredentials.username,
-    vpnPassword: openVpnCredentials.password,
-    tunnelRouterIp: routerManagementBackupIp(tunnelRouterIp),
-    tunnelVpsIp: ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
-    routerOsMajor,
-    installationMode: "coexist",
-    vpnRole: "backup",
-  });
-  const script = `${primaryScript}\n${backupScript}`;
 
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="router-as-client${id}.rsc"`

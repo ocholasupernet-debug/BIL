@@ -86,11 +86,6 @@ function verifyInstallerGrant(grant: string, routerId: number): { adminId: numbe
   return { adminId };
 }
 
-function usableInstallerToken(value: unknown): string {
-  const token = String(value ?? "").trim();
-  return /^[A-Za-z0-9_-]{8,128}$/.test(token) ? token : "";
-}
-
 function verifyTakeoverGrant(grant: string, routerId: number): { adminId: number } | null {
   if (!takeoverGrantSecret()) return null;
   const parts = grant.split(".");
@@ -372,17 +367,28 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
 
 /* ── Verify a RouterOS download created a usable file.
    RouterOS can report a successful fetch even when the destination is a
-   directory or an empty result. Do not read the whole file through
-   `/file get ... contents`: larger .rsc files are not reliably readable on
-   every RouterOS version. HTTP errors are caught by /tool fetch, while the
-   imported child verifies its own required resource. ── */
-function verifyFetchedFile(pathExpression: string, label: string): string {
+   directory or an empty result. Keep this inside the fetch's :do block so the
+   caller's on-error handler reports the exact destination. ── */
+function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVpnError = false): string {
+  const routerVpnErrorCheck = rejectRouterVpnError
+    ? `
+ :global ocholaVpnChildError
+ :local fetchedContents ""
+ :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={
+     :set ocholaVpnChildError "downloaded ${label} could not be inspected before import"
+     :error $ocholaVpnChildError
+ }
+ :if ([:len $fetchedContents] >= [:len "# OCHOLA_ROUTER_VPN_ERROR"] && [:pick $fetchedContents 0 [:len "# OCHOLA_ROUTER_VPN_ERROR"]] = "# OCHOLA_ROUTER_VPN_ERROR") do={
+     :set ocholaVpnChildError ("server rejected ${label}: " . $fetchedContents)
+     :error $ocholaVpnChildError
+ }`
+    : "";
   return `:local fetchedFile [/file find name=${pathExpression}]
 :if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
 :local fetchedType [/file get $fetchedFile type]
 :if ($fetchedType = "directory") do={ :error "download destination is a directory: ${label}" }
 :local fetchedSize [/file get $fetchedFile size]
- :if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }`;
+:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }${routerVpnErrorCheck}`;
 }
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
@@ -405,6 +411,7 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
     :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
     /certificate set $caCert trusted=yes
+    :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
     :put ("  WARN: HTTPS certificate trust setup failed - " . $error)
 }`;
@@ -430,7 +437,7 @@ function portalFetch(
   filename: string,
   fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS,
 ): string {
-  const variableName = `portalPath${subpath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
   return `:local ${variableName} ($hsdir . "/${subpath}")
 :do {
     /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${fetchOptions}
@@ -455,7 +462,7 @@ function safeRm(cmd: string): string {
 }
 
 function coexistenceBridgeName(routerId: number): string {
-  return `co-hotspot-bridge-${routerId}`;
+  return "co-hotspot-bridge";
 }
 
 function coexistenceGateway(routerId: number): string {
@@ -480,7 +487,6 @@ type CoexistenceHotspotPlan = {
 function buildCoexistenceHotspotRsc(
   origin: string,
   routerId: number,
-  adminId: number,
   routerName: string,
   companyName: string,
   plans: CoexistenceHotspotPlan[],
@@ -511,7 +517,7 @@ function buildCoexistenceHotspotRsc(
     `:do {`,
     `:put "COEXISTENCE SERVICE — ${safe(companyName)}"`,
     `:local bridgeName "${safe(bridgeName)}"`,
-    `:local legacyBridgeName "co-hotspot-bridge"`,
+    `:local legacyBridgeName "co-hotspot-bridge-${routerId}"`,
     `:local olderBridgeName "ochola-hs-${routerId}"`,
     `:local bridgeTag "${safe(tag)}"`,
     `:local gateway "${safe(gateway)}"`,
@@ -625,12 +631,6 @@ function buildCoexistenceHotspotRsc(
     `:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/${portalDir}") }`,
     `:do { /file add name=$hsdir type=directory } on-error={}`,
     `:do { /file make-dir $hsdir } on-error={}`,
-    `:do { /file add name=($hsdir . "/css") type=directory } on-error={}`,
-    `:do { /file make-dir ($hsdir . "/css") } on-error={}`,
-    `:do { /file add name=($hsdir . "/img") type=directory } on-error={}`,
-    `:do { /file make-dir ($hsdir . "/img") } on-error={}`,
-    `:do { /file add name=($hsdir . "/xml") type=directory } on-error={}`,
-    `:do { /file make-dir ($hsdir . "/xml") } on-error={}`,
     `:put ("Portal directory: " . $hsdir)`,
     portalFetch(`${portalBase}/hotspot/login.html`, "login.html", "login.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/alogin.html`, "alogin.html", "alogin.html", fetchOptions),
@@ -641,34 +641,9 @@ function buildCoexistenceHotspotRsc(
     portalFetch(`${portalBase}/hotspot/error.html`, "error.html", "error.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/md5.js`, "md5.js", "md5.js", fetchOptions),
     portalFetch(`${portalBase}/hotspot/api.json`, "api.json", "api.json", fetchOptions),
-    portalFetch(`${portalBase}/api/public/typography?adminId=${adminId}`, "typography.json", "typography.json", fetchOptions),
     ``,
     `# Add plan profiles only when absent; never overwrite a profile owned by another system.`,
   ];
-
-  /* The HTML pages reference these assets by relative path. Download the
-     complete portal tree into the isolated hotspot directory so the
-     coexistence service does not depend on another billing system's files. */
-  const portalAssets = [
-    "css/style.css",
-    "img/password.svg",
-    "img/user.svg",
-    "favicon.ico",
-    "radvert.html",
-    "errors.txt",
-    "sweetalert2.js",
-    "tailwind.js",
-    "xml/alogin.html",
-    "xml/error.html",
-    "xml/flogout.html",
-    "xml/login.html",
-    "xml/logout.html",
-    "xml/rlogin.html",
-    "xml/WISPAP.xsd",
-  ];
-  for (const asset of portalAssets) {
-    lines.push(portalFetch(`${portalBase}/hotspot/${asset}`, asset, asset, fetchOptions));
-  }
 
   for (const plan of plans) {
     const profile = slugify(plan.name).slice(0, 40) || "default";
@@ -895,7 +870,6 @@ function buildMainhotspotRsc(
   certificateMode: RouterCertificateMode = "verified",
   installationMode: "coexist" | "takeover" = "takeover",
   coexistenceHotspotUrl: string = "",
-  routerId: number | null = null,
 ): string {
   const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
     ? "mode=https check-certificate=no"
@@ -950,38 +924,28 @@ function buildMainhotspotRsc(
     : `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
   const openVpnSelection = routerVpnUrl
     ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
-    : `:set openVpnUrl ""`;
+    : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
   const openVpnBackupSelection = routerVpnBackupUrl
     ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
     : `:set openVpnBackupUrl ""`;
-  const managementInterfaceName = installationMode === "coexist" && routerId
-    ? `ochola-mgmt-vpn-${routerId}`
-    : "corebillingvpn";
-  const vpnAttempt = (
-    protocol: string,
-    urlVariable: string,
-    fileName: string,
-    independent = false,
-    expectedInterfaceName = managementInterfaceName,
-  ): string => {
+  const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
-    const attemptWrapper = independent ? ":do {" : ":if (!$vpnConfigured) do={";
     const failureDiagnostics = protocol.startsWith("openvpn")
       ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
          :do {
-             :local ovpnIds [/interface ovpn-client find where name="${expectedInterfaceName}"]
+             :local ovpnIds [/interface ovpn-client find]
              :if ([:len $ovpnIds] > 0) do={
                  :foreach ovpnId in=$ovpnIds do={
                      :put ("    name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
                  }
              } else={
-                 :put "    management OpenVPN interface was not found."
+                 :put "    no OpenVPN client interfaces were found."
              }
          } on-error={ :put "    RouterOS could not read OpenVPN interface state." }
-         :put "  Recent management OpenVPN log entries (if supported):"
-         :do { /log print where topics~"ovpn" && message~"${expectedInterfaceName}" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
+         :put "  Recent RouterOS OpenVPN log entries (if supported):"
+         :do { /log print where topics~"ovpn" } on-error={ :put "    RouterOS did not expose filtered OpenVPN logs." }`
       : "";
-    return `${attemptWrapper}
+    return `:if (!$vpnConfigured) do={
     :local attemptPhase "start"
     :do {
         :global ocholaVpnChildError
@@ -990,11 +954,12 @@ function buildMainhotspotRsc(
              :error "${protocol}: no compatible RouterOS child script was selected"
          }
         $pg 1 "vpn-${protocol}" "downloading" ""
+        :put "[1/7] Trying ${protocol.toUpperCase()} router-management VPN..."
         :do { /file remove [find name="${tempFileName}"] } on-error={}
          :set attemptPhase "download"
         /tool fetch url=$${urlVariable} dst-path="${tempFileName}" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
          :set attemptPhase "download verification"
-        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName)}
+        ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
         :delay 2s
          :if ($majorVersion >= 7) do={
              :local preflightError ""
@@ -1023,8 +988,8 @@ function buildMainhotspotRsc(
         :do { /file remove [find name="${fileName}"] } on-error={}
         /file set [find name="${tempFileName}"] name="${fileName}"
         :set vpnConfigured true
-        :if ([:len $vpnProtocols] = 0) do={ :set vpnProtocol "${protocol}" }
-        :set vpnProtocols ($vpnProtocols . "${protocol},")
+        :set vpnProtocol "${protocol}"
+        :put "      ${protocol.toUpperCase()} router-management VPN verified."
         $pg 1 "vpn-${protocol}" "applied" ""
     } on-error={
         :local rawVpnError $error
@@ -1038,7 +1003,7 @@ function buildMainhotspotRsc(
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
         ${failureDiagnostics}
-        :set vpnFailureSummary ($vpnFailureSummary . $vpnError . "; ")
+        :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
         $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
         :do { /file set [find name="${tempFileName}"] name="failed-${fileName}" } on-error={}
@@ -1046,11 +1011,6 @@ function buildMainhotspotRsc(
 }`;
   };
   const coexistenceFallbacksDisabled = installationMode === "coexist";
-  const personalizedInstallerGuard = !routerVpnUrl
-    ? `:put "ERROR: This is not a personalized router installer."
-:put "Download mainhotspot.rsc again from the signed-in ISP Self Install page for a router-specific rid, adminId, and grant."
-:error "Personalized router installer required; existing router configuration was not changed."`
-    : "";
   const wireGuardAttempt = !coexistenceFallbacksDisabled && routerWireGuardUrl
     ? `:if ($majorVersion >= 7) do={\n${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}\n}`
     : "";
@@ -1060,20 +1020,30 @@ function buildMainhotspotRsc(
 
   if (installationMode === "coexist") {
     return `# ${safeCompanyName} — Coexistence management installer
-# SCRIPT REVISION: coexistence-vpn-diagnostics-v3
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
 ${pgDef}
-${personalizedInstallerGuard}
 ${httpsTrustBootstrap}
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
-$pg 0 "coexistence-audit" "audited" ""
+:local bridgeCount [:len [/interface bridge find]]
+:local hotspotCount [:len [/ip hotspot find]]
+:local dhcpCount [:len [/ip dhcp-server find]]
+:local poolCount [:len [/ip pool find]]
+:local radiusCount [:len [/radius find]]
+:local filterCount [:len [/ip firewall filter find]]
+:local natCount [:len [/ip firewall nat find]]
+:local ovpnCount [:len [/interface ovpn-client find]]
+:local ipsecCount [:len [/ip ipsec peer find]]
+:local hotspotUserCount [:len [/ip hotspot user find]]
+:local pppUserCount [:len [/ppp secret find]]
+:local fileCount [:len [/file find]]
+:put ("COEXISTENCE AUDIT — bridges=" . $bridgeCount . ", hotspots=" . $hotspotCount . ", dhcp=" . $dhcpCount . ", pools=" . $poolCount . ", radius=" . $radiusCount . ", firewall=" . $filterCount . ", nat=" . $natCount . ", ovpn=" . $ovpnCount . ", ipsec=" . $ipsecCount . ", hotspot-users=" . $hotspotUserCount . ", ppp-users=" . $pppUserCount . ", files=" . $fileCount)
+$pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . $hotspotCount . ";dhcp=" . $dhcpCount . ";pools=" . $poolCount . ";radius=" . $radiusCount . ";firewall=" . $filterCount . ";nat=" . $natCount . ";ovpn=" . $ovpnCount . ";ipsec=" . $ipsecCount . ";hotspot-users=" . $hotspotUserCount . ";ppp-users=" . $pppUserCount . ";files=" . $fileCount)
 
 :local vpnConfigured false
 :local vpnProtocol ""
-:local vpnProtocols ""
 :local vpnFailureSummary ""
 :local routerOsVersion [/system resource get version]
 :local routerOsMajorDigit [:pick $routerOsVersion 0 1]
@@ -1096,23 +1066,17 @@ ${openVpnSelection}
 ${openVpnBackupSelection}
     ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
     ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
-${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc", true, managementInterfaceName)}
-${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc", true, `${managementInterfaceName}-backup`)}
+${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
-:if ([:len [/interface ovpn-client find where name="${managementInterfaceName}"]] = 0) do={
-    :put ("COEXISTENCE STOPPED - primary management OpenVPN interface is missing. " . $vpnFailureSummary)
+:if (!$vpnConfigured) do={
+    :put ("COEXISTENCE STOPPED — no management VPN was installed. " . $vpnFailureSummary)
     $pg 1 "coexistence" "failed" $vpnFailureSummary
-    :error ("Coexistence stopped: primary management OpenVPN interface was not created. " . $vpnFailureSummary)
+    :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
 }
-:if ([:len [/interface ovpn-client find where name="${managementInterfaceName}-backup"]] = 0) do={
-    :put ("COEXISTENCE STOPPED - backup management OpenVPN interface is missing. " . $vpnFailureSummary)
-    $pg 1 "coexistence" "failed" $vpnFailureSummary
-    :error ("Coexistence stopped: backup management OpenVPN interface was not created. " . $vpnFailureSummary)
-}
-:set vpnConfigured true
-:put "Both management OpenVPN interfaces are installed; existing customer configuration was not replaced."
-$pg 1 "coexistence-vpn" "applied" ("management-vpns=" . $vpnProtocols)
+:put ("COEXISTENCE VPN READY — " . $vpnProtocol . " added; existing customer configuration was not replaced.")
+$pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
 ${coexistenceHotspotUrl ? `
 # Install Ochola's isolated hotspot service only after the management VPN is ready.
 :local coexistenceBundleBytes ""
@@ -1124,6 +1088,7 @@ ${coexistenceHotspotUrl ? `
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
+    :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     # RouterOS 7 can report the exact source line and column for import-time
     # syntax/property failures without changing configuration. RouterOS 6
     # does not have this import option, so the normal import remains the
@@ -1156,7 +1121,7 @@ ${coexistenceHotspotUrl ? `
 ` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; $pg 1 "coexistence-hotspot" "failed" "missing bundle"; :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
 ${safeHeartbeatUrl ? `:do {
     /tool fetch url="${safeHeartbeatUrl}?coexist=1" keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
-    :put "Coexistence heartbeat sent."
+    :put "COEXISTENCE HEARTBEAT SENT — existing customer services remain under their current configuration."
 } on-error={ :put "WARN: coexistence heartbeat could not be sent; retry the installer after the VPN is up." }
 ` : ""}
 `;
@@ -1172,16 +1137,27 @@ ${safeHeartbeatUrl ? `:do {
 :do { /export file=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the text export." }
 :delay 2s
 :if ([:len [/file find name="${takeoverBackupStem}.rsc"]] = 0) do={ :error "Takeover stopped: the RouterOS text export could not be verified." }
+:put "TAKEOVER BACKUP VERIFIED — binary backup and text export are present."
 `
     : "";
 
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
-# SCRIPT REVISION: main-installer-vpn-diagnostics-v3
-# Downloads and imports the router VPN, hotspot, PPPoE, sync, and heartbeat setup.
+# Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
+#
+# INSTALL BUNDLE — downloaded in this order:
+#   1. router VPN child scripts                 (OpenVPN → backup OpenVPN → WireGuard → IPsec)
+#   2. hotspotsetup.rsc -> hotspotsetup.rsc  (required)
+#   3. pppoesetup.rsc   -> pppoesetup.rsc     (required)
+#   4. users.rsc        -> users.rsc          (required)
+#   5. syncusers.rsc    -> syncusers.rsc      (required)
+#   6. heartbeat.rsc    -> heartbeat.rsc      (required)
+#   7. syncfull.rsc     -> syncfull.rsc       (required)
+#   8. logpush.rsc and seclogpush.rsc are optional diagnostics.
+# Hotspot portal files are downloaded by the per-router configuration script
+# into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
-${personalizedInstallerGuard}
 
 # Takeover is a separate, destructive path. Its safety boundary runs first.
 ${takeoverBackup}
@@ -1220,6 +1196,10 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
     :error "No internet connection. Please check your internet connection and try again."
 }
 :local failures 0
+:put "======================================================"
+:put " ${safeCompanyName} router setup"
+:put "======================================================"
+
 # --- Ordered router-management VPN fallback -----------------------------------
 # Attempts primary OpenVPN first, then isolated backup OpenVPN, then WireGuard and IPsec. Each child must verify
 # its own resources; a successful child prevents all later children from running.
@@ -1231,12 +1211,11 @@ ${openVpnBackupSelection}
   :local ipsecUrl ""
 :local vpnConfigured false
 :local vpnProtocol ""
-:local vpnProtocols ""
 :local vpnFailureSummary ""
   ${routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
   ${routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
-${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc", false, managementInterfaceName)}
-${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc", false, `${managementInterfaceName}-backup`)}
+${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
+${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt}
 ${ipsecAttempt}
 :if (!$vpnConfigured) do={
@@ -1244,18 +1223,22 @@ ${ipsecAttempt}
     :put ("  ERROR: no router-management VPN protocol succeeded. " . $vpnFailureSummary)
     $pg 1 "vpn" "failed" $vpnFailureSummary
 } else={
+    :put ("      Selected router-management VPN: " . $vpnProtocol)
 }
 
 # --- Hotspot configuration ----------------------------------------------------
 :do {
     $pg 2 "hotspot" "downloading" ""
+    :put "[2/7] Downloading hotspot configuration..."
     :do { /file remove [find name="hotspotsetup.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/hotspotsetup.rsc" dst-path="hotspotsetup.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"hotspotsetup.rsc.download"`, "hotspotsetup.rsc.download")}
     :delay 2s
+    :put "      Applying hotspot configuration..."
     /import "hotspotsetup.rsc.download"
     :do { /file remove [find name="hotspotsetup.rsc"] } on-error={}
     /file set [find name="hotspotsetup.rsc.download"] name="hotspotsetup.rsc"
+    :put "      Hotspot configuration applied; saved as hotspotsetup.rsc."
     $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1268,13 +1251,16 @@ ${ipsecAttempt}
 # --- PPPoE configuration ------------------------------------------------------
 :do {
     $pg 3 "pppoe" "downloading" ""
+    :put "[3/7] Downloading PPPoE configuration..."
     :do { /file remove [find name="pppoesetup.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/pppoesetup.rsc" dst-path="pppoesetup.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"pppoesetup.rsc.download"`, "pppoesetup.rsc.download")}
     :delay 2s
+    :put "      Applying PPPoE configuration..."
     /import "pppoesetup.rsc.download"
     :do { /file remove [find name="pppoesetup.rsc"] } on-error={}
     /file set [find name="pppoesetup.rsc.download"] name="pppoesetup.rsc"
+    :put "      PPPoE configuration applied; saved as pppoesetup.rsc."
     $pg 3 "pppoe" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1287,13 +1273,16 @@ ${ipsecAttempt}
 # --- Users configuration ------------------------------------------------------
 :do {
     $pg 4 "users" "downloading" ""
+    :put "[4/7] Downloading users configuration..."
     :do { /file remove [find name="users.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/users.rsc" dst-path="users.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"users.rsc.download"`, "users.rsc.download")}
     :delay 2s
+    :put "      Applying users configuration..."
     /import "users.rsc.download"
     :do { /file remove [find name="users.rsc"] } on-error={}
     /file set [find name="users.rsc.download"] name="users.rsc"
+    :put "      Users configuration applied; saved as users.rsc."
     $pg 4 "users" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1306,13 +1295,16 @@ ${ipsecAttempt}
 # --- Sync-users firewalls -----------------------------------------------------
 :do {
     $pg 5 "syncusers" "downloading" ""
+    :put "[5/7] Downloading sync-users firewalls..."
     :do { /file remove [find name="syncusers.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/syncusers.rsc" dst-path="syncusers.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"syncusers.rsc.download"`, "syncusers.rsc.download")}
     :delay 2s
+    :put "      Applying sync-users firewalls..."
     /import "syncusers.rsc.download"
     :do { /file remove [find name="syncusers.rsc"] } on-error={}
     /file set [find name="syncusers.rsc.download"] name="syncusers.rsc"
+    :put "      Sync-users firewalls applied; saved as syncusers.rsc."
     $pg 5 "syncusers" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1325,13 +1317,16 @@ ${ipsecAttempt}
 # --- Heartbeat firewalls ------------------------------------------------------
 :do {
     $pg 6 "heartbeat" "downloading" ""
+    :put "[6/7] Downloading heartbeat firewalls..."
     :do { /file remove [find name="heartbeat.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/heartbeat.rsc" dst-path="heartbeat.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"heartbeat.rsc.download"`, "heartbeat.rsc.download")}
     :delay 2s
+    :put "      Applying heartbeat firewalls..."
     /import "heartbeat.rsc.download"
     :do { /file remove [find name="heartbeat.rsc"] } on-error={}
     /file set [find name="heartbeat.rsc.download"] name="heartbeat.rsc"
+    :put "      Heartbeat firewalls applied; saved as heartbeat.rsc."
     $pg 6 "heartbeat" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1351,19 +1346,23 @@ ${safeHeartbeatUrl ? `:do {
     /system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${safeHeartbeatUrl}?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
     /system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${safeCompanyName} heartbeat"
     /system script run ochola-heartbeat-script
+    :put "      Authenticated heartbeat installed and sent."
 } on-error={ :put "  WARN [heartbeat] authenticated heartbeat install failed" }
 ` : `# This generic script has no saved-router token, so its heartbeat remains disabled.`}
 
 # --- Sync-full script ---------------------------------------------------------
 :do {
     $pg 7 "syncfull" "downloading" ""
+    :put "[7/7] Downloading sync-full script..."
     :do { /file remove [find name="syncfull.rsc.download"] } on-error={}
     /tool fetch url="${scriptsBase}/syncfull.rsc" dst-path="syncfull.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"syncfull.rsc.download"`, "syncfull.rsc.download")}
     :delay 2s
+    :put "      Applying sync-full script..."
     /import "syncfull.rsc.download"
     :do { /file remove [find name="syncfull.rsc"] } on-error={}
     /file set [find name="syncfull.rsc.download"] name="syncfull.rsc"
+    :put "      Sync-full script applied; saved as syncfull.rsc."
     $pg 7 "syncfull" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -1380,37 +1379,44 @@ ${safeHeartbeatUrl ? `:do {
 ${safeInstallerUrl ? `:do {
     /system scheduler remove [find name=ochola-autoupdate]
     /system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${safeInstallerUrl}\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" comment="${safeCompanyName} personalized auto-update"
+    :put "      Personalized auto-update scheduler installed."
 } on-error={ :put "  WARN [auto-update] personalized scheduler install failed" }
 ` : `# Generic installers intentionally retain the tokenless update scheduler.`}
 
 # --- Optional diagnostic logging ----------------------------------------------
 :do {
+    :put "Downloading diagnostic log-push script..."
     /tool fetch url="${scriptsBase}/logpush.rsc" dst-path=logpush.rsc keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"logpush.rsc"`, "logpush.rsc")}
     :delay 2s
     /import logpush.rsc
+    :put "Diagnostic log-push installed; saved as logpush.rsc."
 } on-error={ :put ("Diagnostic log-push install skipped; check logpush.rsc - " . $error) }
 
 # --- Optional API hardening ----------------------------------------------------
 :do {
+    :put "Downloading API security script..."
     /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile(`"seclogpush.rsc"`, "seclogpush.rsc")}
     :delay 2s
     /import seclogpush.rsc
+    :put "API security script installed; saved as seclogpush.rsc."
 } on-error={ :put ("API security install skipped; check seclogpush.rsc - " . $error) }
 
 # --- DNS flush scheduler ------------------------------------------------------
 :do {
+    :put "Setting up DNS flush scheduler..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
     /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
     /ip dns cache flush
+    :put "DNS flush scheduler installed (every 6 hours)."
 } on-error={
     :set failures ($failures + 1)
     :put ("  WARN [dns-flush] FAILED: " . $error)
 }
 
 # --- Report the installed router to this ISP's current app --------------------
-${safeRegistrationUrl ? `
+${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :local reportedIp "${safeRouterVpnIp}"
 :if ($reportedIp = "") do={
     :if ($reportedIp = "") do={
@@ -1441,6 +1447,7 @@ ${safeRegistrationUrl ? `
     :do {
         /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=router-register.tmp
         :do { /file remove router-register.tmp } on-error={}
+        :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
     } on-error={ :put "Router registration report failed (ignored)" }
 } else={
     :put "Management VPN has no IP yet; skipping router registration report"
@@ -1451,10 +1458,11 @@ ${safeRegistrationUrl ? `
 :do {
     /system logging set [find topics="warning"] topics=warning,!script
     /system logging set [find topics="script"] topics=script,!warning
+    :put "Log script-warning suppression applied"
 } on-error={ :put "Log suppression skipped (non-fatal)" }
 
 :if ($failures = 0) do={
-    :put "${safeCompanyName}: setup complete."
+    :put "${safeCompanyName}: all configurations completed successfully."
 } else={
     :put ("${safeCompanyName}: setup finished with " . $failures . " failed step(s) - see WARN lines above.")
 }
@@ -1553,9 +1561,9 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
      progress callbacks. The admin UI may instead send rid+adminId; in that
-      case the server resolves the router secret here so credentials never
-      need to be placed in a browser URL. Without a router identity, the
-      generated installer stops before changing router state. */
+     case the server resolves the router secret here so credentials never
+     need to be placed in a browser URL. Without rid+token/adminId the script
+     runs exactly as before (no callbacks). */
   const ridRaw   = ((req.query.rid   ?? "") as string).trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
   const adminIdRaw = ((req.query.adminId ?? "") as string).trim();
@@ -1620,16 +1628,8 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       if (currentRouter) {
         const openVpnCredentials = routerManagementOvpnCredentials(currentRouter.name);
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
-        /* router_secret is the RouterOS API password and commonly equals a
-           short router name (for example, "come1"). The VPN/bootstrap
-           endpoints require the dedicated unpredictable installer token.
-           Prefer an explicitly supplied token, then the persisted token; only
-           accept router_secret for legacy rows when it independently matches
-           the installer-token format. */
-        resolvedToken = usableInstallerToken(resolvedToken)
-          || usableInstallerToken(currentRouter.token)
-          || usableInstallerToken(currentRouter.router_secret);
-        if (!resolvedToken) throw new Error("Router installer token is not available.");
+        resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
+        if (!resolvedToken) throw new Error("Router install secret is not available.");
         /* Personalize the bundle before reconciling the remote VPN. The
            installer can still configure the router's local services when the
            VPS SSH channel is temporarily unavailable; the VPN child script
@@ -1716,8 +1716,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   res
     .set("Content-Type", "text/plain; charset=utf-8")
     .set("Content-Disposition", "attachment; filename=\"mainhotspot.rsc\"")
-    .set("Cache-Control", "no-store")
-    .set("Pragma", "no-cache")
+    .set("Cache-Control", "no-cache")
     .send(buildMainhotspotRsc(
       scriptsBase,
       progressUrl,
@@ -1736,8 +1735,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
          : "",
       certificateMode,
       installationMode,
-      coexistenceHotspotUrl,
-      rid ? Number(rid) : null,
+       coexistenceHotspotUrl,
     ));
 });
 
@@ -2754,7 +2752,6 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     const content = buildCoexistenceHotspotRsc(
       origin,
       currentRouter.id,
-      currentRouter.admin_id,
       currentRouter.name,
       admins[0]?.name || "ISPlatty",
       plans,
@@ -3060,7 +3057,6 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# Import  : /import ${routerSlug}.rsc`,
       `# ===================================================`,
       `:put ""`,
-      `:put "OcholaSupernet installer revision: main-installer-vpn-diagnostics-v2"`,
       `:put "======================================================"`,
       `:put " ${companyName} Setup — ${routerName}"`,
       `:put "======================================================"`,
@@ -3317,8 +3313,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     res
       .set("Content-Type", "text/plain; charset=utf-8")
       .set("Content-Disposition", `attachment; filename="${routerSlug}.rsc"`)
-      .set("Cache-Control", "no-store")
-      .set("Pragma", "no-cache")
+      .set("Cache-Control", "no-cache")
       .send(body);
 
   } catch (err: unknown) {

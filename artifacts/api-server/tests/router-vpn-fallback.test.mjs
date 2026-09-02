@@ -27,7 +27,6 @@ const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
-const mikrotikRoute = await readFile("src/routes/mikrotik-route.ts", "utf8");
 const provisioningRoute = await readFile("src/lib/router-vpn-provisioning.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
@@ -51,38 +50,7 @@ test("management OpenVPN credentials use the configured router name", () => {
   assert.match(syncRoute, /client\.cn === openVpnCredentials\.username/);
 });
 
-test("admin RouterOS operations forward management VPN connections through the VPS", () => {
-  assert.match(syncRoute, /openVpsTcpForward, type VpsTcpForward/);
-  assert.match(syncRoute, /forward = await openVpsTcpForward\(candidate, 8728/);
-  assert.match(syncRoute, /conn = makeConn\(forward\.host, username, password\)/);
-  assert.match(syncRoute, /closeForward: forward \? \(\) => forward!\.close\(\)/);
-
-  const operationRoutes = [
-    "/admin/sync",
-    "/admin/sync/plans",
-    "/admin/sync/ip-pools",
-    "/admin/sync/users",
-    "/admin/router/sync-copy",
-    "/admin/router/reboot",
-    "/admin/router/fix-api",
-    "/admin/router/probe",
-    "/admin/router/ports",
-    "/admin/router/bridge-assign",
-  ];
-  for (const route of operationRoutes) {
-    const start = syncRoute.indexOf(`router.post("${route}"`);
-    assert.notEqual(start, -1, `${route} route should exist`);
-    const end = syncRoute.indexOf("\n});", start);
-    const source = syncRoute.slice(start, end === -1 ? undefined : end);
-    assert.match(source, /connectWithFallback/, `${route} should use the forwarded connector`);
-    assert.doesNotMatch(source, /makeConn\(/, `${route} must not connect directly`);
-  }
-
-  const adminRoutes = syncRoute.slice(syncRoute.indexOf('router.post("/admin/sync"'));
-  assert.doesNotMatch(adminRoutes, /new RouterOSAPI/, "admin routes must not instantiate RouterOSAPI directly");
-});
-
-test("OpenVPN child fails if creation fails but remains installed while connectivity is pending", () => {
+test("OpenVPN child fails loudly when the client is not created or running", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
     vpnPort: 1196,
@@ -94,15 +62,14 @@ test("OpenVPN child fails if creation fails but remains installed while connecti
   });
   assert.match(script, /\/interface ovpn-client add name="corebillingvpn"/);
   assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
+  assert.match(script, /name="corebillingvpn" && running=yes/);
   assert.match(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
-  assert.match(script, /OpenVPN client installed; running=/);
-  assert.match(script, /interface is installed but not connected yet/);
-  assert.doesNotMatch(script, /:if \(!\$createdOvpnRunning\)/);
-  assert.match(script, /:if \(\$createdOvpnRunning = false\)/);
-  assert.doesNotMatch(script, /did not establish a running session within 60 seconds/);
+  assert.match(script, /did not establish a running session within 60 seconds/);
+  assert.match(script, /Safe interface diagnostics/);
+  assert.match(script, /Recent RouterOS OpenVPN log entries/);
   assert.match(script, /ocholaVpnChildError/);
   assert.doesNotMatch(script, /on-error=\{ :set ovpnError \$error \}/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
@@ -126,9 +93,7 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
   assert.match(ros7, /protocol=tcp mode=ip cipher=aes128-cbc auth=sha1/);
-  assert.doesNotMatch(ros7, /verify-server-certificate/);
-  assert.doesNotMatch(ros7, /[^\x00-\x7F]/, "RouterOS OpenVPN child must remain ASCII-only");
-  assert.doesNotMatch(ros6, /[^\x00-\x7F]/, "RouterOS OpenVPN child must remain ASCII-only");
+  assert.match(ros7, /verify-server-certificate=no/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.match(scriptsRoute, /routerOsMajor/);
 });
@@ -145,8 +110,7 @@ test("installer reads RouterOS version locally and never defaults an unknown rou
 });
 
 test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on RouterOS 6", () => {
-  assert.match(scriptsRoute, /const openVpnSelection = routerVpnUrl/);
-  assert.match(scriptsRoute, /:set openVpnUrl ""/);
+  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{ :set openVpnUrl/);
   assert.match(scriptsRoute, /minimumMajor >= 7/);
   assert.match(scriptsRoute, /versionedUrlAssignment\("wireGuardUrl", safeRouterWireGuardUrl, 7\)/);
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{\\n\$\{vpnAttempt\("wireguard"/);
@@ -168,34 +132,13 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
   });
   assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
-  assert.match(script, /previous owned management interface/);
+  assert.match(script, /previous incomplete management interface/);
   assert.match(script, /active or foreign ochola-mgmt-vpn-42 interface/);
   assert.match(script, /existingOvpnComment/);
-  assert.doesNotMatch(script, /existingOvpnRunning/);
-  assert.doesNotMatch(script, /reuseExistingOvpn/);
-  assert.doesNotMatch(script, /name="ochola-mgmt-vpn-42" && running=yes/);
-  assert.match(script, /interface ovpn-client find where name="ochola-mgmt-vpn-42"/);
+  assert.match(script, /existingOvpnRunning/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
   assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
-});
-
-test("main coexistence diagnostics exclude unrelated billing OpenVPN clients and avoid duplicate errors", () => {
-  assert.match(scriptsRoute, /const managementInterfaceName = installationMode === "coexist" && routerId/);
-  assert.match(scriptsRoute, /interface ovpn-client find where name="\$\{expectedInterfaceName\}"/);
-  assert.match(scriptsRoute, /\/log print where topics~"ovpn" && message~"\$\{expectedInterfaceName\}"/);
-  assert.match(scriptsRoute, /\$vpnFailureSummary \. \$vpnError \. "; "/);
-  assert.doesNotMatch(scriptsRoute, /\$vpnFailureSummary \. "\$\{protocol\}: " \. \$vpnError/);
-  assert.match(scriptsRoute, /SCRIPT REVISION: coexistence-vpn-diagnostics-v3/);
-  assert.match(scriptsRoute, /\.set\("Cache-Control", "no-store"\)\n    \.set\("Pragma", "no-cache"\)/);
-});
-
-test("main installer keeps routine terminal output quiet but preserves failures and completion", () => {
-  assert.doesNotMatch(scriptsRoute, /:put "\[2\/7\] Downloading hotspot configuration/);
-  assert.doesNotMatch(scriptsRoute, /:put "      Hotspot configuration applied; saved as hotspotsetup\.rsc\."/);
-  assert.doesNotMatch(scriptsRoute, /all configurations completed successfully/);
-  assert.match(scriptsRoute, /:put "\$\{safeCompanyName\}: setup complete\."/);
-  assert.match(scriptsRoute, /:put \("  WARN \[vpn-\$\{protocol\}\] FAILED: " \. \$vpnError\)/);
 });
 
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {
@@ -307,16 +250,12 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
-  assert.doesNotMatch(scriptsRoute, /verifyFetchedFile\(`"\$\{tempFileName\}"`, tempFileName, true\)/);
   assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
   assert.match(scriptsRoute, /:local importError \$error/);
   assert.match(scriptsRoute, /:local rawVpnError \$error/);
   assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);
   assert.match(scriptsRoute, /:local attemptPhase "start"/);
-  assert.match(scriptsRoute, /larger \.rsc files are not reliably readable on/);
-  assert.match(scriptsRoute, /const openVpnSelection = routerVpnUrl/);
-  assert.match(scriptsRoute, /:set openVpnUrl ""/);
-  assert.match(scriptsRoute, /Personalized router installer required/);
+  assert.match(scriptsRoute, /server rejected \$\{label\}/);
   assert.match(scriptsRoute, /child import/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
@@ -351,18 +290,6 @@ test("router-management backup is isolated on TCP 1197 and maps router addresses
   assert.throws(() => vpnContract.routerManagementBackupIp("10.9.0.42"), /backup pool/);
 });
 
-test("standalone router client download installs the same primary and backup pair", () => {
-  assert.match(mikrotikRoute, /router\.get\("\/router\/:id\/router-as-client", requireAdmin\(\)/);
-  assert.match(mikrotikRoute, /authenticatedAdminId\(req\)/);
-  assert.match(mikrotikRoute, /getRouterCreds\(id, adminId\)/);
-  assert.match(mikrotikRoute, /routerManagementVpnPortForRouter\(id\)/);
-  assert.match(mikrotikRoute, /ROUTER_MANAGEMENT_VPN_BACKUP\.port/);
-  assert.match(mikrotikRoute, /routerManagementBackupIp\(tunnelRouterIp\)/);
-  assert.match(mikrotikRoute, /vpnRole: "backup"/);
-  assert.match(mikrotikRoute, /installationMode: "coexist"/);
-  assert.match(mikrotikRoute, /no-store, no-cache, must-revalidate/);
-});
-
 test("VPS setup and runtime status readers use the same management paths", () => {
   const setup = vpnUtils.generateVpsOvpnSetupScript({ vpsPublicIp: "vpn.example.test" });
   assert.match(setup, /VPN Port  : 1196\/tcp/);
@@ -377,14 +304,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
   assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
-  assert.match(setup, /\$\{value##\*\/\}.*none/);
-  assert.match(setup, /\[ -n "\$DH_FILE" \] \|\| DH_FILE="none"/);
-  assert.match(setup, /\[ -n "\$DH_FILE" \] && echo "dh \$DH_FILE"/);
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
   assert.match(setup, /grep -Fqx/);
-  assert.match(setup, /\$\{!f\}/);
-  assert.doesNotMatch(setup, /\$\{\$f\}/);
-  assert.match(setup, /\$\{value##\*\/\}/);
   assert.match(setup, /# OpenVPN does not support data-ciphers/);
   assert.match(setup, /data-ciphers AES-128-CBC/);
   assert.match(setup, /ln -sfn "\$OVPN_CONF" "\$OVPN_DIR\/ochola-router\.conf"/);

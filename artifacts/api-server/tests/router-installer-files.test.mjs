@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const httpsTrust = await readFile("src/lib/router-https-trust.ts", "utf8");
 const pppoeRoute = await readFile("src/routes/pppoe-script-route.ts", "utf8");
-const appSource = await readFile("src/app.ts", "utf8");
 
 test("installer selects an available storage directory, including router root", () => {
   assert.match(scriptsRoute, /:local storage ""/);
@@ -37,21 +36,6 @@ test("installer verifies downloads and reports the resolved destination", () => 
   assert.match(scriptsRoute, /keep-result=yes/);
   assert.match(scriptsRoute, /WARN: \$\{filename\} failed at/);
   assert.doesNotMatch(scriptsRoute, /portalFetch[\s\S]{0,500}dst-path=\(\$hsdir \. "/);
-});
-
-test("unpersonalized installers stop instead of downloading placeholder VPN scripts", () => {
-  assert.match(scriptsRoute, /generated installer stops before changing router state/);
-  assert.match(scriptsRoute, /This is not a personalized router installer/);
-  assert.match(scriptsRoute, /signed-in ISP Self Install page/);
-  assert.match(scriptsRoute, /existing router configuration was not changed/);
-});
-
-test("personalized installers use the dedicated installer token instead of a short API password", () => {
-  assert.match(scriptsRoute, /function usableInstallerToken/);
-  assert.match(scriptsRoute, /Prefer an explicitly supplied token/);
-  assert.match(scriptsRoute, /usableInstallerToken\(currentRouter\.token\)/);
-  assert.match(scriptsRoute, /usableInstallerToken\(currentRouter\.router_secret\)/);
-  assert.match(scriptsRoute, /Router installer token is not available/);
 });
 
 test("successful child imports preserve named RouterOS artifacts", () => {
@@ -91,40 +75,12 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.match(scriptsRoute, /repaired the owned DHCP pool range/);
   assert.match(scriptsRoute, /poolComment.*coexistence router/);
   assert.match(scriptsRoute, /global ocholaCoexistenceError/);
-  assert.doesNotMatch(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
+  assert.match(scriptsRoute, /COEXISTENCE BUNDLE DOWNLOADED:/);
   assert.match(scriptsRoute, /after " \. \$coexistenceBundleBytes \. " bytes/);
   assert.match(scriptsRoute, /coexistence hotspot dry-run failed/);
   assert.match(scriptsRoute, /verbose=yes dry-run/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE FAILED at/);
   assert.match(scriptsRoute, /isolated hotspot bundle import failed after .*bytes; inspect failed-ochola-coexistence-hotspot\.rsc.*failing stage/);
-});
-
-test("coexistence installs independent primary and backup management OpenVPN clients", () => {
-  assert.match(scriptsRoute, /independent = false/);
-  assert.match(scriptsRoute, /const attemptWrapper = independent \? ":do \{" : ":if \(!\$vpnConfigured\) do=\{";/);
-  assert.match(scriptsRoute, /:set vpnProtocols \(\$vpnProtocols \. "\$\{protocol\},"\)/);
-  assert.match(scriptsRoute, /vpnAttempt\("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn\.rsc", true/);
-  assert.match(scriptsRoute, /vpnAttempt\("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup\.rsc", true/);
-  assert.match(scriptsRoute, /Both management OpenVPN interfaces are installed; existing customer configuration was not replaced/);
-});
-
-test("coexistence bundle includes the portal assets referenced by its HTML files", () => {
-  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/css"\) type=directory/);
-  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/img"\) type=directory/);
-  assert.match(scriptsRoute, /name=\(\$hsdir \. "\/xml"\) type=directory/);
-  assert.match(scriptsRoute, /api\/public\/typography\?adminId=\$\{adminId\}/);
-  for (const asset of [
-    "css/style.css",
-    "img/password.svg",
-    "img/user.svg",
-    "favicon.ico",
-    "sweetalert2.js",
-    "tailwind.js",
-    "xml/WISPAP.xsd",
-  ]) {
-    assert.match(scriptsRoute, new RegExp(`"${asset.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"`));
-  }
-  assert.match(appSource, /app\.use\("\/hotspot", express\.static\(hotspotStaticDir/);
 });
 
 test("installer bootstraps the public CA and validates managed HTTPS fetches", () => {
