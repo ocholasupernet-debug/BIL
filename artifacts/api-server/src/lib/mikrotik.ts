@@ -2304,15 +2304,6 @@ remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
-  const openVpnOptionalSettings = routerOs7
-    ? `# RouterOS 7 path: apply the optional certificate-verification setting only
-# after the broadly compatible client exists. RouterOS 6 never parses this property.
-:do {
-    /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=no
-} on-error={ :put "${tag}: optional RouterOS 7 OpenVPN certificate setting was not accepted; continuing with the verified client." }`
-    : `# RouterOS 6 path: keep the client command to the conservative common property set.
-# RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
-
   return `# ═══════════════════════════════════════════════════════════════
 # OcholaSupernet — MikroTik ${routerOsPath} Router as OpenVPN CLIENT
 # Generated  : ${new Date().toISOString()}
@@ -2360,8 +2351,6 @@ ${resourcePreparation}
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError
 }
-${openVpnOptionalSettings}
-
 :put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
 :local ovpnRunning false
 :for attempt from=1 to=12 do={

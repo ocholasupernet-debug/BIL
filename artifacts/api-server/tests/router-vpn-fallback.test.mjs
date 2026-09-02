@@ -124,7 +124,7 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
   assert.match(ros7, /protocol=tcp mode=ip cipher=aes128-cbc auth=sha1/);
-  assert.match(ros7, /verify-server-certificate=no/);
+  assert.doesNotMatch(ros7, /verify-server-certificate/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.match(scriptsRoute, /routerOsMajor/);
 });
