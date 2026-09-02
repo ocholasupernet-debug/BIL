@@ -86,6 +86,11 @@ function verifyInstallerGrant(grant: string, routerId: number): { adminId: numbe
   return { adminId };
 }
 
+function usableInstallerToken(value: unknown): string {
+  const token = String(value ?? "").trim();
+  return /^[A-Za-z0-9_-]{8,128}$/.test(token) ? token : "";
+}
+
 function verifyTakeoverGrant(grant: string, routerId: number): { adminId: number } | null {
   if (!takeoverGrantSecret()) return null;
   const parts = grant.split(".");
@@ -1609,8 +1614,16 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       if (currentRouter) {
         const openVpnCredentials = routerManagementOvpnCredentials(currentRouter.name);
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
-        resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
-        if (!resolvedToken) throw new Error("Router install secret is not available.");
+        /* router_secret is the RouterOS API password and commonly equals a
+           short router name (for example, "come1"). The VPN/bootstrap
+           endpoints require the dedicated unpredictable installer token.
+           Prefer an explicitly supplied token, then the persisted token; only
+           accept router_secret for legacy rows when it independently matches
+           the installer-token format. */
+        resolvedToken = usableInstallerToken(resolvedToken)
+          || usableInstallerToken(currentRouter.token)
+          || usableInstallerToken(currentRouter.router_secret);
+        if (!resolvedToken) throw new Error("Router installer token is not available.");
         /* Personalize the bundle before reconciling the remote VPN. The
            installer can still configure the router's local services when the
            VPS SSH channel is temporarily unavailable; the VPN child script

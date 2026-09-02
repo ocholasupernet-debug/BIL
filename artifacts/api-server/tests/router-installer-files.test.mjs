@@ -46,6 +46,14 @@ test("unpersonalized installers stop instead of downloading placeholder VPN scri
   assert.match(scriptsRoute, /existing router configuration was not changed/);
 });
 
+test("personalized installers use the dedicated installer token instead of a short API password", () => {
+  assert.match(scriptsRoute, /function usableInstallerToken/);
+  assert.match(scriptsRoute, /Prefer an explicitly supplied token/);
+  assert.match(scriptsRoute, /usableInstallerToken\(currentRouter\.token\)/);
+  assert.match(scriptsRoute, /usableInstallerToken\(currentRouter\.router_secret\)/);
+  assert.match(scriptsRoute, /Router installer token is not available/);
+});
+
 test("successful child imports preserve named RouterOS artifacts", () => {
   for (const fileName of [
     "hotspotsetup.rsc",
