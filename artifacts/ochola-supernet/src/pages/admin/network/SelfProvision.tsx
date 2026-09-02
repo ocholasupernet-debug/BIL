@@ -100,6 +100,7 @@ export default function SelfProvision() {
   const [script, setScript] = useState("");
   const [scriptExpiresIn, setScriptExpiresIn] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [generatorOpen, setGeneratorOpen] = useState(false);
 
   useEffect(() => {
     const syncTenant = () => {
@@ -119,7 +120,7 @@ export default function SelfProvision() {
       if (!adminId) throw new Error("Sign in to an ISP account before starting self provision.");
       return jsonRequest<RouterSummary[]>(`/api/routers?adminId=${adminId}`);
     },
-    enabled: !!adminId,
+    enabled: !!adminId && generatorOpen,
     refetchInterval: 15_000,
   });
 
@@ -203,6 +204,35 @@ export default function SelfProvision() {
 
   const readinessColor = status?.ready ? "#4ade80" : status?.vpnConnected ? "#fbbf24" : "#94a3b8";
 
+  if (!generatorOpen) {
+    return (
+      <AdminLayout>
+        <div style={{ minHeight: "60vh", display: "grid", placeItems: "center", maxWidth: 1120 }}>
+          <button
+            onClick={() => setGeneratorOpen(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              background: "linear-gradient(135deg,#14b8a6,#0d9488)",
+              border: "none",
+              borderRadius: 9,
+              color: "white",
+              padding: "0.85rem 1.2rem",
+              fontWeight: 800,
+              fontSize: "0.82rem",
+              cursor: "pointer",
+              boxShadow: "0 8px 24px rgba(13,148,136,.2)",
+            }}
+          >
+            <FileCode2 size={16} /> Generate configuration
+          </button>
+        </div>
+      </AdminLayout>
+    );
+  }
+
   return (
     <AdminLayout>
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 1120 }}>
@@ -285,7 +315,7 @@ export default function SelfProvision() {
               The bundle is scoped to the selected router and ISP account. It is authorized for a short period and contains the RouterOS commands needed to apply the service configuration.
             </p>
             <button onClick={() => void generateProvisioningBundle()} disabled={!selectedRouter || provisioning} style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, background: provisioning ? "rgba(20,184,166,.18)" : "linear-gradient(135deg,#14b8a6,#0d9488)", border: "none", borderRadius: 8, color: "white", padding: "0.68rem 0.8rem", fontWeight: 800, fontSize: "0.78rem", cursor: !selectedRouter || provisioning ? "not-allowed" : "pointer", opacity: !selectedRouter ? 0.55 : 1 }}>
-              {provisioning ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Network size={14} />} {provisioning ? "Preparing secure bundle…" : "Generate Self Provision bundle"}
+              {provisioning ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Network size={14} />} {provisioning ? "Preparing secure bundle…" : "Generate configuration"}
             </button>
             {script && (
               <div style={{ marginTop: "1rem", borderRadius: 9, background: "rgba(74,222,128,0.07)", border: "1px solid rgba(74,222,128,0.25)", padding: "0.8rem" }}>
