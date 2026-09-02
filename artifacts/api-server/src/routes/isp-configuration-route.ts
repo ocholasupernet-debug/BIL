@@ -184,12 +184,16 @@ export function buildMainIspConfigurationRsc(
 
   if (routerVpnBaseUrl) {
     const vpnBase = routerVpnBaseUrl.trim();
-    if (!/^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn\.rsc\?rid=[0-9]+&token=[A-Za-z0-9_-]{8,128}&mode=coexist$/.test(vpnBase)) {
+    const queryBootstrap = /^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn\.rsc\?rid=[0-9]+&token=[A-Za-z0-9_-]{8,128}&mode=coexist$/;
+    const pathBootstrap = /^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn-bootstrap\/[0-9]+\/[A-Za-z0-9_-]{8,128}$/;
+    if (!queryBootstrap.test(vpnBase) && !pathBootstrap.test(vpnBase)) {
       throw new Error("The router VPN bootstrap URL is invalid.");
     }
+    const routerVpn6Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/6.rsc` : `${vpnBase}&ros-version=6`;
+    const routerVpn7Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/7.rsc` : `${vpnBase}&ros-version=7`;
     script = script
-      .replaceAll(`${companyHost}/scripts/vpn7.rsc`, `${vpnBase}&ros-version=7`)
-      .replaceAll(`${companyHost}/scripts/vpn6.rsc`, `${vpnBase}&ros-version=6`);
+      .replaceAll(`${companyHost}/scripts/vpn7.rsc`, routerVpn7Url)
+      .replaceAll(`${companyHost}/scripts/vpn6.rsc`, routerVpn6Url);
   }
 
   return script;

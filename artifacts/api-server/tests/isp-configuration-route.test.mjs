@@ -46,9 +46,9 @@ test("router profile creation resumes an unfinished company router", async () =>
 test("the public Main ISP path is tenant-scoped and Self Install uses its separate path", async () => {
   const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
   const selfInstall = await readFile("../ochola-supernet/src/pages/admin/network/SelfInstall.tsx", "utf8");
-  assert.match(scriptsRoute, /router\.get\("\/scripts\/mainhotspot\.rsc", async \(req, res\)/);
+  assert.match(scriptsRoute, /router\.get\(\[\s*"\/scripts\/router-vpn\.rsc",\s*"\/scripts\/router-vpn-bootstrap/);
   assert.match(scriptsRoute, /verifyInstallerGrant\(grant, routerId\)/);
-  assert.match(scriptsRoute, /scripts\/router-vpn\.rsc/);
+  assert.match(scriptsRoute, /scripts\/router-vpn(?:\.rsc|-bootstrap)/);
   assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, currentRouter\.name, routerVpnBaseUrl\)/);
   assert.match(scriptsRoute, /router\.get\("\/scripts\/self-install-mainhotspot\.rsc"/);
   assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc/);

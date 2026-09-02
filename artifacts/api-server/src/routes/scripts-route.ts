@@ -1607,7 +1607,11 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       return;
     }
 
-    const routerVpnBaseUrl = `${requestOrigin(req)}/scripts/router-vpn.rsc?rid=${routerId}&token=${encodeURIComponent(installerToken)}&mode=coexist`;
+    /* Keep the child URL query-free. Older RouterOS fetch implementations can
+       mishandle multiple query parameters when the URL is first assigned to a
+       local variable, which turns a valid child request into a 401/400 and a
+       misleading "downloaded 0KiB" error. */
+    const routerVpnBaseUrl = `${requestOrigin(req)}/scripts/router-vpn-bootstrap/${routerId}/${encodeURIComponent(installerToken)}`;
     res
       .type("text/plain")
       .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
@@ -1924,11 +1928,15 @@ function routerIpsecFallbackConfigured(routerId: number): boolean {
   );
 }
 
-router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
-  const ridRaw = String(req.query.rid ?? "").trim();
-  const token = String(req.query.token ?? "").trim();
+router.get([
+  "/scripts/router-vpn.rsc",
+  "/scripts/router-vpn-bootstrap/:routerId/:token/:rosVersion.rsc",
+], async (req, res): Promise<void> => {
+  const pathBootstrap = Boolean(req.params.routerId);
+  const ridRaw = String(req.params.routerId ?? req.query.rid ?? "").trim();
+  const token = String(req.params.token ?? req.query.token ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
-  const installationMode: "coexist" | "takeover" = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+  const installationMode: "coexist" | "takeover" = !pathBootstrap && String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
     ? "takeover"
     : "coexist";
   const takeoverGrant = String(req.query.grant ?? "").trim();
@@ -1971,7 +1979,7 @@ router.get("/scripts/router-vpn.rsc", async (req, res): Promise<void> => {
 
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
     const protocol = requestedRouterVpnProtocol(req.query.protocol);
-    const routerOsMajor = requestedRouterOsMajor(req.query["ros-version"]);
+    const routerOsMajor = requestedRouterOsMajor(req.params.rosVersion ?? req.query["ros-version"]);
     if (!routerOsMajor) {
       res.status(400).type("text/plain").send(
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
