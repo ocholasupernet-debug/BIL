@@ -3020,12 +3020,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     }
     const safeCompanyName = rosString(companyName.trim().slice(0, 80)) || "OcholaSupernet";
 
-    /* Use the apex certificate for RouterOS downloads. Tenant subdomains are
-       currently served by an older Nginx certificate and redirect to the
-       apex, which RouterOS cannot reliably follow in HTTPS fetch mode.
-       admin_id keeps the generated script tenant-scoped without relying on
-       the request Host header. */
-    const publicAppOrigin = `https://${baseDomain}`;
+    /* Use the signed-in tenant hostname for every RouterOS download and
+       callback. The tenant certificate is verified before deployment, so the
+       router does not need to follow an HTTPS redirect from the apex host. */
+    const publicAppOrigin = `https://${adminSubdomain}.${baseDomain}`;
     const scriptBaseUrl = `${publicAppOrigin}/api/scripts`;
     const scriptAdminQuery = `admin_id=${encodeURIComponent(String(adminId))}`;
     const routerVpnHost = await routerVpnEndpointAddress(publicAppOrigin);
