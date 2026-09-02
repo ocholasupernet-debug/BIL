@@ -461,8 +461,8 @@ export default function SelfInstall() {
   const publicApiOrigin = (
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
-  const scriptUrl = `${publicApiOrigin}/api/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
-  const caUrl = `${publicApiOrigin}/api/scripts/ochola-isrg-root-x1.pem`;
+  const scriptUrl = `${publicApiOrigin}/scripts/mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
+  const caUrl = `${publicApiOrigin}/scripts/ochola-isrg-root-x1.pem`;
   const fetchCommand = certificateMode === "verified"
     ? `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`
     : `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;

@@ -102,6 +102,15 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
   assert.match(scriptsRoute, /req\.query\.certificate/);
 });
 
+test("router-facing installer URLs use the tenant root scripts path", () => {
+  assert.match(scriptsRoute, /const scriptsBase = `\$\{origin\}\$\{req\.baseUrl === "\/api" \? "\/api\/scripts" : "\/scripts"\}`/);
+  assert.ok(
+    scriptsRoute.includes('on-event="/tool fetch url=\\\\"${origin}/scripts/mainhotspot.rsc\\\\" dst-path=mainhotspot.rsc'),
+    "the scheduled refresh should fetch the root-level tenant script",
+  );
+  assert.doesNotMatch(scriptsRoute, /Main ISP Ledger install stage/);
+});
+
 test("PPPoE installers use the same verified HTTPS policy", () => {
   assert.match(pppoeRoute, /pppoeHttpsTrustBootstrap/);
   assert.match(pppoeRoute, /const ROUTER_HTTPS_FETCH_OPTIONS =\s+`mode=https check-certificate=yes`/);
