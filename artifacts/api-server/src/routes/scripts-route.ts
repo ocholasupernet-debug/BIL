@@ -17,6 +17,7 @@ import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
   routerManagementBackupIp,
+  routerManagementClientInterfaceName,
   routerManagementVpnPortForRouter,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
