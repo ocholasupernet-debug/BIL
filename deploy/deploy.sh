@@ -239,6 +239,11 @@ else
   pm2 save
 fi
 
+if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
+  echo "[10/10] Verifying router-management OpenVPN state..."
+  bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
+fi
+
 echo ""
 echo "✓ Deployment complete!"
 echo "  Commit: $(git log -1 --format='%h — %s')"
