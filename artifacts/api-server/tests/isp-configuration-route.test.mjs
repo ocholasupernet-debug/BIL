@@ -10,6 +10,9 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /String\.raw`# OcholaSuperNet Main ISP Configuration Script/);
   assert.match(route, /https:\/\/bil\.isplatty\.org\/scripts\/vpn7\.rsc/);
   assert.match(route, /interface="ocholasupernet"/);
+  assert.match(route, /proxyserver\.isplatty\.org\/ipp\.php/);
+  assert.match(route, /proxyvpn\.isplatty\.org\/ipp\.php/);
+  assert.match(route, /Primary proxyserver report failed; trying proxyvpn backup/);
   assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status|routerId|installerGrant/);
 });
 

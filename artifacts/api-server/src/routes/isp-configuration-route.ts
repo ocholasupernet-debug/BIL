@@ -122,13 +122,23 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         # Strip CIDR suffix (e.g. 10.8.0.6/24 -> 10.8.0.6)
         :local slashPos [:find $reportedIp "/"]
         :if ([:len $slashPos] > 0) do={ :set reportedIp [:pick $reportedIp 0 $slashPos] }
+        :local proxyReportUrl "https://proxyserver.isplatty.org/ipp.php"
         :do {
             /tool fetch mode=https http-method=post \
               http-data=("action=register&sub=bil&name=bil1&ip=" . $reportedIp) \
-              url="https://proxyserver.isplatty.org/ipp.php" \
+              url=$proxyReportUrl \
               output=user
             :put ("Reported VPN IP " . $reportedIp . " to proxy")
-        } on-error={ :put "Proxy report failed (ignored)" }
+        } on-error={
+            :put "Primary proxyserver report failed; trying proxyvpn backup..."
+            :do {
+                /tool fetch mode=https http-method=post \
+                  http-data=("action=register&sub=bil&name=bil1&ip=" . $reportedIp) \
+                  url="https://proxyvpn.isplatty.org/ipp.php" \
+                  output=user
+                :put ("Reported VPN IP " . $reportedIp . " through proxyvpn backup")
+            } on-error={ :put "Proxy report and proxyvpn backup failed (ignored)" }
+        }
     } else={
         :put "ocholasupernet interface has no IP; skipping proxy report"
     }
