@@ -1558,10 +1558,7 @@ router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res)
 
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
-  /* Keep the root-level /scripts mount as the canonical router-facing path.
-     Existing /api/scripts callers continue to work, while generated child
-     URLs stay on the same tenant hostname and mount as this entry-point. */
-  const scriptsBase = `${origin}${req.baseUrl === "/api" ? "/api/scripts" : "/scripts"}`;
+  const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
      progress callbacks. The admin UI may instead send rid+adminId; in that
      case the server resolves the router secret here so credentials never
@@ -1646,12 +1643,12 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
            bake it into a daily auto-update scheduler; operators can request a
            fresh scoped grant when they start another install. */
         installerUrl = "";
-        routerVpnUrl = `${scriptsBase}/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
-        coexistenceHotspotUrl = `${scriptsBase}/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
+        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
-          `${scriptsBase}/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
+          `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
 
         try {
           const provisioning = await provisionRouterManagementOpenVpn({
@@ -2557,7 +2554,7 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 `;
 
 /* ── Optional diagnostic logging bootstrap ──
-   This preserves the multi-stage ISP install without introducing a
+   This preserves the Main ISP Ledger install stage without introducing a
    third-party log collector. The active app remains the source of router
    health and install events. */
 const LOGPUSH_RSC = `# logpush.rsc – ISPlatty diagnostic logging bootstrap
@@ -2639,7 +2636,7 @@ function buildSyncfullRsc(origin: string): string {
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\\"${origin}/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
+    on-event="/tool fetch url=\\"${origin}/api/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
     comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 

@@ -4,7 +4,6 @@ import { Link } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { getAdminApiToken, getAdminRole, getSelectedTenantId } from "@/lib/supabase";
-import { getHostSubdomain } from "@/lib/subdomain";
 import {
   AlertTriangle, Check, CheckCircle2, Copy, Download, ExternalLink,
   FileCode2, Loader2, Network, RefreshCw, Server, ShieldCheck,
@@ -171,10 +170,7 @@ export default function SelfProvision() {
         body: JSON.stringify({ routerId: selectedRouter.id, adminId }),
       });
       if (!grant.ok || !grant.grantToken) throw new Error(grant.error || "Provisioning authorization could not be prepared.");
-      const publicApiOrigin = (
-        getHostSubdomain() ? window.location.origin : (API || window.location.origin)
-      ).replace(/\/$/, "");
-      const url = `${publicApiOrigin}/scripts/mainhotspot.rsc?rid=${selectedRouter.id}&adminId=${adminId}&grant=${encodeURIComponent(grant.grantToken)}&mode=coexist&certificate=on`;
+      const url = `${API}/api/scripts/mainhotspot.rsc?rid=${selectedRouter.id}&adminId=${adminId}&grant=${encodeURIComponent(grant.grantToken)}&mode=coexist&certificate=on`;
       const response = await fetch(url, { headers: authHeaders() });
       const content = await response.text();
       if (!response.ok) throw new Error(content.replace(/^#\s?/gm, "").trim() || `Bundle generation failed (${response.status}).`);
