@@ -462,6 +462,13 @@ function safeRm(cmd: string): string {
   return `:do { ${cleaned} } on-error={}`;
 }
 
+function scheduledConfigImport(url: string, destination: string, label: string): string {
+  const safeUrl = rosString(url);
+  const safeDestination = rosString(destination);
+  const safeLabel = rosString(label);
+  return `:do { /tool fetch url=\\"${safeUrl}\\" dst-path=\\"${safeDestination}.download\\" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}; :local downloaded [/file find name=\\"${safeDestination}.download\\"]; :if ([:len \\$downloaded] = 0) do={ :error \\"${safeLabel}: download did not create a file\\" }; :if ([:tonum [/file get \\$downloaded size]] <= 0) do={ :error \\"${safeLabel}: downloaded file is empty\\" }; :do { /file remove [find name=\\"${safeDestination}\\"] } on-error={}; /file set \\$downloaded name=\\"${safeDestination}\\"; /import \\"${safeDestination}\\" } on-error={ :log warning \\"${safeLabel}: verified update/import failed\\" }`;
+}
+
 function coexistenceBridgeName(routerId: number): string {
   return "co-hotspot-bridge";
 }
@@ -891,6 +898,18 @@ function buildMainhotspotRsc(
   installationMode: "coexist" | "takeover" = "takeover",
   coexistenceHotspotUrl: string = "",
 ): string {
+  const normalizeUrl = (value: string): string =>
+    value.trim().replace(/^(?:https?:\/\/)+/i, "https://").replace(/\/+$/, "");
+  scriptsBase = normalizeUrl(scriptsBase);
+  progressUrl = normalizeUrl(progressUrl);
+  registrationUrl = normalizeUrl(registrationUrl);
+  heartbeatUrl = normalizeUrl(heartbeatUrl);
+  installerUrl = normalizeUrl(installerUrl);
+  routerVpnUrl = normalizeUrl(routerVpnUrl);
+  routerVpnBackupUrl = normalizeUrl(routerVpnBackupUrl);
+  routerWireGuardUrl = normalizeUrl(routerWireGuardUrl);
+  routerIpsecUrl = normalizeUrl(routerIpsecUrl);
+  coexistenceHotspotUrl = normalizeUrl(coexistenceHotspotUrl);
   const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
     ? "mode=https check-certificate=no"
     : `mode=https check-certificate=yes`;
@@ -1188,34 +1207,49 @@ ${httpsTrustBootstrap}
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
 :local routerOsVersion [/system resource get version]
-:local routerOsMajorDigit [:pick $routerOsVersion 0 1]
+:local firstVersionDot [:find $routerOsVersion "."]
+:if ([:len $routerOsVersion] = 0 || [:len $firstVersionDot] = 0) do={
+    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+}
+:if ($firstVersionDot < 1) do={
+    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+}
+:local routerOsMajorText [:pick $routerOsVersion 0 $firstVersionDot]
+:local versionRemainder [:pick $routerOsVersion ($firstVersionDot + 1) [:len $routerOsVersion]]
+:local secondVersionDot [:find $versionRemainder "."]
+:local routerOsMinorText $versionRemainder
+:if ([:len $secondVersionDot] > 0) do={
+    :set routerOsMinorText [:pick $versionRemainder 0 $secondVersionDot]
+}
 :local majorVersion 0
 :local minorVersion 0
-:if ($routerOsMajorDigit = "7") do={
-    :set majorVersion 7
-} else={
-    :if ($routerOsMajorDigit = "6") do={
-        :set majorVersion 6
-        :local firstDot [:find $routerOsVersion "."]
-        :local remaining [:pick $routerOsVersion ($firstDot + 1) [:len $routerOsVersion]]
-        :local secondDot [:find $remaining "."]
-        :if ([:len $secondDot] > 0) do={
-            :set minorVersion [:tonum [:pick $remaining 0 $secondDot]]
-        } else={
-            :set minorVersion [:tonum $remaining]
-        }
-    } else={
-        :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
-    }
+:do {
+    :set majorVersion [:tonum $routerOsMajorText]
+    :set minorVersion [:tonum $routerOsMinorText]
+} on-error={
+    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+}
+:if ($majorVersion != 6 && $majorVersion != 7) do={
+    :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
 }
 :if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
     :put "RouterOS version 6.48 or higher is required."
     :error "RouterOS version 6.48 or higher is required."
 }
-:if ([/ping 8.8.8.8 count=3] = 0) do={
-    :error "No internet connection. Please check your internet connection and try again."
+:local internetReachable false
+:foreach internetTarget in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={
+    :if (!$internetReachable) do={
+        :do {
+            :if ([/ping $internetTarget count=2] > 0) do={ :set internetReachable true }
+        } on-error={}
+    }
 }
+:if (!$internetReachable) do={
+    :error "No usable internet connection was found after testing multiple destinations."
+}
+:put ("Detected RouterOS version: " . $routerOsVersion)
 :local failures 0
+:local optionalFailures 0
 :put "======================================================"
 :put " ${safeCompanyName} router setup"
 :put "======================================================"
@@ -1411,9 +1445,12 @@ ${safeInstallerUrl ? `:do {
     :delay 2s
     /import logpush.rsc
     :put "Diagnostic log-push installed; saved as logpush.rsc."
-} on-error={ :put ("Diagnostic log-push install skipped; check logpush.rsc - " . $error) }
+} on-error={
+    :set optionalFailures ($optionalFailures + 1)
+    :put ("Diagnostic log-push install skipped; check logpush.rsc - " . $error)
+}
 
-# --- Optional API hardening ----------------------------------------------------
+# --- API hardening -------------------------------------------------------------
 :do {
     :put "Downloading API security script..."
     /tool fetch url="${scriptsBase}/seclogpush.rsc" dst-path=seclogpush.rsc keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
@@ -1421,7 +1458,10 @@ ${safeInstallerUrl ? `:do {
     :delay 2s
     /import seclogpush.rsc
     :put "API security script installed; saved as seclogpush.rsc."
-} on-error={ :put ("API security install skipped; check seclogpush.rsc - " . $error) }
+} on-error={
+    :set failures ($failures + 1)
+    :put ("  WARN [seclogpush.rsc] REQUIRED API hardening failed: " . $error)
+}
 
 # --- DNS flush scheduler ------------------------------------------------------
 :do {
@@ -1437,27 +1477,26 @@ ${safeInstallerUrl ? `:do {
 
 # --- Report the installed router to this ISP's current app --------------------
 ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
-:local reportedIp "${safeRouterVpnIp}"
-:if ($reportedIp = "") do={
-    :if ($reportedIp = "") do={
-        :foreach a in=[/ip address find where interface="corebillingvpn"] do={
-            :set reportedIp [/ip address get $a address]
-        }
-        :if ($reportedIp = "") do={
-            :foreach a in=[/ip address find where interface="coreispbilling"] do={
-                :set reportedIp [/ip address get $a address]
+:local reportedIp ""
+:local vpnIpReady false
+:for vpnIpAttempt from=1 to=12 do={
+    :if (!$vpnIpReady) do={
+        :foreach a in=[/ip address find] do={
+            :local candidate [/ip address get $a address]
+            :local slashPos [:find $candidate "/"]
+            :local candidateIp $candidate
+            :if ($slashPos >= 0) do={ :set candidateIp [:pick $candidate 0 $slashPos] }
+            :if ([:len $candidateIp] >= 8 && [:pick $candidateIp 0 7] = "10.8.5.") do={
+                :if ("${safeRouterVpnIp}" = "" || $candidateIp = "${safeRouterVpnIp}") do={
+                    :set reportedIp $candidateIp
+                    :set vpnIpReady true
+                }
             }
         }
-    }
-    :if ($reportedIp = "") do={
-        :foreach a in=[/ip address find where interface="ocholasupernet"] do={
-            :set reportedIp [/ip address get $a address]
-        }
+        :if (!$vpnIpReady) do={ :delay 5s }
     }
 }
-:if ($reportedIp != "") do={
-    :local slashPos [:find $reportedIp "/"]
-    :if ([:len $slashPos] > 0) do={ :set reportedIp [:pick $reportedIp 0 $slashPos] }
+:if ($vpnIpReady && $reportedIp != "") do={
     :local rm ""
     :local ri ""
     :local rv ""
@@ -1465,12 +1504,12 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :do { :set ri [/system identity get name] } on-error={}
     :do { :set rv [/system package get [find name=routeros] version] } on-error={}
     :do {
-        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=router-register.tmp
-        :do { /file remove router-register.tmp } on-error={}
+        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} output=user keep-result=no
         :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
-    } on-error={ :put "Router registration report failed (ignored)" }
+    } on-error={ :put "Router registration report failed; the router will retry on the next heartbeat." }
 } else={
-    :put "Management VPN has no IP yet; skipping router registration report"
+    :set failures ($failures + 1)
+    :put "VPN interface exists but has no valid IPv4 address; router registration was not reported."
 }
 ` : `# Router registration is enabled when this script is generated for a saved router.`}
 
@@ -1481,10 +1520,14 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :put "Log script-warning suppression applied"
 } on-error={ :put "Log suppression skipped (non-fatal)" }
 
-:if ($failures = 0) do={
+:if ($failures = 0 && $optionalFailures = 0) do={
     :put "${safeCompanyName}: all configurations completed successfully."
 } else={
+    :if ($failures = 0) do={
+        :put ("${safeCompanyName}: required configurations completed, but " . $optionalFailures . " optional component(s) were skipped.")
+    } else={
     :put ("${safeCompanyName}: setup finished with " . $failures . " failed step(s) - see WARN lines above.")
+    }
 }
 
 # Final completion ping for the admin progress timeline (no-op when pg was disabled)
@@ -2554,23 +2597,23 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 :do { /interface bridge set [find name="hotspot-bridge"] fast-forward=no } on-error={}
 
 # IP address on bridge (will be overwritten by per-router script)
-:do { /ip address remove [find interface="hotspot-bridge"] } on-error={}
+:do { /ip address remove [find interface="hotspot-bridge" comment="SafeNet hotspot bridge IP"] } on-error={}
 :do { /ip address add address=192.168.88.1/24 interface="hotspot-bridge" comment="SafeNet hotspot bridge IP" } on-error={}
 
 # DNS
 :do { /ip dns set servers=8.8.8.8,8.8.4.4 allow-remote-requests=yes } on-error={}
 
 # IP pool
-:do { /ip pool remove [find name=hspool] } on-error={}
-:do { /ip pool add name=hspool ranges=192.168.88.2-192.168.88.254 } on-error={}
+:do { /ip pool remove [find name=hspool comment="SafeNet hotspot pool"] } on-error={}
+:do { /ip pool add name=hspool ranges=192.168.88.2-192.168.88.254 comment="SafeNet hotspot pool" } on-error={}
 
 # Hotspot profile
-:do { /ip hotspot profile remove [find name=default-hs] } on-error={}
-:do { /ip hotspot profile add name=default-hs hotspot-address=192.168.88.1 dns-name=wifi.local login-by=http-chap,http-pap html-directory=$hsdir } on-error={ :put "  WARN: hotspot profile add failed" }
+:do { /ip hotspot profile remove [find name=default-hs comment="SafeNet hotspot profile"] } on-error={}
+:do { /ip hotspot profile add name=default-hs hotspot-address=192.168.88.1 dns-name=wifi.local login-by=http-chap,http-pap html-directory=$hsdir comment="SafeNet hotspot profile" } on-error={ :error ("hotspot profile setup failed: " . $error) }
 
 # Hotspot service
-:do { /ip hotspot remove [find interface="hotspot-bridge"] } on-error={}
-:do { /ip hotspot add name=hotspot1 interface="hotspot-bridge" profile=default-hs address-pool=hspool idle-timeout=none } on-error={ :put "  WARN: hotspot service add failed" }
+:do { /ip hotspot remove [find interface="hotspot-bridge" comment="SafeNet hotspot service"] } on-error={}
+:do { /ip hotspot add name=hotspot1 interface="hotspot-bridge" profile=default-hs address-pool=hspool idle-timeout=none comment="SafeNet hotspot service" } on-error={ :error ("hotspot service setup failed: " . $error) }
 
 :put "  [hotspot] Hotspot service started on hotspot-bridge (192.168.88.1)  OK"
 `;
@@ -2583,19 +2626,19 @@ const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
 :put "  [pppoe] Setting up PPPoE server..."
 
 # PPPoE IP pool
-:do { /ip pool remove [find name=pppoe-pool] } on-error={}
-:do { /ip pool add name=pppoe-pool ranges=192.168.99.2-192.168.99.254 } on-error={}
+:do { /ip pool remove [find name=pppoe-pool comment="OcholaSuperNet PPPoE pool"] } on-error={}
+:do { /ip pool add name=pppoe-pool ranges=192.168.99.2-192.168.99.254 comment="OcholaSuperNet PPPoE pool" } on-error={ :error ("PPPoE pool setup failed: " . $error) }
 
 # PPP profile (shared between PPPoE and future L2TP use)
-:do { /ppp profile remove [find name=isp-profile] } on-error={}
-:do { /ppp profile add name=isp-profile local-address=192.168.99.1 remote-address=pppoe-pool dns-server=8.8.8.8,8.8.4.4 use-compression=no use-encryption=yes } on-error={ :put "  WARN: PPP profile add failed" }
+:do { /ppp profile remove [find name=isp-profile comment="OcholaSuperNet PPP profile"] } on-error={}
+:do { /ppp profile add name=isp-profile local-address=192.168.99.1 remote-address=pppoe-pool dns-server=8.8.8.8,8.8.4.4 use-compression=no use-encryption=yes comment="OcholaSuperNet PPP profile" } on-error={ :error ("PPP profile setup failed: " . $error) }
 
 # PPPoE server on the LAN hotspot bridge.
 # PPPoE subscribers connect through the same bridge created by hotspotsetup.rsc;
 # binding this server to ether1 would expose it on the WAN side instead.
-:do { /interface pppoe-server server remove [find service-name=isp-pppoe] } on-error={}
-:do { /interface pppoe-server server add service-name=isp-pppoe interface=hotspot-bridge default-profile=isp-profile disabled=no } on-error={ :put "  WARN: PPPoE server add failed" }
-:do { /interface pppoe-server server set [find service-name=isp-pppoe] authentication=pap,chap,mschap1,mschap2 max-sessions=0 } on-error={ :put "  WARN: PPPoE server options could not be applied" }
+:do { /interface pppoe-server server remove [find service-name=isp-pppoe comment="OcholaSuperNet PPPoE server"] } on-error={}
+:do { /interface pppoe-server server add service-name=isp-pppoe interface=hotspot-bridge default-profile=isp-profile disabled=no comment="OcholaSuperNet PPPoE server" } on-error={ :error ("PPPoE server setup failed: " . $error) }
+:do { /interface pppoe-server server set [find service-name=isp-pppoe comment="OcholaSuperNet PPPoE server"] authentication=pap,chap,mschap1,mschap2 max-sessions=0 } on-error={ :error ("PPPoE server options failed: " . $error) }
 
 :put "  [pppoe] PPPoE server configured  OK"
 `;
@@ -2611,14 +2654,14 @@ const USERS_RSC = `# users.rsc – Default hotspot user and group setup
 :do { /ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none } on-error={}
 
 # Remove stale defaults first
-:do { /ip hotspot user remove [find name=admin] } on-error={}
-:do { /ip hotspot user remove [find name=trial] } on-error={}
+:do { /ip hotspot user remove [find name=admin comment="ISP admin bypass"] } on-error={}
+:do { /ip hotspot user remove [find name=trial comment="Trial guest"] } on-error={}
 
 # Admin bypass user (MAC or password – per-router script may adjust)
-:do { /ip hotspot user add name=admin password=admin profile=default comment="ISP admin bypass" } on-error={ :put "  WARN: admin user add failed" }
+:do { /ip hotspot user add name=admin password=admin profile=default comment="ISP admin bypass" } on-error={ :error ("admin hotspot user setup failed: " . $error) }
 
 # 1-hour trial guest
-:do { /ip hotspot user add name=trial password=trial123 profile=default limit-uptime=1h comment="Trial guest" } on-error={ :put "  WARN: trial user add failed" }
+:do { /ip hotspot user add name=trial password=trial123 profile=default limit-uptime=1h comment="Trial guest" } on-error={ :error ("trial hotspot user setup failed: " . $error) }
 
 :put "  [users] Default users set up  OK"
 `;
@@ -2639,7 +2682,7 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="SafeNet - allow API sync" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="SafeNet - allow API sync" } on-error={ :put "  WARN: API sync firewall rule failed" } }
 
 # Enable the RouterOS API service
-:do { /ip service set api disabled=no } on-error={ :put "  WARN: could not enable API service" }
+:do { /ip service set [find name="api"] disabled=no address=10.8.5.0/24 } on-error={ :error ("API service setup failed: " . $error) }
 
 :put "  [syncusers] User-sync firewall rules applied  OK"
 `;
@@ -2652,12 +2695,36 @@ const LOGPUSH_RSC = `# logpush.rsc – ISPlatty diagnostic logging bootstrap
 :put "  [logpush] Diagnostics remain available through the ISP dashboard."
 `;
 
-/* ── Optional API security bootstrap ──
-   Router-specific firewall allow rules are created by the main configuration.
-   This stage intentionally avoids broad DROP rules that could lock an admin
-   out of a freshly installed router. */
+/* ── API security bootstrap ──
+   The management-VPN accept rules are deliberately inserted before the public
+   drops. Service-level restrictions remain in place even if a firewall rule is
+   later reordered by an operator. */
 const SECLOGPUSH_RSC = `# seclogpush.rsc – ISPlatty API security bootstrap
-:put "  [api-security] Router-specific API access policy is being retained."
+:put "  [api-security] Locking API and FTP access to the management VPN..."
+
+:do {
+  /ip service set [find name="api"] disabled=no address=10.8.5.0/24
+  :do { /ip service set [find name="api-ssl"] disabled=yes } on-error={}
+  :do { /ip service set [find name="ftp"] disabled=yes } on-error={}
+} on-error={
+  :error ("RouterOS service lockdown failed: " . $error)
+}
+
+/ip firewall filter
+:do { remove [find comment="OcholaSuperNet - public management port drop"] } on-error={}
+:do { remove [find comment="OcholaSuperNet - management API allow"] } on-error={}
+:do {
+  add chain=input action=drop protocol=tcp dst-port=8728 comment="OcholaSuperNet - public management port drop"
+  add chain=input action=drop protocol=tcp dst-port=8729 comment="OcholaSuperNet - public management port drop"
+  add chain=input action=drop protocol=tcp dst-port=21 comment="OcholaSuperNet - public management port drop"
+  add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 comment="OcholaSuperNet - management API allow"
+} on-error={
+  :error ("RouterOS management firewall rules failed: " . $error)
+}
+
+:do { move [find comment="OcholaSuperNet - public management port drop"] 0 } on-error={}
+:do { move [find comment="OcholaSuperNet - management API allow"] 0 } on-error={}
+:put "  [api-security] API/FTP lockdown applied; management API is VPN-only  OK"
 `;
 
 /* ── Heartbeat ── */
@@ -2671,8 +2738,8 @@ function buildHeartbeatRsc(origin: string): string {
 :put "  [heartbeat] Installing heartbeat script and scheduler..."
 
 # Remove old entries
-:do { /system script remove [find name=ochola-heartbeat-script] } on-error={}
-:do { /system scheduler remove [find name=ochola-heartbeat] } on-error={}
+:do { /system script remove [find name=ochola-heartbeat-script comment="ISP heartbeat script"] } on-error={}
+:do { /system scheduler remove [find name=ochola-heartbeat comment="ISP heartbeat"] } on-error={}
 
 # Placeholder heartbeat – the per-router script overwrites with the
 # real URL containing the secret token.
@@ -2680,6 +2747,7 @@ function buildHeartbeatRsc(origin: string): string {
   /system script add \\
     name=ochola-heartbeat-script \\
     policy=read,write,test \\
+    comment="ISP heartbeat script" \\
   source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; :do { /tool fetch url=(\\"${origin}/api/isp/router/heartbeat/pending?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp } on-error={}; :do { /file remove [find name=hb.tmp] } on-error={}"
 } on-error={ :put "  WARN: heartbeat script add failed" }
 
@@ -2717,18 +2785,20 @@ function buildSyncfullRsc(origin: string): string {
 
 :put "  [syncfull] Scheduling full config sync..."
 
-# Remove old auto-update scheduler (per-router script sets the real URL)
-:do { /system scheduler remove [find name=ochola-autoupdate] } on-error={}
+# Remove only an Ochola-owned auto-update scheduler.
+:do { /system scheduler remove [find name=ochola-autoupdate comment~"auto-update"] } on-error={}
 
-# Placeholder auto-update – the per-router script replaces this with
-# the correct router-specific URL (ISP subdomain + router slug).
+# Placeholder auto-update is intentionally disabled. A scheduler must not
+# fetch/import an unauthenticated or stale installer. An administrator can
+# re-run a freshly generated, router-scoped installer after reviewing it.
 :do {
   /system scheduler add \\
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\\"${origin}/api/scripts/self-install-mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
-    comment="ISP auto-update"
+    disabled=yes \\
+    on-event=":put \\"OcholaSuperNet auto-update is disabled until a router-scoped installer is reviewed and installed.\\"" \\
+    comment="OcholaSuperNet auto-update disabled by default"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
 :put "  [syncfull] Full-sync scheduler installed  OK"
@@ -2928,6 +2998,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     if (!adminId || !adminSubdomain) {
       throw new Error("A tenant subdomain is required to generate a router file.");
     }
+    const safeCompanyName = rosString(companyName.trim().slice(0, 80)) || "OcholaSupernet";
 
     /* Use the apex certificate for RouterOS downloads. Tenant subdomains are
        currently served by an older Nginx certificate and redirect to the
@@ -3178,7 +3249,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       ``,
       `# === Bridge Interface ===`,
       `:put "[3/8] Configuring bridge interface (${bridgeIp}/24)..."`,
-      `:do { /interface bridge add name="${bridgeIface}" comment="${companyName} Hotspot Bridge" } on-error={}`,
+      `:do { /interface bridge add name="${bridgeIface}" comment="${safeCompanyName} Hotspot Bridge" } on-error={}`,
       `# fast-forward=no is REQUIRED for hotspot redirect to work.`,
       `# Without it, bridge packets bypass the CPU/firewall layer and hotspot never sees them.`,
       `:do { /interface bridge set [find name="${bridgeIface}"] fast-forward=no } on-error={}`,
@@ -3196,22 +3267,22 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan1 comment="WiFi 2.4GHz" } on-error={}`,
       `:do { /interface bridge port remove [find interface=wlan2] } on-error={}`,
       `:do { /interface bridge port add bridge="${bridgeIface}" interface=wlan2 comment="WiFi 5GHz" } on-error={}`,
-      safeRm(`/ip address remove [find interface="${bridgeIface}"]`),
-      safeRos(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${companyName} hotspot bridge IP"`, "bridge IP add"),
+      safeRm(`/ip address remove [find interface="${bridgeIface}" comment="${safeCompanyName} hotspot bridge IP"]`),
+      safeRos(`/ip address add address=${ipMask} interface="${bridgeIface}" comment="${safeCompanyName} hotspot bridge IP"`, "bridge IP add"),
       `:put "      Bridge '${bridgeIface}' IP set to ${ipMask}  OK"`,
       ``,
       `# === IP Pool ===`,
-      safeRm(`/ip pool remove [find name=hspool]`),
-      safeRos(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd}`, "pool add"),
+      safeRm(`/ip pool remove [find name=hspool comment="${safeCompanyName} hotspot pool"]`),
+      safeRos(`/ip pool add name=hspool ranges=${poolStart}-${poolEnd} comment="${safeCompanyName} hotspot pool"`, "pool add"),
       ``,
       `# === Hotspot (remove first so profile can be removed) ===`,
-      safeRm(`/ip hotspot remove [find interface="${bridgeIface}"]`),
+      safeRm(`/ip hotspot remove [find interface="${bridgeIface}" comment="${safeCompanyName} hotspot service"]`),
       ``,
       `# === Hotspot Profile & Service ===`,
       `:put "[4/8] Starting hotspot service..."`,
-      safeRm(`/ip hotspot profile remove [find name="${profileName}"]`),
-      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=$hsdir`, "hotspot profile add"),
-      safeRos(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none`, "hotspot add"),
+      safeRm(`/ip hotspot profile remove [find name="${profileName}" comment="${safeCompanyName} hotspot profile"]`),
+      safeRos(`/ip hotspot profile add name="${profileName}" hotspot-address=${bridgeIp} dns-name="${hotspotDns}" login-by=http-chap,http-pap html-directory=$hsdir comment="${safeCompanyName} hotspot profile"`, "hotspot profile add"),
+      safeRos(`/ip hotspot add name=hotspot1 interface="${bridgeIface}" profile="${profileName}" address-pool=hspool idle-timeout=none comment="${safeCompanyName} hotspot service"`, "hotspot add"),
       `:put "      Hotspot on '${bridgeIface}', pool ${poolStart}-${poolEnd}  OK"`,
       `:delay 3s`,
       ``,
@@ -3264,48 +3335,48 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# domains to the router IP instead. The phone connects, gets an unexpected`,
       `# response (or TLS error), and automatically shows "Sign in to network".`,
       `:put "[6a/8] Setting up captive portal DNS overrides..."`,
-      safeRm(`/ip dns static remove [find comment="${companyName} - captive-portal"]`),
+      safeRm(`/ip dns static remove [find comment="${safeCompanyName} - captive-portal"]`),
       `# iOS / macOS captive portal detection`,
-      safeRos(`/ip dns static add name="captive.apple.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static captive.apple.com"),
-      safeRos(`/ip dns static add name="www.apple.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static www.apple.com"),
+      safeRos(`/ip dns static add name="captive.apple.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static captive.apple.com"),
+      safeRos(`/ip dns static add name="www.apple.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static www.apple.com"),
       `# Android / Chrome OS captive portal detection`,
-      safeRos(`/ip dns static add name="connectivitycheck.gstatic.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static gstatic"),
-      safeRos(`/ip dns static add name="connectivitycheck.android.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static android"),
-      safeRos(`/ip dns static add name="clients3.google.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static google-clients3"),
+      safeRos(`/ip dns static add name="connectivitycheck.gstatic.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static gstatic"),
+      safeRos(`/ip dns static add name="connectivitycheck.android.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static android"),
+      safeRos(`/ip dns static add name="clients3.google.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static google-clients3"),
       `# Windows captive portal detection`,
-      safeRos(`/ip dns static add name="www.msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static msft1"),
-      safeRos(`/ip dns static add name="msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static msft2"),
-      safeRos(`/ip dns static add name="www.msftncsi.com" address=${bridgeIp} ttl=10s comment="${companyName} - captive-portal"`, "dns static msftncsi"),
+      safeRos(`/ip dns static add name="www.msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static msft1"),
+      safeRos(`/ip dns static add name="msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static msft2"),
+      safeRos(`/ip dns static add name="www.msftncsi.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static msftncsi"),
       `:put "      Captive portal DNS overrides → ${bridgeIp}  OK"`,
       ``,
       `# === NAT + Firewall ===`,
       `:put "[6b/8] Applying firewall, NAT and API access rules..."`,
-      safeRm(`/ip firewall nat remove [find comment="${companyName} - Hotspot redirect"]`),
-      safeRos(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - Hotspot redirect"`, "NAT redirect add"),
+      safeRm(`/ip firewall nat remove [find comment="${safeCompanyName} - Hotspot redirect"]`),
+      safeRos(`/ip firewall nat add chain=dstnat protocol=tcp dst-port=80 action=redirect to-ports=64872 hotspot=!auth comment="${safeCompanyName} - Hotspot redirect"`, "NAT redirect add"),
       `# Also redirect port 443 (HTTPS) so captive portal detection pages that hit`,
       `# our hotspot IP via the DNS override get a response (hotspot login page)`,
       `# instead of timing out. Works on ROS 6 & 7.`,
-      `:do { /ip firewall nat remove [find comment="${companyName} - HTTPS redirect"] } on-error={}`,
-      `:do { /ip firewall nat add chain=dstnat protocol=tcp dst-port=443 action=redirect to-ports=64872 hotspot=!auth comment="${companyName} - HTTPS redirect" } on-error={}`,
-      safeRm(`/ip firewall filter remove [find comment="${companyName} - allow hotspot"]`),
-      safeRos(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${companyName} - allow hotspot"`, "firewall hotspot accept"),
-      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${companyName} - allow hotspot" } on-error={}`,
+      `:do { /ip firewall nat remove [find comment="${safeCompanyName} - HTTPS redirect"] } on-error={}`,
+      `:do { /ip firewall nat add chain=dstnat protocol=tcp dst-port=443 action=redirect to-ports=64872 hotspot=!auth comment="${safeCompanyName} - HTTPS redirect" } on-error={}`,
+      safeRm(`/ip firewall filter remove [find comment="${safeCompanyName} - allow hotspot"]`),
+      safeRos(`/ip firewall filter add chain=input protocol=tcp dst-port=64872 action=accept comment="${safeCompanyName} - allow hotspot"`, "firewall hotspot accept"),
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept comment="${safeCompanyName} - allow hotspot" } on-error={}`,
       `# Enable RouterOS API service + allow from VPN subnet and LAN`,
-      `:do { /ip service set api disabled=no } on-error={ :put "  WARN: could not enable API service" }`,
-      safeRm(`/ip firewall filter remove [find comment="${companyName} - allow API"]`),
+      `:do { /ip service set [find name="api"] disabled=no address=10.8.5.0/24 } on-error={ :put "  WARN: could not restrict API service" }`,
+      safeRm(`/ip firewall filter remove [find comment="${safeCompanyName} - allow API"]`),
       `# Try place-before=0 first (puts rule at top, before any DROP rules).`,
       `# If the input chain is empty place-before=0 errors — fall back to plain add.`,
-      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${companyName} - allow API" } on-error={ :put "  WARN: API allow (VPN) rule failed" } }`,
-      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow legacy API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${companyName} - allow legacy API" } on-error={ :put "  WARN: API allow (legacy VPN) rule failed" } }`,
-      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${companyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${companyName} - allow API" } on-error={ :put "  WARN: API allow (LAN) rule failed" } }`,
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${safeCompanyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment="${safeCompanyName} - allow API" } on-error={ :put "  WARN: API allow (VPN) rule failed" } }`,
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${safeCompanyName} - allow legacy API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.0.0/24 action=accept comment="${safeCompanyName} - allow legacy API" } on-error={ :put "  WARN: API allow (legacy VPN) rule failed" } }`,
+      `:do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${safeCompanyName} - allow API" place-before=0 } on-error={ :do { /ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=${bridgeIp}/24 action=accept comment="${safeCompanyName} - allow API" } on-error={ :put "  WARN: API allow (LAN) rule failed" } }`,
       `:put "      NAT redirect + firewall + API rules applied  OK"`,
       ``,
       `# === OVPN TLS Certificates ===`,
       `:put "[7/8] Importing VPN certificates and setting up tunnel..."`,
       `# 1) Remove old OVPN interface FIRST so it releases any cert reference`,
-      safeRm(`/interface ovpn-client remove [find name=coreispbilling]`),
-      safeRm(`/interface ovpn-client remove [find name=corebillingvpn]`),
-      safeRm(`/interface ovpn-client remove [find name=ocholasupernet]`),
+      safeRm(`/interface ovpn-client remove [find name=coreispbilling comment~"VPS tunnel"]`),
+      safeRm(`/interface ovpn-client remove [find name=corebillingvpn comment~"VPS tunnel"]`),
+      safeRm(`/interface ovpn-client remove [find name=ocholasupernet comment~"VPS tunnel"]`),
       `# 2) Remove any stale cert entries so re-import lands under the right name`,
       `:foreach x in=[/certificate find name~"${routerSlug}"] do={ :do { /certificate remove $x } on-error={} }`,
       `:foreach x in=[/certificate find name~"vpn-ca"]        do={ :do { /certificate remove $x } on-error={} }`,
@@ -3359,14 +3430,14 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# The script checks whether the hotspot service is running before pinging the`,
       `# billing server. ?hs=1 means the service is active (users can connect) and`,
       `# lights the green indicator in the admin dashboard. ?hs=0 turns it yellow.`,
-      safeRm(`/system script remove [find name=ochola-heartbeat-script]`),
-      safeRos(`/system script add name=ochola-heartbeat-script policy=read,write,test source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`, "heartbeat script add"),
-      safeRm(`/system scheduler remove [find name=ochola-heartbeat]`),
-      safeRos(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${companyName} heartbeat"`, "heartbeat scheduler add"),
+      safeRm(`/system script remove [find name=ochola-heartbeat-script comment="${safeCompanyName} heartbeat script"]`),
+      safeRos(`/system script add name=ochola-heartbeat-script policy=read,write,test comment="${safeCompanyName} heartbeat script" source=":local hs 0; :do {:if ([/ip hotspot print count-only where !disabled]>0) do={:set hs 1}} on-error={}; /tool fetch url=(\\"${heartbeatUrl}?hs=\\" . [:tostr \\$hs]) ${ROUTER_HTTPS_FETCH_OPTIONS} dst-path=hb.tmp; :do {/file remove [find name=hb.tmp]} on-error={}"`, "heartbeat script add"),
+      safeRm(`/system scheduler remove [find name=ochola-heartbeat comment="${safeCompanyName} heartbeat"]`),
+      safeRos(`/system scheduler add name=ochola-heartbeat interval=5m start-time=startup on-event="/system script run ochola-heartbeat-script" comment="${safeCompanyName} heartbeat"`, "heartbeat scheduler add"),
       ``,
       `# === Config Auto-Update Scheduler (daily) ===`,
-      safeRm(`/system scheduler remove [find name=ochola-autoupdate]`),
-      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="/tool fetch url=\\"${scriptBaseUrl}/${rawName}?${scriptAdminQuery}\\" dst-path=${routerSlug}.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import ${routerSlug}.rsc" comment="${companyName} auto-update"`, "auto-update scheduler add"),
+      safeRm(`/system scheduler remove [find name=ochola-autoupdate comment="${safeCompanyName} auto-update"]`),
+      safeRos(`/system scheduler add name=ochola-autoupdate interval=1d start-time=00:05:00 on-event="${scheduledConfigImport(`${scriptBaseUrl}/${rawName}?${scriptAdminQuery}`, `${routerSlug}.rsc`, `${companyName} auto-update`)}" comment="${safeCompanyName} auto-update"`, "auto-update scheduler add"),
       `:put "      Heartbeat every 5 min, auto-update daily at 00:05  OK"`,
       ``,
       `:put ""`,

@@ -13,96 +13,133 @@ const router: IRouter = Router();
 const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configuration Script (mainhotspot.rsc)
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 
-:global version [/system package update get installed-version]
+:local version ""
+:do { :set version [/system resource get version] } on-error={
+    :do { :set version [/system package get [find name=routeros] version] } on-error={}
+}
+:local firstDot [:find $version "."]
+:if ([:len $version] = 0 || $firstDot < 1) do={
+    :error "Could not parse the installed RouterOS version."
+}
+:local majorText [:pick $version 0 $firstDot]
+:local remainder [:pick $version ($firstDot + 1) [:len $version]]
+:local secondDot [:find $remainder "."]
+:local minorText $remainder
+:if ($secondDot >= 0) do={ :set minorText [:pick $remainder 0 $secondDot] }
 :local majorVersion 0
 :local minorVersion 0
-:local dotPos [:find $version "."]
-:if ([:len $dotPos] > 0) do={
-    :set majorVersion [:tonum [:pick $version 0 $dotPos]]
-    :local remaining [:pick $version ($dotPos + 1) [:len $version]]
-    :set dotPos [:find $remaining "."]
-    :if ([:len $dotPos] > 0) do={
-        :set minorVersion [:tonum [:pick $remaining 0 $dotPos]]
-    }
-}
+:do {
+    :set majorVersion [:tonum $majorText]
+    :set minorVersion [:tonum $minorText]
+} on-error={ :error ("Unsupported RouterOS version format: " . $version) }
 :if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
     :put "RouterOS version 6.48 or higher is required."
     :error "RouterOS version 6.48 or higher is required."
 }
-:if ([/ping 8.8.8.8 count=3] = 0) do={
-    :error "No internet connection. Please check your internet connection and try again."
+:put ("Detected RouterOS " . $version . " (major=" . $majorVersion . ", minor=" . $minorVersion . ")")
+:local internetReachable false
+:foreach internetTarget in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={
+    :if (!$internetReachable) do={
+        :do {
+            :if ([/ping $internetTarget count=2] > 0) do={ :set internetReachable true }
+        } on-error={}
+    }
+}
+:if (!$internetReachable) do={
+    :error "No usable internet connection was found after testing multiple destinations."
+}
+:local failures 0
+:local optionalFailures 0
+:global ocholaFetchImportMain do={
+    :local label $1
+    :local url $2
+    :local dst $3
+    :put ("Downloading " . $label . "...")
+    :do { /file remove [find name=$dst] } on-error={}
+    :do {
+        /tool fetch url=$url dst-path=$dst keep-result=yes mode=https check-certificate=yes
+        :local fetchedFile [/file find name=$dst]
+        :if ([:len $fetchedFile] = 0) do={ :error ("download did not create " . $dst) }
+        :if ([/file get $fetchedFile type] = "directory") do={ :error ($dst . " is a directory") }
+        :if ([:tonum [/file get $fetchedFile size]] <= 0) do={ :error ($dst . " is empty") }
+    } on-error={
+        :local fetchError $error
+        :error ($label . " download failed: " . $fetchError)
+    }
+    :do { /import $dst } on-error={
+        :local importError $error
+        :error ($label . " import failed: " . $importError)
+    }
+    :do { /file remove [find name=$dst] } on-error={}
+    :put ($label . " completed.")
 }
 :do {
-    :put "Downloading VPN configuration..."
+    :local caName "ochola-isrg-root-x1"
+    :if ([:len [/certificate find name=$caName]] = 0) do={
+        :local caFile "ochola-isrg-root-x1.pem"
+        :do { /file remove [find name=$caFile] } on-error={}
+        /tool fetch url="https://bil.isplatty.org/scripts/ochola-isrg-root-x1.pem" dst-path=$caFile keep-result=yes mode=https check-certificate=no
+        :if ([:tonum [/file get [/file find name=$caFile] size]] <= 0) do={ :error "public CA download was empty" }
+        /certificate import file-name=$caFile name=$caName trusted=yes
+        :do { /file remove [find name=$caFile] } on-error={}
+    }
+    :if ([:len [/certificate find name=$caName]] = 0) do={ :error "public HTTPS CA was not installed" }
+} on-error={
+    :error ("HTTPS trust bootstrap failed: " . $error)
+}
+:do {
     :local vpnUrl
     :if ($majorVersion = 7) do={
         :set vpnUrl "https://bil.isplatty.org/scripts/vpn7.rsc"
     } else={
         :set vpnUrl "https://bil.isplatty.org/scripts/vpn6.rsc"
     }
-    /tool fetch url=$vpnUrl dst-path=vpnsetup.rsc mode=https
-    :delay 2s
-    :put "Applying VPN configuration..."
-    /import vpnsetup.rsc
-    /file remove vpnsetup.rsc
-    :put "Downloading hotspot configuration..."
-    /tool fetch url="https://bil.isplatty.org/scripts/hotspotsetup.rsc" dst-path=hotspotsetup.rsc mode=https
-    :delay 2s
-    :put "Applying hotspot configuration..."
-    /import hotspotsetup.rsc
-    /file remove hotspotsetup.rsc
-    :put "Downloading PPPoE configuration..."
-    /tool fetch url="https://bil.isplatty.org/scripts/pppoesetup.rsc" dst-path=pppoesetup.rsc mode=https
-    :delay 2s
-    :put "Applying PPPoE configuration..."
-    /import pppoesetup.rsc
-    /file remove pppoesetup.rsc
-    :put "Downloading users configuration..."
-    /tool fetch url="https://bil.isplatty.org/scripts/users.rsc" dst-path=users.rsc mode=https
-    :delay 2s
-    :put "Applying users configuration..."
-    /import users.rsc
-    /file remove users.rsc
-    :put "Downloading sync-users firewalls..."
-    /tool fetch url="https://bil.isplatty.org/scripts/syncusers.rsc" dst-path=syncusers.rsc mode=https
-    :delay 2s
-    :put "Applying sync-users firewalls..."
-    /import syncusers.rsc
-    /file remove syncusers.rsc
-    :put "Downloading heartbeat firewalls..."
-    /tool fetch url="https://bil.isplatty.org/scripts/heartbeat.rsc" dst-path=heartbeat.rsc mode=https
-    :delay 2s
-    :put "Applying heartbeat firewalls..."
-    /import heartbeat.rsc
-    /file remove heartbeat.rsc
-    :put "Downloading sync-full script..."
-    /tool fetch url="https://bil.isplatty.org/scripts/syncfull.rsc" dst-path=syncfull.rsc mode=https
-    :delay 2s
-    :put "Applying sync-full script..."
-    /import syncfull.rsc
-    /file remove syncfull.rsc
-    :put "Downloading log-push script..."
+    :do { $ocholaFetchImportMain "VPN configuration" $vpnUrl "vpnsetup.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED VPN step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "hotspot configuration" "https://bil.isplatty.org/scripts/hotspotsetup.rsc" "hotspotsetup.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED hotspot step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "PPPoE configuration" "https://bil.isplatty.org/scripts/pppoesetup.rsc" "pppoesetup.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED PPPoE step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "users configuration" "https://bil.isplatty.org/scripts/users.rsc" "users.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED users step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "sync-users firewalls" "https://bil.isplatty.org/scripts/syncusers.rsc" "syncusers.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED sync-users step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "heartbeat firewalls" "https://bil.isplatty.org/scripts/heartbeat.rsc" "heartbeat.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED heartbeat step failed: " . $error)
+    }
+    :do { $ocholaFetchImportMain "sync-full script" "https://bil.isplatty.org/scripts/syncfull.rsc" "syncfull.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED sync-full step failed: " . $error)
+    }
     :do {
-      /tool fetch url="https://bil.isplatty.org/scripts/logpush.rsc" dst-path=logpush.rsc mode=https
-      :delay 2s
-      :put "Applying log-push script..."
-      /import logpush.rsc
-      /file remove logpush.rsc
-    } on-error={ :put "log-push install skipped (non-fatal)" }
+      $ocholaFetchImportMain "log-push script" "https://bil.isplatty.org/scripts/logpush.rsc" "logpush.rsc"
+    } on-error={
+      :set optionalFailures ($optionalFailures + 1)
+      :put ("  OPTIONAL log-push step skipped: " . $error)
+    }
 
     # API lockdown - a real firewall block on 8728,8729,21 with ACCEPT-gateways-first
     # then DROP everyone else. Applied on-router via /import (accept lands before the drop atomically),
     # so it cannot sever the install session. Leaves /ip/service www UNTOUCHED (WebFig/local login
     # stays open). The seclogpush.rsc block also HEALS any leftover old rules + retired scripts.
     # Runs inside :do{}on-error so a hiccup never aborts the install.
-    :put "Downloading API block script..."
     :do {
-      /tool fetch url="https://bil.isplatty.org/scripts/seclogpush.rsc" dst-path=seclogpush.rsc mode=https
-      :delay 2s
-      :put "Applying API block script..."
-      /import seclogpush.rsc
-      /file remove seclogpush.rsc
-    } on-error={ :put "API block install skipped (non-fatal)" }
+      $ocholaFetchImportMain "API lockdown" "https://bil.isplatty.org/scripts/seclogpush.rsc" "seclogpush.rsc"
+    } on-error={
+      :set optionalFailures ($optionalFailures + 1)
+      :put ("  OPTIONAL API lockdown step skipped: " . $error)
+    }
 
     :put "Setting up DNS flush firewalls..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
@@ -113,15 +150,19 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     # REPORT VPN IP TO PROXY
     # The ocholasupernet ovpn-client was added at the top of this run, so it
     # already has an IP. Read it and POST (sub, name, ip) to the proxy.
-    :put "Reporting VPN IP to proxy..."
     :local reportedIp ""
-    :foreach a in=[/ip address find where interface="ocholasupernet"] do={
-        :set reportedIp [/ip address get $a address]
+    :for vpnIpAttempt from=1 to=12 do={
+        :if ($reportedIp = "") do={
+            :foreach a in=[/ip address find where interface="ocholasupernet"] do={
+                :local candidate [/ip address get $a address]
+                :local slashPos [:find $candidate "/"]
+                :if ($slashPos >= 0) do={ :set candidate [:pick $candidate 0 $slashPos] }
+                :if ([:len $candidate] >= 8 && [:pick $candidate 0 7] = "10.8.5.") do={ :set reportedIp $candidate }
+            }
+            :if ($reportedIp = "") do={ :delay 5s }
+        }
     }
     :if ($reportedIp != "") do={
-        # Strip CIDR suffix (e.g. 10.8.0.6/24 -> 10.8.0.6)
-        :local slashPos [:find $reportedIp "/"]
-        :if ([:len $slashPos] > 0) do={ :set reportedIp [:pick $reportedIp 0 $slashPos] }
         :local proxyReportUrl "https://proxyserver.isplatty.org/ipp.php"
         :do {
             /tool fetch mode=https http-method=post \
@@ -137,10 +178,14 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
                   url="https://proxyvpn.isplatty.org/ipp.php" \
                   output=user
                 :put ("Reported VPN IP " . $reportedIp . " through proxyvpn backup")
-            } on-error={ :put "Proxy report and proxyvpn backup failed (ignored)" }
+            } on-error={
+                :set optionalFailures ($optionalFailures + 1)
+                :put "Proxy report and proxyvpn backup failed (optional; heartbeat will retry)"
+            }
         }
     } else={
-        :put "ocholasupernet interface has no IP; skipping proxy report"
+        :set failures ($failures + 1)
+        :put "REQUIRED VPN interface has no valid management IP; proxy registration was not attempted."
     }
 
     :put "Suppressing script warnings in system log..."
@@ -152,7 +197,15 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         :put "Log script-warning suppression applied"
     } on-error={ :put "Log suppress skipped (non-fatal)" }
 
-    :put "All configurations completed successfully."
+    :if ($failures = 0 && $optionalFailures = 0) do={
+        :put "All required and optional configurations completed successfully."
+    } else={
+        :if ($failures = 0) do={
+            :put ("Required configurations completed, but " . $optionalFailures . " optional component(s) need attention.")
+        } else={
+            :put ("Configuration finished with " . $failures . " required failure(s) and " . $optionalFailures . " optional issue(s).")
+        }
+    }
 } on-error={
     :put "Error occurred during configuration:"
     :put $error
@@ -160,6 +213,13 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 `;
 
 const TENANT_SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function normalizeRouterScriptUrl(value: string): string {
+  return value
+    .trim()
+    .replace(/^(?:https?:\/\/)+/i, "https://")
+    .replace(/\/+$/, "");
+}
 
 export function buildMainIspConfigurationRsc(
   tenantSubdomain = "bil",
@@ -183,7 +243,7 @@ export function buildMainIspConfigurationRsc(
     .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${routerName}`);
 
   if (routerVpnBaseUrl) {
-    const vpnBase = routerVpnBaseUrl.trim();
+    const vpnBase = normalizeRouterScriptUrl(routerVpnBaseUrl);
     const queryBootstrap = /^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn\.rsc\?rid=[0-9]+&token=[A-Za-z0-9_-]{8,128}&mode=coexist$/;
     const pathBootstrap = /^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn-bootstrap\/[0-9]+\/[A-Za-z0-9_-]{8,128}$/;
     if (!queryBootstrap.test(vpnBase) && !pathBootstrap.test(vpnBase)) {
@@ -192,8 +252,8 @@ export function buildMainIspConfigurationRsc(
     const routerVpn6Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/6.rsc` : `${vpnBase}&ros-version=6`;
     const routerVpn7Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/7.rsc` : `${vpnBase}&ros-version=7`;
     script = script
-      .replaceAll(`${companyHost}/scripts/vpn7.rsc`, routerVpn7Url)
-      .replaceAll(`${companyHost}/scripts/vpn6.rsc`, routerVpn6Url);
+      .replaceAll(`https://${companyHost}/scripts/vpn7.rsc`, routerVpn7Url)
+      .replaceAll(`https://${companyHost}/scripts/vpn6.rsc`, routerVpn6Url);
   }
 
   return script;
@@ -201,10 +261,10 @@ export function buildMainIspConfigurationRsc(
 
 router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, res): void => {
   res
+    .status(410)
     .type("text/plain")
-    .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
     .set("Cache-Control", "no-store")
-    .send(buildMainIspConfigurationRsc());
+    .send("# This legacy installer has been retired.\n# Generate a router-scoped Main ISP command from Add Router (Script) so VPN bootstrap authorization and per-router URLs are included.\n");
 });
 
 export default router;
