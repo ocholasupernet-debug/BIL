@@ -62,9 +62,9 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
   });
-  assert.match(script, /\/interface ovpn-client add name="corebillingvpn"/);
+  assert.match(script, /\/interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
-  assert.match(script, /name="corebillingvpn" && running=yes/);
+  assert.match(script, /name="ochola-mgmt-vpn-42" && running=yes/);
   assert.match(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);

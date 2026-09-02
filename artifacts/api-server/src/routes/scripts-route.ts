@@ -338,6 +338,13 @@ function rosString(value: string): string {
     .replace(/"/g, '\\"');
 }
 
+function rosCertificateContents(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, "\\r\\n");
+}
+
 /* ── Safe ros: wraps a command in on-error so one failure can't abort
    the whole script. Prints a WARN line instead so the user sees it. ── */
 function safeRos(cmd: string, label: string): string {
@@ -406,7 +413,15 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
     :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={
         :do { /file remove [find name="$caFile"] } on-error={}
-        /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+        :local fetchedViaTrustedStore false
+        :do {
+            /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+            :set fetchedViaTrustedStore true
+        } on-error={}
+        :if (!$fetchedViaTrustedStore) do={
+            :put "      RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
+            /file add name="$caFile" contents="${rosCertificateContents(ISRG_ROOT_X1_PEM)}"
+        }
         /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}" trusted=yes
         :do { /file remove [find name="$caFile"] } on-error={}
     }
@@ -415,7 +430,7 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
     /certificate set $caCert trusted=yes
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
-    :put ("  WARN: HTTPS certificate trust setup failed - " . $error)
+    :error ("HTTPS certificate trust setup failed - " . $error)
 }`;
 }
 
@@ -501,9 +516,8 @@ function buildCoexistenceHotspotRsc(
   plans: CoexistenceHotspotPlan[],
   certificateMode: RouterCertificateMode,
 ): string {
-  const fetchOptions = certificateMode === "unverified"
-    ? "mode=https check-certificate=no"
-    : ROUTER_HTTPS_FETCH_OPTIONS;
+  void certificateMode;
+  const fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS;
   const bridgeName = coexistenceBridgeName(routerId);
   const gateway = coexistenceGateway(routerId);
   const subnet = gateway.replace(/\.1$/, ".0/24");
@@ -894,6 +908,7 @@ function buildMainhotspotRsc(
   routerWireGuardUrl: string = "",
   routerIpsecUrl: string = "",
   routerVpnIp: string = "",
+  managementInterfaceName: string = "",
   routerVpnWarning: string = "",
   certificateMode: RouterCertificateMode = "verified",
   installationMode: "coexist" | "takeover" = "takeover",
@@ -911,13 +926,8 @@ function buildMainhotspotRsc(
   routerWireGuardUrl = normalizeUrl(routerWireGuardUrl);
   routerIpsecUrl = normalizeUrl(routerIpsecUrl);
   coexistenceHotspotUrl = normalizeUrl(coexistenceHotspotUrl);
-  const ROUTER_HTTPS_FETCH_OPTIONS = certificateMode === "unverified"
-    ? "mode=https check-certificate=no"
-    : `mode=https check-certificate=yes`;
-  const httpsTrustBootstrap = certificateMode === "unverified"
-    ? `# HTTPS certificate validation is disabled for this installer by administrator choice.
-# Traffic remains encrypted with HTTPS, but the router will not verify the server certificate.`
-    : routerHttpsTrustBootstrap(scriptsBase);
+  const ROUTER_HTTPS_FETCH_OPTIONS = `mode=https check-certificate=yes`;
+  const httpsTrustBootstrap = routerHttpsTrustBootstrap(scriptsBase);
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
      render a live timeline. The function pg is a no-op when no URL was
@@ -941,6 +951,7 @@ function buildMainhotspotRsc(
   const safeRouterWireGuardUrl = rscEscape(routerWireGuardUrl);
   const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
+  const safeManagementInterfaceName = rscEscape(managementInterfaceName);
   const safeRouterVpnWarning = rscEscape(routerVpnWarning);
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
@@ -1251,6 +1262,7 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :put ("Detected RouterOS version: " . $routerOsVersion)
 :local failures 0
 :local optionalFailures 0
+:local backendRegistrationSucceeded false
 :put "======================================================"
 :put " ${safeCompanyName} router setup"
 :put "======================================================"
@@ -1482,12 +1494,12 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :local vpnIpReady false
 :for vpnIpAttempt from=1 to=12 do={
     :if (!$vpnIpReady) do={
-        :foreach a in=[/ip address find] do={
+        :foreach a in=[/ip address find where interface="${safeManagementInterfaceName}"] do={
             :local candidate [/ip address get $a address]
             :local slashPos [:find $candidate "/"]
             :local candidateIp $candidate
             :if ($slashPos >= 0) do={ :set candidateIp [:pick $candidate 0 $slashPos] }
-            :if ([:len $candidateIp] >= 8 && [:pick $candidateIp 0 7] = "10.8.5.") do={
+            :if ([:len $candidateIp] >= 8 && [:pick $candidateIp 0 7] = "10.8.5." && $candidateIp != "10.8.5.1") do={
                 :if ("${safeRouterVpnIp}" = "" || $candidateIp = "${safeRouterVpnIp}") do={
                     :set reportedIp $candidateIp
                     :set vpnIpReady true
@@ -1507,10 +1519,14 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :do {
         /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} output=user keep-result=no
         :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
-    } on-error={ :put "Router registration report failed; the router will retry on the next heartbeat." }
+         :set backendRegistrationSucceeded true
+     } on-error={
+         :set failures ($failures + 1)
+         :put "FAILED: backend router registration was rejected; the router will retry on the next heartbeat, but production readiness is blocked."
+     }
 } else={
     :set failures ($failures + 1)
-    :put "VPN interface exists but has no valid IPv4 address; router registration was not reported."
+    :put ("FAILED: management VPN interface ${safeManagementInterfaceName} has no valid 10.8.5.x IPv4 address; router registration was not reported.")
 }
 ` : `# Router registration is enabled when this script is generated for a saved router.`}
 
@@ -1522,12 +1538,16 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 } on-error={ :put "Log suppression skipped (non-fatal)" }
 
 :if ($failures = 0 && $optionalFailures = 0) do={
-    :put "${safeCompanyName}: all configurations completed successfully."
+    :if ("${safeRegistrationUrl}" = "" || $backendRegistrationSucceeded) do={
+        :put "${safeCompanyName}: SUCCESS - VPN connected; core configuration installed; API lockdown completed${safeRegistrationUrl ? "; router registration successful." : "."}"
+    } else={
+        :put "${safeCompanyName}: FAILED - router registration did not complete; production readiness is blocked."
+    }
 } else={
     :if ($failures = 0) do={
-        :put ("${safeCompanyName}: required configurations completed, but " . $optionalFailures . " optional component(s) were skipped.")
+        :put ("${safeCompanyName}: PARTIAL - core configuration installed, but " . $optionalFailures . " optional component(s) were skipped.")
     } else={
-    :put ("${safeCompanyName}: setup finished with " . $failures . " failed step(s) - see WARN lines above.")
+    :put ("${safeCompanyName}: FAILED - " . $failures . " required step(s) failed and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
     }
 }
 
@@ -1679,7 +1699,7 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
       .type("text/plain")
       .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
       .set("Cache-Control", "no-store")
-      .send(buildMainIspConfigurationRsc(subdomain, currentRouter.name, routerVpnBaseUrl));
+      .send(buildMainIspConfigurationRsc(subdomain, currentRouter.name, routerVpnBaseUrl, currentRouter.id));
   } catch (error) {
     res
       .status(503)
@@ -1706,10 +1726,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
   const adminId = /^\d+$/.test(adminIdRaw) ? adminIdRaw : "";
-  const certificateMode: RouterCertificateMode = ["off", "none", "disabled", "unverified"]
-    .includes(String(req.query.certificate ?? "").trim().toLowerCase())
-    ? "unverified"
-    : "verified";
+  const certificateMode: RouterCertificateMode = "verified";
   const rname  = ((req.query.name  ?? "") as string).trim().slice(0, 80);
   let companyName = "ISPlatty";
   let resolvedRouterName = rname;
@@ -1782,7 +1799,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
         installerUrl = "";
         routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
         routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
-        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=${certificateMode === "unverified" ? "off" : "on"}`;
+        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=on`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
           `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
@@ -1869,6 +1886,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
       routerWireGuardUrl,
       routerIpsecUrl,
       routerVpnIp,
+       routerManagementClientInterfaceName(Number(rid)),
        vpnProvisioningError
          ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
          : "",
@@ -2658,9 +2676,9 @@ const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
 :put "  [pppoe] PPPoE server configured  OK"
 `;
 
-/* ── Default users ── */
+/* ── Default user policy ── */
 const USERS_RSC = `# users.rsc – Default hotspot user and group setup
-# Creates a default admin and a trial guest account.
+# No reusable hotspot credentials are created here.
 # The billing integration manages real user accounts via the API.
 
 :put "  [users] Configuring default hotspot users..."
@@ -2668,17 +2686,7 @@ const USERS_RSC = `# users.rsc – Default hotspot user and group setup
 # Default profile tweaks
 :do { /ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none } on-error={}
 
-# Remove stale defaults first
-:do { /ip hotspot user remove [find name=admin comment="ISP admin bypass"] } on-error={}
-:do { /ip hotspot user remove [find name=trial comment="Trial guest"] } on-error={}
-
-# Admin bypass user (MAC or password – per-router script may adjust)
-:do { /ip hotspot user add name=admin password=admin profile=default comment="ISP admin bypass" } on-error={ :error ("admin hotspot user setup failed: " . $error) }
-
-# 1-hour trial guest
-:do { /ip hotspot user add name=trial password=trial123 profile=default limit-uptime=1h comment="Trial guest" } on-error={ :error ("trial hotspot user setup failed: " . $error) }
-
-:put "  [users] Default users set up  OK"
+:put "  [users] No shared hotspot credentials were created; billing/API-managed users remain the source of truth  OK"
 `;
 
 /* ── Sync-users firewall rules ── */
@@ -2729,10 +2737,10 @@ const SECLOGPUSH_RSC = `# seclogpush.rsc – ISPlatty API security bootstrap
 :do { remove [find comment="OcholaSuperNet - public management port drop"] } on-error={}
 :do { remove [find comment="OcholaSuperNet - management API allow"] } on-error={}
 :do {
+  add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 comment="OcholaSuperNet - management API allow"
   add chain=input action=drop protocol=tcp dst-port=8728 comment="OcholaSuperNet - public management port drop"
   add chain=input action=drop protocol=tcp dst-port=8729 comment="OcholaSuperNet - public management port drop"
   add chain=input action=drop protocol=tcp dst-port=21 comment="OcholaSuperNet - public management port drop"
-  add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 comment="OcholaSuperNet - management API allow"
 } on-error={
   :error ("RouterOS management firewall rules failed: " . $error)
 }
@@ -2891,10 +2899,7 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
   const mode = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
     ? "takeover"
     : "coexist";
-  const certificateMode: RouterCertificateMode = ["off", "none", "disabled", "unverified"]
-    .includes(String(req.query.certificate ?? "").trim().toLowerCase())
-    ? "unverified"
-    : "verified";
+  const certificateMode: RouterCertificateMode = "verified";
 
   if (!Number.isInteger(routerId) || routerId <= 0 || !grant) {
     res.status(401).type("text/plain").send("# Invalid or missing router installer authorization.");

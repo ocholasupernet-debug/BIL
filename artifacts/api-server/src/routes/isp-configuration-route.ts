@@ -1,7 +1,16 @@
 import { Router, type IRouter } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
+import { ISRG_ROOT_X1_PEM } from "../lib/router-https-trust.js";
+import { routerManagementClientInterfaceName } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
+
+function routerOsCertificateContents(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, "\\r\\n");
+}
 
 /*
  * Standalone Main ISP configuration script supplied for the ISP configuration
@@ -78,8 +87,16 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :if ([:len [/certificate find name=$caName]] = 0) do={
         :local caFile "ochola-isrg-root-x1.pem"
         :do { /file remove [find name=$caFile] } on-error={}
-        /tool fetch url="https://bil.isplatty.org/scripts/ochola-isrg-root-x1.pem" dst-path=$caFile keep-result=yes mode=https check-certificate=no
-        :if ([:tonum [/file get [/file find name=$caFile] size]] <= 0) do={ :error "public CA download was empty" }
+        :local fetchedViaTrustedStore false
+        :do {
+            /tool fetch url="https://bil.isplatty.org/scripts/ochola-isrg-root-x1.pem" dst-path=$caFile keep-result=yes mode=https check-certificate=yes
+            :set fetchedViaTrustedStore true
+        } on-error={}
+        :if (!$fetchedViaTrustedStore) do={
+            :put "RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
+            /file add name=$caFile contents="__EMBEDDED_ISRG_ROOT_X1__"
+        }
+        :if ([:tonum [/file get [/file find name=$caFile] size]] <= 0) do={ :error "public CA source was empty" }
         /certificate import file-name=$caFile name=$caName trusted=yes
         :do { /file remove [find name=$caFile] } on-error={}
     }
@@ -92,7 +109,11 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :if ($majorVersion = 7) do={
         :set vpnUrl "https://bil.isplatty.org/scripts/vpn7.rsc"
     } else={
-        :set vpnUrl "https://bil.isplatty.org/scripts/vpn6.rsc"
+        :if ($majorVersion = 6) do={
+            :set vpnUrl "https://bil.isplatty.org/scripts/vpn6.rsc"
+        } else={
+            :error ("Unsupported RouterOS major version: " . $majorVersion)
+        }
     }
     :do { $ocholaFetchImportMain "VPN configuration" $vpnUrl "vpnsetup.rsc" } on-error={
         :set failures ($failures + 1)
@@ -133,31 +154,32 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     # then DROP everyone else. Applied on-router via /import (accept lands before the drop atomically),
     # so it cannot sever the install session. Leaves /ip/service www UNTOUCHED (WebFig/local login
     # stays open). The seclogpush.rsc block also HEALS any leftover old rules + retired scripts.
-    # Runs inside :do{}on-error so a hiccup never aborts the install.
+     # Runs inside :do{}on-error so a hiccup is reported as a required failure.
     :do {
       $ocholaFetchImportMain "API lockdown" "https://bil.isplatty.org/scripts/seclogpush.rsc" "seclogpush.rsc"
     } on-error={
-      :set optionalFailures ($optionalFailures + 1)
-      :put ("  OPTIONAL API lockdown step skipped: " . $error)
+       :set failures ($failures + 1)
+       :put ("  REQUIRED API lockdown step failed: " . $error)
     }
 
-    :put "Setting up DNS flush firewalls..."
+     :put "Setting up DNS cache flush scheduler..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
     /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
     /ip dns cache flush
-    :put "DNS flush firewalls installed (every 6 hours)"
+     :put "DNS cache flush scheduler installed. DNS cache will be flushed every 6 hours."
 
     # REPORT VPN IP TO PROXY
-    # The ocholasupernet ovpn-client was added at the top of this run, so it
+     # The canonical management ovpn-client was added at the top of this run, so it
     # already has an IP. Read it and POST (sub, name, ip) to the proxy.
     :local reportedIp ""
+     :local proxyRegistrationSucceeded false
     :for vpnIpAttempt from=1 to=12 do={
         :if ($reportedIp = "") do={
-            :foreach a in=[/ip address find where interface="ocholasupernet"] do={
+             :foreach a in=[/ip address find where interface="__MANAGEMENT_INTERFACE_NAME__"] do={
                 :local candidate [/ip address get $a address]
                 :local slashPos [:find $candidate "/"]
                 :if ($slashPos >= 0) do={ :set candidate [:pick $candidate 0 $slashPos] }
-                :if ([:len $candidate] >= 8 && [:pick $candidate 0 7] = "10.8.5.") do={ :set reportedIp $candidate }
+                 :if ([:len $candidate] >= 8 && [:pick $candidate 0 7] = "10.8.5." && $candidate != "10.8.5.1") do={ :set reportedIp $candidate }
             }
             :if ($reportedIp = "") do={ :delay 5s }
         }
@@ -169,6 +191,7 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
               http-data=("action=register&sub=bil&name=bil1&ip=" . $reportedIp) \
               url=$proxyReportUrl \
               output=user
+             :set proxyRegistrationSucceeded true
             :put ("Reported VPN IP " . $reportedIp . " to proxy")
         } on-error={
             :put "Primary proxyserver report failed; trying proxyvpn backup..."
@@ -177,15 +200,16 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
                   http-data=("action=register&sub=bil&name=bil1&ip=" . $reportedIp) \
                   url="https://proxyvpn.isplatty.org/ipp.php" \
                   output=user
+                 :set proxyRegistrationSucceeded true
                 :put ("Reported VPN IP " . $reportedIp . " through proxyvpn backup")
             } on-error={
-                :set optionalFailures ($optionalFailures + 1)
-                :put "Proxy report and proxyvpn backup failed (optional; heartbeat will retry)"
+                 :set failures ($failures + 1)
+                 :put "FAILED: Proxy report and proxyvpn backup failed; heartbeat will retry, but production readiness is blocked."
             }
         }
     } else={
         :set failures ($failures + 1)
-        :put "REQUIRED VPN interface has no valid management IP; proxy registration was not attempted."
+         :put "FAILED: management VPN interface has no valid 10.8.5.x IP; proxy registration was not attempted."
     }
 
     :put "Suppressing script warnings in system log..."
@@ -197,13 +221,13 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         :put "Log script-warning suppression applied"
     } on-error={ :put "Log suppress skipped (non-fatal)" }
 
-    :if ($failures = 0 && $optionalFailures = 0) do={
-        :put "All required and optional configurations completed successfully."
+     :if ($failures = 0 && $optionalFailures = 0) do={
+         :put "SUCCESS: VPN connected; VPN IP obtained; API lockdown installed; proxy registration successful."
     } else={
         :if ($failures = 0) do={
-            :put ("Required configurations completed, but " . $optionalFailures . " optional component(s) need attention.")
+             :put ("PARTIAL: core configuration installed, but " . $optionalFailures . " optional component(s) need attention.")
         } else={
-            :put ("Configuration finished with " . $failures . " required failure(s) and " . $optionalFailures . " optional issue(s).")
+             :put ("FAILED: " . $failures . " required failure(s) and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
         }
     }
 } on-error={
@@ -225,6 +249,7 @@ export function buildMainIspConfigurationRsc(
   tenantSubdomain = "bil",
   requestedRouterName?: string,
   routerVpnBaseUrl?: string,
+  routerId?: number,
 ): string {
   const subdomain = tenantSubdomain.trim().toLowerCase();
   if (!TENANT_SUBDOMAIN_RE.test(subdomain)) {
@@ -240,7 +265,17 @@ export function buildMainIspConfigurationRsc(
   const companyHost = `${subdomain}.isplatty.org`;
   let script = MAIN_ISP_CONFIGURATION_RSC
     .replaceAll("bil.isplatty.org", companyHost)
-    .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${routerName}`);
+    .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${routerName}`)
+    .replaceAll(
+      "__EMBEDDED_ISRG_ROOT_X1__",
+      routerOsCertificateContents(ISRG_ROOT_X1_PEM),
+    )
+    .replaceAll(
+      "__MANAGEMENT_INTERFACE_NAME__",
+      routerId && Number.isSafeInteger(routerId)
+        ? routerManagementClientInterfaceName(routerId)
+        : "ochola-mgmt-vpn",
+    );
 
   if (routerVpnBaseUrl) {
     const vpnBase = normalizeRouterScriptUrl(routerVpnBaseUrl);

@@ -53,6 +53,16 @@ export const ROUTER_MANAGEMENT_VPN_BACKUP = {
 
 export type RouterManagementVpnRole = "primary" | "backup";
 
+export function routerManagementClientInterfaceName(
+  routerId: number,
+  role: RouterManagementVpnRole = "primary",
+): string {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) {
+    throw new Error("A valid router id is required to name the management VPN interface.");
+  }
+  return `ochola-mgmt-vpn-${routerId}${role === "backup" ? "-backup" : ""}`;
+}
+
 export function routerManagementVpnContract(role: RouterManagementVpnRole = "primary") {
   return role === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
 }

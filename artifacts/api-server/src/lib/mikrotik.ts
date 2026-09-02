@@ -5,8 +5,10 @@ import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
   routerManagementBackupIp,
+  routerManagementClientInterfaceName,
   type RouterManagementVpnRole,
 } from "./router-management-vpn.js";
+import { ISRG_ROOT_X1_PEM } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
@@ -555,7 +557,7 @@ export async function deployRouterFile(
           `=url=${options.sourceUrl}`,
           `=dst-path=${temporaryPath}`,
           `=mode=${options.sourceUrl.startsWith("https://") ? "https" : "http"}`,
-          ...(options.sourceUrl.startsWith("https://") ? ["=check-certificate=no"] : []),
+          ...(options.sourceUrl.startsWith("https://") ? ["=check-certificate=yes"] : []),
           "=keep-result=yes",
         ]),
         Math.max(ms, 120_000),
@@ -2199,6 +2201,13 @@ function routerOsString(value: string): string {
     .replace(/"/g, '\\"')}"`;
 }
 
+function routerOsCertificateContents(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, "\\r\\n");
+}
+
 function validateRouterOpenVpnEndpoint(value: string): string {
   const endpoint = value.trim();
   if (!endpoint || endpoint.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(endpoint)) {
@@ -2287,10 +2296,10 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
   const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
-  const interfaceName = coexistence && routerId
-    ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
+  const interfaceName = routerId
+    ? routerManagementClientInterfaceName(routerId, vpnRole)
     : `corebillingvpn${roleSuffix}`;
-  const tag = coexistence && routerId
+  const tag = routerId
     ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
     : `corebillingvpn${roleSuffix}`;
   const resourcePreparation = coexistence
@@ -2347,12 +2356,21 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 # RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
 
   const caBootstrap = `# Step 1: Import the management VPN CA
-# The first fetch is deliberately unverified because it bootstraps this public
-# trust anchor. All later HTTPS downloads use the router certificate store.
+# Prefer the RouterOS built-in trust store. If it cannot validate the public
+# endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
+# an unverified download.
 :local caFile "${caCertificateName}.crt"
 :do {
     :do { /file remove [find name="$caFile"] } on-error={}
-    /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+    :local fetchedViaTrustedStore false
+    :do {
+        /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=yes
+        :set fetchedViaTrustedStore true
+    } on-error={}
+    :if (!$fetchedViaTrustedStore) do={
+        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
+        /file add name="$caFile" contents="${routerOsCertificateContents(ISRG_ROOT_X1_PEM)}"
+    }
     /certificate import file-name="$caFile" name=${routerOsString(caCertificateName)} trusted=yes
     :do { /file remove [find name="$caFile"] } on-error={}
     :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={

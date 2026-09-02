@@ -3,6 +3,7 @@ import {
   ROUTER_HTTPS_CERTIFICATE_FILE,
   ROUTER_HTTPS_CERTIFICATE_NAME,
   ROUTER_HTTPS_CERTIFICATE_PATH,
+  ISRG_ROOT_X1_PEM,
 } from "../lib/router-https-trust.js";
 
 const router: IRouter = Router();
@@ -20,6 +21,13 @@ const BASE_DOMAIN  = "isplatty.org";
 const ROUTER_HTTPS_FETCH_OPTIONS =
   `mode=https check-certificate=yes`;
 
+function routerOsCertificateContents(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, "\\r\\n");
+}
+
 function pppoeHttpsTrustBootstrap(adminSubdomain: string): string {
   const caUrl = `https://${adminSubdomain}.${BASE_DOMAIN}/api${ROUTER_HTTPS_CERTIFICATE_PATH}`;
   return `# Install the public CA used by the billing server HTTPS certificate.
@@ -28,14 +36,22 @@ function pppoeHttpsTrustBootstrap(adminSubdomain: string): string {
   :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
   :if ([:len $caCert] = 0) do={
     :do { /file remove [find name="$caFile"] } on-error={}
-    /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+    :local fetchedViaTrustedStore false
+    :do {
+      /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+      :set fetchedViaTrustedStore true
+    } on-error={}
+    :if (!$fetchedViaTrustedStore) do={
+      :put "RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
+      /file add name="$caFile" contents="${routerOsCertificateContents(ISRG_ROOT_X1_PEM)}"
+    }
     /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}" trusted=yes
     :do { /file remove [find name="$caFile"] } on-error={}
   }
   :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
   :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
   /certificate set $caCert trusted=yes
-} on-error={ :put ("  WARN: HTTPS certificate trust setup failed - " . $error) }
+} on-error={ :error ("HTTPS certificate trust setup failed - " . $error) }
 `;
 }
 
@@ -124,6 +140,14 @@ export function parsePPPoEVlanConfig(pppoeMode: string | null): {
 
 interface DbAdmin { id: number; name: string; subdomain: string | null; }
 
+function requireRouterSecret(router: DbRouter): string {
+  const secret = String(router.router_secret ?? "").trim();
+  if (!secret || !/^[A-Za-z0-9_-]{8,128}$/.test(secret)) {
+    throw new Error("A router-specific secret is required before generating a PPPoE script.");
+  }
+  return secret;
+}
+
 function slugify(s: string) {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
@@ -162,7 +186,7 @@ function genPPPoEOnly(
   adminSubdomain: string
 ): string {
   const co         = rosStr(companyName);
-  const secret     = router.router_secret ?? "ocholasupernet";
+  const secret     = requireRouterSecret(router);
   const wanIface   = router.wan_interface  ?? "ether1";
   const apiUser    = rosStr(router.router_username || router.name || "admin");
   const rawIp      = (router.bridge_ip ?? "10.10.0.1").replace(/\/\d+$/, "");
@@ -284,7 +308,7 @@ function genPPPoEOverHotspot(
   adminSubdomain: string
 ): string {
   const co          = rosStr(companyName);
-  const secret      = router.router_secret   ?? "ocholasupernet";
+  const secret      = requireRouterSecret(router);
   const wanIface    = router.wan_interface   ?? "ether1";
   const bridgeName  = router.bridge_interface ?? "hotspot-bridge";
   const dnsName     = router.hotspot_dns_name ?? "hotspot.local";
@@ -445,7 +469,7 @@ export function genPPPoEVlan(
   scriptBaseOverride?: string
 ): string {
   const co          = rosStr(companyName);
-  const secret      = router.router_secret   ?? "ocholasupernet";
+  const secret      = requireRouterSecret(router);
   const wanIface    = router.wan_interface   ?? "ether1";
   const apiUser     = rosStr(router.router_username || router.name || "admin");
   const rawIp       = (vlanGateway ?? router.bridge_ip ?? "10.30.0.1").replace(/\/\d+$/, "");

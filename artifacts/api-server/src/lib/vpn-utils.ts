@@ -362,6 +362,12 @@ if command -v ss >/dev/null 2>&1 && ! $SUDO ss -ltnH | awk '$4 ~ /:'"${selectedV
   $SUDO journalctl -u openvpn-server@${serviceStem} -u openvpn@${serviceStem} -n 60 --no-pager 2>&1 || true
   exit 1
 fi
+if ! $SUDO ip -4 addr show dev "${contract.interfaceName}" 2>/dev/null | grep -Eq "[[:space:]]inet[[:space:]]+${serverGw}/"; then
+  echo "ERROR: Dedicated router-management OpenVPN did not acquire the expected server tunnel address ${serverGw}."
+  echo "       Do not permit RouterOS API access until the VPS tunnel-side address is confirmed."
+  $SUDO ip -4 addr show dev "${contract.interfaceName}" 2>&1 || true
+  exit 1
+fi
 echo ""
 echo "=============================================================="
 echo " Setup complete. Verify:"

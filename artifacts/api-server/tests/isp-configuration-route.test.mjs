@@ -10,14 +10,17 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /buildMainIspConfigurationRsc/);
   assert.match(route, /String\.raw`# OcholaSuperNet Main ISP Configuration Script/);
   assert.match(route, /https:\/\/bil\.isplatty\.org\/scripts\/vpn7\.rsc/);
-  assert.match(route, /interface="ocholasupernet"/);
+  assert.match(route, /__MANAGEMENT_INTERFACE_NAME__/);
+  assert.match(route, /routerManagementClientInterfaceName/);
+  assert.match(route, /check-certificate=yes/);
+  assert.doesNotMatch(route, /check-certificate=no/);
   assert.match(route, /proxyserver\.isplatty\.org\/ipp\.php/);
   assert.match(route, /proxyvpn\.isplatty\.org\/ipp\.php/);
   assert.match(route, /Primary proxyserver report failed; trying proxyvpn backup/);
   assert.match(route, /requestedRouterName/);
   assert.match(route, /routerVpnBaseUrl/);
   assert.match(route, /company subdomain followed by a number/);
-  assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status|routerId|installerGrant/);
+  assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status/);
 });
 
 test("Add Router (Script) provides the staged router ports and sync flow", () => {
@@ -49,7 +52,7 @@ test("the public Main ISP path is tenant-scoped and Self Install uses its separa
   assert.match(scriptsRoute, /router\.get\(\[\s*"\/scripts\/router-vpn\.rsc",\s*"\/scripts\/router-vpn-bootstrap/);
   assert.match(scriptsRoute, /verifyInstallerGrant\(grant, routerId\)/);
   assert.match(scriptsRoute, /scripts\/router-vpn(?:\.rsc|-bootstrap)/);
-  assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, currentRouter\.name, routerVpnBaseUrl\)/);
+  assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, currentRouter\.name, routerVpnBaseUrl, currentRouter\.id\)/);
   assert.match(scriptsRoute, /router\.get\("\/scripts\/self-install-mainhotspot\.rsc"/);
   assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc/);
 });
