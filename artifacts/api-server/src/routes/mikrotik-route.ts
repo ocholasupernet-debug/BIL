@@ -731,8 +731,8 @@ router.get("/probe", async (req, res): Promise<void> => {
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
-router.get("/router/:id/router-as-client", requireAdmin, async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
   const adminId = authenticatedAdminId(req);
