@@ -4,4 +4,4 @@ alter table if exists isp_dashboard_preferences
 
 alter table if exists isp_dashboard_preferences
   add constraint isp_dashboard_preferences_card_shape_check
-  check (card_shape in ('rounded', 'soft-square', 'compact', 'pill', 'circle', 'leaf', 'arch', 'bevel', 'notched', 'hexagon', 'ticket', 'squircle'));
+  check (card_shape in ('rounded', 'soft-square', 'compact', 'square', 'circle', 'star', 'triangle', 'diamond', 'hexagon', 'octagon', 'pill', 'leaf', 'arch', 'bevel', 'notched', 'ticket', 'squircle'));

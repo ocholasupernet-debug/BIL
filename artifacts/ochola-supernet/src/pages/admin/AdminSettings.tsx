@@ -1182,8 +1182,8 @@ function DashboardBuilderTab() {
             <div className="dashboard-builder-control-group">
               <div className="dashboard-builder-control-heading">
                 <div>
-                  <p>Card shape</p>
-                  <span>Set the visual weight of dashboard panels and summary cards.</span>
+                  <p>Panel shape</p>
+                  <span>Choose a real geometric silhouette for dashboard panels and summary cards.</span>
                 </div>
               </div>
               <div className="dashboard-builder-options dashboard-builder-shape-options">

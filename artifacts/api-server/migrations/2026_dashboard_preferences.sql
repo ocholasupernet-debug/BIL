@@ -5,7 +5,7 @@ create table if not exists isp_dashboard_preferences (
   layout       text not null default 'balanced'
     check (layout in ('balanced', 'focus', 'compact')),
   card_shape   text not null default 'rounded'
-    check (card_shape in ('rounded', 'soft-square', 'compact', 'pill', 'circle', 'leaf', 'arch', 'bevel', 'notched', 'hexagon', 'ticket', 'squircle')),
+    check (card_shape in ('rounded', 'soft-square', 'compact', 'square', 'circle', 'star', 'triangle', 'diamond', 'hexagon', 'octagon', 'pill', 'leaf', 'arch', 'bevel', 'notched', 'ticket', 'squircle')),
   updated_at   timestamptz not null default now()
 );
 

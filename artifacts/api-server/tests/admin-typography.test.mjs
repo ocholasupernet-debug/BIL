@@ -6,6 +6,7 @@ const migration = await readFile("migrations/2026_admin_typography.sql", "utf8")
 const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
 const route = await readFile("src/routes/typography-route.ts", "utf8");
 const dashboardRoute = await readFile("src/routes/dashboard-preferences-route.ts", "utf8");
+const dashboardPreferences = await readFile("../ochola-supernet/src/lib/dashboard-preferences.ts", "utf8");
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
 const dashboardMigration = await readFile("migrations/2026_dashboard_amount_visibility.sql", "utf8");
 const portal = await readFile("../ochola-supernet/public/hotspot/login.html", "utf8");
@@ -48,6 +49,15 @@ test("dashboard financial visibility is persisted per ISP", () => {
   assert.match(dashboardRoute, /hideAmounts/);
   assert.match(dashboardRoute, /typeof hideAmounts !== "boolean"/);
   assert.match(dashboardRoute, /hide_amounts: hideAmounts/);
+});
+
+test("dashboard builder keeps more than ten real shape options", () => {
+  const shapes = [...dashboardPreferences.matchAll(/\{ value: "([^"]+)", label:/g)].map(match => match[1]);
+  assert.ok(shapes.length > 10, `expected more than ten dashboard shapes, found ${shapes.length}`);
+  for (const shape of ["square", "circle", "star", "triangle", "diamond", "hexagon", "octagon"]) {
+    assert.ok(shapes.includes(shape), `missing geometric dashboard shape: ${shape}`);
+    assert.match(dashboardRoute, new RegExp(`"${shape}"`));
+  }
 });
 
 test("router portal gets the RouterOS MAC and synchronized typography asset", () => {
