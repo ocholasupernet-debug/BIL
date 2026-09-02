@@ -159,12 +159,26 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 }
 `;
 
+const TENANT_SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+export function buildMainIspConfigurationRsc(tenantSubdomain = "bil"): string {
+  const subdomain = tenantSubdomain.trim().toLowerCase();
+  if (!TENANT_SUBDOMAIN_RE.test(subdomain)) {
+    throw new Error("A valid company subdomain is required for the Main ISP script.");
+  }
+
+  const companyHost = `${subdomain}.isplatty.org`;
+  return MAIN_ISP_CONFIGURATION_RSC
+    .replaceAll("bil.isplatty.org", companyHost)
+    .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${subdomain}1`);
+}
+
 router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, res): void => {
   res
     .type("text/plain")
     .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
     .set("Cache-Control", "no-store")
-    .send(MAIN_ISP_CONFIGURATION_RSC);
+    .send(buildMainIspConfigurationRsc());
 });
 
 export default router;

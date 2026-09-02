@@ -26,6 +26,7 @@ import {
   ROUTER_HTTPS_CERTIFICATE_FILE,
   ROUTER_HTTPS_CERTIFICATE_NAME,
 } from "../lib/router-https-trust.js";
+import { buildMainIspConfigurationRsc } from "./isp-configuration-route.js";
 import {
   generatedRouterVpnChildScript,
   provisionRouterManagementOpenVpn,
@@ -1556,7 +1557,25 @@ router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res)
   }
 });
 
-router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
+router.get("/scripts/mainhotspot.rsc", (req, res): void => {
+  const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  const subdomain = parseSubdomain(requestHost);
+  if (!subdomain) {
+    res
+      .status(400)
+      .type("text/plain")
+      .send("# A company subdomain is required for this Main ISP script.");
+    return;
+  }
+
+  res
+    .type("text/plain")
+    .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
+    .set("Cache-Control", "no-store")
+    .send(buildMainIspConfigurationRsc(subdomain));
+});
+
+router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
   const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
@@ -2636,7 +2655,7 @@ function buildSyncfullRsc(origin: string): string {
     name=ochola-autoupdate \\
     interval=1d \\
     start-time=00:05:00 \\
-    on-event="/tool fetch url=\\"${origin}/api/scripts/mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
+    on-event="/tool fetch url=\\"${origin}/api/scripts/self-install-mainhotspot.rsc\\" dst-path=mainhotspot.rsc ${ROUTER_HTTPS_FETCH_OPTIONS}; /import mainhotspot.rsc" \\
     comment="ISP auto-update"
 } on-error={ :put "  WARN: auto-update scheduler add failed" }
 
