@@ -229,6 +229,7 @@ echo "[9/9] Restarting PM2..."
 mkdir -p logs
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a
+  chmod 600 "$PROJECT_DIR/.env"
 fi
 # Clear old key name; export the canonical name so PM2 picks it up.
 unset SUPABASE_SERVICE_KEY
@@ -238,6 +239,14 @@ else
   pm2 start ecosystem.config.cjs --env standalone
   pm2 save
 fi
+
+for host in bil.isplatty.org vpn.isplatty.org; do
+  if ! curl --fail --silent --show-error --max-time 15 "https://${host}/api/healthz" >/dev/null; then
+    echo "ERROR: TLS/API verification failed for ${host}." >&2
+    exit 1
+  fi
+  echo "  ✓ HTTPS health check passed for ${host}"
+done
 
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
   echo "[10/10] Verifying router-management OpenVPN state..."
