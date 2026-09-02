@@ -155,6 +155,7 @@ interface SbRouter {
   router_secret: string | null;
   token?: string | null;
   status: string;
+  ros_version?: string | null;
 }
 
 /* ─── Build MikroTik credentials from a Supabase row ────────────────────── */
@@ -212,7 +213,7 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status,ros_version&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !isManagementVpnIp(row.vpn_ip ?? "") && !isManagementVpnIp(row.bridge_ip ?? ""))) return null;
@@ -743,6 +744,18 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
 
   const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
+  const requestedVersion = String(req.query["ros-version"] ?? found.row.ros_version ?? "").trim();
+  const routerOsMajor = requestedVersion.startsWith("7")
+    ? 7
+    : requestedVersion.startsWith("6")
+      ? 6
+      : null;
+  if (!routerOsMajor) {
+    res.status(400).type("text/plain").send(
+      "# RouterOS major version is required. Pass ?ros-version=6 or ?ros-version=7, or first record the router version.",
+    );
+    return;
+  }
 
   const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
@@ -752,6 +765,7 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     vpnPassword: openVpnCredentials.password,
     tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
+    routerOsMajor,
   });
 
   res.setHeader("Content-Type", "text/plain; charset=utf-8");

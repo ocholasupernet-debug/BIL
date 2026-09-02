@@ -2282,12 +2282,12 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
             :put "${tag}: existing active management VPN reused for retry."
         }
     } else={
-        :set ocholaVpnChildError "${tag}: coexistence conflict — an active or foreign ${interfaceName} interface was found; nothing was replaced."
+        :set ocholaVpnChildError "${tag}: coexistence conflict - an active or foreign ${interfaceName} interface was found; nothing was replaced."
         :error $ocholaVpnChildError
     }
 }
 :if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — RouterOS API is disabled; it was not enabled."
+    :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
 }`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
@@ -2304,8 +2304,8 @@ remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
-  return `# ═══════════════════════════════════════════════════════════════
-# OcholaSupernet — MikroTik ${routerOsPath} Router as OpenVPN CLIENT
+  return `# ===============================================================
+# OcholaSupernet - MikroTik ${routerOsPath} Router as OpenVPN CLIENT
 # Generated  : ${new Date().toISOString()}
 # Architecture: Router connects TO VPS (VPS is the OVPN server)
 #
@@ -2328,9 +2328,9 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 # VERSION PATH: ${routerOsPath}; this file contains only that version's cipher syntax.
 # DIAGNOSTICS: on failure, inspect the printed OVPN state and /log entries with
 #              /log print where topics~"ovpn"
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 
-# ── Step 1: Create the OVPN client interface ─────────────────────────────────
+# -- Step 1: Create the OVPN client interface ---------------------------------
 # Make this safe to re-import during recovery or after a failed migration.
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
@@ -2386,25 +2386,25 @@ ${resourcePreparation}
     :error $ocholaVpnChildError
 }
 
-# ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
+# -- Step 2: Allow API access from VPN tunnel ---------------------------------
 # The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
 /ip firewall filter
 ${firewallPreparation}
 
-# ── Step 4: Ensure API service is enabled ────────────────────────────────────
+# -- Step 4: Ensure API service is enabled ------------------------------------
 /ip service
 enable api
 # enable api-ssl   # uncomment for port 8729 encrypted API
 
-# ── Step 5: Verify the interface came up ─────────────────────────────────────
-# Run this in terminal after import — should show "R" (running):
+# -- Step 5: Verify the interface came up -------------------------------------
+# Run this in terminal after import - should show "R" (running):
 #   /interface print where name=${interfaceName}
 #   /ip address print where interface=${interfaceName}
 #
 # Expected: inet ${tunnelRouterIp} on ${interfaceName}
 # Then from VPS:  ping ${tunnelRouterIp}  and  curl http://${tunnelRouterIp}:8728
 
-:log info "${tag}: OVPN client configured → ${endpoint}:${port}/tcp (${openVpnCipher})"
+:log info "${tag}: OVPN client configured -> ${endpoint}:${port}/tcp (${openVpnCipher})"
 :log info "${tag}: After connect, router API reachable at ${tunnelRouterIp}:8728"
 `;
 }
