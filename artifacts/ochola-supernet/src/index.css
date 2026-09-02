@@ -1835,6 +1835,64 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
 .dashboard-shape--squircle .section-card { border-radius: 22%; }
 .dashboard-shape--squircle .router-card,
 .dashboard-shape--squircle .gateway-detail { border-radius: 18%; }
+/* Geometric choices are represented by safe panel treatments on the live
+   dashboard so no content is clipped by a circle, star, or polygon mask. */
+.dashboard-shape--square .dashboard-kpi,
+.dashboard-shape--square .dashboard-stat,
+.dashboard-shape--square .gateway-strip,
+.dashboard-shape--square .router-filter-bar,
+.dashboard-shape--square .section-card,
+.dashboard-shape--square .router-card,
+.dashboard-shape--square .gateway-detail { border-radius: 0; clip-path: none; }
+.dashboard-shape--circle .dashboard-kpi,
+.dashboard-shape--circle .dashboard-stat,
+.dashboard-shape--circle .gateway-strip,
+.dashboard-shape--circle .router-filter-bar,
+.dashboard-shape--circle .section-card,
+.dashboard-shape--circle .router-card,
+.dashboard-shape--circle .gateway-detail { border-radius: 28px; clip-path: none; }
+.dashboard-shape--star .dashboard-kpi,
+.dashboard-shape--star .dashboard-stat,
+.dashboard-shape--star .gateway-strip,
+.dashboard-shape--star .router-filter-bar,
+.dashboard-shape--star .section-card,
+.dashboard-shape--star .router-card,
+.dashboard-shape--star .gateway-detail { border-radius: 14px; clip-path: none; }
+.dashboard-shape--triangle .dashboard-kpi,
+.dashboard-shape--triangle .dashboard-stat,
+.dashboard-shape--triangle .gateway-strip,
+.dashboard-shape--triangle .router-filter-bar,
+.dashboard-shape--triangle .section-card,
+.dashboard-shape--triangle .router-card,
+.dashboard-shape--triangle .gateway-detail { border-radius: 8px; clip-path: none; }
+.dashboard-shape--diamond .dashboard-kpi,
+.dashboard-shape--diamond .dashboard-stat,
+.dashboard-shape--diamond .gateway-strip,
+.dashboard-shape--diamond .router-filter-bar,
+.dashboard-shape--diamond .section-card,
+.dashboard-shape--diamond .router-card,
+.dashboard-shape--diamond .gateway-detail { border-radius: 14px; clip-path: none; }
+.dashboard-shape--hexagon .dashboard-kpi,
+.dashboard-shape--hexagon .dashboard-stat,
+.dashboard-shape--hexagon .gateway-strip,
+.dashboard-shape--hexagon .router-filter-bar,
+.dashboard-shape--hexagon .section-card,
+.dashboard-shape--hexagon .router-card,
+.dashboard-shape--hexagon .gateway-detail { border-radius: 18px; clip-path: none; }
+.dashboard-shape--octagon .dashboard-kpi,
+.dashboard-shape--octagon .dashboard-stat,
+.dashboard-shape--octagon .gateway-strip,
+.dashboard-shape--octagon .router-filter-bar,
+.dashboard-shape--octagon .section-card,
+.dashboard-shape--octagon .router-card,
+.dashboard-shape--octagon .gateway-detail { border-radius: 12px; clip-path: none; }
+.dashboard-shape--bevel .dashboard-kpi,
+.dashboard-shape--bevel .dashboard-stat,
+.dashboard-shape--bevel .gateway-strip,
+.dashboard-shape--bevel .router-filter-bar,
+.dashboard-shape--bevel .section-card,
+.dashboard-shape--bevel .router-card,
+.dashboard-shape--bevel .gateway-detail { clip-path: none; }
 
 .dashboard-builder-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr); gap: 24px; align-items: start; }
 .dashboard-builder-controls { min-width: 0; }
@@ -1962,6 +2020,48 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
 .dashboard-builder-preview.dashboard-shape--ticket .dashboard-preview-panel { border-radius: 13px 3px 3px 13px; }
 .dashboard-builder-preview.dashboard-shape--squircle .dashboard-preview-kpi,
 .dashboard-builder-preview.dashboard-shape--squircle .dashboard-preview-panel { border-radius: 23%; }
+.dashboard-builder-preview.dashboard-shape--square .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--square .dashboard-preview-panel { border-radius: 0; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--circle .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--circle .dashboard-preview-panel { border-radius: 16px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--star .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--star .dashboard-preview-panel { border-radius: 9px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--triangle .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--triangle .dashboard-preview-panel { border-radius: 6px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--diamond .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--diamond .dashboard-preview-panel { border-radius: 9px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--hexagon .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--hexagon .dashboard-preview-panel { border-radius: 12px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--octagon .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--octagon .dashboard-preview-panel { border-radius: 8px; clip-path: none; }
+.dashboard-builder-preview.dashboard-shape--bevel .dashboard-preview-kpi,
+.dashboard-builder-preview.dashboard-shape--bevel .dashboard-preview-panel { clip-path: none; }
+.dashboard-builder-preview { position: relative; overflow: hidden; }
+.dashboard-builder-preview::after {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 28px;
+  height: 28px;
+  content: "";
+  pointer-events: none;
+  background: var(--dashboard-accent);
+  opacity: 0.22;
+}
+.dashboard-builder-preview.dashboard-shape--square::after { border-radius: 0; }
+.dashboard-builder-preview.dashboard-shape--circle::after { border-radius: 50%; }
+.dashboard-builder-preview.dashboard-shape--star::after { clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+.dashboard-builder-preview.dashboard-shape--triangle::after { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }
+.dashboard-builder-preview.dashboard-shape--diamond::after { clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
+.dashboard-builder-preview.dashboard-shape--hexagon::after { clip-path: polygon(12% 0%, 88% 0%, 100% 50%, 88% 100%, 12% 100%, 0% 50%); }
+.dashboard-builder-preview.dashboard-shape--octagon::after { clip-path: polygon(14% 0%, 86% 0%, 100% 14%, 100% 86%, 86% 100%, 14% 100%, 0% 86%, 0% 14%); }
+.dashboard-builder-preview.dashboard-shape--pill::after { border-radius: 999px; }
+.dashboard-builder-preview.dashboard-shape--leaf::after { border-radius: 12px 3px 12px 3px; }
+.dashboard-builder-preview.dashboard-shape--arch::after { border-radius: 11px 11px 3px 3px; }
+.dashboard-builder-preview.dashboard-shape--bevel::after { clip-path: polygon(0 5px, 5px 0, calc(100% - 5px) 0, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0 calc(100% - 5px)); }
+.dashboard-builder-preview.dashboard-shape--notched::after { border-radius: 9px 2px 9px 2px; }
+.dashboard-builder-preview.dashboard-shape--ticket::after { border-radius: 10px 2px 2px 10px; }
+.dashboard-builder-preview.dashboard-shape--squircle::after { border-radius: 25%; }
 .dashboard-builder-notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .dashboard-builder-notes > div { display: flex; align-items: flex-start; gap: 9px; padding: 11px; background: var(--isp-section); border: 1px solid var(--isp-border); border-radius: 9px; }
 .dashboard-builder-notes svg { flex: 0 0 auto; color: var(--isp-accent); }
