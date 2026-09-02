@@ -23,12 +23,14 @@ function _getStoredAdminId(): number {
 
 export let ADMIN_ID: number = _getStoredAdminId();
 
-export function setAdminAuth(id: number, username: string, name: string, role?: string, apiToken?: string) {
+export function setAdminAuth(id: number, username: string, name: string, role?: string, apiToken?: string, displayName?: string) {
   ADMIN_ID = id;
   try {
     localStorage.setItem("ochola_admin_id", String(id));
     localStorage.setItem("ochola_admin_username", username);
     localStorage.setItem("ochola_admin_name", name);
+    if (displayName?.trim()) localStorage.setItem("ochola_admin_display_name", displayName.trim());
+    else localStorage.removeItem("ochola_admin_display_name");
     if (role) localStorage.setItem("ochola_admin_role", role);
     if (apiToken) localStorage.setItem("ochola_api_token", apiToken);
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id } }));
@@ -66,6 +68,7 @@ export function clearAdminAuth() {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_admin_display_name");
     localStorage.removeItem("ochola_api_token");
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
@@ -85,6 +88,10 @@ export function clearPasswordSetupToken(): void {
 
 export function getAdminName(): string {
   try { return localStorage.getItem("ochola_admin_name") || ""; } catch { return ""; }
+}
+
+export function getAdminDisplayName(): string {
+  try { return localStorage.getItem("ochola_admin_display_name") || ""; } catch { return ""; }
 }
 
 export function isLoggedIn(): boolean {
@@ -110,6 +117,7 @@ export function stopImpersonation() {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_admin_display_name");
     localStorage.removeItem("ochola_api_token");
   } catch {}
 }

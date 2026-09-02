@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Building2, Phone, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles } from "lucide-react";
+import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
@@ -31,6 +31,7 @@ export default function AdminRegister() {
   const [, setLocation] = useLocation();
 
   const [company, setCompany] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentPhone, setPaymentPhone] = useState("");
 
@@ -167,6 +168,9 @@ export default function AdminRegister() {
     else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
     }
+    if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
+      e.displayName = "Use a name up to 80 characters without control characters.";
+    }
     return e;
   };
 
@@ -182,7 +186,12 @@ export default function AdminRegister() {
       const response = await fetch("/api/registration/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: company.trim(), phone: phone.trim(), paymentPhone: paymentPhone.trim() }),
+        body: JSON.stringify({
+          company: company.trim(),
+          displayName: displayName.trim(),
+          phone: phone.trim(),
+          paymentPhone: paymentPhone.trim(),
+        }),
       });
       const data = await response.json() as {
         ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean;
@@ -452,6 +461,29 @@ export default function AdminRegister() {
             {errors.phone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.phone}</p>}
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <label className="register-label">Your name <span style={{ color: "var(--isp-text-sub)", fontWeight: 500 }}>(optional)</span></label>
+                <div style={{ position: "relative" }}>
+                  <UserRound size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={e => setDisplayName(e.target.value)}
+                    placeholder="e.g. Jane or Jane Wanjiku"
+                    autoComplete="name"
+                    maxLength={80}
+                    className="register-input"
+                    style={inputStyle(!!errors.displayName, null)}
+                    onFocus={e => { if (!errors.displayName) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
+                    onBlur={e => { e.target.style.boxShadow = "none"; }}
+                  />
+                </div>
+                <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+                  We’ll use this to address you on the dashboard. Leave it blank to use a generic greeting.
+                </p>
+                {errors.displayName && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.displayName}</p>}
               </div>
 
               <div className="register-form-section">

@@ -141,6 +141,7 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
 
 router.post("/registration/payment", async (req: Request, res: Response): Promise<void> => {
   const company = typeof req.body?.company === "string" ? req.body.company : "";
+  const displayName = typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
   const slug = slugify(company);
@@ -153,6 +154,10 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
   if (!/^2547\d{8}$/.test(formattedPhone) || !/^2547\d{8}$/.test(formattedPaymentPhone)) {
     res.status(400).json({ ok: false, error: "Enter valid contact and M-Pesa payment numbers." });
+    return;
+  }
+  if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
+    res.status(400).json({ ok: false, error: "Your name must be 80 characters or fewer." });
     return;
   }
   if (RESERVED_SUBDOMAINS.has(slug)) {
@@ -201,7 +206,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     const candidate = await findAvailableSubdomain(company);
     try {
       const inserted = await sbInsertStrict<{ id: number; username: string; subdomain: string }>("isp_admins", {
-        name: company, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
+        name: company, fullname: displayName || null, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
         password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
         is_active: false, role: "isp_admin", subdomain: candidate, status: "pending_payment",
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),

@@ -59,7 +59,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
       try {
         const { data, error } = await supabase
           .from("isp_admins")
-          .select("name, email, phone, area, username, subdomain, currency")
+          .select("name, fullname, email, phone, area, username, subdomain, currency")
           .eq("id", adminId)
           .maybeSingle();
 
@@ -84,7 +84,7 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
           ispName:      DEFAULT.ispName,              /* platform name stays hardcoded */
           domain,
           supportEmail: row.email    || `support@${domain}`,
-          adminName:    row.name     || row.username  || DEFAULT.adminName,
+           adminName:    row.name     || row.username  || DEFAULT.adminName,
           phone:        row.phone    || "",
           country,
           currency,

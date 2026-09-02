@@ -62,7 +62,7 @@ export default function AdminLogin() {
         requiresPasswordSetup?: boolean;
         setupToken?: string;
         error?: string;
-        admin?: { id: number; name?: string; username: string; role?: string; subdomain?: string; area?: string; currency?: string };
+         admin?: { id: number; name?: string; fullname?: string | null; username: string; role?: string; subdomain?: string; area?: string; currency?: string };
       };
       if (!apiLogin.ok || !apiSession.ok || !apiSession.admin) {
         setError(apiSession.error || "Could not create a secure admin session. Please try again.");
@@ -89,7 +89,7 @@ export default function AdminLogin() {
         return;
       }
       clearPasswordSetupToken();
-      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, apiSession.token);
+      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, apiSession.token, admin.fullname || undefined);
       /* store country + currency so formatCurrency works immediately */
       try {
         if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);

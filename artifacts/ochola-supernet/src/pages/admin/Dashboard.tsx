@@ -33,6 +33,7 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   ADMIN_ID,
+  getAdminDisplayName,
   supabase,
   type DbRouter,
   type DbTransaction,
@@ -358,6 +359,7 @@ export default function Dashboard() {
     .filter((transaction) => transaction.status === "completed")
     .reduce((sum, transaction) => sum + transaction.amount, 0);
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
+  const displayName = getAdminDisplayName();
   const hasError = routersError || customersError || txError;
   const dashboardStyle = {
     "--dashboard-accent": preferences.accentColor,
@@ -381,7 +383,7 @@ export default function Dashboard() {
               <span className="dashboard-live-mark"><Activity size={12} /></span>
               Live operations
             </div>
-            <h1>{greeting}</h1>
+             <h1>{displayName ? `${greeting}, ${displayName}` : greeting}</h1>
             <p>Network pulse, customer activity, and cashflow in one view.</p>
           </div>
           <div className="dashboard-date">

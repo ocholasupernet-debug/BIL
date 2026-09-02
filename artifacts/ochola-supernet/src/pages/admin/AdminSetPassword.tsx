@@ -57,14 +57,14 @@ export default function AdminSetPassword() {
         ok?: boolean;
         error?: string;
         token?: string;
-        admin?: { id: number; name?: string; username: string; role?: string; area?: string; currency?: string };
+        admin?: { id: number; name?: string; fullname?: string | null; username: string; role?: string; area?: string; currency?: string };
       };
       if (!response.ok || !result.ok || !result.token || !result.admin) {
         throw new Error(result.error || "Failed to update password.");
       }
       const admin = result.admin;
       clearPasswordSetupToken();
-      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, result.token);
+       setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, result.token, admin.fullname || undefined);
       try {
         if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);
         if (admin.area) localStorage.setItem("ochola_admin_country", admin.area);
