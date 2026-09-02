@@ -170,6 +170,8 @@ export default function AddRouterScript() {
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const [phase, setPhase] = useState<Phase>("script");
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
+  const [createdRouter, setCreatedRouter] = useState<RouterRecord | null>(null);
+  const [creatingRouter, setCreatingRouter] = useState(false);
   const [ports, setPorts] = useState<PortsPayload | null>(null);
   const [selectedPorts, setSelectedPorts] = useState<Set<string>>(new Set());
   const [portsLoading, setPortsLoading] = useState(false);
@@ -201,7 +203,7 @@ export default function AddRouterScript() {
     },
   });
 
-  const { data: routers = [], isLoading: loadingRouters, refetch: refetchRouters } = useQuery({
+  const { data: routers = [], refetch: refetchRouters } = useQuery({
     queryKey: ["add_router_script_routers", adminId],
     enabled: Number.isFinite(adminId) && adminId > 0,
     queryFn: async () => {
@@ -220,15 +222,20 @@ export default function AddRouterScript() {
     if (selectedRouterId && !routers.some(router => router.id === selectedRouterId)) setSelectedRouterId(routers[0]?.id ?? null);
   }, [routers, selectedRouterId]);
 
-  const selectedRouter = routers.find(router => router.id === selectedRouterId) ?? null;
+  const selectedRouter = createdRouter?.id === selectedRouterId
+    ? createdRouter
+    : routers.find(router => router.id === selectedRouterId) ?? null;
   const sourceRouters = routers.filter(router => router.id !== selectedRouterId);
   const sourceRouter = sourceRouters.find(router => router.id === sourceRouterId) ?? sourceRouters[0] ?? null;
   const accountSubdomain = account?.subdomain?.trim().toLowerCase() ?? "";
   const companyHost = accountSubdomain ? `${accountSubdomain}.${BASE_DOMAIN}` : "";
-  const mainhotspotUrl = companyHost ? `https://${companyHost}/scripts/mainhotspot.rsc` : "";
-  const bootstrapCommand = mainhotspotUrl
-    ? `/tool fetch url="${mainhotspotUrl}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`
-    : "";
+  const buildBootstrapCommand = (routerName?: string) => {
+    if (!companyHost) return "";
+    const routerQuery = routerName ? `?routerName=${encodeURIComponent(routerName)}` : "";
+    return `/tool fetch url="https://${companyHost}/scripts/mainhotspot.rsc${routerQuery}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`;
+  };
+  const bootstrapCommand = buildBootstrapCommand();
+  const canGenerate = !!bootstrapCommand;
 
   const hotspotBridgeExists = !!ports?.bridges.some(bridge => bridge.name === HOTSPOT_BRIDGE);
   const currentBridgePorts = useMemo(
@@ -239,11 +246,30 @@ export default function AddRouterScript() {
     || [...selectedPorts].some(port => !currentBridgePorts.has(port));
   const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
 
-  const generateConfiguration = () => {
-    if (!bootstrapCommand) return;
-    setScript(bootstrapCommand);
-    setCopyState("idle");
+  const generateConfiguration = async () => {
+    if (!canGenerate || !adminId) return;
+    setCreatingRouter(true);
     setPageError("");
+    setSelectedRouterId(null);
+    setCreatedRouter(null);
+    try {
+      const result = await jsonRequest<{ ok: boolean; router?: RouterRecord; error?: string }>("/api/admin/router/ensure", {
+        method: "POST",
+        body: JSON.stringify({ adminId }),
+      });
+      if (!result.ok || !result.router?.id || !result.router.name) {
+        throw new Error(result.error || "The router profile could not be created.");
+      }
+      setCreatedRouter(result.router);
+      setSelectedRouterId(result.router.id);
+      setScript(buildBootstrapCommand(result.router.name));
+      setCopyState("idle");
+      await refetchRouters();
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not create the router profile.");
+    } finally {
+      setCreatingRouter(false);
+    }
   };
 
   const loadPorts = async () => {
@@ -369,6 +395,8 @@ export default function AddRouterScript() {
   const resetFlow = () => {
     setPhase("script");
     setScript("");
+    setCreatedRouter(null);
+    setSelectedRouterId(null);
     setPorts(null);
     setSelectedPorts(new Set());
     setSyncResult(null);
@@ -426,33 +454,14 @@ export default function AddRouterScript() {
               </div>
             )}
 
-            <div style={{ marginBottom: "0.9rem" }}>
-              <label style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".68rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: ".35rem" }}>
-                Router profile
-              </label>
-              <select
-                value={selectedRouterId ?? ""}
-                onChange={event => setSelectedRouterId(Number(event.target.value) || null)}
-                disabled={loadingRouters || routers.length === 0}
-                style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .75rem", fontFamily: "inherit", fontSize: ".76rem" }}
-              >
-                <option value="">{loadingRouters ? "Loading router profiles…" : "Select the router that ran this script"}</option>
-                {routers.map(router => <option key={router.id} value={router.id}>{router.name} · {router.model || "MikroTik"} · {router.status}</option>)}
-              </select>
-              <div style={{ marginTop: ".35rem", color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.5 }}>
-                The router must already have a saved API profile so the server can connect through its management address.
-              </div>
+            <div style={{ marginBottom: ".9rem", display: "flex", alignItems: "flex-start", gap: 8, color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
+              <Server size={15} color="var(--isp-accent)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>Generating the command automatically creates or resumes the next company router profile and reserves its management address. The returned router name will be shown below.</span>
             </div>
 
-            {!loadingRouters && routers.length === 0 && (
-              <div style={{ marginBottom: ".85rem", display: "flex", gap: 7, color: "#fcd34d", background: "rgba(251,191,36,.08)", border: "1px solid rgba(251,191,36,.25)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".7rem", lineHeight: 1.5 }}>
-                <AlertTriangle size={14} style={{ flexShrink: 0 }} /> Add this MikroTik under Router API Config first, then return here to load its ports.
-              </div>
-            )}
-
-            <button onClick={generateConfiguration} disabled={loadingAccount || !bootstrapCommand} style={primaryButton(loadingAccount || !bootstrapCommand)}>
-              {loadingAccount ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <FileCode2 size={16} />}
-              {loadingAccount ? "Loading company…" : "Generate router command"}
+            <button onClick={() => void generateConfiguration()} disabled={loadingAccount || creatingRouter || !canGenerate} style={primaryButton(loadingAccount || creatingRouter || !canGenerate)}>
+              {loadingAccount || creatingRouter ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <FileCode2 size={16} />}
+              {loadingAccount ? "Loading company…" : creatingRouter ? "Creating router profile…" : "Create profile & generate command"}
             </button>
 
             {script && (
@@ -467,8 +476,14 @@ export default function AddRouterScript() {
                   </button>
                 </div>
                 <pre style={{ margin: 0, background: "#0a0f1a", borderRadius: 8, padding: ".85rem", color: "#cbd5e1", fontSize: ".7rem", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{script}</pre>
+                {selectedRouter && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: ".75rem", padding: ".65rem .75rem", borderRadius: 8, background: "rgba(20,184,166,.07)", border: "1px solid rgba(20,184,166,.2)", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
+                    <CheckCircle2 size={15} color="#4ade80" />
+                    <span>Router profile ready: <strong style={{ color: "var(--isp-text)" }}>{selectedRouter.name}</strong>{selectedRouter.vpn_ip ? ` · management ${selectedRouter.vpn_ip}` : ""}</span>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: ".85rem" }}>
-                  <button onClick={() => void loadPorts()} disabled={!selectedRouter || portsLoading} style={primaryButton(!selectedRouter || portsLoading)}>
+                  <button onClick={() => void loadPorts()} disabled={!selectedRouter || portsLoading || creatingRouter} style={primaryButton(!selectedRouter || portsLoading || creatingRouter)}>
                     {portsLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ChevronRight size={15} />}
                     {portsLoading ? "Loading MikroTik ports…" : "Next — load router ports"}
                   </button>

@@ -161,16 +161,22 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 
 const TENANT_SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-export function buildMainIspConfigurationRsc(tenantSubdomain = "bil"): string {
+export function buildMainIspConfigurationRsc(tenantSubdomain = "bil", requestedRouterName?: string): string {
   const subdomain = tenantSubdomain.trim().toLowerCase();
   if (!TENANT_SUBDOMAIN_RE.test(subdomain)) {
     throw new Error("A valid company subdomain is required for the Main ISP script.");
   }
 
+  const routerName = (requestedRouterName?.trim().toLowerCase() || `${subdomain}1`);
+  const escapedSubdomain = subdomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`^${escapedSubdomain}[0-9]+$`).test(routerName)) {
+    throw new Error("The router name must use the company subdomain followed by a number.");
+  }
+
   const companyHost = `${subdomain}.isplatty.org`;
   return MAIN_ISP_CONFIGURATION_RSC
     .replaceAll("bil.isplatty.org", companyHost)
-    .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${subdomain}1`);
+    .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${routerName}`);
 }
 
 router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, res): void => {

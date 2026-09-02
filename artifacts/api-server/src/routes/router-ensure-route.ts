@@ -93,6 +93,16 @@ async function nextCompanyRouterName(adminId: number, requestHost: string): Prom
   throw new Error(`No available router name remains for company prefix "${base}"`);
 }
 
+async function unfinishedRouterName(adminId: number): Promise<string> {
+  const unfinishedRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=name&order=updated_at.desc&limit=1`,
+    { headers: sbHeaders(BEST_KEY) },
+  );
+  if (!unfinishedRes.ok) return "";
+  const rows = await unfinishedRes.json() as Array<{ name?: string | null }>;
+  return String(rows[0]?.name ?? "").trim();
+}
+
 /* Credentials are consumed by server-side RouterOS routes and by the
  * generated installer only. Never return them to the admin browser. */
 function publicRouter(row: Record<string, unknown>): Record<string, unknown> {
@@ -145,7 +155,8 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
   let name = typeof routerName === "string" ? routerName.trim() : "";
   if (!name) {
     try {
-      name = await nextCompanyRouterName(adminId, req.get("host") ?? "");
+      name = await unfinishedRouterName(adminId)
+        || await nextCompanyRouterName(adminId, req.get("host") ?? "");
     } catch (error) {
       res.status(503).json({
         ok: false,

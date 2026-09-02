@@ -1568,11 +1568,19 @@ router.get("/scripts/mainhotspot.rsc", (req, res): void => {
     return;
   }
 
-  res
-    .type("text/plain")
-    .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
-    .set("Cache-Control", "no-store")
-    .send(buildMainIspConfigurationRsc(subdomain));
+  const requestedRouterName = typeof req.query.routerName === "string" ? req.query.routerName : undefined;
+  try {
+    res
+      .type("text/plain")
+      .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
+      .set("Cache-Control", "no-store")
+      .send(buildMainIspConfigurationRsc(subdomain, requestedRouterName));
+  } catch (error) {
+    res
+      .status(400)
+      .type("text/plain")
+      .send(`# ${error instanceof Error ? error.message : "Invalid router name."}`);
+  }
 });
 
 router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<void> => {
