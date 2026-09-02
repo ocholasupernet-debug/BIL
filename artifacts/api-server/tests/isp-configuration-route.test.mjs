@@ -17,13 +17,17 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status|routerId|installerGrant/);
 });
 
-test("ISP configuration page does not use the Self Install controls", () => {
+test("Add Router (Script) provides the staged router ports and sync flow", () => {
   assert.match(page, /<AdminLayout hiddenNavHrefs=\{\["\/admin\/network\/self-install"\]\}>/);
   assert.match(page, /Add Router \(Script\)/);
   assert.match(page, /scripts\/mainhotspot\.rsc/);
   assert.match(page, /dst-path=mainhotspot\.rsc mode=https; \/import mainhotspot\.rsc/);
   assert.match(page, /from\("isp_admins"\)/);
-  assert.doesNotMatch(page, /Self Install|install-status|routerId|grantToken|vpnConnected/);
+  assert.match(page, /Next — load router ports/);
+  assert.match(page, /\/api\/admin\/router\/self-install\/ports/);
+  assert.match(page, /hotspot-bridge/);
+  assert.match(page, /Next — sync IP pools, users and plans/);
+  assert.match(page, /\/api\/admin\/router\/sync-copy/);
 });
 
 test("the public Main ISP path is tenant-scoped and Self Install uses its separate path", async () => {
