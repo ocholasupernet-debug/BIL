@@ -1848,7 +1848,7 @@ export interface VpnSetupOptions {
   /** OpenVPN port on the router (default: 1194) */
   vpnPort?: number;
   /** VPN user to create on the router */
-  vpnUsername?: string;
+  vpnUsername: string;
   /** VPN user password */
   vpnPassword?: string;
   /** IP pool CIDR for VPN tunnel addresses (default: 192.168.89.0/24) */
@@ -1997,7 +1997,7 @@ export interface OvpnClientOptions {
   /** OpenVPN port on the router (default: 1194) */
   vpnPort?: number;
   /** VPN username for auth-user-pass */
-  vpnUsername?: string;
+  vpnUsername: string;
   /** VPN password — CAUTION: only embed in .ovpn for dev/testing;
    *  production setups should use a separate credentials file */
   vpnPassword?: string;
@@ -2128,9 +2128,15 @@ export interface RouterAsClientOptions {
   /** Router-management OpenVPN server port on the VPS (default 1196) */
   vpnPort?: number;
   /** Username to authenticate with the VPS OVPN server */
-  vpnUsername?: string;
+  vpnUsername: string;
   /** Password for the VPN user */
-  vpnPassword?: string;
+  vpnPassword: string;
+  /** Public HTTPS URL that serves the CA which signs the management VPN server certificate. */
+  caCertificateUrl: string;
+  /** RouterOS certificate-store name for the management VPN CA. */
+  caCertificateName?: string;
+  /** Authenticated router registration endpoint used to report the live tunnel IP. */
+  backendRegistrationUrl: string;
   /**
    * VPN tunnel IP the VPS server will assign to the router.
     * Depends on the VPS server's IP pool (default "10.8.5.2").
@@ -2201,6 +2207,20 @@ function validateRouterOpenVpnEndpoint(value: string): string {
   return endpoint;
 }
 
+function validateRouterOpenVpnCaUrl(value: string): string {
+  const raw = String(value ?? "").trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Management VPN CA URL must be a valid HTTPS URL.");
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) {
+    throw new Error("Management VPN CA URL must use HTTPS and contain no embedded credentials.");
+  }
+  return parsed.toString();
+}
+
 function validateRouterOpenVpnPort(value: number): number {
   if (!Number.isInteger(value) || value < 1 || value > 65535) {
     throw new Error("VPS OpenVPN port must be an integer between 1 and 65535.");
@@ -2211,6 +2231,9 @@ function validateRouterOpenVpnPort(value: number): number {
 function validateRouterOpenVpnCredential(value: string, label: string): string {
   if (!value || /[\u0000-\u001F\u007F]/.test(value)) {
     throw new Error(`VPS OpenVPN ${label} is empty or contains control characters.`);
+  }
+  if (label === "username" && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(value)) {
+    throw new Error("VPS OpenVPN username must contain only letters, numbers, '_' or '-'.");
   }
   return value;
 }
@@ -2232,9 +2255,12 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const {
     vpsPublicIp,
     vpnPort         = ROUTER_MANAGEMENT_VPN.port,
-    vpnUsername     = "admin",
-    vpnPassword     = "ochola",
-    tunnelRouterIp  = "10.8.5.2",
+    vpnUsername,
+    vpnPassword,
+    caCertificateUrl,
+    caCertificateName = "ochola-router-management-ca",
+    backendRegistrationUrl,
+    tunnelRouterIp,
     tunnelVpsIp     = "10.8.5.1",
     lanNetwork      = "192.168.88.0/24",
     routerId,
@@ -2247,6 +2273,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const port = validateRouterOpenVpnPort(vpnPort);
   const safeVpnUsername = validateRouterOpenVpnCredential(vpnUsername, "username");
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
+  const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
+  const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
+  if (safeVpnUsername === safeVpnPassword) {
+    throw new Error("VPS OpenVPN username and password must be different.");
+  }
   const coexistence = installationMode === "coexist";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
@@ -2282,12 +2313,12 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
             :put "${tag}: existing active management VPN reused for retry."
         }
     } else={
-        :set ocholaVpnChildError "${tag}: coexistence conflict — an active or foreign ${interfaceName} interface was found; nothing was replaced."
+        :set ocholaVpnChildError "${tag}: coexistence conflict - an active or foreign ${interfaceName} interface was found; nothing was replaced."
         :error $ocholaVpnChildError
     }
 }
 :if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
-    :set ocholaVpnChildError "${tag}: coexistence conflict — RouterOS API is disabled; it was not enabled."
+    :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
 }`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
@@ -2295,57 +2326,78 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence
-    ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
+    ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0 } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
 :if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }`
     : `/ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
-add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel"
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
   const openVpnOptionalSettings = routerOs7
-    ? `# RouterOS 7 path: apply the optional certificate-verification setting only
-# after the broadly compatible client exists. RouterOS 6 never parses this property.
+    ? `# RouterOS 7 path: certificate verification is mandatory.
 :do {
-    /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=no
-} on-error={ :put "${tag}: optional RouterOS 7 OpenVPN certificate setting was not accepted; continuing with the verified client." }`
+    /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=yes
+} on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable OpenVPN server certificate verification."
+    :error $ocholaVpnChildError
+}`
     : `# RouterOS 6 path: keep the client command to the conservative common property set.
 # RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
 
-  return `# ═══════════════════════════════════════════════════════════════
-# OcholaSupernet — MikroTik ${routerOsPath} Router as OpenVPN CLIENT
+  const caBootstrap = `# Step 1: Import the management VPN CA
+# The first fetch is deliberately unverified because it bootstraps this public
+# trust anchor. All later HTTPS downloads use the router certificate store.
+:local caFile "${caCertificateName}.crt"
+:do {
+    :do { /file remove [find name="$caFile"] } on-error={}
+    /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=no
+    /certificate import file-name="$caFile" name=${routerOsString(caCertificateName)} trusted=yes
+    :do { /file remove [find name="$caFile"] } on-error={}
+    :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={
+        :error "management VPN CA was not imported"
+    }
+} on-error={
+    :set ocholaVpnChildError "${tag}: management VPN CA import failed; refusing an unverified OpenVPN connection."
+    :error $ocholaVpnChildError
+}
+
+# Step 2: Create the OVPN client interface
+# Make this safe to re-import during recovery or after a failed migration.
+`;
+
+  return `# ===============================================================
+# OcholaSupernet - MikroTik ${routerOsPath} Router as OpenVPN CLIENT
 # Generated  : ${new Date().toISOString()}
 # Architecture: Router connects TO VPS (VPS is the OVPN server)
 #
 # VPS OVPN server : ${endpoint}:${port}/tcp  (${contract.interfaceName} ${tunnelVpsIp})
-# Router tunnel IP: ${tunnelRouterIp}  (assigned by VPS server after connect)
+# Router tunnel IP: dynamic (discover it from /ip address after connect)
 # VPN user        : ${safeVpnUsername}
 # OpenVPN cipher  : ${openVpnCipher} / auth=sha1
 #
 # After import:
-#   - Router connects to VPS and gets tunnel IP ${tunnelRouterIp}
-#   - Backend: set MIKROTIK_BRIDGE_IP=${tunnelRouterIp}
-#   - API reaches router at ${tunnelRouterIp}:8728
+#   - Router connects to VPS and receives a dynamic tunnel IPv4 address
+#   - The script reports the actual address; backend registration must confirm it
 #
 # REQUIREMENTS on VPS side (run the dedicated router-management OpenVPN setup first):
 #   - VPS OpenVPN server must use proto tcp
 #   - User '${vpnUsername}' must be added to the dedicated router-management auth file
-#   - tls-auth should be disabled or compatible with MikroTik
+#   - The server certificate must chain to the imported management VPN CA
 #
 # USAGE: /import router-as-client${routerId ?? ""}.rsc
 # VERSION PATH: ${routerOsPath}; this file contains only that version's cipher syntax.
 # DIAGNOSTICS: on failure, inspect the printed OVPN state and /log entries with
 #              /log print where topics~"ovpn"
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 
-# ── Step 1: Create the OVPN client interface ─────────────────────────────────
-# Make this safe to re-import during recovery or after a failed migration.
 :global ocholaVpnChildError
 :set ocholaVpnChildError ""
 :local ovpnError ""
 :local reuseExistingOvpn false
 :if ([:len "$ocholaVpnChildError"] = 0) do={
+${caBootstrap}
 ${resourcePreparation}
 }
 :if (!$reuseExistingOvpn) do={
@@ -2392,26 +2444,58 @@ ${openVpnOptionalSettings}
     :put "${tag}: OVPN client is running."
 }
 
-# ── Step 2: Allow API access from VPN tunnel ─────────────────────────────────
-# The VPS reaches the router's API at ${tunnelRouterIp}:8728 through the tunnel.
+# Step 3: Allow API access from the validated VPN peer
+# Only the configured VPS tunnel gateway may reach RouterOS API ports.
 /ip firewall filter
 ${firewallPreparation}
 
-# ── Step 4: Ensure API service is enabled ────────────────────────────────────
+# Step 4: Ensure API service is enabled and restricted
 /ip service
-enable api
-# enable api-ssl   # uncomment for port 8729 encrypted API
+:do { /ip service set [find where name="api"] disabled=no address=${tunnelVpsIp}/32 } on-error={
+    :set ocholaVpnChildError "${tag}: could not restrict the RouterOS API service to the management VPN peer."
+    :error $ocholaVpnChildError
+}
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}
 
-# ── Step 5: Verify the interface came up ─────────────────────────────────────
-# Run this in terminal after import — should show "R" (running):
-#   /interface print where name=${interfaceName}
-#   /ip address print where interface=${interfaceName}
-#
-# Expected: inet ${tunnelRouterIp} on ${interfaceName}
-# Then from VPS:  ping ${tunnelRouterIp}  and  curl http://${tunnelRouterIp}:8728
+# Step 5: Discover and report the live tunnel IPv4
+:local ovpnId [/interface ovpn-client find where name="${interfaceName}"]
+:local liveTunnelIp ""
+:if ([:len $ovpnId] > 0) do={
+    :local addressRows [/ip address find where interface="${interfaceName}"]
+    :foreach addressId in=$addressRows do={
+        :local addressValue [/ip address get $addressId address]
+        :if ($addressValue ~ "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/") do={
+            :set liveTunnelIp [:pick $addressValue 0 [:find $addressValue "/"]]
+        }
+    }
+}
+:if ([:len $liveTunnelIp] = 0) do={
+    :set ocholaVpnChildError "${tag}: OpenVPN is running but no valid tunnel IPv4 was assigned."
+    :error $ocholaVpnChildError
+}
 
-:log info "${tag}: OVPN client configured → ${endpoint}:${port}/tcp (${openVpnCipher})"
-:log info "${tag}: After connect, router API reachable at ${tunnelRouterIp}:8728"
+# Step 6: Verify RouterOS API reachability and backend registration
+:local apiReachable false
+:do {
+    :local apiIds [/ip service find where name="api" && disabled=no]
+    :if ([:len $apiIds] > 0) do={ :set apiReachable true }
+} on-error={}
+:if (!$apiReachable) do={
+    :set ocholaVpnChildError "${tag}: tunnel IPv4 \${liveTunnelIp} is present but RouterOS API is not enabled."
+    :error $ocholaVpnChildError
+}
+:local registrationUrl ${routerOsString(safeBackendRegistrationUrl)}
+:set registrationUrl ($registrationUrl . "?ip=" . $liveTunnelIp)
+:do {
+    /tool fetch url=$registrationUrl keep-result=no mode=https check-certificate=yes
+} on-error={
+    :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
+    :error $ocholaVpnChildError
+}
+:put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp)
+:put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
+
+:log info "${tag}: OVPN client running; dynamic tunnel IPv4=\${liveTunnelIp}; backend API verification pending"
 `;
 }
 

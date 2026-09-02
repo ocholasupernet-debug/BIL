@@ -17,10 +17,10 @@ import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
   routerManagementBackupIp,
-  routerManagementOvpnCredentials,
   routerManagementVpnPortForRouter,
   routerManagementVpnReadiness,
 } from "../lib/router-management-vpn.js";
+import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import {
   ISRG_ROOT_X1_PEM,
   ROUTER_HTTPS_CERTIFICATE_FILE,
@@ -1723,6 +1723,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
   let vpnProvisioningError = "";
 
   interface InstallRouter {
+    id: number;
     admin_id: number; name: string; vpn_ip?: string | null;
     router_secret?: string | null; token?: string | null;
   }
@@ -1753,11 +1754,15 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
         ? `or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})`
         : `admin_id=eq.${encodeURIComponent(adminId)}`;
       const routers = await sbGet<InstallRouter>(
-        `isp_routers?id=eq.${rid}&${ownerFilter}&select=admin_id,name,vpn_ip,router_secret,token&limit=1`,
+        `isp_routers?id=eq.${rid}&${ownerFilter}&select=id,admin_id,name,vpn_ip,router_secret,token&limit=1`,
       );
       const currentRouter = routers[0];
       if (currentRouter) {
-        const openVpnCredentials = routerManagementOvpnCredentials(currentRouter.name);
+        const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+          routerId: currentRouter.id,
+          adminId: currentRouter.admin_id,
+          routerName: currentRouter.name,
+        });
         const assignedIp = await ensurePersistentRouterTunnelIp(Number(rid), currentRouter.vpn_ip);
         resolvedToken = resolvedToken || currentRouter.router_secret || currentRouter.token || "";
         if (!resolvedToken) throw new Error("Router install secret is not available.");
@@ -1783,6 +1788,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
 
         try {
           const provisioning = await provisionRouterManagementOpenVpn({
+            adminId: currentRouter.admin_id,
             routerId: Number(rid),
             routerName: currentRouter.name,
             routerIp: assignedIp,
@@ -1796,6 +1802,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
         }
         try {
           await provisionRouterManagementOpenVpnBackup({
+            adminId: currentRouter.admin_id,
             routerId: Number(rid),
             routerName: currentRouter.name,
             routerIp: assignedIp,
@@ -1904,6 +1911,7 @@ router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Pr
     let provisioning: Awaited<ReturnType<typeof provisionRouterManagementOpenVpn>>;
     try {
       provisioning = await provisionRouterManagementOpenVpn({
+        adminId,
         routerId,
         routerName: provisioningRouter.name,
         routerIp: currentIp,
@@ -2059,7 +2067,11 @@ router.get([
     let script: string;
 
     if (protocol === "openvpn" || protocol === "openvpn-backup") {
-      const openVpnCredentials = routerManagementOvpnCredentials(rows[0].name);
+      const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+        routerId,
+        adminId: Number(rows[0].admin_id),
+        routerName: rows[0].name,
+      });
       const isBackup = protocol === "openvpn-backup";
       const readiness = routerManagementVpnReadiness();
       if (!readiness.endpointConfigured) {
@@ -2088,6 +2100,8 @@ router.get([
         vpnPort,
         vpnUsername: openVpnCredentials.username,
         vpnPassword: openVpnCredentials.password,
+        caCertificateUrl: `${requestOrigin(req)}/api/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`,
+        backendRegistrationUrl: `${requestOrigin(req)}/api/isp/router/register/${encodeURIComponent(token)}`,
          tunnelRouterIp: isBackup ? routerManagementBackupIp(tunnelRouterIp) : tunnelRouterIp,
          tunnelVpsIp: isBackup ? ROUTER_MANAGEMENT_VPN_BACKUP.gateway : ROUTER_VPN_GATEWAY,
         routerId,
@@ -3138,7 +3152,11 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     /* ── Step 4: Derive config values ── */
     const routerName  = router_row.name;
     const routerSlug  = slug === "mainhotspot" || slug === "main-hotspot" ? slugify(routerName) : slug;
-    const openVpnCredentials = routerManagementOvpnCredentials(routerName);
+    const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+      routerId: router_row.id,
+      adminId,
+      routerName,
+    });
     const bridgeIface = router_row.bridge_interface  || "hotspot-bridge";
     const hotspotDns  = router_row.hotspot_dns_name  || `wifi.${routerSlug}.local`;
     const bridgeIp    = router_row.bridge_ip         || "192.168.88.1";

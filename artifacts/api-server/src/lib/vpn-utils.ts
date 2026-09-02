@@ -9,20 +9,21 @@ import {
   type RouterManagementVpnRole,
 } from "./router-management-vpn.js";
 import { routerVpnPeerIp } from "./router-vpn-ip.js";
+import { ISRG_ROOT_X1_PEM, ROUTER_HTTPS_CERTIFICATE_NAME } from "./router-https-trust.js";
 
 export interface VpsOvpnSetupOptions {
   /** VPS public IP (shown to the user as the endpoint) */
   vpsPublicIp: string;
   /** OpenVPN server port (default 1196; customer VPN remains on 1194) */
   vpnPort?: number;
-  /** Username to add for the router (default "admin") */
-  vpnUsername?: string;
-  /** Password for the VPN user (default "ochola") */
-  vpnPassword?: string;
+  /** Unique username to add for the router. */
+  vpnUsername: string;
+  /** Unique password for the VPN user. */
+  vpnPassword: string;
   /** Tunnel IP pool base — first 3 octets (default "10.8.5") */
   tunnelBase?: string;
-  /** Static IP to assign to the router inside the tunnel (default "10.8.5.2") */
-  routerTunnelIp?: string;
+  /** IP to assign to the router inside the tunnel. */
+  routerTunnelIp: string;
   /** Router ID (for labelling) */
   routerId?: number;
   /** Select the isolated backup management OpenVPN instance. */
@@ -50,8 +51,8 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const {
     vpsPublicIp,
     vpnPort,
-    vpnUsername   = "admin",
-    vpnPassword   = "ochola",
+    vpnUsername,
+    vpnPassword,
     tunnelBase,
     routerTunnelIp,
     routerId,
@@ -62,17 +63,36 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   const serviceStem = vpnRole === "backup" ? "ochola-router-backup" : "ochola-router";
   const selectedVpnPort = vpnPort ?? contract.port;
   const selectedTunnelBase = tunnelBase ?? contract.tunnelBase;
-  const selectedRouterTunnelIp = routerTunnelIp ?? `${contract.tunnelBase}.2`;
+  if (!vpnUsername || /[\u0000-\u001F\u007F:]/.test(vpnUsername)) {
+    throw new Error("VPS OpenVPN username is required and must not contain control characters or ':'.");
+  }
+  if (!vpnPassword || /[\u0000-\u001F\u007F]/.test(vpnPassword)) {
+    throw new Error("VPS OpenVPN password is required and must not contain control characters.");
+  }
+  if (vpnUsername === vpnPassword) {
+    throw new Error("VPS OpenVPN username and password must be different.");
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(vpnUsername)) {
+    throw new Error("VPS OpenVPN username must contain only letters, numbers, '_' or '-'.");
+  }
+  if (selectedTunnelBase !== contract.tunnelBase) {
+    throw new Error(`VPS OpenVPN tunnel base must remain the isolated ${contract.tunnelBase}.0/24 network.`);
+  }
+  if (!new RegExp(`^${contract.tunnelBase.replace(/\./g, "\\.")}\\.(?:[2-9]|[1-9]\\d|1\\d\\d|2[0-4]\\d|25[0-3])$`).test(routerTunnelIp)) {
+    throw new Error(`Router tunnel IP must be a valid host in ${contract.tunnelBase}.0/24.`);
+  }
+  const selectedRouterTunnelIp = routerTunnelIp;
   const tag       = routerId ? `router${routerId}` : "router";
   const serverNet = `${selectedTunnelBase}.0`;
   const serverGw  = `${selectedTunnelBase}.1`;
   const routerPeerIp = routerVpnPeerIp(selectedRouterTunnelIp);
   const usernameB64 = base64(vpnUsername);
   const passwordB64 = base64(vpnPassword);
+  const managedCaB64 = base64(ISRG_ROOT_X1_PEM);
 
   return `#!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════════
-# OcholaSupernet — VPS OpenVPN Server Setup for MikroTik Clients
+# ===============================================================
+# OcholaSupernet - VPS OpenVPN Server Setup for MikroTik Clients
 # Generated : ${new Date().toISOString()}
 # VPS IP    : ${vpsPublicIp}
 # VPN Port  : ${selectedVpnPort}/tcp
@@ -85,7 +105,7 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
 # USAGE:
 #   chmod +x vps-ovpn-setup.sh
 #   sudo bash vps-ovpn-setup.sh
-# ═══════════════════════════════════════════════════════════════════
+# ===============================================================
 set -euo pipefail
 
 BASE_OVPN_CONF="/etc/openvpn/server.conf"
@@ -96,11 +116,11 @@ AUTHFILE="${contract.authFilePath}" # username:password auth file
 AUTHSCRIPT="${contract.authScriptPath}"
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
 
-echo "──────────────────────────────────────────────────────────────"
+echo "--------------------------------------------------------------"
 echo " OcholaSupernet: Configuring OVPN server for MikroTik client"
-echo "──────────────────────────────────────────────────────────────"
+echo "--------------------------------------------------------------"
 
-# ── 1. Detect the legacy server config without changing it ──────────────────
+# 1. Detect the legacy server config without changing it
 if [ ! -f "$BASE_OVPN_CONF" ]; then
   # Try common alternative locations
   for f in /etc/openvpn/server/*.conf /etc/openvpn/*.conf; do
@@ -112,38 +132,14 @@ if [ -f "$BASE_OVPN_CONF" ]; then
   echo "[1] Reading existing config: $BASE_OVPN_CONF"
   echo "    Legacy end-user VPN configuration will not be modified."
 else
-  echo "[1] No existing OpenVPN config found; bootstrapping an isolated management PKI."
-  echo "    No legacy customer VPN configuration will be created or changed."
-  $SUDO apt-get update -qq
-  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openvpn easy-rsa
-  EASYRSA_DIR="/etc/openvpn/easy-rsa"
-  $SUDO install -d -m 700 "$EASYRSA_DIR"
-  if [ ! -x "$EASYRSA_DIR/easyrsa" ]; then
-    if [ ! -x /usr/share/easy-rsa/easyrsa ]; then
-      echo "ERROR: easy-rsa was installed but its easyrsa command is unavailable."
-      exit 1
-    fi
-    $SUDO cp -a /usr/share/easy-rsa/. "$EASYRSA_DIR/"
-  fi
-  if [ ! -d "$EASYRSA_DIR/pki" ]; then
-    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 ./easyrsa init-pki"
-  fi
-  if [ ! -f "$EASYRSA_DIR/pki/ca.crt" ]; then
-    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 EASYRSA_REQ_CN='OcholaSupernet-CA' ./easyrsa build-ca nopass"
-  fi
-  if [ ! -f "$EASYRSA_DIR/pki/issued/ochola-router-server.crt" ] || [ ! -f "$EASYRSA_DIR/pki/private/ochola-router-server.key" ]; then
-    $SUDO sh -c "cd '$EASYRSA_DIR' && EASYRSA_BATCH=1 ./easyrsa build-server-full ochola-router-server nopass"
-  fi
-  CA_FILE="$EASYRSA_DIR/pki/ca.crt"
-  CERT_FILE="$EASYRSA_DIR/pki/issued/ochola-router-server.crt"
-  KEY_FILE="$EASYRSA_DIR/pki/private/ochola-router-server.key"
-  # Avoid a slow DH parameter generation on a fresh VPS. OpenVPN negotiates
-  # modern ECDH when dh is set to none; existing configs keep their own DH.
-  DH_FILE="none"
+  echo "[1] No existing OpenVPN config found."
+  echo "ERROR: An existing OpenVPN server with a publicly trusted certificate is required."
+  echo "       Configure the VPS certificate first, then download this setup again."
+  exit 1
 fi
 
-# ── 2. Patch: ensure proto tcp ───────────────────────────────────────────────
-echo "[2] Creating isolated router-management server on ${selectedTunnelBase}.0:${selectedVpnPort}..."
+# 3. Patch: ensure proto tcp
+echo "[3] Creating isolated router-management server on ${selectedTunnelBase}.0:${selectedVpnPort}..."
 if [ -f "$BASE_OVPN_CONF" ]; then
   conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
   CA_FILE="$(conf_value ca)"
@@ -161,6 +157,43 @@ if [ -z "$CA_FILE" ] || [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
   echo "ERROR: OpenVPN CA/cert/key paths are unavailable."
   exit 1
 fi
+MANAGEMENT_CA_FILE="$OVPN_DIR/${ROUTER_HTTPS_CERTIFICATE_NAME}.pem"
+$SUDO sh -c "printf '%s' '${managedCaB64}' | base64 -d > '$MANAGEMENT_CA_FILE'"
+$SUDO chmod 644 "$MANAGEMENT_CA_FILE"
+echo "    RouterOS trust contract: ${ROUTER_HTTPS_CERTIFICATE_NAME} (ISRG Root X1)"
+echo "[2] Checking system time before certificate validation..."
+if command -v timedatectl >/dev/null 2>&1; then
+  if ! timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -qx "yes"; then
+    echo "ERROR: System time is not synchronized. Enable NTP before starting OpenVPN."
+    exit 1
+  fi
+elif command -v chronyc >/dev/null 2>&1; then
+  if ! chronyc tracking 2>/dev/null | grep -q "Leap status.*Normal"; then
+    echo "ERROR: chrony does not report a synchronized system clock."
+    exit 1
+  fi
+else
+  echo "WARNING: timedatectl/chronyc is unavailable; verify NTP manually before continuing."
+fi
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "ERROR: openssl is required to validate the public OpenVPN server certificate."
+  exit 1
+fi
+CERT_TMP="$(mktemp -d)"
+trap 'rm -rf "$CERT_TMP"' EXIT
+awk 'BEGIN { n=0 } /-----BEGIN CERTIFICATE-----/ { n++ } n == 1 { print } /-----END CERTIFICATE-----/ && n == 1 { exit }' "$CERT_FILE" > "$CERT_TMP/leaf.pem"
+awk 'BEGIN { n=0 } /-----BEGIN CERTIFICATE-----/ { n++ } n >= 2 { print }' "$CERT_FILE" > "$CERT_TMP/chain.pem"
+if grep -q "BEGIN CERTIFICATE" "$CERT_TMP/chain.pem"; then
+  CERT_VERIFY_ARGS=(-untrusted "$CERT_TMP/chain.pem")
+else
+  CERT_VERIFY_ARGS=()
+fi
+if ! openssl verify -CAfile "$MANAGEMENT_CA_FILE" "\${CERT_VERIFY_ARGS[@]}" "$CERT_TMP/leaf.pem" >/dev/null 2>&1; then
+  echo "ERROR: The OpenVPN server certificate must chain to ISRG Root X1."
+  echo "       The RouterOS client will refuse an untrusted server certificate."
+  exit 1
+fi
+echo "    OpenVPN server certificate chains to ISRG Root X1."
 OPENVPN_VERSION="$(openvpn --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
 OPENVPN_MAJOR="$(printf '%s' "$OPENVPN_VERSION" | cut -d. -f1)"
 OPENVPN_MINOR="$(printf '%s' "$OPENVPN_VERSION" | cut -d. -f2)"
@@ -217,16 +250,16 @@ fi
 } > "$OVPN_CONF"
 echo "    Dedicated config written: $OVPN_CONF"
 
-# ── 3. Patch: disable tls-auth / tls-crypt ───────────────────────────────────
-echo "[3] Disabling tls-auth / tls-crypt (not supported by MikroTik)..."
+# 4. Patch: disable tls-auth / tls-crypt
+echo "[4] Disabling tls-auth / tls-crypt (not supported by MikroTik)..."
 echo "    Dedicated config does not include tls-auth or tls-crypt."
 
-# ── 4. Patch: set cipher and auth compatible with MikroTik ──────────────────
-echo "[4] Setting cipher=AES-128-CBC auth=SHA1..."
+# 5. Patch: set cipher and auth compatible with MikroTik
+echo "[5] Setting cipher=AES-128-CBC auth=SHA1..."
 echo "    Dedicated config uses cipher=AES-128-CBC auth=SHA1."
 
-# ── 5. Enable username/password authentication ───────────────────────────────
-echo "[5] Enabling username/password auth..."
+# 6. Enable username/password authentication
+echo "[6] Enabling username/password auth..."
 
 # Create auth verification script
 cat > "$AUTHSCRIPT" << 'AUTHEOF'
@@ -240,10 +273,10 @@ grep -Fqx "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
 
-# ── 6. Add the VPN user (${vpnUsername}) ────────────────────────────────────
+# 7. Add the VPN user (${vpnUsername})
 VPN_USERNAME="$(printf '%s' '${usernameB64}' | base64 -d)"
 VPN_PASSWORD="$(printf '%s' '${passwordB64}' | base64 -d)"
-echo "[6] Adding VPN user '${vpnUsername}'..."
+echo "[7] Adding VPN user '${vpnUsername}'..."
 touch "$AUTHFILE"
 chmod 600 "$AUTHFILE"
 
@@ -252,8 +285,8 @@ sed -i "/^\${VPN_USERNAME}:/d" "$AUTHFILE"
 printf '%s:%s\n' "$VPN_USERNAME" "$VPN_PASSWORD" >> "$AUTHFILE"
 echo "    User '${vpnUsername}' added to $AUTHFILE"
 
-# ── 7. Enable client-config-dir for static IP assignment ────────────────────
-echo "[7] Configuring static IP for router (${selectedRouterTunnelIp})..."
+# 8. Enable client-config-dir for the assigned management address
+echo "[8] Configuring the assigned management IP for router (${selectedRouterTunnelIp})..."
 mkdir -p "$CCDDIR"
 
 if ! grep -q "^client-config-dir" "$OVPN_CONF"; then
@@ -270,8 +303,8 @@ ifconfig-push ${selectedRouterTunnelIp} ${routerPeerIp}
 CCDEOF
 echo "    Static IP ${selectedRouterTunnelIp} assigned to '${vpnUsername}'"
 
-# ── 8. Firewall: allow VPN port and API access from tunnel ──────────────────
-echo "[8] Opening firewall rules..."
+# 9. Firewall: allow VPN port and API access from tunnel
+echo "[9] Opening firewall rules..."
 # Allow incoming OVPN connections
 iptables -I INPUT -p tcp --dport ${selectedVpnPort} -j ACCEPT 2>/dev/null || true
 # Allow forwarding from the isolated router tunnel to enable API traffic
@@ -285,7 +318,7 @@ elif command -v iptables-save &>/dev/null; then
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
-# ── 8b. Validate the two RouterOS compatibility requirements ──────────────────
+# 9b. Validate RouterOS compatibility requirements
 # A subnet-topology server pushes an address form that RouterOS can interpret
 # as a /0 netmask. The dedicated service must stay net30 and must not require a
 # client certificate because MikroTik authenticates with username/password.
@@ -302,8 +335,8 @@ if grep -Eq '^[[:space:]]*(topology[[:space:]]+subnet|tls-auth|tls-crypt|tls-cry
   exit 1
 fi
 
-# ── 9. Restart only the dedicated router-management instance ────────────────
-echo "[9] Starting dedicated router-management OpenVPN..."
+# 10. Restart only the dedicated router-management instance
+echo "[10] Starting dedicated router-management OpenVPN..."
 $SUDO ln -sfn "$OVPN_CONF" "$OVPN_DIR/${serviceStem}.conf"
 service_started=false
 if $SUDO systemctl restart openvpn-server@${serviceStem} 2>/dev/null || $SUDO systemctl enable --now openvpn-server@${serviceStem} 2>/dev/null; then
@@ -330,7 +363,7 @@ if command -v ss >/dev/null 2>&1 && ! $SUDO ss -ltnH | awk '$4 ~ /:'"${selectedV
   exit 1
 fi
 echo ""
-echo "══════════════════════════════════════════════════════════════"
+echo "=============================================================="
 echo " Setup complete. Verify:"
 echo "   systemctl status openvpn-server@${serviceStem}"
 echo "   ip addr show ${contract.interfaceName}    # should show ${serverGw}"
@@ -340,11 +373,11 @@ echo "   /import router-as-client${routerId ?? ""}.rsc"
 echo ""
 echo " After router connects, verify from this VPS:"
 echo "   ping ${selectedRouterTunnelIp}                    # router tunnel IP"
-echo "   curl -s http://${selectedRouterTunnelIp}:8728      # router API"
+echo "   nc -vz -w 3 ${selectedRouterTunnelIp} 8728          # API port reachability"
+echo "   journalctl -u openvpn-server@${serviceStem} -n 60 --no-pager"
 echo ""
-echo " Set in OcholaSupernet backend:"
 echo "   MIKROTIK_BRIDGE_IP=${selectedRouterTunnelIp}"
-echo "══════════════════════════════════════════════════════════════"
+echo "=============================================================="
 `;
 }
 
@@ -352,7 +385,9 @@ echo "════════════════════════�
  * Returns a summary JSON of the VPN architecture for the given setup,
  * useful for displaying in the admin UI.
  */
-export function describeVpnArchitecture(opts: VpsOvpnSetupOptions) {
+export function describeVpnArchitecture(
+  opts: Omit<VpsOvpnSetupOptions, "vpnUsername" | "vpnPassword"> & { vpnUsername?: string },
+) {
   const {
     vpsPublicIp,
     vpnPort,

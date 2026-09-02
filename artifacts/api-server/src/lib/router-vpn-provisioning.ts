@@ -6,8 +6,8 @@ import {
   ROUTER_MANAGEMENT_VPN_BACKUP,
   routerManagementBackupIp,
   type RouterManagementVpnRole,
-  routerManagementOvpnCredentials,
 } from "./router-management-vpn.js";
+import { ensureRouterManagementOvpnCredentials } from "./router-management-credentials.js";
 import { encryptVpnSecret, decryptVpnSecret, type EncryptedSecret } from "./vpn-crypto.js";
 import { runVpsScript, vpsSshConfigured } from "./vps-ssh.js";
 import { generateVpsOvpnSetupScript } from "./vpn-utils.js";
@@ -387,7 +387,11 @@ async function reconcileRouterVpn(
   });
   await upsertSecret(ipsec.id, "psk", ipsecPsk);
 
-  const openVpnCredentials = routerManagementOvpnCredentials(input.routerName);
+  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+    routerId: input.routerId,
+    adminId: input.adminId,
+    routerName: input.routerName,
+  });
   const script = generateVpsReconciliationScript({
     routerId: input.routerId,
     routerIp: input.routerIp,
@@ -461,6 +465,7 @@ const openVpnLocks = new Map<string, Promise<{
  * This intentionally avoids changing any other VPN technology.
  */
 export async function provisionRouterManagementOpenVpn(input: {
+  adminId: number;
   routerId: number;
   routerName: string;
   routerIp: string;
@@ -474,6 +479,7 @@ export async function provisionRouterManagementOpenVpn(input: {
 }
 
 export async function provisionRouterManagementOpenVpnBackup(input: {
+  adminId: number;
   routerId: number;
   routerName: string;
   routerIp: string;
@@ -487,6 +493,7 @@ export async function provisionRouterManagementOpenVpnBackup(input: {
 }
 
 async function provisionRouterManagementOpenVpnInstance(input: {
+  adminId: number;
   routerId: number;
   routerName: string;
   routerIp: string;
@@ -511,7 +518,11 @@ async function provisionRouterManagementOpenVpnInstance(input: {
     }
 
     const endpoint = endpointHost();
-    const credentials = routerManagementOvpnCredentials(input.routerName);
+    const credentials = await ensureRouterManagementOvpnCredentials({
+      routerId: input.routerId,
+      adminId: input.adminId,
+      routerName: input.routerName,
+    });
     const script = generateVpsOvpnSetupScript({
       vpsPublicIp: endpoint,
       vpnPort: contract.port,

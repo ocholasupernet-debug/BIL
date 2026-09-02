@@ -33,10 +33,10 @@ const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 const vpnSettings = await readFile("../ochola-supernet/src/pages/vpn/Settings.tsx", "utf8");
 
 test("management OpenVPN credentials use the configured router name", () => {
-  assert.deepEqual(
-    vpnContract.routerManagementOvpnCredentials("come2"),
-    { username: "come2", password: "come2" },
-  );
+  const credentials = vpnContract.routerManagementOvpnCredentials("come2");
+  assert.equal(credentials.username, "come2");
+  assert.equal(typeof credentials.password, "string");
+  assert.notEqual(credentials.password, "come2");
   assert.throws(
     () => vpnContract.routerManagementOvpnCredentials("come 2"),
     /Router name must be/,
@@ -45,7 +45,7 @@ test("management OpenVPN credentials use the configured router name", () => {
     () => vpnContract.routerManagementOvpnCredentials("../come2"),
     /Router name must be/,
   );
-  assert.match(scriptsRoute, /routerManagementOvpnCredentials\(rows\[0\]\.name\)/);
+  assert.match(scriptsRoute, /ensureRouterManagementOvpnCredentials/);
   assert.doesNotMatch(scriptsRoute, /vpnUsername: `router-\$\{routerId\}`/);
   assert.match(syncRoute, /client\.cn === openVpnCredentials\.username/);
 });
@@ -56,6 +56,8 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     vpnPort: 1196,
     vpnUsername: "router-42",
     vpnPassword: "one-time-token",
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
     tunnelRouterIp: "10.8.5.42",
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
@@ -84,6 +86,8 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
     tunnelRouterIp: "10.8.5.42",
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
   };
   const ros6 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 6 });
   const ros7 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 7 });
@@ -93,7 +97,7 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
   assert.match(ros7, /protocol=tcp mode=ip cipher=aes128-cbc auth=sha1/);
-  assert.match(ros7, /verify-server-certificate=no/);
+  assert.match(ros7, /verify-server-certificate=yes/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.match(scriptsRoute, /routerOsMajor/);
 });
@@ -129,6 +133,8 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
     installationMode: "coexist",
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
   });
   assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
@@ -291,7 +297,12 @@ test("router-management backup is isolated on TCP 1197 and maps router addresses
 });
 
 test("VPS setup and runtime status readers use the same management paths", () => {
-  const setup = vpnUtils.generateVpsOvpnSetupScript({ vpsPublicIp: "vpn.example.test" });
+  const setup = vpnUtils.generateVpsOvpnSetupScript({
+    vpsPublicIp: "vpn.example.test",
+    vpnUsername: "router-42",
+    vpnPassword: "one-time-token",
+    routerTunnelIp: "10.8.5.2",
+  });
   assert.match(setup, /VPN Port  : 1196\/tcp/);
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router\.conf/);
   assert.match(setup, /\/etc\/openvpn\/router-passwd/);
@@ -305,6 +316,7 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
   assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
+  assert.doesNotMatch(setup, /curl -s http/);
   assert.match(setup, /grep -Fqx/);
   assert.match(setup, /# OpenVPN does not support data-ciphers/);
   assert.match(setup, /data-ciphers AES-128-CBC/);
@@ -321,6 +333,9 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(scriptsRoute, /The OpenVPN server may be hosted separately/);
   const backupSetup = vpnUtils.generateVpsOvpnSetupScript({
     vpsPublicIp: "vpn.example.test",
+    vpnUsername: "router-42",
+    vpnPassword: "one-time-token",
+    routerTunnelIp: "10.8.6.2",
     vpnRole: "backup",
   });
   assert.match(backupSetup, /VPN Port  : 1197\/tcp/);

@@ -38,8 +38,11 @@ import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
-import { routerManagementOvpnCredentials } from "../lib/router-management-vpn";
+import { routerManagementVpnContract } from "../lib/router-management-vpn";
+import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
+import { ROUTER_HTTPS_CERTIFICATE_FILE } from "../lib/router-https-trust.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
+import { requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -147,6 +150,7 @@ router.get("/router-file-source/:token", (req, res): void => {
 /* ── Supabase isp_routers row shape ─────────────────────────────────────── */
 interface SbRouter {
   id: number;
+  admin_id: number;
   name: string;
   host: string;
   bridge_ip: string | null;
@@ -212,7 +216,7 @@ async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: Ro
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !isManagementVpnIp(row.vpn_ip ?? "") && !isManagementVpnIp(row.bridge_ip ?? ""))) return null;
@@ -335,7 +339,7 @@ router.get("/router/live-by-host", async (req, res): Promise<void> => {
  * Returns latency, SSL status, whether VPN fallback was used, and any warnings.
  */
 router.get("/router/:id/test", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP configured" }); return; }
@@ -375,7 +379,7 @@ router.get("/router/:id/test", async (req, res): Promise<void> => {
  * administrator's router.
  */
 router.get("/router/:id/files", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const adminId = parseInt(String(req.query.adminId ?? ""), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (isNaN(adminId)) { res.status(400).json({ error: "adminId query param is required" }); return; }
@@ -412,7 +416,7 @@ router.get("/router/:id/files", async (req, res): Promise<void> => {
  *     destinationDirectory? , destinationPath?, overwrite? }
  */
 router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
   const sourceType = req.body?.sourceType as DeployableSourceType;
   const sourceName = String(req.body?.sourceName ?? "").trim();
@@ -528,7 +532,7 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
  * only while the atomic RouterOS transfer is in progress.
  */
 router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
   const overwrite = req.body?.overwrite === true;
   const directory = String(req.body?.destinationDirectory ?? "hotspot")
@@ -724,8 +728,8 @@ router.get("/probe", async (req, res): Promise<void> => {
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
-router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
   const found = await getRouterCreds(id);
@@ -741,7 +745,16 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     return;
   }
 
-  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
+  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+    routerId: id,
+    adminId: found.row.admin_id,
+    routerName: found.row.name,
+  });
+  const registrationToken = found.row.token || found.row.router_secret;
+  if (!registrationToken) {
+    res.status(409).json({ error: "Router registration token is not available; regenerate the router installer first." });
+    return;
+  }
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateRouterAsClientScript({
@@ -750,6 +763,8 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
     vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
     vpnUsername: openVpnCredentials.username,
     vpnPassword: openVpnCredentials.password,
+    caCertificateUrl: `${requestOrigin(req)}/api/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`,
+    backendRegistrationUrl: `${requestOrigin(req)}/api/isp/router/register/${encodeURIComponent(registrationToken)}`,
     tunnelRouterIp,
     tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
   });
@@ -779,8 +794,8 @@ router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
  *   VPN credentials are derived from the configured router name.
  *   tunnelRouterIp  — static IP to assign to router
  */
-router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+router.get("/router/:id/vps-ovpn-setup", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
   const found = await getRouterCreds(id);
@@ -795,7 +810,11 @@ router.get("/router/:id/vps-ovpn-setup", async (req, res): Promise<void> => {
     return;
   }
 
-  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
+  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+    routerId: id,
+    adminId: found.row.admin_id,
+    routerName: found.row.name,
+  });
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
 
   const script = generateVpsOvpnSetupScript({
@@ -830,7 +849,11 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
-  const openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
+  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+    routerId: id,
+    adminId: found.row.admin_id,
+    routerName: found.row.name,
+  });
   const info = describeVpnArchitecture({
     vpsPublicIp:    vpsIp || "SET_VPS_HOST_OR_QUERY_PARAM",
     routerId:       id,

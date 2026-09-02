@@ -4,7 +4,8 @@ import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
-import { routerManagementBackupIp, routerManagementOvpnCredentials } from "../lib/router-management-vpn.js";
+import { routerManagementBackupIp } from "../lib/router-management-vpn.js";
+import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 
 const router: IRouter = Router();
 
@@ -58,6 +59,16 @@ async function upsertByFilter(
 /* ─── Connect helper ─── */
 function makeConn(host: string, username: string, password: string): RouterOSAPI {
   return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 6, keepalive: false });
+}
+
+async function verifyManagementApi(host: string, username: string, password: string): Promise<void> {
+  const conn = makeConn(host, username, password);
+  try {
+    await withTimeout(conn.connect(), 8_000);
+    await withTimeout(conn.write(["/system/resource/print"]), 8_000);
+  } finally {
+    try { conn.close(); } catch { /* connection may not have opened */ }
+  }
 }
 
 /* ─── Connect with optional management VPN fallback ─── */
@@ -2093,7 +2104,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
   const REG_KEY = hbKey();
 
   if (!REG_URL || !REG_KEY) {
-    res.json({ ok: true, ts, note: "db-not-configured" });
+    res.status(503).json({ ok: false, ts, error: "backend registration is unavailable because the database is not configured" });
     return;
   }
 
@@ -2117,8 +2128,15 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     /* First: read current name + admin_id to decide whether to rename + for VPN user */
     let existingAdminId: number | null = null;
     let existingName: string = "";
+    let existingRouter: {
+      id: number;
+      name: string;
+      admin_id: number;
+      router_username?: string | null;
+      router_secret?: string | null;
+    } | null = null;
     const getRes = await fetch(
-      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name,admin_id`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name,admin_id,router_username,router_secret`,
       {
         headers: {
           apikey: REG_KEY,
@@ -2128,9 +2146,16 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       }
     );
     if (getRes.ok) {
-      const rows = await getRes.json() as Array<{ id: number; name: string; admin_id: number }>;
+      const rows = await getRes.json() as Array<{
+        id: number;
+        name: string;
+        admin_id: number;
+        router_username?: string | null;
+        router_secret?: string | null;
+      }>;
       const existing = rows[0];
       if (existing) {
+        existingRouter = existing;
         existingAdminId = existing.admin_id;
         existingName    = existing.name;
         /* Update name to RouterOS identity only if the current name ends with " Router"
@@ -2138,6 +2163,26 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
         if (rname && existing.name.endsWith(" Router")) {
           patch.name = rname;
         }
+      }
+    }
+    if (!existingRouter) {
+      res.status(404).json({ ok: false, ts, error: "router registration token was not found" });
+      return;
+    }
+    if (bridgeIp && isRouterManagementVpnIp(bridgeIp)) {
+      try {
+        await verifyManagementApi(
+          bridgeIp,
+          existingRouter.router_username ?? "admin",
+          existingRouter.router_secret ?? "",
+        );
+      } catch (error) {
+        res.status(503).json({
+          ok: false,
+          ts,
+          error: `management tunnel registered, but RouterOS API verification failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        return;
       }
     }
 
@@ -2167,13 +2212,17 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     }
 
     const updated = await patchRes.json() as Array<{
-      id: number; name: string; host?: string; router_username?: string;
+      id: number; admin_id?: number; name: string; host?: string; router_username?: string;
     }>;
-    const row = updated[0];
+    const row = updated[0] ?? existingRouter;
     const routerName = row?.name ?? existingName ?? rname ?? "unknown";
-    let openVpnCredentials: ReturnType<typeof routerManagementOvpnCredentials> | null = null;
+    let openVpnCredentials: { username: string; password: string } | null = null;
     try {
-      openVpnCredentials = routerManagementOvpnCredentials(routerName);
+      openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+        routerId: row.id,
+        adminId: Number(row.admin_id ?? existingAdminId ?? 0),
+        routerName,
+      });
     } catch (error) {
       console.warn(
         `[register] management OpenVPN identity skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -2186,7 +2235,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       if (liveClient) syncIppEntry(openVpnCredentials.username, liveClient.vpnIp);
     }
     console.log(`[register] ✓ ${routerName} | model=${model} ver=${ver} @ ${ts}`);
-    res.json({ ok: true, ts, router: routerName, model, version: ver });
+    res.json({ ok: true, ts, router: routerName, model, version: ver, managementApiVerified: Boolean(bridgeIp && isRouterManagementVpnIp(bridgeIp)) });
 
     /* ── Auto-probe: prefer VPN source IP; fall back to bridge IP ── */
     const srcIp   = clientIp(req);
@@ -2225,7 +2274,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[register] error: ${msg}`);
-    res.json({ ok: true, ts, note: "db error but registration ping received" });
+    res.status(503).json({ ok: false, ts, error: `backend registration failed: ${msg}` });
   }
 });
 

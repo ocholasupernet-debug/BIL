@@ -30,7 +30,10 @@ process.on("exit", () => rmSync(outdir, { recursive: true, force: true }));
 test("coexistence OpenVPN removes only its exact stale client and preserves firewall resources", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
+    vpnUsername: "router-42",
     vpnPassword: "router-secret",
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
     tunnelRouterIp: "10.8.5.42",
     tunnelVpsIp: "10.8.5.1",
     installationMode: "coexist",
@@ -47,7 +50,10 @@ test("coexistence OpenVPN removes only its exact stale client and preserves fire
 test("takeover retains a separate replacement path", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
+    vpnUsername: "router-42",
     vpnPassword: "router-secret",
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
     installationMode: "takeover",
   });
   assert.match(script, /interface ovpn-client remove/);
