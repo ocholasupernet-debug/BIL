@@ -70,6 +70,8 @@ reserved = {"www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin
 pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 print("register")
 print("latex")
+print("vpn")
+print("bil")
 with open(sys.argv[1], encoding="utf-8") as source:
     rows = json.load(source)
 for row in rows:
@@ -90,7 +92,14 @@ for subdomain in "${subdomains[@]}"; do
   cert_dir="/etc/letsencrypt/live/$host"
   snippet="$VHOST_DIR/$host.conf"
 
-  if [[ ! -r "$cert_dir/fullchain.pem" || ! -r "$cert_dir/privkey.pem" ]]; then
+  certificate_valid=false
+  if [[ -r "$cert_dir/fullchain.pem" && -r "$cert_dir/privkey.pem" ]] &&
+     openssl x509 -in "$cert_dir/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
+       grep -Fq "DNS:${host}"; then
+    certificate_valid=true
+  fi
+
+  if [[ "$certificate_valid" != true ]]; then
     echo "Issuing certificate for $host..."
     if ! certbot certonly \
       --webroot \

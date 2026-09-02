@@ -283,7 +283,10 @@ export async function openVpsTcpForward(
   const timeoutMs = Math.max(5_000, options.timeoutMs ?? 15_000);
   const localPort = await reserveLocalPort();
   const askPassPath = `/tmp/ochola-vps-forward-askpass-${randomUUID()}`;
-  const passphrase = process.env.VPS_SSH_PASSPHRASE || "";
+  /* Use the same resolver as runVpsScript. Production persists the
+     passphrase as VPS_SSH_PASSPHRASE_B64 so PM2 reloads and VPS reboots do
+     not depend on a transient unencoded shell variable. */
+  const passphrase = configuredPassphrase();
   if (passphrase) {
     writeFileSync(
       askPassPath,
