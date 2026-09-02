@@ -114,6 +114,7 @@ const navSections: NavSection[] = [
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Self Install",   href: "/admin/network/self-install" },
+          { name: "Self Provision", href: "/admin/network/self-provision" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "PPPoE",          href: "/admin/network/pppoe" },
