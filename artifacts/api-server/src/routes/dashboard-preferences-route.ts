@@ -12,7 +12,20 @@ const DEFAULT_PREFERENCES = {
 } as const;
 
 const LAYOUTS = new Set(["balanced", "focus", "compact"]);
-const CARD_SHAPES = new Set(["rounded", "soft-square", "compact"]);
+const CARD_SHAPES = new Set([
+  "rounded",
+  "soft-square",
+  "compact",
+  "pill",
+  "circle",
+  "leaf",
+  "arch",
+  "bevel",
+  "notched",
+  "hexagon",
+  "ticket",
+  "squircle",
+]);
 
 interface DashboardPreferenceRow {
   admin_id: number;

@@ -1,5 +1,17 @@
 export type DashboardLayout = "balanced" | "focus" | "compact";
-export type DashboardCardShape = "rounded" | "soft-square" | "compact";
+export type DashboardCardShape =
+  | "rounded"
+  | "soft-square"
+  | "compact"
+  | "pill"
+  | "circle"
+  | "leaf"
+  | "arch"
+  | "bevel"
+  | "notched"
+  | "hexagon"
+  | "ticket"
+  | "squircle";
 
 export interface DashboardPreferences {
   accentColor: string;
@@ -48,6 +60,15 @@ export const DASHBOARD_SHAPE_OPTIONS: Array<{
   { value: "rounded", label: "Rounded", description: "Friendly cards with generous corners." },
   { value: "soft-square", label: "Soft square", description: "A sharper, structured operations look." },
   { value: "compact", label: "Compact", description: "Tight corners for a dense control-room feel." },
+  { value: "pill", label: "Pill", description: "Long, smooth corners for a softer dashboard rhythm." },
+  { value: "circle", label: "Circle", description: "Bold rounded panels with a strong geometric feel." },
+  { value: "leaf", label: "Leaf", description: "Alternating corners create a natural, distinctive silhouette." },
+  { value: "arch", label: "Arch", description: "Rounded upper corners with a grounded lower edge." },
+  { value: "bevel", label: "Bevel", description: "Angled corners for a technical operations aesthetic." },
+  { value: "notched", label: "Notched", description: "Cut-in corners that make each section feel custom-built." },
+  { value: "hexagon", label: "Hexagon", description: "Structured six-sided accents for a futuristic look." },
+  { value: "ticket", label: "Ticket", description: "Perforated-style side cuts inspired by access passes." },
+  { value: "squircle", label: "Squircle", description: "Balanced between a square and a circle." },
 ];
 
 export function isDashboardLayout(value: unknown): value is DashboardLayout {
@@ -55,7 +76,7 @@ export function isDashboardLayout(value: unknown): value is DashboardLayout {
 }
 
 export function isDashboardCardShape(value: unknown): value is DashboardCardShape {
-  return value === "rounded" || value === "soft-square" || value === "compact";
+  return DASHBOARD_SHAPE_OPTIONS.some(option => option.value === value);
 }
 
 export function isDashboardAccentColor(value: unknown): value is string {

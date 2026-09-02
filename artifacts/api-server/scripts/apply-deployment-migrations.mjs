@@ -45,6 +45,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_vpn_fallbacks.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_dashboard_preferences.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_dashboard_amount_visibility.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_dashboard_shape_options.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_typography.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_prepaid_user_operations.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_bandwidth_profiles.sql", import.meta.url)),

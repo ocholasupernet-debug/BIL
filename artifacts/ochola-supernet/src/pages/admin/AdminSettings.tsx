@@ -1186,7 +1186,7 @@ function DashboardBuilderTab() {
                   <span>Set the visual weight of dashboard panels and summary cards.</span>
                 </div>
               </div>
-              <div className="dashboard-builder-options">
+              <div className="dashboard-builder-options dashboard-builder-shape-options">
                 {DASHBOARD_SHAPE_OPTIONS.map(option => (
                   <button
                     key={option.value}
