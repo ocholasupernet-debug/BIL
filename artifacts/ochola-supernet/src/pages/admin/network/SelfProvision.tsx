@@ -227,8 +227,13 @@ export default function AddRouterScript() {
     : routers.find(router => router.id === selectedRouterId) ?? null;
   const sourceRouters = routers.filter(router => router.id !== selectedRouterId);
   const sourceRouter = sourceRouters.find(router => router.id === sourceRouterId) ?? sourceRouters[0] ?? null;
-  const accountSubdomain = account?.subdomain?.trim().toLowerCase() ?? "";
-  const companyHost = accountSubdomain ? `${accountSubdomain}.${BASE_DOMAIN}` : "";
+  const accountSubdomain = (account?.subdomain?.trim().toLowerCase() ?? "")
+    .replace(/^https?:\/\//i, "")
+    .split(/[/?#]/, 1)[0]
+    .replace(/\.$/, "");
+  const companyHost = accountSubdomain
+    ? accountSubdomain.endsWith(`.${BASE_DOMAIN}`) ? accountSubdomain : `${accountSubdomain}.${BASE_DOMAIN}`
+    : "";
   const buildBootstrapCommand = (routerId?: number, installerGrant?: string) => {
     if (!companyHost) return "";
     const routerQuery = routerId && installerGrant

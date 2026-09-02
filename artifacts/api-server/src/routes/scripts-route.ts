@@ -725,22 +725,41 @@ async function ensureVpnUser(adminId: number, username: string, password: string
   } catch { /* ignore — non-critical */ }
 }
 
+/* ── Host/origin normalization ──────────────────────────────────────────────
+   Reverse proxies occasionally send an already-qualified host such as
+   "https://come.isplatty.org" in x-forwarded-host. Keep schemes out of host
+   values before adding the one protocol that belongs in a generated script. */
+function normalizeHostHeader(value: string): string {
+  return value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split(/[/?#]/, 1)[0]
+    .replace(/\/+$/, "")
+    .trim();
+}
+
+function normalizeOrigin(value: string, protocol = "https"): string {
+  const host = normalizeHostHeader(value);
+  return host ? `${protocol}://${host}` : "";
+}
+
 /* ── Resolve the base origin for the requesting ISP.
    When a router at come.isplatty.org fetches a script, the Host
    header is "come.isplatty.org" → origin = "https://come.isplatty.org".
    Falls back to the literal host when no subdomain is present (dev). ── */
 function resolveOrigin(host: string): string {
-  const subdomain = parseSubdomain(host);
+  const normalizedHost = normalizeHostHeader(host);
+  const subdomain = parseSubdomain(normalizedHost);
   if (subdomain) return `https://${subdomain}.isplatty.org`;
-  const proto = host.startsWith("localhost") || host.startsWith("127.") ? "http" : "https";
-  return `${proto}://${host}`;
+  const proto = normalizedHost.startsWith("localhost") || normalizedHost.startsWith("127.") ? "http" : "https";
+  return normalizeOrigin(normalizedHost, proto);
 }
 
 function requestOrigin(req: Request): string {
   const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
     .split(",")[0]
     .trim();
-  const requestHost = forwardedHost || req.get("host") || "";
+  const requestHost = normalizeHostHeader(forwardedHost || req.get("host") || "");
   const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "")
     .split(",")[0]
     .trim();
@@ -749,7 +768,7 @@ function requestOrigin(req: Request): string {
     || hostname === "127.0.0.1"
     || hostname === "0.0.0.0";
   const publicHost = isLocalHost && process.env.REPLIT_DEV_DOMAIN
-    ? process.env.REPLIT_DEV_DOMAIN
+    ? normalizeHostHeader(process.env.REPLIT_DEV_DOMAIN)
     : requestHost;
   if (parseSubdomain(publicHost)) return resolveOrigin(publicHost);
   const protocol = forwardedProto === "https"
@@ -757,7 +776,7 @@ function requestOrigin(req: Request): string {
     || publicHost !== requestHost
     ? "https"
     : (publicHost.startsWith("localhost") || publicHost.startsWith("127.") ? "http" : "https");
-  return `${protocol}://${publicHost}`;
+  return normalizeOrigin(publicHost, protocol);
 }
 
 function routerVpnEndpointHost(origin: string): string {
@@ -1558,7 +1577,7 @@ router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res)
 });
 
 router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
-  const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  const requestHost = normalizeHostHeader(String(req.headers["x-forwarded-host"] ?? req.headers.host ?? ""));
   const subdomain = parseSubdomain(requestHost);
   if (!subdomain) {
     res
@@ -1762,7 +1781,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
         }
       }
     } else {
-      const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+      const requestHost = normalizeHostHeader(String(req.headers["x-forwarded-host"] ?? req.headers.host ?? ""));
       const subdomain = parseSubdomain(requestHost);
       if (subdomain) {
         const admins = await sbGet<InstallAdmin>(
@@ -1852,7 +1871,6 @@ router.get("/scripts/router-vpn/readiness", requireAdmin(), async (req, res): Pr
     }
 
     const readiness = routerManagementVpnReadiness({ remoteReady: provisioning.ready });
-    const requestHost = String(req.headers.host ?? "");
     const endpoint = routerVpnEndpointHost(requestOrigin(req));
     const message = readiness.ready
       ? "Router-management VPN is ready for installation."
@@ -2874,7 +2892,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       subdomain: string | null;
     }
 
-    const hostHeader = (req.headers.host ?? "") as string;
+    const hostHeader = normalizeHostHeader((req.headers.host ?? "") as string);
     const subdomain  = parseSubdomain(hostHeader);
 
      let adminId: number | null = null;
