@@ -45,6 +45,7 @@ import {
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth";
 
 const router: IRouter = Router();
 
@@ -730,11 +731,14 @@ router.get("/probe", async (req, res): Promise<void> => {
  *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
  *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
  */
-router.get("/router/:id/router-as-client", async (req, res): Promise<void> => {
+router.get("/router/:id/router-as-client", requireAdmin, async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
-  const found = await getRouterCreds(id);
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) { res.status(401).json({ error: "Authentication required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);

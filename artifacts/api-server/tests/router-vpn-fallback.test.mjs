@@ -352,6 +352,9 @@ test("router-management backup is isolated on TCP 1197 and maps router addresses
 });
 
 test("standalone router client download installs the same primary and backup pair", () => {
+  assert.match(mikrotikRoute, /router\.get\("\/router\/:id\/router-as-client", requireAdmin/);
+  assert.match(mikrotikRoute, /authenticatedAdminId\(req\)/);
+  assert.match(mikrotikRoute, /getRouterCreds\(id, adminId\)/);
   assert.match(mikrotikRoute, /routerManagementVpnPortForRouter\(id\)/);
   assert.match(mikrotikRoute, /ROUTER_MANAGEMENT_VPN_BACKUP\.port/);
   assert.match(mikrotikRoute, /routerManagementBackupIp\(tunnelRouterIp\)/);
