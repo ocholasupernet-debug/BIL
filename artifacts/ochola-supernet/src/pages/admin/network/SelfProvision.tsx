@@ -229,9 +229,11 @@ export default function AddRouterScript() {
   const sourceRouter = sourceRouters.find(router => router.id === sourceRouterId) ?? sourceRouters[0] ?? null;
   const accountSubdomain = account?.subdomain?.trim().toLowerCase() ?? "";
   const companyHost = accountSubdomain ? `${accountSubdomain}.${BASE_DOMAIN}` : "";
-  const buildBootstrapCommand = (routerName?: string) => {
+  const buildBootstrapCommand = (routerId?: number, installerGrant?: string) => {
     if (!companyHost) return "";
-    const routerQuery = routerName ? `?routerName=${encodeURIComponent(routerName)}` : "";
+    const routerQuery = routerId && installerGrant
+      ? `?rid=${routerId}&adminId=${adminId}&grant=${encodeURIComponent(installerGrant)}`
+      : "";
     return `/tool fetch url="https://${companyHost}/scripts/mainhotspot.rsc${routerQuery}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`;
   };
   const bootstrapCommand = buildBootstrapCommand();
@@ -260,9 +262,16 @@ export default function AddRouterScript() {
       if (!result.ok || !result.router?.id || !result.router.name) {
         throw new Error(result.error || "The router profile could not be created.");
       }
+      const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>("/api/admin/router/self-install/grant", {
+        method: "POST",
+        body: JSON.stringify({ routerId: result.router.id, adminId }),
+      });
+      if (!prepared.ok || !prepared.grantToken) {
+        throw new Error(prepared.error || "Installer authorization could not be prepared.");
+      }
       setCreatedRouter(result.router);
       setSelectedRouterId(result.router.id);
-      setScript(buildBootstrapCommand(result.router.name));
+      setScript(buildBootstrapCommand(result.router.id, prepared.grantToken));
       setCopyState("idle");
       await refetchRouters();
     } catch (error) {

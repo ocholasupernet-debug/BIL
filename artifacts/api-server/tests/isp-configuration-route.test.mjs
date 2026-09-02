@@ -15,6 +15,7 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /proxyvpn\.isplatty\.org\/ipp\.php/);
   assert.match(route, /Primary proxyserver report failed; trying proxyvpn backup/);
   assert.match(route, /requestedRouterName/);
+  assert.match(route, /routerVpnBaseUrl/);
   assert.match(route, /company subdomain followed by a number/);
   assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status|routerId|installerGrant/);
 });
@@ -31,6 +32,7 @@ test("Add Router (Script) provides the staged router ports and sync flow", () =>
   assert.match(page, /Next — sync IP pools, users and plans/);
   assert.match(page, /\/api\/admin\/router\/sync-copy/);
   assert.match(page, /\/api\/admin\/router\/ensure/);
+  assert.match(page, /\/api\/admin\/router\/self-install\/grant/);
   assert.match(page, /Create profile &amp; generate command|Create profile & generate command/);
 });
 
@@ -44,7 +46,9 @@ test("router profile creation resumes an unfinished company router", async () =>
 test("the public Main ISP path is tenant-scoped and Self Install uses its separate path", async () => {
   const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
   const selfInstall = await readFile("../ochola-supernet/src/pages/admin/network/SelfInstall.tsx", "utf8");
-  assert.match(scriptsRoute, /router\.get\("\/scripts\/mainhotspot\.rsc", \(req, res\)/);
+  assert.match(scriptsRoute, /router\.get\("\/scripts\/mainhotspot\.rsc", async \(req, res\)/);
+  assert.match(scriptsRoute, /verifyInstallerGrant\(grant, routerId\)/);
+  assert.match(scriptsRoute, /scripts\/router-vpn\.rsc/);
   assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, requestedRouterName\)/);
   assert.match(scriptsRoute, /router\.get\("\/scripts\/self-install-mainhotspot\.rsc"/);
   assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc/);

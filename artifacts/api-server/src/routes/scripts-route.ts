@@ -1557,7 +1557,7 @@ router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res)
   }
 });
 
-router.get("/scripts/mainhotspot.rsc", (req, res): void => {
+router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
   const requestHost = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
   const subdomain = parseSubdomain(requestHost);
   if (!subdomain) {
@@ -1568,18 +1568,56 @@ router.get("/scripts/mainhotspot.rsc", (req, res): void => {
     return;
   }
 
-  const requestedRouterName = typeof req.query.routerName === "string" ? req.query.routerName : undefined;
+  const ridRaw = String(req.query.rid ?? "").trim();
+  const adminIdRaw = String(req.query.adminId ?? "").trim();
+  const grant = String(req.query.grant ?? "").trim();
+  const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
+  const adminId = /^\d+$/.test(adminIdRaw) ? Number(adminIdRaw) : 0;
+  const grantIdentity = verifyInstallerGrant(grant, routerId);
+  if (!routerId || !adminId || !grantIdentity || grantIdentity.adminId !== adminId) {
+    res
+      .status(403)
+      .type("text/plain")
+      .send("# Router-specific installer authorization is required. Generate a fresh command from Add Router (Script).");
+    return;
+  }
+
   try {
+    interface MainRouter {
+      id: number;
+      admin_id: number;
+      name: string;
+      router_secret?: string | null;
+      token?: string | null;
+    }
+    const rows = await sbGet<MainRouter>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,router_secret,token&limit=1`,
+    );
+    const currentRouter = rows[0];
+    if (!currentRouter) {
+      res.status(404).type("text/plain").send("# Router profile was not found for this ISP account.");
+      return;
+    }
+
+    const installerToken = [currentRouter.token, currentRouter.router_secret]
+      .map(value => String(value ?? "").trim())
+      .find(value => /^[A-Za-z0-9_-]{8,128}$/.test(value) && !/^(admin|password|secret|test|default)$/i.test(value));
+    if (!installerToken) {
+      res.status(503).type("text/plain").send("# Router installer token is not available. Return to Add Router (Script) and generate a fresh command.");
+      return;
+    }
+
+    const routerVpnBaseUrl = `${requestOrigin(req)}/scripts/router-vpn.rsc?rid=${routerId}&token=${encodeURIComponent(installerToken)}&mode=coexist`;
     res
       .type("text/plain")
       .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
       .set("Cache-Control", "no-store")
-      .send(buildMainIspConfigurationRsc(subdomain, requestedRouterName));
+      .send(buildMainIspConfigurationRsc(subdomain, currentRouter.name, routerVpnBaseUrl));
   } catch (error) {
     res
-      .status(400)
+      .status(503)
       .type("text/plain")
-      .send(`# ${error instanceof Error ? error.message : "Invalid router name."}`);
+      .send(`# Could not generate the router-specific Main ISP script: ${error instanceof Error ? error.message : "unknown error"}`);
   }
 });
 

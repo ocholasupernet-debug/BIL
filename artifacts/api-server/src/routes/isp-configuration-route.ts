@@ -161,7 +161,11 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 
 const TENANT_SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-export function buildMainIspConfigurationRsc(tenantSubdomain = "bil", requestedRouterName?: string): string {
+export function buildMainIspConfigurationRsc(
+  tenantSubdomain = "bil",
+  requestedRouterName?: string,
+  routerVpnBaseUrl?: string,
+): string {
   const subdomain = tenantSubdomain.trim().toLowerCase();
   if (!TENANT_SUBDOMAIN_RE.test(subdomain)) {
     throw new Error("A valid company subdomain is required for the Main ISP script.");
@@ -174,9 +178,21 @@ export function buildMainIspConfigurationRsc(tenantSubdomain = "bil", requestedR
   }
 
   const companyHost = `${subdomain}.isplatty.org`;
-  return MAIN_ISP_CONFIGURATION_RSC
+  let script = MAIN_ISP_CONFIGURATION_RSC
     .replaceAll("bil.isplatty.org", companyHost)
     .replaceAll("sub=bil&name=bil1", `sub=${subdomain}&name=${routerName}`);
+
+  if (routerVpnBaseUrl) {
+    const vpnBase = routerVpnBaseUrl.trim();
+    if (!/^https:\/\/[a-z0-9.-]+\/(?:api\/)?scripts\/router-vpn\.rsc\?rid=[0-9]+&token=[A-Za-z0-9_-]{8,128}&mode=coexist$/.test(vpnBase)) {
+      throw new Error("The router VPN bootstrap URL is invalid.");
+    }
+    script = script
+      .replaceAll(`${companyHost}/scripts/vpn7.rsc`, `${vpnBase}&ros-version=7`)
+      .replaceAll(`${companyHost}/scripts/vpn6.rsc`, `${vpnBase}&ros-version=6`);
+  }
+
+  return script;
 }
 
 router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, res): void => {
