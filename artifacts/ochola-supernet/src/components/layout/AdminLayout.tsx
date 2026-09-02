@@ -114,7 +114,7 @@ const navSections: NavSection[] = [
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Self Install",   href: "/admin/network/self-install" },
-          { name: "ISP Configuration", href: "/admin/network/self-provision" },
+          { name: "Add Router (Script)", href: "/admin/network/add-router-script" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "PPPoE",          href: "/admin/network/pppoe" },
@@ -200,7 +200,13 @@ const navSections: NavSection[] = [
 
 const SIDEBAR_W = 248;
 
-export function AdminLayout({ children }: { children: React.ReactNode }) {
+export function AdminLayout({
+  children,
+  hiddenNavHrefs = [],
+}: {
+  children: React.ReactNode;
+  hiddenNavHrefs?: string[];
+}) {
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 768);
   const [expanded, setExpanded]       = useState<string[]>([]);
@@ -222,6 +228,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         .map(item => ({
           ...item,
           children: item.children?.filter(child => {
+            if (hiddenNavHrefs.includes(child.href)) return false;
             const childFeatureKey = getAdminFeatureKeyForPath(child.href);
             return !childFeatureKey || isVisible(childFeatureKey);
           }),

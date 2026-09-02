@@ -15,6 +15,8 @@ test("standalone ISP configuration route serves only the supplied script family"
 
 test("ISP configuration page does not use the Self Install controls", () => {
   assert.match(page, /\/api\/admin\/isp-configuration\/mainhotspot\.rsc/);
+  assert.match(page, /<AdminLayout hiddenNavHrefs=\{\["\/admin\/network\/self-install"\]\}>/);
+  assert.match(page, /Add Router \(Script\)/);
   assert.match(page, /Generate configuration/);
-  assert.doesNotMatch(page, /Self Install|self-install|install-status|routerId|grantToken|vpnConnected/);
+  assert.doesNotMatch(page, /Self Install|install-status|routerId|grantToken|vpnConnected/);
 });

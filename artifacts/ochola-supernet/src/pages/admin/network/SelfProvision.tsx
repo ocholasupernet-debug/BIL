@@ -10,7 +10,7 @@ function authHeaders(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export default function SelfProvision() {
+export default function AddRouterScript() {
   const [script, setScript] = useState("");
   const [loading, setLoading] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -55,12 +55,12 @@ export default function SelfProvision() {
   };
 
   return (
-    <AdminLayout>
+    <AdminLayout hiddenNavHrefs={["/admin/network/self-install"]}>
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 1120 }}>
         <div>
-          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>ISP Configuration</h1>
+          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>Add Router (Script)</h1>
           <p style={{ color: "var(--isp-text-muted)", margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-            Generate the standalone Main ISP configuration script.
+            Add a router using the standalone Main ISP configuration script.
           </p>
         </div>
 

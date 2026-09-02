@@ -8,7 +8,7 @@ import {
 const TABS = [
   { id: "routers",           label: "Routers",         href: "/admin/network/routers",           icon: Server    },
   { id: "self-install",      label: "Self Install",    href: "/admin/network/self-install",      icon: PlusCircle},
-  { id: "self-provision",    label: "ISP Configuration", href: "/admin/network/self-provision",  icon: Network   },
+  { id: "add-router-script", label: "Add Router (Script)", href: "/admin/network/add-router-script", icon: Network },
   { id: "replace-router",    label: "Replace Router",  href: "/admin/network/replace-router",    icon: RotateCcw },
   { id: "migration",         label: "Migration",       href: "/admin/network/migration",         icon: RefreshCw },
   { id: "pppoe",             label: "PPPoE",           href: "/admin/network/pppoe",             icon: Shield    },

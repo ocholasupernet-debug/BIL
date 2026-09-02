@@ -20,7 +20,7 @@ import NetworkPPPoE from "./pages/admin/network/PPPoE";
 import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
-import NetworkSelfProvision from "./pages/admin/network/SelfProvision";
+import NetworkAddRouterScript from "./pages/admin/network/SelfProvision";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
 import NetworkMigration from "./pages/admin/network/migration/NetworkMigration";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
@@ -148,7 +148,7 @@ function Router() {
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
       <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
-      <Route path="/admin/network/self-provision" component={NetworkSelfProvision} />
+      <Route path="/admin/network/add-router-script" component={NetworkAddRouterScript} />
       <Route path="/admin/network/add-router"     component={LegacySelfInstallRedirect} />
       <Route path="/admin/network/migration"      component={NetworkMigration}     />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
