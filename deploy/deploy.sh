@@ -240,12 +240,34 @@ else
   pm2 save
 fi
 
+verify_public_health() {
+  local host="$1"
+  local attempts=30
+  local attempt response
+
+  for attempt in $(seq 1 "$attempts"); do
+    response=$(curl --silent --show-error --output /dev/null \
+      --write-out '%{http_code}' --max-time 15 \
+      "https://${host}/api/healthz" 2>&1) || \
+      response="curl failed: ${response:-unknown error}"
+
+    if [[ "$response" =~ ^2[0-9][0-9]$ ]]; then
+      echo "  ✓ HTTPS health check passed for ${host}"
+      return 0
+    fi
+
+    echo "  ! HTTPS health check for ${host} returned ${response}; retrying (${attempt}/${attempts})..."
+    sleep 2
+  done
+
+  echo "ERROR: TLS/API verification failed for ${host} after ${attempts} attempts." >&2
+  pm2 status || true
+  pm2 logs ocholanet-api --lines 80 --nostream || true
+  return 1
+}
+
 for host in bil.isplatty.org vpn.isplatty.org; do
-  if ! curl --fail --silent --show-error --max-time 15 "https://${host}/api/healthz" >/dev/null; then
-    echo "ERROR: TLS/API verification failed for ${host}." >&2
-    exit 1
-  fi
-  echo "  ✓ HTTPS health check passed for ${host}"
+  verify_public_health "$host" || exit 1
 done
 
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
