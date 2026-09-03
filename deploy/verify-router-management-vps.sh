@@ -18,6 +18,58 @@ PRIMARY_CCD="/etc/openvpn/server/ochola-router-ccd"
 BACKUP_CCD="/etc/openvpn/server/ochola-router-backup-ccd"
 PRIMARY_STATUS="/var/log/openvpn/ochola-router-status.log"
 BACKUP_STATUS="/var/log/openvpn/ochola-router-backup-status.log"
+FAILURES=()
+
+check() {
+  local label="$1"
+  shift
+  if "$@"; then
+    echo "PASS: ${label}"
+  else
+    echo "FAIL: ${label}"
+    FAILURES+=("$label")
+  fi
+}
+
+check_primary_listener() {
+  ss -lntp | grep -Eq ':(1196)\b'
+}
+
+check_backup_listener() {
+  ss -lntp | grep -Eq ':(1197)\b'
+}
+
+check_primary_tunnel() {
+  ip -4 addr show dev tun-router | grep -Eq 'inet 10\.8\.5\.1([/ ]|$)'
+}
+
+check_backup_tunnel() {
+  ip -4 addr show dev tun-router-backup | grep -Eq 'inet 10\.8\.6\.1([/ ]|$)'
+}
+
+check_router_port_redirect() {
+  iptables -t nat -S PREROUTING |
+    grep -Eq -- '--dport 11960:12959 .*--to-ports 1196'
+}
+
+check_router_port_filter() {
+  iptables -S INPUT |
+    grep -Eq -- '--dport 11960:12959 .* -j ACCEPT'
+}
+
+check_management_forwarding() {
+  iptables -S FORWARD |
+    grep -Eq 'tun-router|tun-router-backup|10\.8\.[56]\.0/24'
+}
+
+check_management_nat() {
+  iptables -t nat -S |
+    grep -Eq '10\.8\.[56]\.0/24|11960:12959'
+}
+
+check_firewall() {
+  ufw status verbose | grep -Eq '^Status: active'
+}
 
 echo "=== SSH identity ==="
 id -un
@@ -36,68 +88,102 @@ service_unit() {
   echo "ERROR: no active OpenVPN service found for ${stem}." >&2
   return 1
 }
-PRIMARY_SERVICE="$(service_unit ochola-router)"
-BACKUP_SERVICE="$(service_unit ochola-router-backup)"
-echo "primary service: ${PRIMARY_SERVICE}"
-echo "backup service: ${BACKUP_SERVICE}"
-systemctl --no-pager --plain --full status \
-  "$PRIMARY_SERVICE" "$BACKUP_SERVICE" |
-  sed -n '1,24p'
+PRIMARY_SERVICE=""
+BACKUP_SERVICE=""
+if PRIMARY_SERVICE="$(service_unit ochola-router)"; then
+  echo "primary service: ${PRIMARY_SERVICE}"
+else
+  echo "FAIL: primary OpenVPN service is not active"
+  FAILURES+=("primary OpenVPN service is active")
+fi
+if BACKUP_SERVICE="$(service_unit ochola-router-backup)"; then
+  echo "backup service: ${BACKUP_SERVICE}"
+else
+  echo "FAIL: backup OpenVPN service is not active"
+  FAILURES+=("backup OpenVPN service is active")
+fi
+if [ -n "$PRIMARY_SERVICE" ] && [ -n "$BACKUP_SERVICE" ]; then
+  if systemctl --no-pager --plain --full status \
+    "$PRIMARY_SERVICE" "$BACKUP_SERVICE" | sed -n '1,24p'; then
+    echo "PASS: OpenVPN service status is readable"
+  else
+    echo "FAIL: OpenVPN service status is readable"
+    FAILURES+=("OpenVPN service status is readable")
+  fi
+fi
 
 echo "=== OpenVPN configuration contract ==="
-test -s "$PRIMARY_CONF"
-test -s "$BACKUP_CONF"
-grep -Eq '^port 1196$' "$PRIMARY_CONF"
-grep -Eq '^proto tcp-server$' "$PRIMARY_CONF"
-grep -Eq '^server 10\.8\.5\.0 255\.255\.255\.0$' "$PRIMARY_CONF"
-grep -Eq '^port 1197$' "$BACKUP_CONF"
-grep -Eq '^proto tcp-server$' "$BACKUP_CONF"
-grep -Eq '^server 10\.8\.6\.0 255\.255\.255\.0$' "$BACKUP_CONF"
+check "primary config exists" test -s "$PRIMARY_CONF"
+check "backup config exists" test -s "$BACKUP_CONF"
+check "primary port is 1196/tcp" grep -Eq '^port 1196$' "$PRIMARY_CONF"
+check "primary protocol is tcp-server" grep -Eq '^proto tcp-server$' "$PRIMARY_CONF"
+check "primary network is 10.8.5.0/24" grep -Eq '^server 10\.8\.5\.0 255\.255\.255\.0$' "$PRIMARY_CONF"
+check "backup port is 1197/tcp" grep -Eq '^port 1197$' "$BACKUP_CONF"
+check "backup protocol is tcp-server" grep -Eq '^proto tcp-server$' "$BACKUP_CONF"
+check "backup network is 10.8.6.0/24" grep -Eq '^server 10\.8\.6\.0 255\.255\.255\.0$' "$BACKUP_CONF"
 echo "primary: 1196/tcp on 10.8.5.0/24"
 echo "backup: 1197/tcp on 10.8.6.0/24"
 
 echo "=== Router-management authentication ==="
-test -s "$PRIMARY_AUTH"
-test -s "$BACKUP_AUTH"
-if grep -Eq '^come27:' "$PRIMARY_AUTH"; then
-  echo "primary auth identity come27: present"
-else
-  echo "ERROR: primary auth identity come27 is missing." >&2
-  exit 1
-fi
+check "primary auth file exists" test -s "$PRIMARY_AUTH"
+check "backup auth file exists" test -s "$BACKUP_AUTH"
+check "primary auth identity come27 is present" grep -Eq '^come27:' "$PRIMARY_AUTH"
 
 echo "=== CCD/static address configuration ==="
-test -d "$PRIMARY_CCD"
-test -d "$BACKUP_CCD"
+check "primary CCD directory exists" test -d "$PRIMARY_CCD"
+check "backup CCD directory exists" test -d "$BACKUP_CCD"
 if [ -f "$PRIMARY_CCD/come27" ]; then
   echo "primary CCD come27:"
   grep -E '^ifconfig-push ' "$PRIMARY_CCD/come27" || true
 else
   echo "primary CCD come27: absent; dynamic pool assignment is in use."
 fi
-echo "primary CCD entries: $(find "$PRIMARY_CCD" -maxdepth 1 -type f | wc -l)"
-echo "backup CCD entries: $(find "$BACKUP_CCD" -maxdepth 1 -type f | wc -l)"
+if [ -d "$PRIMARY_CCD" ]; then
+  echo "primary CCD entries: $(find "$PRIMARY_CCD" -maxdepth 1 -type f | wc -l)"
+fi
+if [ -d "$BACKUP_CCD" ]; then
+  echo "backup CCD entries: $(find "$BACKUP_CCD" -maxdepth 1 -type f | wc -l)"
+fi
 
 echo "=== Actual OpenVPN listeners and tunnel interfaces ==="
-ss -lntp | grep -E ':(1196|1197)\b'
-ip -4 addr show dev tun-router
-ip -4 addr show dev tun-router-backup
+check "primary listener is bound to 1196/tcp" check_primary_listener
+check "backup listener is bound to 1197/tcp" check_backup_listener
+check "primary tunnel interface has 10.8.5.1" check_primary_tunnel
+check "backup tunnel interface has 10.8.6.1" check_backup_tunnel
 
 echo "=== Router 83 forwarding contract ==="
-iptables -t nat -S PREROUTING |
-  grep -Eq -- '--dport 11960:12959 .*--to-ports 1196'
+check "router public ports redirect to 1196" check_router_port_redirect
+check "router public ports are accepted by INPUT" check_router_port_filter
 echo "12042/tcp is within 11960-12959 and redirects to 1196/tcp."
 
 echo "=== Forwarding, NAT, and firewall ==="
-iptables -S FORWARD | grep -E 'tun-router|tun-router-backup|10\.8\.[56]\.0/24' || true
-iptables -t nat -S | grep -E '10\.8\.[56]\.0/24|11960:12959' || true
-ufw status verbose | sed -n '1,40p'
+check "management tunnel forwarding rules exist" check_management_forwarding
+check "management NAT rules exist" check_management_nat
+if check_firewall; then
+  echo "PASS: firewall is active"
+else
+  echo "FAIL: firewall is active"
+  FAILURES+=("firewall is active")
+fi
+ufw status verbose | sed -n '1,40p' || true
 
 echo "=== OpenVPN status files and recent logs ==="
-test -e "$PRIMARY_STATUS"
-test -e "$BACKUP_STATUS"
-tail -n 5 "$PRIMARY_STATUS" || true
-journalctl -u "$PRIMARY_SERVICE" -n 20 --no-pager
-journalctl -u "$BACKUP_SERVICE" -n 20 --no-pager
+check "primary status file exists" test -e "$PRIMARY_STATUS"
+check "backup status file exists" test -e "$BACKUP_STATUS"
+if [ -e "$PRIMARY_STATUS" ]; then
+  tail -n 5 "$PRIMARY_STATUS" || true
+fi
+if [ -n "$PRIMARY_SERVICE" ]; then
+  check "primary journal is readable" journalctl -u "$PRIMARY_SERVICE" -n 20 --no-pager
+fi
+if [ -n "$BACKUP_SERVICE" ]; then
+  check "backup journal is readable" journalctl -u "$BACKUP_SERVICE" -n 20 --no-pager
+fi
+
+if [ "${#FAILURES[@]}" -gt 0 ]; then
+  echo "=== Router-management VPS verification failed ===" >&2
+  printf 'FAILED CHECK: %s\n' "${FAILURES[@]}" >&2
+  exit 1
+fi
 
 echo "=== Router-management VPS verification passed ==="
