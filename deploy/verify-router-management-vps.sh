@@ -23,10 +23,25 @@ echo "=== SSH identity ==="
 id -un
 
 echo "=== OpenVPN services ==="
-systemctl is-active --quiet openvpn-server@ochola-router
-systemctl is-active --quiet openvpn-server@ochola-router-backup
+service_unit() {
+  local stem="$1"
+  if systemctl is-active --quiet "openvpn-server@${stem}" 2>/dev/null; then
+    printf 'openvpn-server@%s\n' "$stem"
+    return 0
+  fi
+  if systemctl is-active --quiet "openvpn@${stem}" 2>/dev/null; then
+    printf 'openvpn@%s\n' "$stem"
+    return 0
+  fi
+  echo "ERROR: no active OpenVPN service found for ${stem}." >&2
+  return 1
+}
+PRIMARY_SERVICE="$(service_unit ochola-router)"
+BACKUP_SERVICE="$(service_unit ochola-router-backup)"
+echo "primary service: ${PRIMARY_SERVICE}"
+echo "backup service: ${BACKUP_SERVICE}"
 systemctl --no-pager --plain --full status \
-  openvpn-server@ochola-router openvpn-server@ochola-router-backup |
+  "$PRIMARY_SERVICE" "$BACKUP_SERVICE" |
   sed -n '1,24p'
 
 echo "=== OpenVPN configuration contract ==="
@@ -82,7 +97,7 @@ echo "=== OpenVPN status files and recent logs ==="
 test -e "$PRIMARY_STATUS"
 test -e "$BACKUP_STATUS"
 tail -n 5 "$PRIMARY_STATUS" || true
-journalctl -u openvpn-server@ochola-router -n 20 --no-pager
-journalctl -u openvpn-server@ochola-router-backup -n 20 --no-pager
+journalctl -u "$PRIMARY_SERVICE" -n 20 --no-pager
+journalctl -u "$BACKUP_SERVICE" -n 20 --no-pager
 
 echo "=== Router-management VPS verification passed ==="
