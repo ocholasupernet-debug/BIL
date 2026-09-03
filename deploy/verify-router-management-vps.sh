@@ -53,8 +53,7 @@ check_router_port_redirect() {
 }
 
 check_router_port_filter() {
-  iptables -S INPUT |
-    grep -Eq -- '--dport 11960:12959 .* -j ACCEPT'
+  iptables -C INPUT -p tcp --dport 11960:12959 -j ACCEPT
 }
 
 check_management_forwarding() {
@@ -127,16 +126,20 @@ echo "backup: 1197/tcp on 10.8.6.0/24"
 echo "=== Router-management authentication ==="
 check "primary auth file exists" test -s "$PRIMARY_AUTH"
 check "backup auth file exists" test -s "$BACKUP_AUTH"
-check "primary auth identity come27 is present" grep -Eq '^come27:' "$PRIMARY_AUTH"
+PRIMARY_IDENTITY=""
+if [ -s "$PRIMARY_AUTH" ]; then
+  PRIMARY_IDENTITY="$(awk -F: '/^[A-Za-z0-9][A-Za-z0-9._-]*:[^:]*$/ { print $1; exit }' "$PRIMARY_AUTH")"
+fi
+check "primary auth identity is present" test -n "$PRIMARY_IDENTITY"
 
 echo "=== CCD/static address configuration ==="
 check "primary CCD directory exists" test -d "$PRIMARY_CCD"
 check "backup CCD directory exists" test -d "$BACKUP_CCD"
-if [ -f "$PRIMARY_CCD/come27" ]; then
-  echo "primary CCD come27:"
-  grep -E '^ifconfig-push ' "$PRIMARY_CCD/come27" || true
+if [ -n "$PRIMARY_IDENTITY" ] && [ -f "$PRIMARY_CCD/$PRIMARY_IDENTITY" ]; then
+  echo "primary CCD ${PRIMARY_IDENTITY}:"
+  grep -E '^ifconfig-push ' "$PRIMARY_CCD/$PRIMARY_IDENTITY" || true
 else
-  echo "primary CCD come27: absent; dynamic pool assignment is in use."
+  echo "primary CCD ${PRIMARY_IDENTITY:-none}: absent; dynamic pool assignment is in use."
 fi
 if [ -d "$PRIMARY_CCD" ]; then
   echo "primary CCD entries: $(find "$PRIMARY_CCD" -maxdepth 1 -type f | wc -l)"

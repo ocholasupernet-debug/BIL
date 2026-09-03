@@ -221,6 +221,42 @@ if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
   bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
 fi
 
+ensure_management_tunnel() {
+  local stem="$1"
+  local interface="$2"
+  local unit=""
+  local attempt
+
+  if systemctl is-active --quiet "openvpn-server@${stem}" 2>/dev/null; then
+    unit="openvpn-server@${stem}"
+  elif systemctl is-active --quiet "openvpn@${stem}" 2>/dev/null; then
+    unit="openvpn@${stem}"
+  else
+    echo "ERROR: OpenVPN service ${stem} is not active." >&2
+    return 1
+  fi
+
+  if ! ip link show dev "$interface" >/dev/null 2>&1; then
+    echo "  ! ${interface} is absent; restarting ${unit}..."
+    systemctl restart "$unit"
+  fi
+
+  for attempt in $(seq 1 15); do
+    if ip link show dev "$interface" >/dev/null 2>&1; then
+      echo "  ✓ ${interface} is present"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "ERROR: ${unit} is active but did not create ${interface}." >&2
+  systemctl status "$unit" --no-pager || true
+  journalctl -u "$unit" -n 60 --no-pager || true
+  return 1
+}
+
+ensure_management_tunnel "ochola-router" "tun-router"
+ensure_management_tunnel "ochola-router-backup" "tun-router-backup"
 # 9. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
