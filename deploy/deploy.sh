@@ -221,6 +221,26 @@ if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
   bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
 fi
 
+normalize_management_interface() {
+  local config="$1"
+  local interface="$2"
+
+  if [ ! -s "$config" ]; then
+    echo "ERROR: Management OpenVPN config is missing: ${config}" >&2
+    return 1
+  fi
+  if ! grep -Eq '^dev[[:space:]]+' "$config"; then
+    echo "ERROR: Management OpenVPN config has no dev directive: ${config}" >&2
+    return 1
+  fi
+
+  sed -i -E "s/^dev[[:space:]].*/dev ${interface}/" "$config"
+}
+
+normalize_management_interface \
+  "/etc/openvpn/server/ochola-router.conf" "tun-router"
+normalize_management_interface \
+  "/etc/openvpn/server/ochola-router-backup.conf" "tun-router-bkp"
 ensure_management_tunnel() {
   local stem="$1"
   local interface="$2"
