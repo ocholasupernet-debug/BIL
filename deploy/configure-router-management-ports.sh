@@ -8,10 +8,22 @@ PORT_START="${ROUTER_OPENVPN_PUBLIC_PORT_START:-11960}"
 PORT_END="${ROUTER_OPENVPN_PUBLIC_PORT_END:-12959}"
 LISTENER_PORT="${ROUTER_OPENVPN_LISTENER_PORT:-1196}"
 BACKUP_LISTENER_PORT="${ROUTER_OPENVPN_BACKUP_PORT:-1197}"
-UFW_BIN="$(command -v ufw 2>/dev/null || true)"
-if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
-  UFW_BIN="/usr/sbin/ufw"
-fi
+resolve_ufw() {
+  UFW_BIN="$(command -v ufw 2>/dev/null || true)"
+  if [ -z "$UFW_BIN" ]; then
+    for candidate in /usr/sbin/ufw /usr/bin/ufw /sbin/ufw /bin/ufw; do
+      if [ -x "$candidate" ]; then
+        UFW_BIN="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$UFW_BIN" ]; then
+    UFW_BIN="$(sudo sh -c 'command -v ufw' 2>/dev/null || true)"
+  fi
+}
+
+resolve_ufw
 
 sudo iptables -t nat -C PREROUTING -p tcp --dport "${PORT_START}:${PORT_END}" \
   -j REDIRECT --to-ports "$LISTENER_PORT" 2>/dev/null ||
@@ -34,10 +46,7 @@ if command -v ufw >/dev/null 2>&1; then
   fi
   sudo apt-get update -qq
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw
-  UFW_BIN="$(command -v ufw 2>/dev/null || true)"
-  if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
-    UFW_BIN="/usr/sbin/ufw"
-  fi
+  resolve_ufw
 fi
 
 if [ -z "$UFW_BIN" ] ||

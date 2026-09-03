@@ -66,10 +66,22 @@ check_management_nat() {
     grep -Eq '10\.8\.[56]\.0/24|11960:12959'
 }
 
-UFW_BIN="$(command -v ufw 2>/dev/null || true)"
-if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
-  UFW_BIN="/usr/sbin/ufw"
-fi
+resolve_ufw() {
+  UFW_BIN="$(command -v ufw 2>/dev/null || true)"
+  if [ -z "$UFW_BIN" ]; then
+    for candidate in /usr/sbin/ufw /usr/bin/ufw /sbin/ufw /bin/ufw; do
+      if [ -x "$candidate" ]; then
+        UFW_BIN="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$UFW_BIN" ]; then
+    UFW_BIN="$(sudo sh -c 'command -v ufw' 2>/dev/null || true)"
+  fi
+}
+
+resolve_ufw
 check_firewall() {
   [ -n "$UFW_BIN" ] && "$UFW_BIN" status verbose | grep -Eq '^Status: active'
 }
