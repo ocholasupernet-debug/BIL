@@ -8,6 +8,10 @@ PORT_START="${ROUTER_OPENVPN_PUBLIC_PORT_START:-11960}"
 PORT_END="${ROUTER_OPENVPN_PUBLIC_PORT_END:-12959}"
 LISTENER_PORT="${ROUTER_OPENVPN_LISTENER_PORT:-1196}"
 BACKUP_LISTENER_PORT="${ROUTER_OPENVPN_BACKUP_PORT:-1197}"
+UFW_BIN="$(command -v ufw 2>/dev/null || true)"
+if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
+  UFW_BIN="/usr/sbin/ufw"
+fi
 
 sudo iptables -t nat -C PREROUTING -p tcp --dport "${PORT_START}:${PORT_END}" \
   -j REDIRECT --to-ports "$LISTENER_PORT" 2>/dev/null ||
@@ -23,22 +27,27 @@ if command -v ufw >/dev/null 2>&1; then
   sudo ufw allow 22/tcp >/dev/null 2>&1 || true
   sudo ufw allow 80/tcp >/dev/null 2>&1 || true
   sudo ufw allow 443/tcp >/dev/null 2>&1 || true
-  if ! command -v ufw >/dev/null 2>&1; then
+  if [ -z "$UFW_BIN" ]; then
   if ! command -v apt-get >/dev/null 2>&1; then
     echo "ERROR: UFW is unavailable and this VPS has no apt-get package manager." >&2
     exit 1
   fi
   sudo apt-get update -qq
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw
+  UFW_BIN="$(command -v ufw 2>/dev/null || true)"
+  if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
+    UFW_BIN="/usr/sbin/ufw"
+  fi
 fi
 
-if ! sudo ufw allow 22/tcp >/dev/null 2>&1 ||
-   ! sudo ufw allow 80/tcp >/dev/null 2>&1 ||
-   ! sudo ufw allow 443/tcp >/dev/null 2>&1 ||
-   ! sudo ufw allow "${LISTENER_PORT}/tcp" >/dev/null 2>&1 ||
-   ! sudo ufw allow "${BACKUP_LISTENER_PORT}/tcp" >/dev/null 2>&1 ||
-   ! sudo ufw allow "${PORT_START}:${PORT_END}/tcp" >/dev/null 2>&1 ||
-   ! sudo ufw --force enable >/dev/null 2>&1
+if [ -z "$UFW_BIN" ] ||
+   ! sudo "$UFW_BIN" allow 22/tcp >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" allow 80/tcp >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" allow 443/tcp >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" allow "${LISTENER_PORT}/tcp" >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" allow "${BACKUP_LISTENER_PORT}/tcp" >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" allow "${PORT_START}:${PORT_END}/tcp" >/dev/null 2>&1 ||
+   ! sudo "$UFW_BIN" --force enable >/dev/null 2>&1
 then
   echo "ERROR: Could not activate UFW with the required management rules." >&2
   exit 1

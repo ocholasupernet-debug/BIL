@@ -66,8 +66,12 @@ check_management_nat() {
     grep -Eq '10\.8\.[56]\.0/24|11960:12959'
 }
 
+UFW_BIN="$(command -v ufw 2>/dev/null || true)"
+if [ -z "$UFW_BIN" ] && [ -x /usr/sbin/ufw ]; then
+  UFW_BIN="/usr/sbin/ufw"
+fi
 check_firewall() {
-  ufw status verbose | grep -Eq '^Status: active'
+  [ -n "$UFW_BIN" ] && "$UFW_BIN" status verbose | grep -Eq '^Status: active'
 }
 
 echo "=== SSH identity ==="
@@ -168,7 +172,11 @@ else
   echo "FAIL: firewall is active"
   FAILURES+=("firewall is active")
 fi
-ufw status verbose | sed -n '1,40p' || true
+if [ -n "$UFW_BIN" ]; then
+  "$UFW_BIN" status verbose | sed -n '1,40p' || true
+else
+  echo "UFW binary not found on PATH or /usr/sbin."
+fi
 
 echo "=== OpenVPN status files and recent logs ==="
 check "primary status file exists" test -e "$PRIMARY_STATUS"
