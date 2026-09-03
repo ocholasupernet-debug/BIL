@@ -256,7 +256,7 @@ ensure_management_tunnel() {
 }
 
 ensure_management_tunnel "ochola-router" "tun-router"
-ensure_management_tunnel "ochola-router-backup" "tun-router-backup"
+ensure_management_tunnel "ochola-router-backup" "tun-router-bkp"
 # 9. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit

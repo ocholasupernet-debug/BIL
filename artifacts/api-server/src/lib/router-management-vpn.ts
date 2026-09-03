@@ -37,7 +37,9 @@ export const ROUTER_MANAGEMENT_VPN_BACKUP = {
   tunnelBase: "10.8.6",
   network: "10.8.6.0/24",
   gateway: "10.8.6.1",
-  interfaceName: "tun-router-backup",
+  // Linux/OpenVPN truncates TUN device names longer than 15 characters.
+  // Keep this name short so the configured and observed interface match.
+  interfaceName: "tun-router-bkp",
   configPath: "/etc/openvpn/server/ochola-router-backup.conf",
   authFilePath: "/etc/openvpn/router-backup-passwd",
   authScriptPath: "/etc/openvpn/verify-router-backup-pass.sh",

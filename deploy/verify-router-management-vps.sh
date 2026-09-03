@@ -44,7 +44,7 @@ check_primary_tunnel() {
 }
 
 check_backup_tunnel() {
-  ip -4 addr show dev tun-router-backup | grep -Eq 'inet 10\.8\.6\.1([/ ]|$)'
+  ip -4 addr show dev tun-router-bkp | grep -Eq 'inet 10\.8\.6\.1([/ ]|$)'
 }
 
 check_router_port_redirect() {
@@ -58,7 +58,7 @@ check_router_port_filter() {
 
 check_management_forwarding() {
   iptables -S FORWARD |
-    grep -Eq 'tun-router|tun-router-backup|10\.8\.[56]\.0/24'
+    grep -Eq 'tun-router|tun-router-bkp|10\.8\.[56]\.0/24'
 }
 
 check_management_nat() {
