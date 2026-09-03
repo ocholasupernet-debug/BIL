@@ -182,7 +182,10 @@ fi
 
 if [ "${#FAILURES[@]}" -gt 0 ]; then
   echo "=== Router-management VPS verification failed ===" >&2
-  printf 'FAILED CHECK: %s\n' "${FAILURES[@]}" >&2
+  for failure in "${FAILURES[@]}"; do
+    printf 'FAILED CHECK: %s\n' "$failure" >&2
+    printf '::error title=Router-management VPS readiness::%s\n' "$failure"
+  done
   exit 1
 fi
 
