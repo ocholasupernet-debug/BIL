@@ -141,6 +141,12 @@ test("authenticated installer reports machine-readable gates and validates backu
   assert.match(scriptsRoute, /installation_status=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
 });
 
+test("Main ISP bootstrap supports a RouterOS-safe path authorization form", () => {
+  assert.match(scriptsRoute, /\/scripts\/mainhotspot\/:pathRouterId\/:pathAdminId\/:pathGrant/);
+  assert.match(scriptsRoute, /req\.params\.pathRouterId \?\? req\.query\.rid/);
+  assert.match(scriptsRoute, /RouterOS terminal quirk/);
+});
+
 test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",

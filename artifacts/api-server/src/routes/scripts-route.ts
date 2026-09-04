@@ -1754,7 +1754,10 @@ router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res)
   }
 });
 
-router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
+router.get([
+  "/scripts/mainhotspot.rsc",
+  "/scripts/mainhotspot/:pathRouterId/:pathAdminId/:pathGrant",
+], async (req, res): Promise<void> => {
   const requestHost = normalizeHostHeader(String(req.headers["x-forwarded-host"] ?? req.headers.host ?? ""));
   const subdomain = parseSubdomain(requestHost);
   if (!subdomain) {
@@ -1765,9 +1768,11 @@ router.get("/scripts/mainhotspot.rsc", async (req, res): Promise<void> => {
     return;
   }
 
-  const ridRaw = String(req.query.rid ?? "").trim();
-  const adminIdRaw = String(req.query.adminId ?? "").trim();
-  const grant = String(req.query.grant ?? "").trim();
+  /* The path form avoids a RouterOS terminal quirk: pasting `?` can invoke
+     command help and silently remove the query delimiter from the URL. */
+  const ridRaw = String(req.params.pathRouterId ?? req.query.rid ?? "").trim();
+  const adminIdRaw = String(req.params.pathAdminId ?? req.query.adminId ?? "").trim();
+  const grant = String(req.params.pathGrant ?? req.query.grant ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
   const adminId = /^\d+$/.test(adminIdRaw) ? Number(adminIdRaw) : 0;
   const grantIdentity = verifyInstallerGrant(grant, routerId);

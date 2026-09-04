@@ -236,10 +236,10 @@ export default function AddRouterScript() {
     : "";
   const buildBootstrapCommand = (routerId?: number, installerGrant?: string) => {
     if (!companyHost) return "";
-    const routerQuery = routerId && installerGrant
-      ? `?rid=${routerId}&adminId=${adminId}&grant=${encodeURIComponent(installerGrant)}`
-      : "";
-    return `/tool fetch url="https://${companyHost}/scripts/mainhotspot.rsc${routerQuery}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`;
+    const authorizedPath = routerId && installerGrant
+      ? `/scripts/mainhotspot/${routerId}/${adminId}/${encodeURIComponent(installerGrant)}`
+      : "/scripts/mainhotspot.rsc";
+    return `/tool fetch url="https://${companyHost}${authorizedPath}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`;
   };
   const bootstrapCommand = buildBootstrapCommand();
   const canGenerate = !!bootstrapCommand;
