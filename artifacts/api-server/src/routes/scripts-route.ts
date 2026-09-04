@@ -1889,7 +1889,10 @@ router.get([
   }
 });
 
-router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<void> => {
+router.get([
+  "/scripts/self-install-mainhotspot.rsc",
+  "/scripts/self-install-mainhotspot/:pathRouterId/:pathAdminId/:pathMode/:pathGrant",
+], async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
   const scriptsBase = `${origin}/api/scripts`;
   /* Optional ?rid=N&name=routerName&token=<router_secret> turns on per-step
@@ -1897,13 +1900,13 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
      case the server resolves the router secret here so credentials never
      need to be placed in a browser URL. Without rid+token/adminId the script
      runs exactly as before (no callbacks). */
-  const ridRaw   = ((req.query.rid   ?? "") as string).trim();
+  const ridRaw   = String(req.params.pathRouterId ?? req.query.rid ?? "").trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
-  const adminIdRaw = ((req.query.adminId ?? "") as string).trim();
-  const installationMode: "coexist" | "takeover" = String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+  const adminIdRaw = String(req.params.pathAdminId ?? req.query.adminId ?? "").trim();
+  const installationMode: "coexist" | "takeover" = String(req.params.pathMode ?? req.query.mode ?? "").trim().toLowerCase() === "takeover"
     ? "takeover"
     : "coexist";
-  const takeoverGrant = String(req.query.grant ?? "").trim();
+  const takeoverGrant = String(req.params.pathGrant ?? req.query.grant ?? "").trim();
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
   const adminId = /^\d+$/.test(adminIdRaw) ? adminIdRaw : "";

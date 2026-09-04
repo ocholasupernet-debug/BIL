@@ -451,13 +451,12 @@ export default function SelfInstall() {
   };
 
   const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
-  const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
   /* When an ISP admin is signed in on its own hostname, keep installer URLs
      on that hostname so RouterOS validates that company's certificate. */
   const publicApiOrigin = (
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
-  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}`;
+  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${installationMode}/${encodeURIComponent(takeoverGrant || "missing-grant")}`;
   const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`;
 
   const loadPorts = async () => {

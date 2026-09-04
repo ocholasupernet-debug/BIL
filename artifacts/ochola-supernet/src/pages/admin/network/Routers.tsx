@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy, ChevronDown,
+  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy, ChevronDown, Shield,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -251,11 +251,28 @@ type InstallStepDto = {
   phase: "downloading" | "applied" | "failed";
   error?: string; ts: number;
 };
+type InstallerResultDto = {
+  installationStatus: "SUCCESS" | "PARTIAL" | "FAILED";
+  routerOsVersion: string;
+  hotspotStatus: "OK" | "FAILED";
+  pppoeStatus: "OK" | "FAILED";
+  usersStatus: "OK" | "FAILED";
+  syncStatus: "OK" | "FAILED";
+  heartbeatStatus: "OK" | "FAILED";
+  vpnStatus: "CONNECTED" | "CONFIGURED" | "FAILED";
+  vpnIp: string;
+  proxyStatus: "REGISTERED" | "FAILED" | "NOT_CONFIGURED";
+  apiLockdown: "ACTIVE" | "FAILED";
+  dnsScheduler: "ACTIVE" | "FAILED";
+  failedComponent: string;
+  error: string;
+};
 type InstallDto = {
   routerId: number; routerName: string;
   startedAt: number; updatedAt: number;
   done: boolean; failures: number;
   steps: InstallStepDto[];
+  result?: InstallerResultDto;
 };
 
 const INSTALL_STEP_ORDER: Array<{ num: number; name: string; label: string }> = [
@@ -374,6 +391,46 @@ function InstallProgressPanel() {
                   );
                 })}
               </div>
+
+              {inst.result && (
+                <div style={{
+                  marginTop: 10, padding: "0.65rem 0.75rem",
+                  borderRadius: 7, background: "rgba(20,184,166,.06)",
+                  border: "1px solid rgba(20,184,166,.2)", fontSize: "0.7rem",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6, color: "var(--isp-text)", fontWeight: 700 }}>
+                    <Shield size={12} style={{ color: inst.result.installationStatus === "FAILED" ? "#f87171" : "#2dd4bf" }} />
+                    Installer result: {inst.result.installationStatus} · RouterOS {inst.result.routerOsVersion}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 0.7rem", color: "var(--isp-text-muted)" }}>
+                    {[
+                      ["Hotspot", inst.result.hotspotStatus],
+                      ["PPPoE", inst.result.pppoeStatus],
+                      ["Users", inst.result.usersStatus],
+                      ["Sync", inst.result.syncStatus],
+                      ["Heartbeat", inst.result.heartbeatStatus],
+                      ["VPN", inst.result.vpnStatus],
+                      ["Proxy", inst.result.proxyStatus],
+                      ["API lock", inst.result.apiLockdown],
+                      ["DNS scheduler", inst.result.dnsScheduler],
+                    ].map(([label, value]) => (
+                      <span key={label}>
+                        {label}:{" "}
+                        <strong style={{ color: value === "FAILED" ? "#f87171" : "#34d399" }}>
+                          {value}
+                        </strong>
+                      </span>
+                    ))}
+                  </div>
+                  {(inst.result.failedComponent || inst.result.error) && (
+                    <div style={{ marginTop: 6, color: "#fca5a5", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+                      {inst.result.failedComponent ? `Failed component: ${inst.result.failedComponent}` : ""}
+                      {inst.result.failedComponent && inst.result.error ? " · " : ""}
+                      {inst.result.error}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
