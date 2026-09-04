@@ -33,13 +33,7 @@ sudo iptables -t nat -C PREROUTING -p tcp --dport "${PORT_START}:${PORT_END}" \
 sudo iptables -C INPUT -p tcp --dport "${PORT_START}:${PORT_END}" -j ACCEPT 2>/dev/null ||
   sudo iptables -I INPUT -p tcp --dport "${PORT_START}:${PORT_END}" -j ACCEPT
 
-if command -v ufw >/dev/null 2>&1; then
-  # Preserve SSH and the public HTTPS entrypoints before enabling UFW on VPS
-  # images where the initial setup left it inactive.
-  sudo ufw allow 22/tcp >/dev/null 2>&1 || true
-  sudo ufw allow 80/tcp >/dev/null 2>&1 || true
-  sudo ufw allow 443/tcp >/dev/null 2>&1 || true
-  if [ -z "$UFW_BIN" ]; then
+if [ -z "$UFW_BIN" ]; then
   if ! command -v apt-get >/dev/null 2>&1; then
     echo "ERROR: UFW is unavailable and this VPS has no apt-get package manager." >&2
     exit 1
@@ -66,14 +60,6 @@ if ! sudo iptables -C INPUT -p tcp --dport "${PORT_START}:${PORT_END}" -j ACCEPT
   echo "ERROR: Could not install the router-management INPUT rule." >&2
   exit 1
 fi
-  sudo ufw --force enable >/dev/null 2>&1 || true
-fi
-
-if ! sudo iptables -C INPUT -p tcp --dport "${PORT_START}:${PORT_END}" -j ACCEPT 2>/dev/null; then
-  echo "ERROR: Could not install the router-management INPUT rule." >&2
-  exit 1
-fi
-
 sudo tee /etc/systemd/system/ochola-router-vpn-ports.service >/dev/null <<EOF
 [Unit]
 Description=Ochola per-router management VPN port forwarding
