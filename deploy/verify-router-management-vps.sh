@@ -83,7 +83,11 @@ resolve_ufw() {
 
 resolve_ufw
 check_firewall() {
-  [ -n "$UFW_BIN" ] && "$UFW_BIN" status verbose | grep -Eq '^Status: active'
+  if [ -n "$UFW_BIN" ]; then
+    "$UFW_BIN" status verbose | grep -Eq '^Status: active'
+  else
+    sudo ufw status verbose | grep -Eq '^Status: active'
+  fi
 }
 
 echo "=== SSH identity ==="
@@ -187,7 +191,7 @@ fi
 if [ -n "$UFW_BIN" ]; then
   "$UFW_BIN" status verbose | sed -n '1,40p' || true
 else
-  echo "UFW binary not found on PATH or /usr/sbin."
+  sudo ufw status verbose | sed -n '1,40p' || true
 fi
 
 echo "=== OpenVPN status files and recent logs ==="
