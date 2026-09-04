@@ -146,6 +146,14 @@ test("authenticated installer reports machine-readable gates and validates backu
   assert.match(syncRoute, /parseInstallerResult/);
   assert.match(syncRoute, /installer-result/);
   assert.match(syncRoute, /installation_status/);
+   assert.match(syncRoute, /routeros_version/);
+   assert.match(syncRoute, /hotspot_status/);
+   assert.match(syncRoute, /pppoe_status/);
+   assert.match(syncRoute, /users_status/);
+   assert.match(syncRoute, /sync_status/);
+   assert.match(syncRoute, /heartbeat_status/);
+   assert.match(syncRoute, /failed_component/);
+   assert.match(syncRoute, /error/);
    assert.match(scriptsRoute, /installation_status=.*routeros_version=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
 });
 

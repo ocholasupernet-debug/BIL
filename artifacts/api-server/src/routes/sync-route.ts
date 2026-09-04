@@ -1578,13 +1578,22 @@ async function markBridgePortsAssigned(routerId: number): Promise<string | null>
   }
   type InstallerResultStatus = "SUCCESS" | "PARTIAL" | "FAILED";
   type InstallerVpnStatus = "CONNECTED" | "CONFIGURED" | "FAILED";
+  type InstallerComponentStatus = "OK" | "FAILED";
   interface InstallerResult {
     installationStatus: InstallerResultStatus;
+    routerOsVersion: string;
+    hotspotStatus: InstallerComponentStatus;
+    pppoeStatus: InstallerComponentStatus;
+    usersStatus: InstallerComponentStatus;
+    syncStatus: InstallerComponentStatus;
+    heartbeatStatus: InstallerComponentStatus;
     vpnStatus: InstallerVpnStatus;
     vpnIp: string;
     proxyStatus: "REGISTERED" | "FAILED" | "NOT_CONFIGURED";
     apiLockdown: "ACTIVE" | "FAILED";
     dnsScheduler: "ACTIVE" | "FAILED";
+    failedComponent: string;
+    error: string;
   }
   interface InstallProgress {
     routerId: number;
@@ -1601,24 +1610,48 @@ async function markBridgePortsAssigned(routerId: number): Promise<string | null>
   function parseInstallerResult(src: Record<string, string>): InstallerResult | null {
     const rawInstallationStatus = String(src.installation_status ?? "").trim().toUpperCase();
     if (!rawInstallationStatus) return null;
+    const rawRouterOsVersion = String(src.routeros_version ?? "").trim();
+    const rawHotspotStatus = String(src.hotspot_status ?? "").trim().toUpperCase();
+    const rawPppoeStatus = String(src.pppoe_status ?? "").trim().toUpperCase();
+    const rawUsersStatus = String(src.users_status ?? "").trim().toUpperCase();
+    const rawSyncStatus = String(src.sync_status ?? "").trim().toUpperCase();
+    const rawHeartbeatStatus = String(src.heartbeat_status ?? "").trim().toUpperCase();
     const rawVpnStatus = String(src.vpn_status ?? "").trim().toUpperCase();
     const rawVpnIp = String(src.vpn_ip ?? "").trim();
     const rawProxyStatus = String(src.proxy_status ?? "").trim().toUpperCase();
     const rawApiLockdown = String(src.api_lockdown ?? "").trim().toUpperCase();
     const rawDnsScheduler = String(src.dns_scheduler ?? "").trim().toUpperCase();
+    const rawFailedComponent = String(src.failed_component ?? "").trim().toLowerCase();
+    const rawError = String(src.error ?? "").trim().slice(0, 500);
     if (!["SUCCESS", "PARTIAL", "FAILED"].includes(rawInstallationStatus)) return null;
+    if (!rawRouterOsVersion || rawRouterOsVersion.length > 64 || /[\u0000-\u001f]/.test(rawRouterOsVersion)) return null;
+    if (!["OK", "FAILED"].includes(rawHotspotStatus)) return null;
+    if (!["OK", "FAILED"].includes(rawPppoeStatus)) return null;
+    if (!["OK", "FAILED"].includes(rawUsersStatus)) return null;
+    if (!["OK", "FAILED"].includes(rawSyncStatus)) return null;
+    if (!["OK", "FAILED"].includes(rawHeartbeatStatus)) return null;
     if (!["CONNECTED", "CONFIGURED", "FAILED"].includes(rawVpnStatus)) return null;
     if (rawVpnIp && !isRouterManagementVpnIp(rawVpnIp)) return null;
     if (!["REGISTERED", "FAILED", "NOT_CONFIGURED"].includes(rawProxyStatus)) return null;
     if (!["ACTIVE", "FAILED"].includes(rawApiLockdown)) return null;
     if (!["ACTIVE", "FAILED"].includes(rawDnsScheduler)) return null;
+    if (!/^[a-z0-9-]{0,80}$/.test(rawFailedComponent)) return null;
+    if (/[\u0000-\u001f]/.test(rawError)) return null;
     return {
       installationStatus: rawInstallationStatus as InstallerResultStatus,
+      routerOsVersion: rawRouterOsVersion,
+      hotspotStatus: rawHotspotStatus as InstallerComponentStatus,
+      pppoeStatus: rawPppoeStatus as InstallerComponentStatus,
+      usersStatus: rawUsersStatus as InstallerComponentStatus,
+      syncStatus: rawSyncStatus as InstallerComponentStatus,
+      heartbeatStatus: rawHeartbeatStatus as InstallerComponentStatus,
       vpnStatus: rawVpnStatus as InstallerVpnStatus,
       vpnIp: rawVpnIp,
       proxyStatus: rawProxyStatus as InstallerResult["proxyStatus"],
       apiLockdown: rawApiLockdown as InstallerResult["apiLockdown"],
       dnsScheduler: rawDnsScheduler as InstallerResult["dnsScheduler"],
+      failedComponent: rawFailedComponent,
+      error: rawError,
     };
   }
 
@@ -1698,8 +1731,10 @@ async function handleInstallProgressUpdate(
   const rname = (src.rname ?? "").toString().slice(0, 80);
   const done  = src.done === "1" || src.done === "true";
   const resultFields = [
-    "installation_status", "vpn_status", "vpn_ip", "proxy_status",
-    "api_lockdown", "dns_scheduler",
+    "installation_status", "routeros_version", "hotspot_status",
+    "pppoe_status", "users_status", "sync_status", "heartbeat_status",
+    "vpn_status", "vpn_ip", "proxy_status", "api_lockdown",
+    "dns_scheduler", "failed_component", "error",
   ];
   const hasResultFields = resultFields.some(field => Object.prototype.hasOwnProperty.call(src, field));
   const installerResult = hasResultFields ? parseInstallerResult(src) : null;
