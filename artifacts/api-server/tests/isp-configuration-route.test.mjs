@@ -17,10 +17,29 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /proxyserver\.isplatty\.org\/ipp\.php/);
   assert.match(route, /proxyvpn\.isplatty\.org\/ipp\.php/);
   assert.match(route, /Primary proxyserver report failed; trying proxyvpn backup/);
+  assert.match(route, /INSTALLATION_STATUS=SUCCESS/);
+  assert.match(route, /VPN_STATUS=CONNECTED/);
+  assert.match(route, /VPN_IP=/);
+  assert.match(route, /PROXY_STATUS=REGISTERED/);
+  assert.match(route, /API_LOCKDOWN=ACTIVE/);
+  assert.match(route, /DNS_SCHEDULER=ACTIVE/);
+  assert.match(route, /name=\("failed-" \. \$dst\)/);
+  assert.match(route, /management VPN client __MANAGEMENT_INTERFACE_NAME__ did not reach running=yes/);
+  assert.match(route, /API lockdown allow rule was not installed/);
+  assert.match(route, /DNS flush scheduler was not created/);
   assert.match(route, /requestedRouterName/);
   assert.match(route, /routerVpnBaseUrl/);
   assert.match(route, /company subdomain followed by a number/);
   assert.doesNotMatch(route, /ispledger\.com|freeispradius|self-install|install-status/);
+});
+
+test("standalone installer checks both management VPN address pools and cleans staged files", () => {
+  assert.match(route, /\/interface ovpn-client find where name="__MANAGEMENT_INTERFACE_NAME__"/);
+  assert.match(route, /10\.8\.5\./);
+  assert.match(route, /dst-path=\$temp/);
+  assert.match(route, /\/import \$temp/);
+  assert.match(route, /failed-" \. \$dst/);
+  assert.match(route, /trusted\] != true/);
 });
 
 test("Add Router (Script) provides the staged router ports and sync flow", () => {

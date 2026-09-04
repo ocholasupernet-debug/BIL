@@ -41,6 +41,9 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :set majorVersion [:tonum $majorText]
     :set minorVersion [:tonum $minorText]
 } on-error={ :error ("Unsupported RouterOS version format: " . $version) }
+:if ($majorVersion != 6 && $majorVersion != 7) do={
+    :error ("Unsupported RouterOS major version: " . $majorVersion . ". Only RouterOS 6.48+ and 7.x are supported.")
+}
 :if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
     :put "RouterOS version 6.48 or higher is required."
     :error "RouterOS version 6.48 or higher is required."
@@ -63,23 +66,27 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :local label $1
     :local url $2
     :local dst $3
+    :local temp ($dst . ".download")
     :put ("Downloading " . $label . "...")
-    :do { /file remove [find name=$dst] } on-error={}
+    :do { /file remove [find name=$temp] } on-error={}
     :do {
-        /tool fetch url=$url dst-path=$dst keep-result=yes mode=https check-certificate=yes
-        :local fetchedFile [/file find name=$dst]
+        /tool fetch url=$url dst-path=$temp keep-result=yes mode=https check-certificate=yes
+        :local fetchedFile [/file find name=$temp]
         :if ([:len $fetchedFile] = 0) do={ :error ("download did not create " . $dst) }
         :if ([/file get $fetchedFile type] = "directory") do={ :error ($dst . " is a directory") }
         :if ([:tonum [/file get $fetchedFile size]] <= 0) do={ :error ($dst . " is empty") }
+        :do { /import $temp } on-error={
+            :local importError $error
+            :error ($label . " import failed: " . $importError)
+        }
+        :do { /file remove [find name=$dst] } on-error={}
+        /file set $fetchedFile name=$dst
     } on-error={
-        :local fetchError $error
-        :error ($label . " download failed: " . $fetchError)
+        :local stageError $error
+        :do { /file remove [find name=("failed-" . $dst)] } on-error={}
+        :do { /file set [find name=$temp] name=("failed-" . $dst) } on-error={}
+        :error ($label . " download/import failed: " . $stageError)
     }
-    :do { /import $dst } on-error={
-        :local importError $error
-        :error ($label . " import failed: " . $importError)
-    }
-    :do { /file remove [find name=$dst] } on-error={}
     :put ($label . " completed.")
 }
 :do {
@@ -100,10 +107,17 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         /certificate import file-name=$caFile name=$caName trusted=yes
         :do { /file remove [find name=$caFile] } on-error={}
     }
-    :if ([:len [/certificate find name=$caName]] = 0) do={ :error "public HTTPS CA was not installed" }
+    :local caCert [/certificate find name=$caName]
+    :if ([:len $caCert] = 0) do={ :error "public HTTPS CA was not installed" }
+    :if ([/certificate get $caCert trusted] != true) do={ :error "public HTTPS CA was imported but is not trusted" }
 } on-error={
     :error ("HTTPS trust bootstrap failed: " . $error)
 }
+:local vpnStatus "FAILED"
+:local vpnIp ""
+:local proxyRegistrationSucceeded false
+:local apiLockdownActive false
+:local dnsSchedulerActive false
 :do {
     :local vpnUrl
     :if ($majorVersion = 7) do={
@@ -119,6 +133,31 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         :set failures ($failures + 1)
         :put ("  REQUIRED VPN step failed: " . $error)
     }
+    :for vpnAttempt from=1 to=12 do={
+        :if ($vpnStatus != "CONNECTED") do={
+            :foreach vpnClient in=[/interface ovpn-client find where name="__MANAGEMENT_INTERFACE_NAME__"] do={
+                :if ([/interface ovpn-client get $vpnClient running] = true) do={
+                    :foreach addressId in=[/ip address find where interface="__MANAGEMENT_INTERFACE_NAME__"] do={
+                        :local addressValue [/ip address get $addressId address]
+                        :local slashPos [:find $addressValue "/"]
+                        :local candidateIp $addressValue
+                        :if ($slashPos >= 0) do={ :set candidateIp [:pick $addressValue 0 $slashPos] }
+                        :if ([:len $candidateIp] >= 8 && [:pick $candidateIp 0 7] = "10.8.5." && $candidateIp != "10.8.5.1") do={
+                            :set vpnIp $candidateIp
+                            :set vpnStatus "CONNECTED"
+                        }
+                    }
+                }
+            }
+            :if ($vpnStatus != "CONNECTED") do={ :delay 5s }
+        }
+    }
+    :if ($vpnStatus != "CONNECTED") do={
+        :set failures ($failures + 1)
+        :error "Required management VPN client __MANAGEMENT_INTERFACE_NAME__ did not reach running=yes with a valid 10.8.5.x address."
+    }
+    :put ("VPN_STATUS=CONNECTED")
+    :put ("VPN_IP=" . $vpnIp)
     :do { $ocholaFetchImportMain "hotspot configuration" "https://bil.isplatty.org/scripts/hotspotsetup.rsc" "hotspotsetup.rsc" } on-error={
         :set failures ($failures + 1)
         :put ("  REQUIRED hotspot step failed: " . $error)
@@ -157,6 +196,9 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
      # Runs inside :do{}on-error so a hiccup is reported as a required failure.
     :do {
       $ocholaFetchImportMain "API lockdown" "https://bil.isplatty.org/scripts/seclogpush.rsc" "seclogpush.rsc"
+       :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - management API allow" && action=accept && chain=input]] = 0) do={ :error "API lockdown allow rule was not installed" }
+       :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - public management port drop" && action=drop && chain=input]] < 3) do={ :error "API lockdown drop rules were not installed" }
+       :set apiLockdownActive true
     } on-error={
        :set failures ($failures + 1)
        :put ("  REQUIRED API lockdown step failed: " . $error)
@@ -165,6 +207,8 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
      :put "Setting up DNS cache flush scheduler..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
     /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
+     :if ([:len [/system scheduler find where name="dns-flush"]] = 0) do={ :error "DNS flush scheduler was not created" }
+     :set dnsSchedulerActive true
     /ip dns cache flush
      :put "DNS cache flush scheduler installed. DNS cache will be flushed every 6 hours."
 
@@ -172,7 +216,6 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
      # The canonical management ovpn-client was added at the top of this run, so it
     # already has an IP. Read it and POST (sub, name, ip) to the proxy.
     :local reportedIp ""
-     :local proxyRegistrationSucceeded false
     :for vpnIpAttempt from=1 to=12 do={
         :if ($reportedIp = "") do={
              :foreach a in=[/ip address find where interface="__MANAGEMENT_INTERFACE_NAME__"] do={
@@ -221,18 +264,54 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         :put "Log script-warning suppression applied"
     } on-error={ :put "Log suppress skipped (non-fatal)" }
 
-     :if ($failures = 0 && $optionalFailures = 0) do={
-         :put "SUCCESS: VPN connected; VPN IP obtained; API lockdown installed; proxy registration successful."
+      :local proxyStatus "FAILED"
+      :local apiLockdownStatus "FAILED"
+      :local dnsSchedulerStatus "FAILED"
+      :if ($proxyRegistrationSucceeded) do={ :set proxyStatus "REGISTERED" }
+      :if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
+      :if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+      :if ($failures = 0 && $optionalFailures = 0 && $vpnStatus = "CONNECTED" && $proxyRegistrationSucceeded && $apiLockdownActive && $dnsSchedulerActive) do={
+          :put "INSTALLATION_STATUS=SUCCESS"
+          :put ("VPN_STATUS=" . $vpnStatus)
+          :put ("VPN_IP=" . $vpnIp)
+          :put "PROXY_STATUS=REGISTERED"
+          :put "API_LOCKDOWN=ACTIVE"
+          :put "DNS_SCHEDULER=ACTIVE"
+          :put "SUCCESS: VPN connected; VPN IP obtained; API lockdown installed; proxy registration successful."
     } else={
         :if ($failures = 0) do={
+               :put "INSTALLATION_STATUS=PARTIAL"
+               :put ("VPN_STATUS=" . $vpnStatus)
+               :put ("VPN_IP=" . $vpnIp)
+               :put ("PROXY_STATUS=" . $proxyStatus)
+               :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+               :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
              :put ("PARTIAL: core configuration installed, but " . $optionalFailures . " optional component(s) need attention.")
         } else={
+               :put "INSTALLATION_STATUS=FAILED"
+               :put ("VPN_STATUS=" . $vpnStatus)
+               :put ("VPN_IP=" . $vpnIp)
+               :put ("PROXY_STATUS=" . $proxyStatus)
+               :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+               :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
              :put ("FAILED: " . $failures . " required failure(s) and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
         }
     }
 } on-error={
-    :put "Error occurred during configuration:"
-    :put $error
+    :set failures ($failures + 1)
+    :put ("REQUIRED_UNHANDLED_FAILURE=" . $error)
+    :put "INSTALLATION_STATUS=FAILED"
+    :put ("VPN_STATUS=" . $vpnStatus)
+    :put ("VPN_IP=" . $vpnIp)
+    :local proxyStatus "FAILED"
+    :local apiLockdownStatus "FAILED"
+    :local dnsSchedulerStatus "FAILED"
+    :if ($proxyRegistrationSucceeded) do={ :set proxyStatus "REGISTERED" }
+    :if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
+    :if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+    :put ("PROXY_STATUS=" . $proxyStatus)
+    :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+    :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
 }
 `;
 

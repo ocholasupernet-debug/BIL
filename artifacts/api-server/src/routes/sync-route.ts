@@ -1576,6 +1576,16 @@ async function markBridgePortsAssigned(routerId: number): Promise<string | null>
     error?: string;
     ts: number;
   }
+  type InstallerResultStatus = "SUCCESS" | "PARTIAL" | "FAILED";
+  type InstallerVpnStatus = "CONNECTED" | "CONFIGURED" | "FAILED";
+  interface InstallerResult {
+    installationStatus: InstallerResultStatus;
+    vpnStatus: InstallerVpnStatus;
+    vpnIp: string;
+    proxyStatus: "REGISTERED" | "FAILED" | "NOT_CONFIGURED";
+    apiLockdown: "ACTIVE" | "FAILED";
+    dnsScheduler: "ACTIVE" | "FAILED";
+  }
   interface InstallProgress {
     routerId: number;
     adminId?: number;
@@ -1585,6 +1595,31 @@ async function markBridgePortsAssigned(routerId: number): Promise<string | null>
     done: boolean;
     failures: number;
     steps: Map<number, InstallStep>;
+    result?: InstallerResult;
+  }
+
+  function parseInstallerResult(src: Record<string, string>): InstallerResult | null {
+    const rawInstallationStatus = String(src.installation_status ?? "").trim().toUpperCase();
+    if (!rawInstallationStatus) return null;
+    const rawVpnStatus = String(src.vpn_status ?? "").trim().toUpperCase();
+    const rawVpnIp = String(src.vpn_ip ?? "").trim();
+    const rawProxyStatus = String(src.proxy_status ?? "").trim().toUpperCase();
+    const rawApiLockdown = String(src.api_lockdown ?? "").trim().toUpperCase();
+    const rawDnsScheduler = String(src.dns_scheduler ?? "").trim().toUpperCase();
+    if (!["SUCCESS", "PARTIAL", "FAILED"].includes(rawInstallationStatus)) return null;
+    if (!["CONNECTED", "CONFIGURED", "FAILED"].includes(rawVpnStatus)) return null;
+    if (rawVpnIp && !isRouterManagementVpnIp(rawVpnIp)) return null;
+    if (!["REGISTERED", "FAILED", "NOT_CONFIGURED"].includes(rawProxyStatus)) return null;
+    if (!["ACTIVE", "FAILED"].includes(rawApiLockdown)) return null;
+    if (!["ACTIVE", "FAILED"].includes(rawDnsScheduler)) return null;
+    return {
+      installationStatus: rawInstallationStatus as InstallerResultStatus,
+      vpnStatus: rawVpnStatus as InstallerVpnStatus,
+      vpnIp: rawVpnIp,
+      proxyStatus: rawProxyStatus as InstallerResult["proxyStatus"],
+      apiLockdown: rawApiLockdown as InstallerResult["apiLockdown"],
+      dnsScheduler: rawDnsScheduler as InstallerResult["dnsScheduler"],
+    };
   }
 
   const installProgress = new Map<number, InstallProgress>();
@@ -1662,6 +1697,16 @@ async function handleInstallProgressUpdate(
   const err   = (src.err   ?? src.error ?? "").toString().slice(0, 500);
   const rname = (src.rname ?? "").toString().slice(0, 80);
   const done  = src.done === "1" || src.done === "true";
+  const resultFields = [
+    "installation_status", "vpn_status", "vpn_ip", "proxy_status",
+    "api_lockdown", "dns_scheduler",
+  ];
+  const hasResultFields = resultFields.some(field => Object.prototype.hasOwnProperty.call(src, field));
+  const installerResult = hasResultFields ? parseInstallerResult(src) : null;
+  if (hasResultFields && !installerResult) {
+    res.json({ ok: false, error: "invalid installer result" });
+    return;
+  }
 
   if (!done && (!step || step < 1 || step > 7)) { res.json({ ok: false, error: "step out of range" }); return; }
 
@@ -1716,21 +1761,29 @@ async function handleInstallProgressUpdate(
   }
 
   if (done) p.done = true;
+  if (installerResult) {
+    const wasRecorded = Boolean(p.result);
+    p.result = installerResult;
+    if (!wasRecorded && installerResult.installationStatus !== "SUCCESS") p.failures += 1;
+  }
 
   console.log(`[install-progress] router=${rid} step=${step}/${name} phase=${phase}${err ? ` err="${err.slice(0, 80)}"` : ""}${done ? " (done)" : ""}`);
 
   /* Persist event so admins can audit past installs even after the
      in-memory store has been GC'd or the API server has restarted. */
   if (step || done) {
+    const resultPhase: InstallPhase = installerResult
+      ? installerResult.installationStatus === "SUCCESS" ? "applied" : "failed"
+      : phase;
     await recordInstallEvent({
       routerId:         rid,
       adminId:          routerRow.admin_id,
       routerName:       p.routerName,
       installStartedAt: p.startedAt,
-      step:             step || 0,
-      stepName:         name,
-      phase,
-      error:            err || undefined,
+      step:             installerResult ? 0 : step || 0,
+      stepName:         installerResult ? "installer-result" : name,
+      phase:            resultPhase,
+      error:            installerResult ? JSON.stringify(installerResult) : err || undefined,
       done,
     });
   }
@@ -1782,7 +1835,7 @@ router.get("/admin/router/install-progress", async (req, res): Promise<void> => 
 
   const installs: Array<{
     routerId: number; routerName: string; startedAt: number; updatedAt: number;
-    done: boolean; failures: number; steps: InstallStep[];
+    done: boolean; failures: number; steps: InstallStep[]; result?: InstallerResult;
   }> = [];
 
   for (const p of installProgress.values()) {
@@ -1801,6 +1854,7 @@ router.get("/admin/router/install-progress", async (req, res): Promise<void> => 
       done:       p.done,
       failures:   p.failures,
       steps:      Array.from(p.steps.values()).sort((a, b) => a.step - b.step),
+      result:     p.result,
     });
   }
 

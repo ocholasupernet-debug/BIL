@@ -123,6 +123,24 @@ test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on Ro
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
 
+test("authenticated installer reports machine-readable gates and validates backup pool", () => {
+  assert.match(scriptsRoute, /INSTALLATION_STATUS=SUCCESS/);
+  assert.match(scriptsRoute, /VPN_STATUS=/);
+  assert.match(scriptsRoute, /VPN_IP=/);
+  assert.match(scriptsRoute, /PROXY_STATUS=/);
+  assert.match(scriptsRoute, /API_LOCKDOWN=/);
+  assert.match(scriptsRoute, /DNS_SCHEDULER=/);
+  assert.match(scriptsRoute, /expectedVpnPrefix "10\.8\.5\."/);
+  assert.match(scriptsRoute, /expectedVpnPrefix "10\.8\.6\."/);
+  assert.match(scriptsRoute, /management API allow rule was not verified after creation/);
+  assert.match(scriptsRoute, /DNS flush scheduler was not created/);
+  assert.match(scriptsRoute, /failures = 0 && \$optionalFailures > 0/);
+  assert.match(syncRoute, /parseInstallerResult/);
+  assert.match(syncRoute, /installer-result/);
+  assert.match(syncRoute, /installation_status/);
+  assert.match(scriptsRoute, /installation_status=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
+});
+
 test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",

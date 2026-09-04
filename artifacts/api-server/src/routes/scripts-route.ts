@@ -952,6 +952,13 @@ function buildMainhotspotRsc(
   const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
   const safeManagementInterfaceName = rscEscape(managementInterfaceName);
+  const managementRouterId = /(?:^|-)vpn-(\d+)$/.exec(managementInterfaceName)?.[1] ?? "";
+  const safeBackupManagementInterfaceName = rscEscape(
+    managementRouterId ? `ochola-mgmt-vpn-${managementRouterId}-backup` : "",
+  );
+  const safeWireGuardInterfaceName = rscEscape(
+    managementRouterId ? `ochola-mgmt-wg-${managementRouterId}` : "ochola-wg",
+  );
   const safeRouterVpnWarning = rscEscape(routerVpnWarning);
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
@@ -1263,6 +1270,10 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :local failures 0
 :local optionalFailures 0
 :local backendRegistrationSucceeded false
+:local vpnStatus "FAILED"
+:local vpnIp ""
+:local apiLockdownActive false
+:local dnsSchedulerActive false
 :put "======================================================"
 :put " ${safeCompanyName} router setup"
 :put "======================================================"
@@ -1292,6 +1303,66 @@ ${ipsecAttempt}
 } else={
     :put ("      Selected router-management VPN: " . $vpnProtocol)
 }
+
+# Parent-level VPN verification. A child import is not enough: the selected
+# management resource must be present, running where RouterOS exposes running,
+# and assigned a non-server address from the expected management pool.
+:local verifiedVpnInterface "${safeManagementInterfaceName}"
+:if ($vpnProtocol = "openvpn-backup") do={ :set verifiedVpnInterface "${safeBackupManagementInterfaceName}" }
+:local expectedVpnPrefix "10.8.5."
+:local expectedVpnGateway "10.8.5.1"
+:if ($vpnProtocol = "openvpn-backup") do={
+    :set expectedVpnPrefix "10.8.6."
+    :set expectedVpnGateway "10.8.6.1"
+}
+:local vpnResourceReady false
+:if ($vpnConfigured && ($vpnProtocol = "openvpn" || $vpnProtocol = "openvpn-backup")) do={
+    :for vpnVerifyAttempt from=1 to=12 do={
+        :if (!$vpnResourceReady) do={
+            :foreach vpnClient in=[/interface ovpn-client find where name=$verifiedVpnInterface] do={
+                :if ([/interface ovpn-client get $vpnClient running] = true) do={
+                    :foreach addressId in=[/ip address find where interface=$verifiedVpnInterface] do={
+                        :local addressValue [/ip address get $addressId address]
+                        :local slashPos [:find $addressValue "/"]
+                        :local candidateIp $addressValue
+                        :if ($slashPos >= 0) do={ :set candidateIp [:pick $addressValue 0 $slashPos] }
+                        :if ([:len $candidateIp] > [:len $expectedVpnPrefix] && [:pick $candidateIp 0 [:len $expectedVpnPrefix]] = $expectedVpnPrefix && $candidateIp != $expectedVpnGateway) do={
+                            :set vpnIp $candidateIp
+                            :set vpnResourceReady true
+                            :set vpnStatus "CONNECTED"
+                        }
+                    }
+                }
+            }
+            :if (!$vpnResourceReady) do={ :delay 5s }
+        }
+    }
+} else={
+    :if ($vpnConfigured && $vpnProtocol = "wireguard") do={
+        :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10\\.8\\.5\\.[0-9]+/"]] > 0) do={
+            :set vpnResourceReady true
+            :set vpnStatus "CONNECTED"
+            :foreach addressId in=[/ip address find where interface="${safeWireGuardInterfaceName}"] do={
+                :local addressValue [/ip address get $addressId address]
+                :local slashPos [:find $addressValue "/"]
+                :if ($slashPos >= 0) do={ :set vpnIp [:pick $addressValue 0 $slashPos] }
+            }
+        }
+    }
+    :if ($vpnConfigured && $vpnProtocol = "ipsec") do={
+        :if ([:len [/ip ipsec policy find where comment~"IPsec management policy"]] > 0) do={
+            :set vpnResourceReady true
+            :set vpnStatus "CONFIGURED"
+        }
+    }
+}
+:if ($vpnConfigured && !$vpnResourceReady) do={
+    :set failures ($failures + 1)
+    :set vpnStatus "FAILED"
+    :put ("  ERROR: selected " . $vpnProtocol . " management VPN did not pass parent-level resource verification.")
+}
+:put ("VPN_STATUS=" . $vpnStatus)
+:put ("VPN_IP=" . $vpnIp)
 
 # --- Hotspot configuration ----------------------------------------------------
 :do {
@@ -1470,6 +1541,9 @@ ${safeInstallerUrl ? `:do {
     ${verifyFetchedFile(`"seclogpush.rsc"`, "seclogpush.rsc")}
     :delay 2s
     /import seclogpush.rsc
+    :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - management API allow" && action=accept && chain=input]] = 0) do={ :error "API lockdown allow rule was not installed" }
+    :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - public management port drop" && action=drop && chain=input]] < 3) do={ :error "API lockdown drop rules were not installed" }
+    :set apiLockdownActive true
     :put "API security script installed; saved as seclogpush.rsc."
 } on-error={
     :set failures ($failures + 1)
@@ -1481,6 +1555,8 @@ ${safeInstallerUrl ? `:do {
     :put "Setting up DNS flush scheduler..."
     :foreach i in=[/system scheduler find where name="dns-flush"] do={ /system scheduler remove $i }
     /system scheduler add name="dns-flush" interval=06:00:00 on-event="/ip dns cache flush" policy=read,write,test,ftp start-time=00:00:00
+    :if ([:len [/system scheduler find where name="dns-flush"]] = 0) do={ :error "DNS flush scheduler was not created" }
+    :set dnsSchedulerActive true
     /ip dns cache flush
     :put "DNS flush scheduler installed (every 6 hours)."
 } on-error={
@@ -1537,16 +1613,54 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :put "Log script-warning suppression applied"
 } on-error={ :put "Log suppression skipped (non-fatal)" }
 
+:local proxyStatus "NOT_CONFIGURED"
+:if ("${safeRegistrationUrl}" != "") do={
+    :set proxyStatus "FAILED"
+    :if ($backendRegistrationSucceeded) do={ :set proxyStatus "REGISTERED" }
+}
+:local apiLockdownStatus "FAILED"
+:if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
+:local dnsSchedulerStatus "FAILED"
+:if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+:local installationStatus "FAILED"
+:if ($failures = 0 && $optionalFailures > 0) do={ :set installationStatus "PARTIAL" }
+:if ($failures = 0 && $optionalFailures = 0 && (("${safeRegistrationUrl}" = "" || $backendRegistrationSucceeded) && $vpnStatus != "FAILED" && $apiLockdownActive && $dnsSchedulerActive)) do={
+    :set installationStatus "SUCCESS"
+}
 :if ($failures = 0 && $optionalFailures = 0) do={
-    :if ("${safeRegistrationUrl}" = "" || $backendRegistrationSucceeded) do={
-        :put "${safeCompanyName}: SUCCESS - VPN connected; core configuration installed; API lockdown completed${safeRegistrationUrl ? "; router registration successful." : "."}"
+    :if (("${safeRegistrationUrl}" = "" || $backendRegistrationSucceeded) && $vpnStatus != "FAILED" && $apiLockdownActive && $dnsSchedulerActive) do={
+        :put "INSTALLATION_STATUS=SUCCESS"
+        :put ("VPN_STATUS=" . $vpnStatus)
+        :put ("VPN_IP=" . $vpnIp)
+        :put ("PROXY_STATUS=" . $proxyStatus)
+        :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+        :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+        :put "${safeCompanyName}: SUCCESS - VPN connected; core configuration installed; API lockdown completed."
     } else={
-        :put "${safeCompanyName}: FAILED - router registration did not complete; production readiness is blocked."
+        :put "INSTALLATION_STATUS=FAILED"
+        :put ("VPN_STATUS=" . $vpnStatus)
+        :put ("VPN_IP=" . $vpnIp)
+        :put ("PROXY_STATUS=" . $proxyStatus)
+        :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+        :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+        :put "${safeCompanyName}: FAILED - one or more required verification gates did not complete; production readiness is blocked."
     }
 } else={
     :if ($failures = 0) do={
+        :put "INSTALLATION_STATUS=PARTIAL"
+        :put ("VPN_STATUS=" . $vpnStatus)
+        :put ("VPN_IP=" . $vpnIp)
+        :put ("PROXY_STATUS=" . $proxyStatus)
+        :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+        :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
         :put ("${safeCompanyName}: PARTIAL - core configuration installed, but " . $optionalFailures . " optional component(s) were skipped.")
     } else={
+    :put "INSTALLATION_STATUS=FAILED"
+    :put ("VPN_STATUS=" . $vpnStatus)
+    :put ("VPN_IP=" . $vpnIp)
+    :put ("PROXY_STATUS=" . $proxyStatus)
+    :put ("API_LOCKDOWN=" . $apiLockdownStatus)
+    :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
     :put ("${safeCompanyName}: FAILED - " . $failures . " required step(s) failed and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
     }
 }
@@ -1556,7 +1670,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :global IPProgUrl
     :global IPRname
     :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname . "&installation_status=" . $installationStatus . "&vpn_status=" . $vpnStatus . "&vpn_ip=" . $vpnIp . "&proxy_status=" . $proxyStatus . "&api_lockdown=" . $apiLockdownStatus . "&dns_scheduler=" . $dnsSchedulerStatus) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     }
 } on-error={}
 `;
@@ -1886,7 +2000,7 @@ router.get("/scripts/self-install-mainhotspot.rsc", async (req, res): Promise<vo
       routerWireGuardUrl,
       routerIpsecUrl,
       routerVpnIp,
-       routerManagementClientInterfaceName(Number(rid)),
+       rid ? routerManagementClientInterfaceName(Number(rid)) : "",
        vpnProvisioningError
          ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
          : "",
@@ -2726,7 +2840,10 @@ const SECLOGPUSH_RSC = `# seclogpush.rsc – ISPlatty API security bootstrap
 :put "  [api-security] Locking API and FTP access to the management VPN..."
 
 :do {
-  /ip service set [find name="api"] disabled=no address=10.8.5.0/24
+  :local apiServiceIds [/ip service find where name="api"]
+  :if ([:len $apiServiceIds] = 0) do={ :error "RouterOS API service was not found" }
+  :local apiServiceId [:pick $apiServiceIds 0]
+  /ip service set $apiServiceId disabled=no address=10.8.5.0/24
   :do { /ip service set [find name="api-ssl"] disabled=yes } on-error={}
   :do { /ip service set [find name="ftp"] disabled=yes } on-error={}
 } on-error={
@@ -2743,6 +2860,17 @@ const SECLOGPUSH_RSC = `# seclogpush.rsc – ISPlatty API security bootstrap
   add chain=input action=drop protocol=tcp dst-port=21 comment="OcholaSuperNet - public management port drop"
 } on-error={
   :error ("RouterOS management firewall rules failed: " . $error)
+}
+
+:if ([:len [/ip firewall filter find where comment="OcholaSuperNet - management API allow" && action=accept && chain=input]] = 0) do={
+  :error "RouterOS management API allow rule was not verified after creation"
+}
+:if ([:len [/ip firewall filter find where comment="OcholaSuperNet - public management port drop" && action=drop && chain=input]] < 3) do={
+  :error "RouterOS public management drop rules were not verified after creation"
+}
+:local verifiedApiServiceIds [/ip service find where name="api" && disabled=no && address="10.8.5.0/24"]
+:if ([:len $verifiedApiServiceIds] = 0) do={
+  :error "RouterOS API service was not verified as VPN-only"
 }
 
 :do { move [find comment="OcholaSuperNet - public management port drop"] 0 } on-error={}
