@@ -211,6 +211,7 @@ create index if not exists isp_routers_status_idx   on isp_routers(status);
 alter table isp_routers add column if not exists vpn_ip text;
 create unique index if not exists isp_routers_vpn_ip_unique_idx
   on isp_routers(vpn_ip) where vpn_ip is not null;
+alter table isp_routers add column if not exists manual_vpn_config jsonb;
 
 -- Encrypted RouterOS migration packages (service role only).
 create table if not exists router_migration_jobs (

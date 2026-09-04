@@ -57,6 +57,15 @@ export function ensureClientCert(slug: string): boolean {
   }
 }
 
+/** Return a generated client certificate for an authenticated admin download. */
+export function readClientCertificate(routerName: string): string | null {
+  const slug = slugify(routerName);
+  if (!slug || !ensureClientCert(slug)) return null;
+  const certPath = `${PKI_ISSUED}/${slug}.crt`;
+  if (!existsSync(certPath)) return null;
+  return readFileSync(certPath, "utf-8");
+}
+
 async function slugBySecret(secret: string): Promise<string | null> {
   const url = sbUrl();
   const key = sbKey();

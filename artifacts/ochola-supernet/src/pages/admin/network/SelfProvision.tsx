@@ -199,6 +199,16 @@ export default function AddRouterScript() {
     model: "",
     rosVersion: "",
     ipAddress: "",
+    connectTo: "",
+    vpnPort: "1197",
+    mode: "ip",
+    vpnUser: "",
+    vpnPassword: "",
+    profile: "default-encryption",
+    certificate: "",
+    cipher: "aes128",
+    auth: "sha1",
+    routeNoPull: true,
   });
 
   useEffect(() => {
@@ -324,12 +334,38 @@ export default function AddRouterScript() {
         throw new Error(result.error || "The manual router configuration could not be saved.");
       }
       setManualSaved(result.router);
-      setManualForm(current => ({ ...current, password: "" }));
+      setManualForm(current => ({ ...current, password: "", vpnPassword: "" }));
       await refetchRouters();
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Could not save the manual router configuration.");
     } finally {
       setManualSaving(false);
+    }
+  };
+
+  const downloadManualCertificate = async () => {
+    if (!manualSaved) return;
+    try {
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (getAdminRole() === "superadmin") {
+        const selectedTenantId = getSelectedTenantId();
+        if (selectedTenantId) headers["X-Impersonated-Admin-Id"] = String(selectedTenantId);
+      }
+      const response = await fetch(`/api/admin/router/manual/${manualSaved.id}/certificate`, { headers });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `Certificate download failed (${response.status}).`);
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${manualSaved.name}.crt`;
+      anchor.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not download the client certificate.");
     }
   };
 

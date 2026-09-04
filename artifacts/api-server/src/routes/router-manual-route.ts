@@ -9,11 +9,14 @@
 import { Router, type IRouter } from "express";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { logActivity } from "../lib/activity-log.js";
+import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { sbInsertStrict, sbSelectStrict } from "../lib/supabase-client.js";
+import { readClientCertificate } from "./vpn-route.js";
 
 const router: IRouter = Router();
 const MAX_TEXT_LENGTH = 160;
 const MAX_SECRET_LENGTH = 512;
+const VPN_MODES = new Set(["ip", "ethernet"]);
 
 type RouterRow = {
   id: number;
@@ -28,6 +31,7 @@ type RouterRow = {
   ros_version: string | null;
   router_username: string | null;
   router_secret: string | null;
+  manual_vpn_config: Record<string, unknown> | null;
   status: string;
 };
 
@@ -49,6 +53,20 @@ function secret(value: unknown, label: string): string {
   if (typeof value !== "string" || !value) throw new Error(`${label} is required.`);
   if (value.length > MAX_SECRET_LENGTH) throw new Error(`${label} is too long.`);
   return value;
+}
+
+function port(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error("OpenVPN port must be an integer between 1 and 65535.");
+  }
+  return parsed;
+}
+
+function vpnMode(value: unknown): "ip" | "ethernet" {
+  const mode = text(value, "OpenVPN mode", true)!;
+  if (!VPN_MODES.has(mode)) throw new Error("OpenVPN mode must be ip or ethernet.");
+  return mode as "ip" | "ethernet";
 }
 
 function publicRouter(row: RouterRow) {
@@ -87,6 +105,16 @@ router.post("/api/admin/router/manual", requireAdmin(), async (req, res): Promis
     const bridgeInterface = text(req.body?.bridgeInterface, "Bridge interface") ?? "hotspot-bridge";
     const model = text(req.body?.model, "Model");
     const rosVersion = text(req.body?.rosVersion, "RouterOS version");
+    const connectTo = text(req.body?.connectTo, "OpenVPN connect-to address", true)!;
+    const vpnPort = port(req.body?.vpnPort);
+    const mode = vpnMode(req.body?.mode);
+    const vpnUser = text(req.body?.vpnUser, "OpenVPN user", true)!;
+    const vpnPassword = secret(req.body?.vpnPassword, "OpenVPN password");
+    const profile = text(req.body?.profile, "OpenVPN profile", true)!;
+    const certificate = text(req.body?.certificate, "OpenVPN certificate", true)!;
+    const cipher = text(req.body?.cipher, "OpenVPN cipher", true)!;
+    const auth = text(req.body?.auth, "OpenVPN auth", true)!;
+    const routeNoPull = Boolean(req.body?.routeNoPull);
 
     const [admins, existing, vpnOwners] = await Promise.all([
       sbSelectStrict<{ id: number }>("isp_admins", `id=eq.${adminId}&select=id&limit=1`),
@@ -127,6 +155,18 @@ router.post("/api/admin/router/manual", requireAdmin(), async (req, res): Promis
       ros_version: rosVersion,
       router_username: username,
       router_secret: password,
+      manual_vpn_config: {
+        connect_to: connectTo,
+        port: vpnPort,
+        mode,
+        user: vpnUser,
+        password: encryptVpnSecret(vpnPassword),
+        profile,
+        certificate,
+        cipher,
+        auth,
+        route_nopull: routeNoPull,
+      },
       status: "offline",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -155,6 +195,38 @@ router.post("/api/admin/router/manual", requireAdmin(), async (req, res): Promis
       ok: false,
       error: error instanceof Error ? error.message : "Invalid manual router details.",
     });
+  }
+});
+
+router.get("/api/admin/router/manual/:id/certificate", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const adminId = authenticatedAdminId(req);
+    const routerId = Number(req.params.id);
+    if (!adminId || !Number.isSafeInteger(routerId) || routerId <= 0) {
+      res.status(400).json({ ok: false, error: "Invalid router." });
+      return;
+    }
+    const rows = await sbSelectStrict<{ id: number; name: string }>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name&limit=1`,
+    );
+    const target = rows[0];
+    if (!target) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    const certificate = readClientCertificate(target.name);
+    if (!certificate) {
+      res.status(503).json({ ok: false, error: "The client certificate is not available on the VPN server." });
+      return;
+    }
+    const filename = `${target.name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}.crt`;
+    res.set("Content-Type", "application/x-x509-ca-cert");
+    res.set("Content-Disposition", `attachment; filename="${filename}"`);
+    res.set("Cache-Control", "no-store");
+    res.send(certificate);
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error instanceof Error ? error.message : "Certificate download failed." });
   }
 });
 
