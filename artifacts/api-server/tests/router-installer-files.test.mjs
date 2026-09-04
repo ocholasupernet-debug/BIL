@@ -38,6 +38,13 @@ test("installer verifies downloads and reports the resolved destination", () => 
   assert.doesNotMatch(scriptsRoute, /portalFetch[\s\S]{0,500}dst-path=\(\$hsdir \. "/);
 });
 
+test("installer exposes a fresh revision marker for stale-file diagnosis", () => {
+  assert.match(scriptsRoute, /const installerRevision = `r\$\{Date\.now\(\)\.toString\(36\)\}`/);
+  assert.match(scriptsRoute, /# INSTALLER_REVISION=\$\{installerRevision\}/);
+  assert.match(scriptsRoute, /INSTALLER_REVISION=\$\{installerRevision\}/);
+  assert.match(scriptsRoute, /Cache-Control", "no-store"/);
+});
+
 test("successful child imports preserve named RouterOS artifacts", () => {
   for (const fileName of [
     "hotspotsetup.rsc",
@@ -59,6 +66,37 @@ test("successful child imports preserve named RouterOS artifacts", () => {
 
   assert.match(scriptsRoute, /name="failed-\$\{fileName\}"/);
   assert.doesNotMatch(scriptsRoute, /\/file remove (?:hotspotsetup|pppoesetup|users|syncusers|heartbeat|syncfull)\.rsc/);
+});
+
+test("required child imports use completion markers, resource checks, and final file checks", () => {
+  for (const marker of [
+    "ocholaHotspotInstallMarker",
+    "ocholaPppoeInstallMarker",
+    "ocholaUsersInstallMarker",
+    "ocholaSyncUsersInstallMarker",
+    "ocholaHeartbeatInstallMarker",
+    "ocholaSyncFullInstallMarker",
+  ]) {
+    assert.match(scriptsRoute, new RegExp(`global ${marker}`));
+    assert.match(scriptsRoute, new RegExp(`completionCheck\\("${marker}"`));
+  }
+
+  assert.match(scriptsRoute, /hotspot-bridge.*was not verified/);
+  assert.match(scriptsRoute, /pppoe-pool.*was not verified/);
+  assert.match(scriptsRoute, /default hotspot profile was not verified/);
+  assert.match(scriptsRoute, /SafeNet - allow API.*was not verified/);
+  assert.match(scriptsRoute, /heartbeat\.rsc import completed.*scheduler was not verified/);
+  assert.match(scriptsRoute, /syncfull\.rsc import completed.*scheduler was not verified/);
+  assert.match(scriptsRoute, /fileCompletionCheck\(fileName\)/);
+  assert.match(scriptsRoute, /fileCompletionCheck\("hotspotsetup\.rsc"\)/);
+});
+
+test("installer callback values are form-encoded before posting", () => {
+  assert.match(scriptsRoute, /global ocholaFormEncode do=/);
+  assert.match(scriptsRoute, /%26/);
+  assert.match(scriptsRoute, /%3D/);
+  assert.match(scriptsRoute, /installation_status=.*ocholaFormEncode/);
+  assert.match(scriptsRoute, /error=.*ocholaFormEncode/);
 });
 
 test("portal files use explicit per-file paths and remain available after fetch", () => {

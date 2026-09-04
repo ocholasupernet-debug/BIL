@@ -927,6 +927,7 @@ function buildMainhotspotRsc(
   routerIpsecUrl = normalizeUrl(routerIpsecUrl);
   coexistenceHotspotUrl = normalizeUrl(coexistenceHotspotUrl);
   const ROUTER_HTTPS_FETCH_OPTIONS = `mode=https check-certificate=yes`;
+  const installerRevision = `r${Date.now().toString(36)}`;
   const httpsTrustBootstrap = routerHttpsTrustBootstrap(scriptsBase);
   /* When progressUrl is set, every [N/7] step posts a status update to
      /api/isp/router/install-progress/<rid> so the admin Routers page can
@@ -951,27 +952,90 @@ function buildMainhotspotRsc(
   const safeRouterWireGuardUrl = rscEscape(routerWireGuardUrl);
   const safeRouterIpsecUrl = rscEscape(routerIpsecUrl);
   const safeRouterVpnIp = rscEscape(routerVpnIp);
+  const safeBackupRouterVpnIp = rscEscape(
+    /^10\.8\.5\.\d+$/.test(routerVpnIp) ? routerVpnIp.replace(/^10\.8\.5\./, "10.8.6.") : "",
+  );
   const safeManagementInterfaceName = rscEscape(managementInterfaceName);
   const managementRouterId = /(?:^|-)vpn-(\d+)$/.exec(managementInterfaceName)?.[1] ?? "";
   const safeBackupManagementInterfaceName = rscEscape(
     managementRouterId ? `ochola-mgmt-vpn-${managementRouterId}-backup` : "",
   );
   const safeWireGuardInterfaceName = rscEscape(
-    managementRouterId ? `ochola-mgmt-wg-${managementRouterId}` : "ochola-wg",
+    installationMode === "coexist" && managementRouterId ? `ochola-mgmt-wg-${managementRouterId}` : "ochola-wg",
   );
   const safeRouterVpnWarning = rscEscape(routerVpnWarning);
+  const formEncodeDef = `
+:global ocholaFormEncode do={
+    :local input [:tostr $1]
+    :local output ""
+    :if ([:len $input] > 0) do={
+        :for i from=0 to=([:len $input] - 1) do={
+            :local char [:pick $input $i ($i + 1)]
+            :if ($char = "%") do={ :set output ($output . "%25") } else={
+            :if ($char = "&") do={ :set output ($output . "%26") } else={
+            :if ($char = "=") do={ :set output ($output . "%3D") } else={
+            :if ($char = "+") do={ :set output ($output . "%2B") } else={
+            :if ($char = " ") do={ :set output ($output . "%20") } else={
+            :if ($char = "?") do={ :set output ($output . "%3F") } else={
+            :if ($char = "#") do={ :set output ($output . "%23") } else={
+            :if ($char = "\r") do={ :set output ($output . "%0D") } else={
+            :if ($char = "\n") do={ :set output ($output . "%0A") } else={
+                :set output ($output . $char)
+            }}}}}}}}}
+        }
+    }
+    :return $output
+}`;
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
 :global pg do={
     :global IPProgUrl
     :global IPRname
-    :local body ("step=" . [:tostr $1] . "&name=" . [:tostr $2] . "&phase=" . [:tostr $3] . "&err=" . [:tostr $4] . "&rname=" . $IPRname)
+    :local formEncode do={
+        :local input [:tostr $1]
+        :local output ""
+        :if ([:len $input] > 0) do={
+            :for i from=0 to=([:len $input] - 1) do={
+                :local char [:pick $input $i ($i + 1)]
+                :if ($char = "%") do={ :set output ($output . "%25") } else={
+                :if ($char = "&") do={ :set output ($output . "%26") } else={
+                :if ($char = "=") do={ :set output ($output . "%3D") } else={
+                :if ($char = "+") do={ :set output ($output . "%2B") } else={
+                :if ($char = " ") do={ :set output ($output . "%20") } else={
+                :if ($char = "?") do={ :set output ($output . "%3F") } else={
+                :if ($char = "#") do={ :set output ($output . "%23") } else={
+                :if ($char = "\r") do={ :set output ($output . "%0D") } else={
+                :if ($char = "\n") do={ :set output ($output . "%0A") } else={
+                    :set output ($output . $char)
+                }}}}}}}}}
+            }
+        }
+        :return $output
+    }
+    :local body ("step=" . [$formEncode $1] . "&name=" . [$formEncode $2] . "&phase=" . [$formEncode $3] . "&err=" . [$formEncode $4] . "&rname=" . [$formEncode $IPRname])
     :do {
         /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     } on-error={}
 }`
     : `:global pg do={}`;
+  const installMarkerReset = `
+:global ocholaHotspotInstallMarker
+:global ocholaPppoeInstallMarker
+:global ocholaUsersInstallMarker
+:global ocholaSyncUsersInstallMarker
+:global ocholaHeartbeatInstallMarker
+:global ocholaSyncFullInstallMarker
+:set ocholaHotspotInstallMarker ""
+:set ocholaPppoeInstallMarker ""
+:set ocholaUsersInstallMarker ""
+:set ocholaSyncUsersInstallMarker ""
+:set ocholaHeartbeatInstallMarker ""
+:set ocholaSyncFullInstallMarker ""`;
+  const completionCheck = (marker: string, expected: string, label: string): string =>
+    `:if ($${marker} != "${expected}") do={ :error "${label} did not report a completed import." }`;
+  const fileCompletionCheck = (fileName: string): string =>
+    verifyFetchedFile(`"${fileName}"`, fileName);
 
   const versionedUrlAssignment = (
     variableName: string,
@@ -1045,6 +1109,7 @@ function buildMainhotspotRsc(
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="${fileName}"] } on-error={}
         /file set [find name="${tempFileName}"] name="${fileName}"
+         ${fileCompletionCheck(fileName)}
         :set vpnConfigured true
         :set vpnProtocol "${protocol}"
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
@@ -1078,12 +1143,15 @@ function buildMainhotspotRsc(
 
   if (installationMode === "coexist") {
     return `# ${safeCompanyName} — Coexistence management installer
+# INSTALLER_REVISION=${installerRevision}
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
 ${pgDef}
+${formEncodeDef}
 ${httpsTrustBootstrap}
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
+:put "INSTALLER_REVISION=${installerRevision}"
 
 :local bridgeCount [:len [/interface bridge find]]
 :local hotspotCount [:len [/ip hotspot find]]
@@ -1200,6 +1268,7 @@ ${safeHeartbeatUrl ? `:do {
     : "";
 
   return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
+# INSTALLER_REVISION=${installerRevision}
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
 #
@@ -1216,6 +1285,7 @@ ${safeHeartbeatUrl ? `:do {
 # into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
 
 ${pgDef}
+${formEncodeDef}
 
 # Takeover is a separate, destructive path. Its safety boundary runs first.
 ${takeoverBackup}
@@ -1224,6 +1294,10 @@ ${takeoverBackup}
 ${httpsTrustBootstrap}
 
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
+
+:put "INSTALLER_REVISION=${installerRevision}"
+
+${installMarkerReset}
 
 :local routerOsVersion [/system resource get version]
 :local firstVersionDot [:find $routerOsVersion "."]
@@ -1387,15 +1461,22 @@ ${ipsecAttempt}
     :delay 2s
     :put "      Applying hotspot configuration..."
     /import "hotspotsetup.rsc.download"
+     ${completionCheck("ocholaHotspotInstallMarker", "hotspotsetup-v1", "hotspotsetup.rsc")}
+     ${fileCompletionCheck("hotspotsetup.rsc.download")}
+     :if ([:len [/interface bridge find where name="hotspot-bridge"]] = 0) do={ :error "hotspotsetup.rsc import completed, but hotspot-bridge was not verified." }
+     :if ([:len [/ip pool find where name="hspool"]] = 0) do={ :error "hotspotsetup.rsc import completed, but hspool was not verified." }
+     :if ([:len [/ip hotspot profile find where name="default-hs"]] = 0) do={ :error "hotspotsetup.rsc import completed, but default-hs was not verified." }
+     :if ([:len [/ip hotspot find where name="hotspot1"]] = 0) do={ :error "hotspotsetup.rsc import completed, but hotspot1 was not verified." }
     :do { /file remove [find name="hotspotsetup.rsc"] } on-error={}
     /file set [find name="hotspotsetup.rsc.download"] name="hotspotsetup.rsc"
+     ${fileCompletionCheck("hotspotsetup.rsc")}
      :set hotspotStatus "OK"
     :put "      Hotspot configuration applied; saved as hotspotsetup.rsc."
     $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "hotspot"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "hotspot" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
     $pg 2 "hotspot" "failed" $error
     :do { /file remove [find name=failed-hotspotsetup.rsc] } on-error={}
@@ -1412,15 +1493,21 @@ ${ipsecAttempt}
     :delay 2s
     :put "      Applying PPPoE configuration..."
     /import "pppoesetup.rsc.download"
+     ${completionCheck("ocholaPppoeInstallMarker", "pppoe-v1", "pppoesetup.rsc")}
+     ${fileCompletionCheck("pppoesetup.rsc.download")}
+     :if ([:len [/ip pool find where name="pppoe-pool"]] = 0) do={ :error "pppoesetup.rsc import completed, but pppoe-pool was not verified." }
+     :if ([:len [/ppp profile find where name="isp-profile"]] = 0) do={ :error "pppoesetup.rsc import completed, but isp-profile was not verified." }
+     :if ([:len [/interface pppoe-server server find where service-name="isp-pppoe" && disabled=no]] = 0) do={ :error "pppoesetup.rsc import completed, but the PPPoE server was not verified." }
     :do { /file remove [find name="pppoesetup.rsc"] } on-error={}
     /file set [find name="pppoesetup.rsc.download"] name="pppoesetup.rsc"
+     ${fileCompletionCheck("pppoesetup.rsc")}
      :set pppoeStatus "OK"
     :put "      PPPoE configuration applied; saved as pppoesetup.rsc."
     $pg 3 "pppoe" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "pppoe"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "pppoe" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
     $pg 3 "pppoe" "failed" $error
     :do { /file remove [find name=failed-pppoesetup.rsc] } on-error={}
@@ -1437,15 +1524,19 @@ ${ipsecAttempt}
     :delay 2s
     :put "      Applying users configuration..."
     /import "users.rsc.download"
+     ${completionCheck("ocholaUsersInstallMarker", "users-v1", "users.rsc")}
+     ${fileCompletionCheck("users.rsc.download")}
+     :if ([:len [/ip hotspot user profile find where name="default"]] = 0) do={ :error "users.rsc import completed, but the default hotspot profile was not verified." }
     :do { /file remove [find name="users.rsc"] } on-error={}
     /file set [find name="users.rsc.download"] name="users.rsc"
+     ${fileCompletionCheck("users.rsc")}
      :set usersStatus "OK"
     :put "      Users configuration applied; saved as users.rsc."
     $pg 4 "users" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "users"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "users" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [users.rsc] FAILED: " . $error)
     $pg 4 "users" "failed" $error
     :do { /file remove [find name=failed-users.rsc] } on-error={}
@@ -1462,15 +1553,19 @@ ${ipsecAttempt}
     :delay 2s
     :put "      Applying sync-users firewalls..."
     /import "syncusers.rsc.download"
+     ${completionCheck("ocholaSyncUsersInstallMarker", "syncusers-v1", "syncusers.rsc")}
+     ${fileCompletionCheck("syncusers.rsc.download")}
+     :if ([:len [/ip firewall filter find where comment="SafeNet - allow API sync" && action=accept && chain=input]] = 0) do={ :error "syncusers.rsc import completed, but its API firewall rule was not verified." }
     :do { /file remove [find name="syncusers.rsc"] } on-error={}
     /file set [find name="syncusers.rsc.download"] name="syncusers.rsc"
+     ${fileCompletionCheck("syncusers.rsc")}
      :set syncUsersStatus "OK"
     :put "      Sync-users firewalls applied; saved as syncusers.rsc."
     $pg 5 "syncusers" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "sync-users"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "sync-users" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [syncusers.rsc] FAILED: " . $error)
     $pg 5 "syncusers" "failed" $error
     :do { /file remove [find name=failed-syncusers.rsc] } on-error={}
@@ -1487,15 +1582,20 @@ ${ipsecAttempt}
     :delay 2s
     :put "      Applying heartbeat firewalls..."
     /import "heartbeat.rsc.download"
+     ${completionCheck("ocholaHeartbeatInstallMarker", "heartbeat-v1", "heartbeat.rsc")}
+     ${fileCompletionCheck("heartbeat.rsc.download")}
+     :if ([:len [/system script find where name="ochola-heartbeat-script"]] = 0) do={ :error "heartbeat.rsc import completed, but its system script was not verified." }
+     :if ([:len [/system scheduler find where name="ochola-heartbeat"]] = 0) do={ :error "heartbeat.rsc import completed, but its scheduler was not verified." }
     :do { /file remove [find name="heartbeat.rsc"] } on-error={}
     /file set [find name="heartbeat.rsc.download"] name="heartbeat.rsc"
+     ${fileCompletionCheck("heartbeat.rsc")}
      :set heartbeatStatus "OK"
     :put "      Heartbeat firewalls applied; saved as heartbeat.rsc."
     $pg 6 "heartbeat" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "heartbeat"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "heartbeat" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
     $pg 6 "heartbeat" "failed" $error
     :do { /file remove [find name=failed-heartbeat.rsc] } on-error={}
@@ -1526,15 +1626,19 @@ ${safeHeartbeatUrl ? `:do {
     :delay 2s
     :put "      Applying sync-full script..."
     /import "syncfull.rsc.download"
+     ${completionCheck("ocholaSyncFullInstallMarker", "syncfull-v1", "syncfull.rsc")}
+     ${fileCompletionCheck("syncfull.rsc.download")}
+     :if ([:len [/system scheduler find where name="ochola-autoupdate"]] = 0) do={ :error "syncfull.rsc import completed, but its auto-update scheduler was not verified." }
     :do { /file remove [find name="syncfull.rsc"] } on-error={}
     /file set [find name="syncfull.rsc.download"] name="syncfull.rsc"
+     ${fileCompletionCheck("syncfull.rsc")}
      :set syncFullStatus "OK"
     :put "      Sync-full script applied; saved as syncfull.rsc."
     $pg 7 "syncfull" "applied" ""
 } on-error={
     :set failures ($failures + 1)
-     :set failedComponent "sync-full"
-     :set lastError $error
+     :if ([:len $failedComponent] = 0) do={ :set failedComponent "sync-full" }
+     :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [syncfull.rsc] FAILED: " . $error)
     $pg 7 "syncfull" "failed" $error
     :do { /file remove [find name=failed-syncfull.rsc] } on-error={}
@@ -1578,10 +1682,33 @@ ${safeInstallerUrl ? `:do {
     :put "API security script installed; saved as seclogpush.rsc."
 } on-error={
     :set failures ($failures + 1)
-    :set failedComponent "api-lockdown"
-    :set lastError $error
+    :if ([:len $failedComponent] = 0) do={ :set failedComponent "api-lockdown" }
+    :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [seclogpush.rsc] REQUIRED API hardening failed: " . $error)
 }
+
+# A backup OpenVPN client uses the isolated 10.8.6.0/24 pool. The static
+# sync/security children intentionally target the primary pool, so correct the
+# final API allow-list to the VPN that actually passed verification.
+${safeBackupRouterVpnIp ? `:if ($vpnResourceReady && $vpnProtocol = "openvpn-backup") do={
+    :do {
+        /ip service set [find name="api"] address=10.8.6.1/32
+        :do { /ip service set [find name="api-ssl"] address=10.8.6.1/32 } on-error={}
+        /ip firewall filter remove [find where comment="OcholaSuperNet - management API allow"]
+        /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.6.1/32 comment="OcholaSuperNet - management API allow" place-before=0
+        :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - management API allow" && action=accept && src-address=10.8.6.1/32]] = 0) do={
+            :error "backup management API allow rule was not verified"
+        }
+        :put "Backup management VPN API access verified for 10.8.6.1/32."
+    } on-error={
+        :set failures ($failures + 1)
+        :set apiLockdownActive false
+        :set failedComponent "api-lockdown"
+        :set lastError ("backup management VPN API access failed: " . $error)
+        :put ("  WARN [api-lockdown] " . $lastError)
+        $pg 1 "api-lockdown-backup" "failed" $lastError
+    }
+}` : ""}
 
 # --- DNS flush scheduler ------------------------------------------------------
 :do {
@@ -1594,8 +1721,8 @@ ${safeInstallerUrl ? `:do {
     :put "DNS flush scheduler installed (every 6 hours)."
 } on-error={
     :set failures ($failures + 1)
-    :set failedComponent "dns-scheduler"
-    :set lastError $error
+    :if ([:len $failedComponent] = 0) do={ :set failedComponent "dns-scheduler" }
+    :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
     :put ("  WARN [dns-flush] FAILED: " . $error)
 }
 
@@ -1603,15 +1730,28 @@ ${safeInstallerUrl ? `:do {
 ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :local reportedIp ""
 :local vpnIpReady false
+:local reportInterface "${safeManagementInterfaceName}"
+:local reportPrefix "10.8.5."
+:local reportGateway "10.8.5.1"
+:local expectedReportedIp "${safeRouterVpnIp}"
+:if ($vpnProtocol = "openvpn-backup") do={
+    :set reportInterface "${safeBackupManagementInterfaceName}"
+    :set reportPrefix "10.8.6."
+    :set reportGateway "10.8.6.1"
+    :set expectedReportedIp "${safeBackupRouterVpnIp}"
+}
+:if ($vpnProtocol = "wireguard") do={
+    :set reportInterface "${safeWireGuardInterfaceName}"
+}
 :for vpnIpAttempt from=1 to=12 do={
     :if (!$vpnIpReady) do={
-        :foreach a in=[/ip address find where interface="${safeManagementInterfaceName}"] do={
+        :foreach a in=[/ip address find where interface=$reportInterface] do={
             :local candidate [/ip address get $a address]
             :local slashPos [:find $candidate "/"]
             :local candidateIp $candidate
             :if ($slashPos >= 0) do={ :set candidateIp [:pick $candidate 0 $slashPos] }
-            :if ([:len $candidateIp] >= 8 && [:pick $candidateIp 0 7] = "10.8.5." && $candidateIp != "10.8.5.1") do={
-                :if ("${safeRouterVpnIp}" = "" || $candidateIp = "${safeRouterVpnIp}") do={
+            :if ([:len $candidateIp] > [:len $reportPrefix] && [:pick $candidateIp 0 [:len $reportPrefix]] = $reportPrefix && $candidateIp != $reportGateway) do={
+                :if ([:len $expectedReportedIp] = 0 || $candidateIp = $expectedReportedIp) do={
                     :set reportedIp $candidateIp
                     :set vpnIpReady true
                 }
@@ -1628,20 +1768,21 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :do { :set ri [/system identity get name] } on-error={}
     :do { :set rv [/system package get [find name=routeros] version] } on-error={}
     :do {
-        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp) ${ROUTER_HTTPS_FETCH_OPTIONS} output=user keep-result=no
+        /tool fetch url=("${safeRegistrationUrl}?model=" . $rm . "&rname=" . $ri . "&ver=" . $rv . "&ip=" . $reportedIp . "&vpn=" . $vpnProtocol) ${ROUTER_HTTPS_FETCH_OPTIONS} output=user keep-result=no
         :put ("Reported router VPN IP " . $reportedIp . " to ${safeCompanyName}")
          :set backendRegistrationSucceeded true
      } on-error={
          :set failures ($failures + 1)
-         :set failedComponent "backend-registration"
-         :set lastError $error
+         :if ([:len $failedComponent] = 0) do={ :set failedComponent "backend-registration" }
+         :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $error) } else={ :set lastError $error }
          :put "FAILED: backend router registration was rejected; the router will retry on the next heartbeat, but production readiness is blocked."
      }
 } else={
     :set failures ($failures + 1)
-    :set failedComponent "backend-registration"
-    :set lastError "Management VPN interface has no valid 10.8.5.x IPv4 address."
-    :put ("FAILED: management VPN interface ${safeManagementInterfaceName} has no valid 10.8.5.x IPv4 address; router registration was not reported.")
+    :if ([:len $failedComponent] = 0) do={ :set failedComponent "backend-registration" }
+    :local registrationError ("Management VPN interface has no valid " . $reportPrefix . "x IPv4 address.")
+    :if ([:len $lastError] > 0) do={ :set lastError ($lastError . " | " . $registrationError) } else={ :set lastError $registrationError }
+    :put ("FAILED: management VPN interface " . $reportInterface . " has no valid " . $reportPrefix . "x IPv4 address; router registration was not reported.")
 }
 ` : `# Router registration is enabled when this script is generated for a saved router.`}
 
@@ -1731,8 +1872,9 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :do {
     :global IPProgUrl
     :global IPRname
+    :global ocholaFormEncode
     :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname . "&installation_status=" . $installationStatus . "&routeros_version=" . $routerOsVersion . "&vpn_status=" . $vpnStatus . "&vpn_ip=" . $vpnIp . "&proxy_status=" . $proxyStatus . "&api_lockdown=" . $apiLockdownStatus . "&dns_scheduler=" . $dnsSchedulerStatus . "&hotspot_status=" . $hotspotStatus . "&pppoe_status=" . $pppoeStatus . "&users_status=" . $usersStatus . "&sync_status=" . $syncStatus . "&heartbeat_status=" . $heartbeatStatus . "&failed_component=" . $failedComponent . "&error=" . $lastError) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . [$ocholaFormEncode $IPRname] . "&installation_status=" . [$ocholaFormEncode $installationStatus] . "&routeros_version=" . [$ocholaFormEncode $routerOsVersion] . "&vpn_status=" . [$ocholaFormEncode $vpnStatus] . "&vpn_ip=" . [$ocholaFormEncode $vpnIp] . "&proxy_status=" . [$ocholaFormEncode $proxyStatus] . "&api_lockdown=" . [$ocholaFormEncode $apiLockdownStatus] . "&dns_scheduler=" . [$ocholaFormEncode $dnsSchedulerStatus] . "&hotspot_status=" . [$ocholaFormEncode $hotspotStatus] . "&pppoe_status=" . [$ocholaFormEncode $pppoeStatus] . "&users_status=" . [$ocholaFormEncode $usersStatus] . "&sync_status=" . [$ocholaFormEncode $syncStatus] . "&heartbeat_status=" . [$ocholaFormEncode $heartbeatStatus] . "&failed_component=" . [$ocholaFormEncode $failedComponent] . "&error=" . [$ocholaFormEncode $lastError]) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     }
 } on-error={}
 `;
@@ -2833,6 +2975,8 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 :do { /ip hotspot add name=hotspot1 interface="hotspot-bridge" profile=default-hs address-pool=hspool idle-timeout=none comment="SafeNet hotspot service" } on-error={ :error ("hotspot service setup failed: " . $error) }
 
 :put "  [hotspot] Hotspot service started on hotspot-bridge (192.168.88.1)  OK"
+:global ocholaHotspotInstallMarker
+:set ocholaHotspotInstallMarker "hotspotsetup-v1"
 `;
 
 /* ── PPPoE setup ── */
@@ -2858,6 +3002,8 @@ const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
 :do { /interface pppoe-server server set [find service-name=isp-pppoe comment="OcholaSuperNet PPPoE server"] authentication=pap,chap,mschap1,mschap2 max-sessions=0 } on-error={ :error ("PPPoE server options failed: " . $error) }
 
 :put "  [pppoe] PPPoE server configured  OK"
+:global ocholaPppoeInstallMarker
+:set ocholaPppoeInstallMarker "pppoe-v1"
 `;
 
 /* ── Default user policy ── */
@@ -2871,6 +3017,8 @@ const USERS_RSC = `# users.rsc – Default hotspot user and group setup
 :do { /ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none } on-error={}
 
 :put "  [users] No shared hotspot credentials were created; billing/API-managed users remain the source of truth  OK"
+:global ocholaUsersInstallMarker
+:set ocholaUsersInstallMarker "users-v1"
 `;
 
 /* ── Sync-users firewall rules ── */
@@ -2892,6 +3040,8 @@ const SYNCUSERS_RSC = `# syncusers.rsc – Firewall rules required for user sync
 :do { /ip service set [find name="api"] disabled=no address=10.8.5.0/24 } on-error={ :error ("API service setup failed: " . $error) }
 
 :put "  [syncusers] User-sync firewall rules applied  OK"
+:global ocholaSyncUsersInstallMarker
+:set ocholaSyncUsersInstallMarker "syncusers-v1"
 `;
 
 /* ── Optional diagnostic logging bootstrap ──
@@ -2979,7 +3129,7 @@ function buildHeartbeatRsc(origin: string): string {
     start-time=startup \\
     on-event="/system script run ochola-heartbeat-script" \\
     comment="ISP heartbeat"
-} on-error={ :put "  WARN: heartbeat scheduler add failed" }
+} on-error={ :error ("heartbeat scheduler add failed: " . $error) }
 
 # DNS flush scheduler (every 6 hours)
 :do { /system scheduler remove [find name=dns-flush] } on-error={}
@@ -2990,9 +3140,11 @@ function buildHeartbeatRsc(origin: string): string {
     on-event="/ip dns cache flush" \\
     policy=read,write,test,ftp \\
     start-time=00:00:00
-} on-error={}
+} on-error={ :error ("DNS flush scheduler add failed: " . $error) }
 
 :put "  [heartbeat] Heartbeat every 5 min  OK"
+:global ocholaHeartbeatInstallMarker
+:set ocholaHeartbeatInstallMarker "heartbeat-v1"
 `;
 }
 
@@ -3020,9 +3172,11 @@ function buildSyncfullRsc(origin: string): string {
     disabled=yes \\
     on-event=":put \\"OcholaSuperNet auto-update is disabled until a router-scoped installer is reviewed and installed.\\"" \\
     comment="OcholaSuperNet auto-update disabled by default"
-} on-error={ :put "  WARN: auto-update scheduler add failed" }
+} on-error={ :error ("auto-update scheduler add failed: " . $error) }
 
 :put "  [syncfull] Full-sync scheduler installed  OK"
+:global ocholaSyncFullInstallMarker
+:set ocholaSyncFullInstallMarker "syncfull-v1"
 `;
 }
 

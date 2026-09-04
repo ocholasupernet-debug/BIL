@@ -157,6 +157,16 @@ test("authenticated installer reports machine-readable gates and validates backu
    assert.match(scriptsRoute, /installation_status=.*routeros_version=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
 });
 
+test("backup VPN keeps router registration and API access on the backup pool", () => {
+  assert.match(scriptsRoute, /reportInterface "\$\{safeManagementInterfaceName\}"/);
+  assert.match(scriptsRoute, /reportInterface "\$\{safeBackupManagementInterfaceName\}"/);
+  assert.match(scriptsRoute, /reportPrefix "10\.8\.6\."/);
+  assert.match(scriptsRoute, /reportGateway "10\.8\.6\.1"/);
+  assert.match(scriptsRoute, /backup management VPN API access failed/);
+  assert.match(scriptsRoute, /src-address=10\.8\.6\.1\/32/);
+  assert.match(scriptsRoute, /"&vpn=" \. \$vpnProtocol/);
+});
+
 test("Main ISP bootstrap supports a RouterOS-safe path authorization form", () => {
   assert.match(scriptsRoute, /\/scripts\/mainhotspot\/:pathRouterId\/:pathAdminId\/:pathGrant/);
   assert.match(scriptsRoute, /req\.params\.pathRouterId \?\? req\.query\.rid/);
