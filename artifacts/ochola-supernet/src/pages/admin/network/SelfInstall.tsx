@@ -71,6 +71,24 @@ interface InstallProgress {
   done: boolean;
   failures: number;
   steps: InstallStep[];
+  result?: InstallerResult;
+}
+
+interface InstallerResult {
+  installationStatus: "SUCCESS" | "PARTIAL" | "FAILED";
+  routerOsVersion: string;
+  hotspotStatus: "OK" | "FAILED";
+  pppoeStatus: "OK" | "FAILED";
+  usersStatus: "OK" | "FAILED";
+  syncStatus: "OK" | "FAILED";
+  heartbeatStatus: "OK" | "FAILED";
+  vpnStatus: "CONNECTED" | "CONFIGURED" | "FAILED";
+  vpnIp: string;
+  proxyStatus: "REGISTERED" | "FAILED" | "NOT_CONFIGURED";
+  apiLockdown: "ACTIVE" | "FAILED";
+  dnsScheduler: "ACTIVE" | "FAILED";
+  failedComponent: string;
+  error: string;
 }
 
 interface Iface {
@@ -592,6 +610,13 @@ export default function SelfInstall() {
   const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
   const stepLabels = ["Generate profile", "Run installer", "VPN + heartbeat", "Router ports", "Installed"];
   const currentStep = phase === "idle" ? 0 : phase === "install" ? (routerApiReady ? 3 : 2) : phase === "ports" ? 4 : 5;
+  const installerResult = progress?.result;
+  const failedInstallSteps = progress?.steps.filter(step => step.phase === "failed") ?? [];
+  const hasInstallerLog = Boolean(
+    installerResult
+    || failedInstallSteps.length > 0
+    || progressQuery.error,
+  );
 
   return (
     <AdminLayout>
@@ -822,6 +847,98 @@ export default function SelfInstall() {
                 </div>
               )}
             </div>
+            {hasInstallerLog && (
+              <div style={{
+                ...panelStyle(),
+                padding: "1rem 1.15rem",
+                borderColor: installerResult?.installationStatus === "FAILED" || failedInstallSteps.length > 0
+                  ? "rgba(248,113,113,.35)"
+                  : "rgba(251,191,36,.3)",
+                background: installerResult?.installationStatus === "FAILED" || failedInstallSteps.length > 0
+                  ? "rgba(248,113,113,.045)"
+                  : "rgba(251,191,36,.045)",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: ".75rem" }}>
+                  <Terminal size={15} style={{ color: installerResult?.installationStatus === "FAILED" || failedInstallSteps.length > 0 ? "#f87171" : "#fbbf24" }} />
+                  <span style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".84rem" }}>Installer configuration log</span>
+                  {installerResult && (
+                    <strong style={{
+                      marginLeft: "auto",
+                      color: installerResult.installationStatus === "FAILED" ? "#f87171" : installerResult.installationStatus === "PARTIAL" ? "#fbbf24" : "#4ade80",
+                      fontSize: ".7rem",
+                    }}>
+                      {installerResult.installationStatus}
+                    </strong>
+                  )}
+                </div>
+
+                {installerResult && (
+                  <>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 0.8rem", color: "var(--isp-text-muted)", fontSize: ".69rem" }}>
+                      {[
+                        ["RouterOS", installerResult.routerOsVersion],
+                        ["Hotspot", installerResult.hotspotStatus],
+                        ["PPPoE", installerResult.pppoeStatus],
+                        ["Users", installerResult.usersStatus],
+                        ["Sync", installerResult.syncStatus],
+                        ["Heartbeat", installerResult.heartbeatStatus],
+                        ["VPN", installerResult.vpnStatus],
+                        ["VPN IP", installerResult.vpnIp || "not assigned"],
+                        ["Proxy", installerResult.proxyStatus],
+                        ["API lockdown", installerResult.apiLockdown],
+                        ["DNS scheduler", installerResult.dnsScheduler],
+                      ].map(([label, value]) => {
+                        const failed = value === "FAILED";
+                        const pending = value === "CONFIGURED" || value === "NOT_CONFIGURED" || value === "not assigned";
+                        return (
+                          <span key={label}>
+                            {label}:{" "}
+                            <strong style={{ color: failed ? "#f87171" : pending ? "#fbbf24" : "#86efac" }}>
+                              {value}
+                            </strong>
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {(installerResult.failedComponent || installerResult.error) && (
+                      <div style={{
+                        marginTop: ".7rem",
+                        padding: ".6rem .7rem",
+                        borderRadius: 7,
+                        background: "rgba(0,0,0,.2)",
+                        border: "1px solid rgba(248,113,113,.2)",
+                        color: "#fca5a5",
+                        fontFamily: "monospace",
+                        fontSize: ".7rem",
+                        lineHeight: 1.55,
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}>
+                        {installerResult.failedComponent && <div>Failed component: {installerResult.failedComponent}</div>}
+                        {installerResult.error && <div>RouterOS error: {installerResult.error}</div>}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {failedInstallSteps.length > 0 && (
+                  <div style={{ marginTop: installerResult ? ".7rem" : 0, display: "flex", flexDirection: "column", gap: ".35rem" }}>
+                    {failedInstallSteps.map(step => (
+                      <div key={`${step.step}-${step.name}`} style={{ color: "#fca5a5", fontSize: ".7rem", lineHeight: 1.5 }}>
+                        <strong>[{step.step}/7] {step.name}</strong>
+                        {step.error ? ` — ${step.error}` : " — failed without a reported error"}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {progressQuery.error && (
+                  <div style={{ marginTop: ".6rem", color: "#fbbf24", fontSize: ".7rem" }}>
+                    The live installer log could not be refreshed: {(progressQuery.error as Error).message}
+                  </div>
+                )}
+              </div>
+            )}
             {!routerApiReady && !statusQuery.isLoading && (
               <RouterRecovery
                 error={status?.error || statusQuery.error?.message}
