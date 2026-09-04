@@ -13,6 +13,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { sbDelete, sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
+import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
@@ -456,6 +457,11 @@ export async function processMpesaCallback(
 
   if (isSuccessful && settlement.payment_method === "mpesa_registration") {
     logger.info({ adminId: settlement.admin_id, checkoutId }, "[mpesa/callback] ISP registration activated");
+    if (settlement.admin_id) {
+      void provisionTenantCertificateForAdmin(settlement.admin_id).catch(error => {
+        logger.error({ err: error, adminId: settlement.admin_id }, "[registration] immediate tenant certificate provisioning failed; timer will retry");
+      });
+    }
   } else if (isSuccessful) {
     logger.info({ customerId: settlement.credited_customer_id, checkoutId, amount: settlement.amount }, "[mpesa/callback] Payment settled atomically");
   }

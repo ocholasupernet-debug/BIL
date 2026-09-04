@@ -22,6 +22,7 @@ import {
 import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { extractToken, validateToken } from "../lib/api-auth.js";
+import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import {
   gatewayConfigMap as routingGatewayConfigMap,
   paymentCollectionMode,
@@ -812,6 +813,9 @@ router.post("/super-admin/manual-registration-payments/:id/verify", async (req: 
       });
       return;
     }
+    void provisionTenantCertificateForAdmin(settlements[0].admin_id).catch(error => {
+      console.error("[registration] immediate tenant certificate provisioning failed; timer will retry", error);
+    });
     res.json({ ok: true, adminId: settlements[0].admin_id });
   } catch {
     res.status(503).json({ ok: false, error: "Manual payment verification is unavailable. Apply the registration payments migration, then try again." });
