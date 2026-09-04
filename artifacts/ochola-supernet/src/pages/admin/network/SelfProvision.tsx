@@ -369,6 +369,32 @@ export default function AddRouterScript() {
     }
   };
 
+  const downloadManualProfile = async () => {
+    if (!manualSaved) return;
+    try {
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (getAdminRole() === "superadmin") {
+        const selectedTenantId = getSelectedTenantId();
+        if (selectedTenantId) headers["X-Impersonated-Admin-Id"] = String(selectedTenantId);
+      }
+      const response = await fetch(`/api/admin/router/manual/${manualSaved.id}/profile`, { headers });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `OpenVPN profile download failed (${response.status}).`);
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${manualSaved.name}.ovpn`;
+      anchor.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not download the OpenVPN profile.");
+    }
+  };
+
   const loadPorts = async () => {
     if (!selectedRouter || !adminId) {
       setPageError("Select the router profile that ran the script before loading its ports.");
@@ -559,11 +585,61 @@ export default function AddRouterScript() {
                   <input type="password" value={manualForm.password} onChange={event => updateManualField("password", event.target.value)} required autoComplete="new-password" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }} />
                 </label>
               </div>
+              <div style={{ borderTop: "1px solid var(--isp-border)", paddingTop: ".9rem" }}>
+                <div style={{ color: "var(--isp-text)", fontSize: ".82rem", fontWeight: 800, marginBottom: ".7rem" }}>OpenVPN client profile</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: ".8rem" }}>
+                  <label style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Connect to <span style={{ color: "#f87171" }}>*</span></span>
+                    <input value={manualForm.connectTo} onChange={event => updateManualField("connectTo", event.target.value)} placeholder="137.184.224.160" required autoComplete="off" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontFamily: "monospace", fontSize: ".75rem" }} />
+                  </label>
+                  <label style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Port <span style={{ color: "#f87171" }}>*</span></span>
+                    <input type="number" min="1" max="65535" value={manualForm.vpnPort} onChange={event => updateManualField("vpnPort", event.target.value)} required style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontFamily: "monospace", fontSize: ".75rem" }} />
+                  </label>
+                  <label style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Mode <span style={{ color: "#f87171" }}>*</span></span>
+                    <select value={manualForm.mode} onChange={event => updateManualField("mode", event.target.value)} required style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }}>
+                      <option value="ip">IP</option>
+                      <option value="ethernet">Ethernet</option>
+                    </select>
+                  </label>
+                  <label style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>User <span style={{ color: "#f87171" }}>*</span></span>
+                    <input value={manualForm.vpnUser} onChange={event => updateManualField("vpnUser", event.target.value)} placeholder="router-user" required autoComplete="off" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }} />
+                  </label>
+                  <label style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Password <span style={{ color: "#f87171" }}>*</span></span>
+                    <input type="password" value={manualForm.vpnPassword} onChange={event => updateManualField("vpnPassword", event.target.value)} required autoComplete="new-password" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }} />
+                  </label>
+                  {([
+                    ["profile", "Profile", "default-encryption"],
+                    ["certificate", "Certificate", "client certificate name"],
+                    ["cipher", "Cipher", "AES-256-CBC"],
+                    ["auth", "Auth", "SHA1"],
+                  ] as const).map(([field, label, placeholder]) => (
+                    <label key={field} style={{ display: "block" }}>
+                      <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>{label} <span style={{ color: "#f87171" }}>*</span></span>
+                      <input value={manualForm[field]} onChange={event => updateManualField(field, event.target.value)} placeholder={placeholder} required autoComplete="off" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontFamily: "monospace", fontSize: ".75rem" }} />
+                    </label>
+                  ))}
+                  <label style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--isp-text)", fontSize: ".75rem", fontWeight: 700, paddingTop: "1.45rem" }}>
+                    <input type="checkbox" checked={manualForm.routeNoPull} onChange={event => setManualForm(current => ({ ...current, routeNoPull: event.target.checked }))} style={{ width: 16, height: 16, accentColor: "var(--isp-accent)" }} />
+                    Route Nopull
+                  </label>
+                </div>
+              </div>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "var(--isp-text-muted)", fontSize: ".69rem", lineHeight: 1.5 }}>
                 <Shield size={14} color="var(--isp-accent)" style={{ flexShrink: 0, marginTop: 1 }} />
-                <span>Credentials are sent only to the authenticated server and are never returned to the browser after saving. The record remains tenant-scoped.</span>
+                <span>Router and VPN credentials are sent only to the authenticated server. VPN passwords are encrypted before storage and are never returned to the browser.</span>
               </div>
-              {manualSaved && <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#86efac", background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, padding: ".7rem .75rem", fontSize: ".72rem" }}><CheckCircle2 size={15} /> Saved <strong>{manualSaved.name}</strong> as offline. It will become online only after verification.</div>}
+              {manualSaved && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#86efac", background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, padding: ".7rem .75rem", fontSize: ".72rem", flexWrap: "wrap" }}>
+                  <CheckCircle2 size={15} /> Saved <strong>{manualSaved.name}</strong> as offline. It will become online only after verification.
+                  <span style={{ flex: 1 }} />
+                  <button type="button" onClick={() => void downloadManualCertificate()} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(20,184,166,.12)", border: "1px solid rgba(20,184,166,.35)", borderRadius: 7, color: "var(--isp-accent)", padding: ".45rem .65rem", fontSize: ".68rem", fontWeight: 800, cursor: "pointer" }}>Download certificate</button>
+                  <button type="button" onClick={() => void downloadManualProfile()} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(20,184,166,.12)", border: "1px solid rgba(20,184,166,.35)", borderRadius: 7, color: "var(--isp-accent)", padding: ".45rem .65rem", fontSize: ".68rem", fontWeight: 800, cursor: "pointer" }}>Download .ovpn profile</button>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <button type="submit" disabled={manualSaving} style={primaryButton(manualSaving)}>
                   {manualSaving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Settings2 size={15} />}
