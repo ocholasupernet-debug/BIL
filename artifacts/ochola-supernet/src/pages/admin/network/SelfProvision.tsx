@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Server,
   Shield,
+  Settings2,
   Users,
   Wifi,
 } from "lucide-react";
@@ -46,6 +47,7 @@ interface RouterRecord {
   model: string | null;
   ros_version: string | null;
   router_username: string | null;
+  bridge_interface?: string | null;
   status: string;
 }
 
@@ -165,6 +167,9 @@ const primaryButton = (disabled: boolean): React.CSSProperties => ({
 });
 
 export default function AddRouterScript() {
+  const [addMode, setAddMode] = useState<"script" | "manual">(
+    () => new URLSearchParams(window.location.search).get("mode") === "manual" ? "manual" : "script",
+  );
   const [adminId, setAdminId] = useState(ADMIN_ID);
   const [script, setScript] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -181,6 +186,20 @@ export default function AddRouterScript() {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [pageError, setPageError] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualSaved, setManualSaved] = useState<RouterRecord | null>(null);
+  const [manualForm, setManualForm] = useState({
+    name: "",
+    host: "",
+    vpnIp: "",
+    bridgeIp: "",
+    bridgeInterface: HOTSPOT_BRIDGE,
+    username: "admin",
+    password: "",
+    model: "",
+    rosVersion: "",
+    ipAddress: "",
+  });
 
   useEffect(() => {
     const syncTenant = () => setAdminId(getSelectedTenantId() || ADMIN_ID);
@@ -283,6 +302,34 @@ export default function AddRouterScript() {
       setPageError(error instanceof Error ? error.message : "Could not create the router profile.");
     } finally {
       setCreatingRouter(false);
+    }
+  };
+
+  const updateManualField = (field: keyof typeof manualForm, value: string) => {
+    setManualForm(current => ({ ...current, [field]: value }));
+  };
+
+  const saveManualConfiguration = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!adminId) return;
+    setManualSaving(true);
+    setManualSaved(null);
+    setPageError("");
+    try {
+      const result = await jsonRequest<{ ok: boolean; router?: RouterRecord; error?: string }>("/api/admin/router/manual", {
+        method: "POST",
+        body: JSON.stringify({ adminId, ...manualForm }),
+      });
+      if (!result.ok || !result.router) {
+        throw new Error(result.error || "The manual router configuration could not be saved.");
+      }
+      setManualSaved(result.router);
+      setManualForm(current => ({ ...current, password: "" }));
+      await refetchRouters();
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not save the manual router configuration.");
+    } finally {
+      setManualSaving(false);
     }
   };
 
@@ -422,13 +469,76 @@ export default function AddRouterScript() {
       <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 1120 }}>
         <div>
-          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>Add Router (Script)</h1>
+          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>Add Router</h1>
           <p style={{ color: "var(--isp-text-muted)", margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
-            Run the Main ISP script, assign the hotspot bridge ports, then sync the account configuration.
+            Choose a guided script setup or save the connection details for a router you configured manually.
           </p>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 0, overflowX: "auto", background: "rgba(20,184,166,.05)", border: "1px solid rgba(20,184,166,.18)", borderRadius: 10, padding: ".65rem .8rem" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => { setAddMode("script"); setPageError(""); }} style={{ display: "flex", alignItems: "center", gap: 9, textAlign: "left", flex: "1 1 260px", background: addMode === "script" ? "rgba(20,184,166,.1)" : "rgba(255,255,255,.025)", border: `1px solid ${addMode === "script" ? "rgba(20,184,166,.45)" : "var(--isp-border)"}`, borderRadius: 10, color: "var(--isp-text)", padding: ".75rem .85rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <FileCode2 size={15} color={addMode === "script" ? "var(--isp-accent)" : "var(--isp-text-muted)"} />
+            <span><strong style={{ display: "block", fontSize: ".76rem" }}>Script setup</strong><small style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".65rem", marginTop: ".18rem" }}>Generate a secure installer command</small></span>
+          </button>
+          <button type="button" onClick={() => { setAddMode("manual"); setPageError(""); }} style={{ display: "flex", alignItems: "center", gap: 9, textAlign: "left", flex: "1 1 260px", background: addMode === "manual" ? "rgba(20,184,166,.1)" : "rgba(255,255,255,.025)", border: `1px solid ${addMode === "manual" ? "rgba(20,184,166,.45)" : "var(--isp-border)"}`, borderRadius: 10, color: "var(--isp-text)", padding: ".75rem .85rem", cursor: "pointer", fontFamily: "inherit" }}>
+            <Settings2 size={15} color={addMode === "manual" ? "var(--isp-accent)" : "var(--isp-text-muted)"} />
+            <span><strong style={{ display: "block", fontSize: ".76rem" }}>Manual configuration</strong><small style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".65rem", marginTop: ".18rem" }}>Save an already configured router</small></span>
+          </button>
+        </div>
+
+        {addMode === "manual" && (
+          <section style={panelStyle}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 9, marginBottom: "1rem" }}>
+              <Settings2 size={17} color="var(--isp-accent)" style={{ marginTop: 2 }} />
+              <div>
+                <h2 style={{ color: "var(--isp-text)", fontSize: ".95rem", margin: 0 }}>Manual router configuration</h2>
+                <p style={{ color: "var(--isp-text-muted)", fontSize: ".72rem", margin: ".3rem 0 0", lineHeight: 1.5 }}>
+                  Use this when RouterOS is already configured. The router is saved as <strong style={{ color: "#fcd34d" }}>offline</strong> until a management heartbeat verifies it.
+                </p>
+              </div>
+            </div>
+            <form onSubmit={saveManualConfiguration} style={{ display: "flex", flexDirection: "column", gap: ".9rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: ".8rem" }}>
+                {([
+                  ["name", "Router name", "come3", true],
+                  ["host", "Management host or IP", "10.8.5.12 or router.example.com", true],
+                  ["vpnIp", "Management VPN IP", "10.8.5.12", false],
+                  ["bridgeIp", "Bridge / LAN gateway IP", "192.168.88.1", false],
+                  ["bridgeInterface", "Bridge interface", "hotspot-bridge", false],
+                  ["ipAddress", "WAN or public IP", "Optional", false],
+                  ["model", "Router model", "MikroTik hAP ac2", false],
+                  ["rosVersion", "RouterOS version", "7.16", false],
+                ] as const).map(([field, label, placeholder, required]) => (
+                  <label key={field} style={{ display: "block" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>{label}{required && <span style={{ color: "#f87171" }}> *</span>}</span>
+                    <input value={manualForm[field]} onChange={event => updateManualField(field, event.target.value)} placeholder={placeholder} required={required} autoComplete="off" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontFamily: field === "host" || field === "vpnIp" || field === "bridgeIp" ? "monospace" : "inherit", fontSize: ".75rem" }} />
+                  </label>
+                ))}
+                <label style={{ display: "block" }}>
+                  <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Router API username <span style={{ color: "#f87171" }}>*</span></span>
+                  <input value={manualForm.username} onChange={event => updateManualField("username", event.target.value)} required autoComplete="off" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }} />
+                </label>
+                <label style={{ display: "block" }}>
+                  <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".67rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".35rem" }}>Router API password <span style={{ color: "#f87171" }}>*</span></span>
+                  <input type="password" value={manualForm.password} onChange={event => updateManualField("password", event.target.value)} required autoComplete="new-password" style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontSize: ".75rem" }} />
+                </label>
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "var(--isp-text-muted)", fontSize: ".69rem", lineHeight: 1.5 }}>
+                <Shield size={14} color="var(--isp-accent)" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Credentials are sent only to the authenticated server and are never returned to the browser after saving. The record remains tenant-scoped.</span>
+              </div>
+              {manualSaved && <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#86efac", background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, padding: ".7rem .75rem", fontSize: ".72rem" }}><CheckCircle2 size={15} /> Saved <strong>{manualSaved.name}</strong> as offline. It will become online only after verification.</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button type="submit" disabled={manualSaving} style={primaryButton(manualSaving)}>
+                  {manualSaving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Settings2 size={15} />}
+                  {manualSaving ? "Saving router…" : "Save manual configuration"}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {addMode === "script" && <div style={{ display: "flex", alignItems: "center", gap: 0, overflowX: "auto", background: "rgba(20,184,166,.05)", border: "1px solid rgba(20,184,166,.18)", borderRadius: 10, padding: ".65rem .8rem" }}>
           {["Script", "Router ports", "Account sync", "Complete"].map((label, index) => {
             const activeIndex = phase === "script" ? 0 : phase === "ports" ? 1 : phase === "sync" ? 2 : 3;
             const done = index < activeIndex;
@@ -445,7 +555,7 @@ export default function AddRouterScript() {
               </React.Fragment>
             );
           })}
-        </div>
+        </div>}
 
         {pageError && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "#fca5a5", background: "rgba(248,113,113,.08)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 9, padding: ".75rem 1rem", fontSize: ".75rem", lineHeight: 1.5 }}>
@@ -453,7 +563,7 @@ export default function AddRouterScript() {
           </div>
         )}
 
-        {phase === "script" && (
+        {addMode === "script" && phase === "script" && (
           <section style={panelStyle}>
             <div style={{ marginBottom: "0.9rem", padding: "0.75rem 0.8rem", borderRadius: 8, background: "rgba(20,184,166,.07)", border: "1px solid rgba(20,184,166,.2)" }}>
               <div style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 800 }}>Company script host</div>
@@ -507,7 +617,7 @@ export default function AddRouterScript() {
           </section>
         )}
 
-        {phase === "ports" && selectedRouter && ports && (
+        {addMode === "script" && phase === "ports" && selectedRouter && ports && (
           <section style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             <div style={{ ...panelStyle, display: "flex", alignItems: "center", gap: 12 }}>
               <div style={{ width: 40, height: 40, display: "grid", placeItems: "center", background: "rgba(20,184,166,.1)", borderRadius: 10 }}>
@@ -591,7 +701,7 @@ export default function AddRouterScript() {
           </section>
         )}
 
-        {phase === "sync" && selectedRouter && (
+        {addMode === "script" && phase === "sync" && selectedRouter && (
           <section style={{ ...panelStyle, display: "flex", flexDirection: "column", gap: "1rem" }}>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
               <Network size={18} color="var(--isp-accent)" style={{ marginTop: 2 }} />
@@ -643,7 +753,7 @@ export default function AddRouterScript() {
           </section>
         )}
 
-        {phase === "complete" && selectedRouter && (
+        {addMode === "script" && phase === "complete" && selectedRouter && (
           <section style={{ ...panelStyle, background: "linear-gradient(135deg,rgba(20,184,166,.12),rgba(34,197,94,.05))", borderColor: "rgba(34,197,94,.3)" }}>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
               <CheckCircle2 size={26} color="#4ade80" style={{ flexShrink: 0 }} />

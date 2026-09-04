@@ -990,6 +990,17 @@ export default function Routers() {
           >
             <Plus size={13} /> Self Install
           </button>
+           <button
+             onClick={() => navigate("/admin/network/add-router-script?mode=manual")}
+             style={{
+               display: "flex", alignItems: "center", gap: "0.35rem",
+               padding: "0.45rem 1rem", background: "rgba(20,184,166,.08)",
+               border: "1px solid rgba(20,184,166,.45)", borderRadius: 7, color: "var(--isp-accent)",
+               fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit",
+             }}
+           >
+             <Shield size={13} /> Manual Configuration
+           </button>
         </div>
 
         <NetworkTabs active="routers" />
