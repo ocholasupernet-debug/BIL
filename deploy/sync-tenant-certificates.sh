@@ -66,7 +66,7 @@ import json
 import re
 import sys
 
-reserved = {"www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"}
+reserved = {"www", "api", "vpn", "bil", "register", "latex", "proxyvpn", "mail", "admin"}
 pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 print("register")
 print("latex")
@@ -80,6 +80,8 @@ for row in rows:
         print(value)
 PY
 )
+
+rm -f "$VHOST_DIR/bil.isplatty.org.conf"
 
 if [[ "${#subdomains[@]}" -eq 0 ]]; then
   echo "No active tenant subdomains found."

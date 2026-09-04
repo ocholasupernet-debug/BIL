@@ -214,6 +214,46 @@ install -m 0644 \
 systemctl daemon-reload
 systemctl enable --now ochola-tenant-certificates.timer
 
+disable_bil_host() {
+  local vhost_dir="/etc/nginx/tenant-sites.d"
+  local disabled_vhost="${vhost_dir}/00-disabled-bil.isplatty.org.conf"
+  local wildcard_cert="/etc/letsencrypt/live/isplatty.org-wildcard"
+
+  if [ ! -r "${wildcard_cert}/fullchain.pem" ] ||
+     [ ! -r "${wildcard_cert}/privkey.pem" ]; then
+    echo "ERROR: Cannot disable bil.isplatty.org without the active wildcard certificate." >&2
+    return 1
+  fi
+
+  rm -f "${vhost_dir}/bil.isplatty.org.conf"
+  cat > "$disabled_vhost" <<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name bil.isplatty.org;
+    return 410;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name bil.isplatty.org;
+
+    ssl_certificate     ${wildcard_cert}/fullchain.pem;
+    ssl_certificate_key ${wildcard_cert}/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    return 410;
+}
+NGINX
+  chmod 0644 "$disabled_vhost"
+  nginx -t
+  systemctl reload nginx
+  echo "      ✓ Disabled bil.isplatty.org at Nginx"
+}
+
+disable_bil_host
 # Keep the public per-router VPN ports aligned with generated RouterOS
 # profiles. The service is idempotent and survives VPS reboots.
 if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
@@ -322,7 +362,7 @@ verify_public_health() {
   return 1
 }
 
-for host in bil.isplatty.org vpn.isplatty.org; do
+for host in vpn.isplatty.org; do
   verify_public_health "$host" || exit 1
 done
 
