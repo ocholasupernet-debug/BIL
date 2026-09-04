@@ -2198,7 +2198,7 @@ router.get([
   res
     .set("Content-Type", "text/plain; charset=utf-8")
     .set("Content-Disposition", "attachment; filename=\"mainhotspot.rsc\"")
-    .set("Cache-Control", "no-cache")
+    .set("Cache-Control", "no-store")
     .send(buildMainhotspotRsc(
       scriptsBase,
       progressUrl,
