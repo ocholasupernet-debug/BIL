@@ -23,7 +23,6 @@ const CONFIG_CATEGORIES = [
 ] as const;
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
-type CertificateMode = "verified" | "unverified";
 type InstallationMode = "coexist" | "takeover";
 
 interface RouterSummary {
@@ -293,7 +292,6 @@ export default function SelfInstall() {
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
   const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
-  const [certificateMode, setCertificateMode] = useState<CertificateMode>("verified");
   const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
   const [takeoverConfirmation, setTakeoverConfirmation] = useState("");
   const [takeoverGrant, setTakeoverGrant] = useState("");
@@ -366,7 +364,7 @@ export default function SelfInstall() {
      which can legitimately lag behind the seven installer stages. */
   const routerApiReady = !!status?.connected && !!status.router.identity && !!status.router.rosVersion;
 
-  const handleGenerate = async (mode: CertificateMode) => {
+  const handleGenerate = async () => {
     if (!adminId) {
       setPageError("Your ISP session is missing a tenant account. Sign in again before creating a router profile.");
       return;
@@ -376,7 +374,6 @@ export default function SelfInstall() {
       return;
     }
     setGenerating(true);
-    setCertificateMode(mode);
     setPageError(null);
     try {
       const result = await jsonRequest<{ ok: boolean; router?: RouterSummary }>("/api/admin/router/ensure", {
@@ -454,18 +451,14 @@ export default function SelfInstall() {
   };
 
   const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
-  const certificateQuery = certificateMode === "unverified" ? "&certificate=off" : "";
   const modeQuery = `&mode=${installationMode}${takeoverGrant ? `&grant=${encodeURIComponent(takeoverGrant)}` : ""}`;
   /* When an ISP admin is signed in on its own hostname, keep installer URLs
      on that hostname so RouterOS validates that company's certificate. */
   const publicApiOrigin = (
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
-  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}${certificateQuery}`;
-  const caUrl = `${publicApiOrigin}/api/scripts/ochola-isrg-root-x1.pem`;
-  const fetchCommand = certificateMode === "verified"
-    ? `:if ([:len [/certificate find name="ochola-isrg-root-x1"]] = 0) do={ /tool fetch url="${caUrl}" dst-path=ochola-isrg-root-x1.pem keep-result=yes mode=https check-certificate=no; /certificate import file-name=ochola-isrg-root-x1.pem name=ochola-isrg-root-x1 trusted=yes; /file remove [find name=ochola-isrg-root-x1.pem] }; /tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`
-    : `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
+  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot.rsc?rid=${activeRouterId ?? ""}&adminId=${adminId ?? ""}${modeQuery}`;
+  const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;
@@ -725,20 +718,9 @@ export default function SelfInstall() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
-              <button onClick={() => void handleGenerate("verified")} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{ ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")), alignSelf: "flex-start" }}>
-                {generating && certificateMode === "verified" ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={15} />}
-                {generating && certificateMode === "verified" ? "Creating secure profile…" : "Generate with certificate"}
-              </button>
-              <button onClick={() => void handleGenerate("unverified")} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{
-                ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")),
-                alignSelf: "flex-start",
-                background: generating ? "rgba(148,163,184,.12)" : "rgba(148,163,184,.14)",
-                color: generating ? "#94a3b8" : "#cbd5e1",
-                border: "1px solid rgba(148,163,184,.25)",
-                boxShadow: "none",
-              }}>
-                {generating && certificateMode === "unverified" ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Terminal size={15} />}
-                {generating && certificateMode === "unverified" ? "Creating fallback profile…" : "Generate without certificate"}
+              <button onClick={() => void handleGenerate()} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{ ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")), alignSelf: "flex-start" }}>
+                {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={15} />}
+                {generating ? "Creating secure profile…" : "Generate secure profile"}
               </button>
             </div>
             {routers.filter(router => router.status !== "setup").length > 0 && (
@@ -796,18 +778,13 @@ export default function SelfInstall() {
               <div style={{ display: "flex", flexDirection: "column", gap: ".65rem" }}>
                 <div>
                   <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>
-                    1. {certificateMode === "verified" ? "Install HTTPS trust and download configuration" : "Download configuration without certificate validation"}
+                    1. Download configuration with HTTPS certificate verification
                   </div>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>
                     <code style={{ color: "#7dd3fc", fontSize: ".7rem", lineHeight: 1.55, wordBreak: "break-all", flex: 1 }}>{fetchCommand}</code>
                     <CopyButton text={fetchCommand} />
                   </div>
                 </div>
-                {certificateMode === "unverified" && (
-                  <div style={{ color: "#fbbf24", fontSize: ".7rem", lineHeight: 1.5 }}>
-                    Certificate validation is disabled for this installer. HTTPS encryption remains enabled, but use this only until the production certificate is corrected.
-                  </div>
-                )}
                 <div>
                   <div style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", fontWeight: 700, marginBottom: ".35rem" }}>2. Run configuration</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".6rem .7rem" }}>

@@ -18,6 +18,14 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /proxyvpn\.isplatty\.org\/ipp\.php/);
   assert.match(route, /Primary proxyserver report failed; trying proxyvpn backup/);
   assert.match(route, /INSTALLATION_STATUS=SUCCESS/);
+   assert.match(route, /ROUTEROS_VERSION=/);
+   assert.match(route, /HOTSPOT_STATUS=/);
+   assert.match(route, /PPPOE_STATUS=/);
+   assert.match(route, /USERS_STATUS=/);
+   assert.match(route, /SYNC_STATUS=/);
+   assert.match(route, /HEARTBEAT_STATUS=/);
+   assert.match(route, /FAILED_COMPONENT=/);
+   assert.match(route, /ERROR=/);
   assert.match(route, /VPN_STATUS=CONNECTED/);
   assert.match(route, /VPN_IP=/);
   assert.match(route, /PROXY_STATUS=REGISTERED/);
@@ -74,4 +82,5 @@ test("the public Main ISP path is tenant-scoped and Self Install uses its separa
   assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, currentRouter\.name, routerVpnBaseUrl, currentRouter\.id\)/);
   assert.match(scriptsRoute, /router\.get\("\/scripts\/self-install-mainhotspot\.rsc"/);
   assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc/);
+   assert.doesNotMatch(selfInstall, /check-certificate=no|certificate=off|Generate without certificate/);
 });

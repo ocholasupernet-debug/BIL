@@ -49,6 +49,7 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :error "RouterOS version 6.48 or higher is required."
 }
 :put ("Detected RouterOS " . $version . " (major=" . $majorVersion . ", minor=" . $minorVersion . ")")
+:put ("ROUTEROS_VERSION=" . $version)
 :local internetReachable false
 :foreach internetTarget in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={
     :if (!$internetReachable) do={
@@ -62,6 +63,14 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 }
 :local failures 0
 :local optionalFailures 0
+:local hotspotStatus "FAILED"
+:local pppoeStatus "FAILED"
+:local usersStatus "FAILED"
+:local syncUsersStatus "FAILED"
+:local syncFullStatus "FAILED"
+:local heartbeatStatus "FAILED"
+:local failedComponent ""
+:local safeError ""
 :global ocholaFetchImportMain do={
     :local label $1
     :local url $2
@@ -154,32 +163,46 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     }
     :if ($vpnStatus != "CONNECTED") do={
         :set failures ($failures + 1)
+        :set failedComponent "management-vpn"
+        :set safeError "Required management VPN did not reach running=yes with a valid 10.8.5.x address."
         :error "Required management VPN client __MANAGEMENT_INTERFACE_NAME__ did not reach running=yes with a valid 10.8.5.x address."
     }
     :put ("VPN_STATUS=CONNECTED")
     :put ("VPN_IP=" . $vpnIp)
-    :do { $ocholaFetchImportMain "hotspot configuration" "https://bil.isplatty.org/scripts/hotspotsetup.rsc" "hotspotsetup.rsc" } on-error={
+    :do { $ocholaFetchImportMain "hotspot configuration" "https://bil.isplatty.org/scripts/hotspotsetup.rsc" "hotspotsetup.rsc"; :set hotspotStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "hotspot"
+        :set safeError $error
         :put ("  REQUIRED hotspot step failed: " . $error)
     }
-    :do { $ocholaFetchImportMain "PPPoE configuration" "https://bil.isplatty.org/scripts/pppoesetup.rsc" "pppoesetup.rsc" } on-error={
+    :do { $ocholaFetchImportMain "PPPoE configuration" "https://bil.isplatty.org/scripts/pppoesetup.rsc" "pppoesetup.rsc"; :set pppoeStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "pppoe"
+        :set safeError $error
         :put ("  REQUIRED PPPoE step failed: " . $error)
     }
-    :do { $ocholaFetchImportMain "users configuration" "https://bil.isplatty.org/scripts/users.rsc" "users.rsc" } on-error={
+    :do { $ocholaFetchImportMain "users configuration" "https://bil.isplatty.org/scripts/users.rsc" "users.rsc"; :set usersStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "users"
+        :set safeError $error
         :put ("  REQUIRED users step failed: " . $error)
     }
-    :do { $ocholaFetchImportMain "sync-users firewalls" "https://bil.isplatty.org/scripts/syncusers.rsc" "syncusers.rsc" } on-error={
+    :do { $ocholaFetchImportMain "sync-users firewalls" "https://bil.isplatty.org/scripts/syncusers.rsc" "syncusers.rsc"; :set syncUsersStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "sync-users"
+        :set safeError $error
         :put ("  REQUIRED sync-users step failed: " . $error)
     }
-    :do { $ocholaFetchImportMain "heartbeat firewalls" "https://bil.isplatty.org/scripts/heartbeat.rsc" "heartbeat.rsc" } on-error={
+    :do { $ocholaFetchImportMain "heartbeat firewalls" "https://bil.isplatty.org/scripts/heartbeat.rsc" "heartbeat.rsc"; :set heartbeatStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "heartbeat"
+        :set safeError $error
         :put ("  REQUIRED heartbeat step failed: " . $error)
     }
-    :do { $ocholaFetchImportMain "sync-full script" "https://bil.isplatty.org/scripts/syncfull.rsc" "syncfull.rsc" } on-error={
+    :do { $ocholaFetchImportMain "sync-full script" "https://bil.isplatty.org/scripts/syncfull.rsc" "syncfull.rsc"; :set syncFullStatus "OK" } on-error={
         :set failures ($failures + 1)
+        :set failedComponent "sync-full"
+        :set safeError $error
         :put ("  REQUIRED sync-full step failed: " . $error)
     }
     :do {
@@ -200,6 +223,8 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
        :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - public management port drop" && action=drop && chain=input]] < 3) do={ :error "API lockdown drop rules were not installed" }
        :set apiLockdownActive true
     } on-error={
+        :set failedComponent "api-lockdown"
+        :set safeError $error
        :set failures ($failures + 1)
        :put ("  REQUIRED API lockdown step failed: " . $error)
     }
@@ -246,11 +271,15 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
                  :set proxyRegistrationSucceeded true
                 :put ("Reported VPN IP " . $reportedIp . " through proxyvpn backup")
             } on-error={
+                  :set failedComponent "proxy-registration"
+                  :set safeError $error
                  :set failures ($failures + 1)
                  :put "FAILED: Proxy report and proxyvpn backup failed; heartbeat will retry, but production readiness is blocked."
             }
         }
     } else={
+        :set failedComponent "proxy-registration"
+        :set safeError "Management VPN interface has no valid 10.8.5.x IP; proxy registration was not attempted."
         :set failures ($failures + 1)
          :put "FAILED: management VPN interface has no valid 10.8.5.x IP; proxy registration was not attempted."
     }
@@ -270,6 +299,14 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
       :if ($proxyRegistrationSucceeded) do={ :set proxyStatus "REGISTERED" }
       :if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
       :if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+      :local syncStatus "FAILED"
+      :if ($syncUsersStatus = "OK" && $syncFullStatus = "OK") do={ :set syncStatus "OK" }
+      :put ("ROUTEROS_VERSION=" . $version)
+      :put ("HOTSPOT_STATUS=" . $hotspotStatus)
+      :put ("PPPOE_STATUS=" . $pppoeStatus)
+      :put ("USERS_STATUS=" . $usersStatus)
+      :put ("SYNC_STATUS=" . $syncStatus)
+      :put ("HEARTBEAT_STATUS=" . $heartbeatStatus)
       :if ($failures = 0 && $optionalFailures = 0 && $vpnStatus = "CONNECTED" && $proxyRegistrationSucceeded && $apiLockdownActive && $dnsSchedulerActive) do={
           :put "INSTALLATION_STATUS=SUCCESS"
           :put ("VPN_STATUS=" . $vpnStatus)
@@ -286,6 +323,8 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
                :put ("PROXY_STATUS=" . $proxyStatus)
                :put ("API_LOCKDOWN=" . $apiLockdownStatus)
                :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+           :put ("FAILED_COMPONENT=" . $failedComponent)
+           :put ("ERROR=" . $safeError)
              :put ("PARTIAL: core configuration installed, but " . $optionalFailures . " optional component(s) need attention.")
         } else={
                :put "INSTALLATION_STATUS=FAILED"
@@ -294,6 +333,8 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
                :put ("PROXY_STATUS=" . $proxyStatus)
                :put ("API_LOCKDOWN=" . $apiLockdownStatus)
                :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+               :put ("FAILED_COMPONENT=" . $failedComponent)
+               :put ("ERROR=" . $safeError)
              :put ("FAILED: " . $failures . " required failure(s) and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
         }
     }
@@ -301,17 +342,26 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
     :set failures ($failures + 1)
     :put ("REQUIRED_UNHANDLED_FAILURE=" . $error)
     :put "INSTALLATION_STATUS=FAILED"
+     :put ("ROUTEROS_VERSION=" . $version)
     :put ("VPN_STATUS=" . $vpnStatus)
     :put ("VPN_IP=" . $vpnIp)
     :local proxyStatus "FAILED"
     :local apiLockdownStatus "FAILED"
     :local dnsSchedulerStatus "FAILED"
+     :local syncStatus "FAILED"
     :if ($proxyRegistrationSucceeded) do={ :set proxyStatus "REGISTERED" }
     :if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
     :if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+     :put ("HOTSPOT_STATUS=" . $hotspotStatus)
+     :put ("PPPOE_STATUS=" . $pppoeStatus)
+     :put ("USERS_STATUS=" . $usersStatus)
+     :put ("SYNC_STATUS=" . $syncStatus)
+     :put ("HEARTBEAT_STATUS=" . $heartbeatStatus)
     :put ("PROXY_STATUS=" . $proxyStatus)
     :put ("API_LOCKDOWN=" . $apiLockdownStatus)
     :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+     :put ("FAILED_COMPONENT=" . $failedComponent)
+     :put ("ERROR=" . $error)
 }
 `;
 

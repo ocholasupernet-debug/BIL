@@ -125,11 +125,19 @@ test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on Ro
 
 test("authenticated installer reports machine-readable gates and validates backup pool", () => {
   assert.match(scriptsRoute, /INSTALLATION_STATUS=SUCCESS/);
+  assert.match(scriptsRoute, /ROUTEROS_VERSION=/);
+  assert.match(scriptsRoute, /HOTSPOT_STATUS=/);
+  assert.match(scriptsRoute, /PPPOE_STATUS=/);
+  assert.match(scriptsRoute, /USERS_STATUS=/);
+  assert.match(scriptsRoute, /SYNC_STATUS=/);
+  assert.match(scriptsRoute, /HEARTBEAT_STATUS=/);
   assert.match(scriptsRoute, /VPN_STATUS=/);
   assert.match(scriptsRoute, /VPN_IP=/);
   assert.match(scriptsRoute, /PROXY_STATUS=/);
   assert.match(scriptsRoute, /API_LOCKDOWN=/);
   assert.match(scriptsRoute, /DNS_SCHEDULER=/);
+  assert.match(scriptsRoute, /FAILED_COMPONENT=/);
+  assert.match(scriptsRoute, /ERROR=/);
   assert.match(scriptsRoute, /expectedVpnPrefix "10\.8\.5\."/);
   assert.match(scriptsRoute, /expectedVpnPrefix "10\.8\.6\."/);
   assert.match(scriptsRoute, /management API allow rule was not verified after creation/);
@@ -138,7 +146,7 @@ test("authenticated installer reports machine-readable gates and validates backu
   assert.match(syncRoute, /parseInstallerResult/);
   assert.match(syncRoute, /installer-result/);
   assert.match(syncRoute, /installation_status/);
-  assert.match(scriptsRoute, /installation_status=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
+   assert.match(scriptsRoute, /installation_status=.*routeros_version=.*vpn_status=.*vpn_ip=.*proxy_status=.*api_lockdown=.*dns_scheduler/);
 });
 
 test("Main ISP bootstrap supports a RouterOS-safe path authorization form", () => {

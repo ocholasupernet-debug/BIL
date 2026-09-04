@@ -1255,6 +1255,7 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
     :put "RouterOS version 6.48 or higher is required."
     :error "RouterOS version 6.48 or higher is required."
 }
+:put ("ROUTEROS_VERSION=" . $routerOsVersion)
 :local internetReachable false
 :foreach internetTarget in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={
     :if (!$internetReachable) do={
@@ -1274,6 +1275,14 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :local vpnIp ""
 :local apiLockdownActive false
 :local dnsSchedulerActive false
+:local hotspotStatus "FAILED"
+:local pppoeStatus "FAILED"
+:local usersStatus "FAILED"
+:local syncUsersStatus "FAILED"
+:local syncFullStatus "FAILED"
+:local heartbeatStatus "FAILED"
+:local failedComponent ""
+:local lastError ""
 :put "======================================================"
 :put " ${safeCompanyName} router setup"
 :put "======================================================"
@@ -1298,6 +1307,8 @@ ${wireGuardAttempt}
 ${ipsecAttempt}
 :if (!$vpnConfigured) do={
     :set failures ($failures + 1)
+    :set failedComponent "management-vpn"
+    :set lastError $vpnFailureSummary
     :put ("  ERROR: no router-management VPN protocol succeeded. " . $vpnFailureSummary)
     $pg 1 "vpn" "failed" $vpnFailureSummary
 } else={
@@ -1359,6 +1370,8 @@ ${ipsecAttempt}
 :if ($vpnConfigured && !$vpnResourceReady) do={
     :set failures ($failures + 1)
     :set vpnStatus "FAILED"
+    :set failedComponent "management-vpn"
+    :set lastError "Selected management VPN did not pass parent-level resource verification."
     :put ("  ERROR: selected " . $vpnProtocol . " management VPN did not pass parent-level resource verification.")
 }
 :put ("VPN_STATUS=" . $vpnStatus)
@@ -1376,10 +1389,13 @@ ${ipsecAttempt}
     /import "hotspotsetup.rsc.download"
     :do { /file remove [find name="hotspotsetup.rsc"] } on-error={}
     /file set [find name="hotspotsetup.rsc.download"] name="hotspotsetup.rsc"
+     :set hotspotStatus "OK"
     :put "      Hotspot configuration applied; saved as hotspotsetup.rsc."
     $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "hotspot"
+     :set lastError $error
     :put ("  WARN [hotspotsetup.rsc] FAILED: " . $error)
     $pg 2 "hotspot" "failed" $error
     :do { /file remove [find name=failed-hotspotsetup.rsc] } on-error={}
@@ -1398,10 +1414,13 @@ ${ipsecAttempt}
     /import "pppoesetup.rsc.download"
     :do { /file remove [find name="pppoesetup.rsc"] } on-error={}
     /file set [find name="pppoesetup.rsc.download"] name="pppoesetup.rsc"
+     :set pppoeStatus "OK"
     :put "      PPPoE configuration applied; saved as pppoesetup.rsc."
     $pg 3 "pppoe" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "pppoe"
+     :set lastError $error
     :put ("  WARN [pppoesetup.rsc] FAILED: " . $error)
     $pg 3 "pppoe" "failed" $error
     :do { /file remove [find name=failed-pppoesetup.rsc] } on-error={}
@@ -1420,10 +1439,13 @@ ${ipsecAttempt}
     /import "users.rsc.download"
     :do { /file remove [find name="users.rsc"] } on-error={}
     /file set [find name="users.rsc.download"] name="users.rsc"
+     :set usersStatus "OK"
     :put "      Users configuration applied; saved as users.rsc."
     $pg 4 "users" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "users"
+     :set lastError $error
     :put ("  WARN [users.rsc] FAILED: " . $error)
     $pg 4 "users" "failed" $error
     :do { /file remove [find name=failed-users.rsc] } on-error={}
@@ -1442,10 +1464,13 @@ ${ipsecAttempt}
     /import "syncusers.rsc.download"
     :do { /file remove [find name="syncusers.rsc"] } on-error={}
     /file set [find name="syncusers.rsc.download"] name="syncusers.rsc"
+     :set syncUsersStatus "OK"
     :put "      Sync-users firewalls applied; saved as syncusers.rsc."
     $pg 5 "syncusers" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "sync-users"
+     :set lastError $error
     :put ("  WARN [syncusers.rsc] FAILED: " . $error)
     $pg 5 "syncusers" "failed" $error
     :do { /file remove [find name=failed-syncusers.rsc] } on-error={}
@@ -1464,10 +1489,13 @@ ${ipsecAttempt}
     /import "heartbeat.rsc.download"
     :do { /file remove [find name="heartbeat.rsc"] } on-error={}
     /file set [find name="heartbeat.rsc.download"] name="heartbeat.rsc"
+     :set heartbeatStatus "OK"
     :put "      Heartbeat firewalls applied; saved as heartbeat.rsc."
     $pg 6 "heartbeat" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "heartbeat"
+     :set lastError $error
     :put ("  WARN [heartbeat.rsc] FAILED: " . $error)
     $pg 6 "heartbeat" "failed" $error
     :do { /file remove [find name=failed-heartbeat.rsc] } on-error={}
@@ -1500,10 +1528,13 @@ ${safeHeartbeatUrl ? `:do {
     /import "syncfull.rsc.download"
     :do { /file remove [find name="syncfull.rsc"] } on-error={}
     /file set [find name="syncfull.rsc.download"] name="syncfull.rsc"
+     :set syncFullStatus "OK"
     :put "      Sync-full script applied; saved as syncfull.rsc."
     $pg 7 "syncfull" "applied" ""
 } on-error={
     :set failures ($failures + 1)
+     :set failedComponent "sync-full"
+     :set lastError $error
     :put ("  WARN [syncfull.rsc] FAILED: " . $error)
     $pg 7 "syncfull" "failed" $error
     :do { /file remove [find name=failed-syncfull.rsc] } on-error={}
@@ -1547,6 +1578,8 @@ ${safeInstallerUrl ? `:do {
     :put "API security script installed; saved as seclogpush.rsc."
 } on-error={
     :set failures ($failures + 1)
+    :set failedComponent "api-lockdown"
+    :set lastError $error
     :put ("  WARN [seclogpush.rsc] REQUIRED API hardening failed: " . $error)
 }
 
@@ -1561,6 +1594,8 @@ ${safeInstallerUrl ? `:do {
     :put "DNS flush scheduler installed (every 6 hours)."
 } on-error={
     :set failures ($failures + 1)
+    :set failedComponent "dns-scheduler"
+    :set lastError $error
     :put ("  WARN [dns-flush] FAILED: " . $error)
 }
 
@@ -1598,10 +1633,14 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
          :set backendRegistrationSucceeded true
      } on-error={
          :set failures ($failures + 1)
+         :set failedComponent "backend-registration"
+         :set lastError $error
          :put "FAILED: backend router registration was rejected; the router will retry on the next heartbeat, but production readiness is blocked."
      }
 } else={
     :set failures ($failures + 1)
+    :set failedComponent "backend-registration"
+    :set lastError "Management VPN interface has no valid 10.8.5.x IPv4 address."
     :put ("FAILED: management VPN interface ${safeManagementInterfaceName} has no valid 10.8.5.x IPv4 address; router registration was not reported.")
 }
 ` : `# Router registration is enabled when this script is generated for a saved router.`}
@@ -1622,6 +1661,21 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 :if ($apiLockdownActive) do={ :set apiLockdownStatus "ACTIVE" }
 :local dnsSchedulerStatus "FAILED"
 :if ($dnsSchedulerActive) do={ :set dnsSchedulerStatus "ACTIVE" }
+:local syncStatus "FAILED"
+:if ($syncUsersStatus = "OK" && $syncFullStatus = "OK") do={ :set syncStatus "OK" }
+:put ("ROUTEROS_VERSION=" . $routerOsVersion)
+:put ("HOTSPOT_STATUS=" . $hotspotStatus)
+:put ("PPPOE_STATUS=" . $pppoeStatus)
+:put ("USERS_STATUS=" . $usersStatus)
+:put ("SYNC_STATUS=" . $syncStatus)
+:put ("HEARTBEAT_STATUS=" . $heartbeatStatus)
+:put ("VPN_STATUS=" . $vpnStatus)
+:put ("VPN_IP=" . $vpnIp)
+:put ("PROXY_STATUS=" . $proxyStatus)
+:put ("API_LOCKDOWN=" . $apiLockdownStatus)
+:put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+:put ("FAILED_COMPONENT=" . $failedComponent)
+:put ("ERROR=" . $lastError)
 :local installationStatus "FAILED"
 :if ($failures = 0 && $optionalFailures > 0) do={ :set installationStatus "PARTIAL" }
 :if ($failures = 0 && $optionalFailures = 0 && (("${safeRegistrationUrl}" = "" || $backendRegistrationSucceeded) && $vpnStatus != "FAILED" && $apiLockdownActive && $dnsSchedulerActive)) do={
@@ -1635,6 +1689,8 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
         :put ("PROXY_STATUS=" . $proxyStatus)
         :put ("API_LOCKDOWN=" . $apiLockdownStatus)
         :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+        :put ("FAILED_COMPONENT=" . $failedComponent)
+        :put ("ERROR=" . $lastError)
         :put "${safeCompanyName}: SUCCESS - VPN connected; core configuration installed; API lockdown completed."
     } else={
         :put "INSTALLATION_STATUS=FAILED"
@@ -1643,6 +1699,8 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
         :put ("PROXY_STATUS=" . $proxyStatus)
         :put ("API_LOCKDOWN=" . $apiLockdownStatus)
         :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+        :put ("FAILED_COMPONENT=" . $failedComponent)
+        :put ("ERROR=" . $lastError)
         :put "${safeCompanyName}: FAILED - one or more required verification gates did not complete; production readiness is blocked."
     }
 } else={
@@ -1653,6 +1711,8 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
         :put ("PROXY_STATUS=" . $proxyStatus)
         :put ("API_LOCKDOWN=" . $apiLockdownStatus)
         :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+        :put ("FAILED_COMPONENT=" . $failedComponent)
+        :put ("ERROR=" . $lastError)
         :put ("${safeCompanyName}: PARTIAL - core configuration installed, but " . $optionalFailures . " optional component(s) were skipped.")
     } else={
     :put "INSTALLATION_STATUS=FAILED"
@@ -1661,6 +1721,8 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :put ("PROXY_STATUS=" . $proxyStatus)
     :put ("API_LOCKDOWN=" . $apiLockdownStatus)
     :put ("DNS_SCHEDULER=" . $dnsSchedulerStatus)
+    :put ("FAILED_COMPONENT=" . $failedComponent)
+    :put ("ERROR=" . $lastError)
     :put ("${safeCompanyName}: FAILED - " . $failures . " required step(s) failed and " . $optionalFailures . " optional issue(s); production readiness is blocked.")
     }
 }
@@ -1670,7 +1732,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     :global IPProgUrl
     :global IPRname
     :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname . "&installation_status=" . $installationStatus . "&vpn_status=" . $vpnStatus . "&vpn_ip=" . $vpnIp . "&proxy_status=" . $proxyStatus . "&api_lockdown=" . $apiLockdownStatus . "&dns_scheduler=" . $dnsSchedulerStatus) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . $IPRname . "&installation_status=" . $installationStatus . "&routeros_version=" . $routerOsVersion . "&vpn_status=" . $vpnStatus . "&vpn_ip=" . $vpnIp . "&proxy_status=" . $proxyStatus . "&api_lockdown=" . $apiLockdownStatus . "&dns_scheduler=" . $dnsSchedulerStatus . "&hotspot_status=" . $hotspotStatus . "&pppoe_status=" . $pppoeStatus . "&users_status=" . $usersStatus . "&sync_status=" . $syncStatus . "&heartbeat_status=" . $heartbeatStatus . "&failed_component=" . $failedComponent . "&error=" . $lastError) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     }
 } on-error={}
 `;
