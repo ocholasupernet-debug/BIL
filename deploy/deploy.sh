@@ -217,14 +217,6 @@ systemctl enable --now ochola-tenant-certificates.timer
 disable_bil_host() {
   local vhost_dir="/etc/nginx/tenant-sites.d"
   local disabled_vhost="${vhost_dir}/00-disabled-bil.isplatty.org.conf"
-  local wildcard_cert="/etc/letsencrypt/live/isplatty.org-wildcard"
-
-  if [ ! -r "${wildcard_cert}/fullchain.pem" ] ||
-     [ ! -r "${wildcard_cert}/privkey.pem" ]; then
-    echo "ERROR: Cannot disable bil.isplatty.org without the active wildcard certificate." >&2
-    return 1
-  fi
-
   rm -f "${vhost_dir}/bil.isplatty.org.conf"
   cat > "$disabled_vhost" <<NGINX
 server {
@@ -234,18 +226,6 @@ server {
     return 410;
 }
 
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name bil.isplatty.org;
-
-    ssl_certificate     ${wildcard_cert}/fullchain.pem;
-    ssl_certificate_key ${wildcard_cert}/privkey.pem;
-    include             /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
-
-    return 410;
-}
 NGINX
   chmod 0644 "$disabled_vhost"
   nginx -t

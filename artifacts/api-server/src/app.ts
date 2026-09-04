@@ -9,6 +9,22 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+// bil.isplatty.org is retired. Keep this guard before every API, script, and
+// static route so shared wildcard HTTPS cannot accidentally revive the tenant.
+app.use((req, res, next) => {
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
+    .split(",")[0]
+    .trim();
+  const requestHost = (forwardedHost || req.get("host") || req.hostname || "")
+    .split(":")[0]
+    .toLowerCase();
+
+  if (requestHost === "bil.isplatty.org") {
+    res.status(410).type("text").send("This hostname has been retired.\n");
+    return;
+  }
+  next();
+});
 app.use(
   pinoHttp({
     logger,
