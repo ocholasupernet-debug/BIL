@@ -12,9 +12,15 @@ BASE_DOMAIN="${PUBLIC_BASE_DOMAIN:-isplatty.org}"
 CERT_EMAIL="${CERTBOT_EMAIL:-admin@isplatty.org}"
 WEBROOT="${TENANT_ACME_WEBROOT:-/var/www/letsencrypt}"
 VHOST_DIR="${TENANT_VHOST_DIR:-/etc/nginx/tenant-sites.d}"
+REQUESTED_SUBDOMAIN="${1:-}"
 
 if [[ ! "$BASE_DOMAIN" =~ ^[a-z0-9.-]+$ ]]; then
   echo "Invalid PUBLIC_BASE_DOMAIN: $BASE_DOMAIN" >&2
+  exit 1
+fi
+if [[ -n "$REQUESTED_SUBDOMAIN" ]] &&
+   [[ ! "$REQUESTED_SUBDOMAIN" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "Invalid requested tenant subdomain: $REQUESTED_SUBDOMAIN" >&2
   exit 1
 fi
 if [[ ! -f "$PROJECT_DIR/.env" ]]; then
@@ -80,6 +86,14 @@ for row in rows:
         print(value)
 PY
 )
+
+if [[ -n "$REQUESTED_SUBDOMAIN" ]]; then
+  if ! printf '%s\n' "${subdomains[@]}" | grep -Fxq "$REQUESTED_SUBDOMAIN"; then
+    echo "Requested tenant subdomain is not active: $REQUESTED_SUBDOMAIN" >&2
+    exit 1
+  fi
+  subdomains=("$REQUESTED_SUBDOMAIN")
+fi
 
 rm -f "$VHOST_DIR/bil.isplatty.org.conf"
 

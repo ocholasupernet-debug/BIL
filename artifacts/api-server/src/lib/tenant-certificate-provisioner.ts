@@ -38,7 +38,7 @@ export async function provisionTenantCertificate(subdomain: string): Promise<voi
    * subdomain validation above prevents an invalid activation from reaching
    * the shell and also documents the caller's contract.
    */
-  await execFileAsync("bash", [certificateSyncScript()], {
+  await execFileAsync("bash", [certificateSyncScript(), normalized], {
     timeout: 120_000,
     maxBuffer: 256 * 1024,
   });
