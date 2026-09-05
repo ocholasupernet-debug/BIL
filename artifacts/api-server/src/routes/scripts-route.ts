@@ -2075,6 +2075,20 @@ router.get([
   let routerVpnIp = "";
   let resolvedToken = token;
 
+  /* Never let the public, tokenless URL look like a usable installer. It
+     cannot bind the router to an ISP account, obtain router-specific VPN
+     credentials, or post the final registration heartbeat. Previously it
+     returned a generic coexistence bundle which then failed later when it
+     fetched the intentionally-authenticated vpn6/vpn7 child script. */
+  if (!rid && !token && !adminId) {
+    res.status(400).type("text/plain").send(
+      "# OCHOLA_ROUTER_INSTALL_ERROR\n" +
+      "# A router-specific installation profile is required.\n" +
+      "# Sign in to the ISP dashboard, open Network > Self Install, generate a secure profile, and run the generated RouterOS command.\n",
+    );
+    return;
+  }
+
   if (installationMode === "takeover") {
     const grant = verifyTakeoverGrant(takeoverGrant, Number(rid));
     if (!grant || !adminId || grant.adminId !== Number(adminId)) {
