@@ -33,10 +33,10 @@ export async function provisionTenantCertificate(subdomain: string): Promise<voi
     throw new Error("The tenant subdomain is not valid for certificate provisioning.");
   }
   /*
-   * The synchronizer reads active tenants from Supabase and updates all
-   * matching Nginx vhosts. It intentionally has no positional argument; the
-   * subdomain validation above prevents an invalid activation from reaching
-   * the shell and also documents the caller's contract.
+   * The synchronizer reads active tenants from Supabase and validates the
+   * requested hostname before issuing its exact-host certificate and vhost.
+   * The subdomain validation above prevents an invalid activation from
+   * reaching the shell and documents the caller's contract.
    */
   await execFileAsync("bash", [certificateSyncScript(), normalized], {
     timeout: 120_000,
