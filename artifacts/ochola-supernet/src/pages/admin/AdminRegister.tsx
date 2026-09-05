@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles } from "lucide-react";
+import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, Smartphone, WalletCards } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
@@ -52,9 +52,14 @@ export default function AdminRegister() {
   const [checkoutId, setCheckoutId] = useState("");
   const [awaitingPayment, setAwaitingPayment] = useState(false);
   const [paymentReady, setPaymentReady] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<"stk" | "paybill">("stk");
+  const [manualPaybillAvailable, setManualPaybillAvailable] = useState(false);
   const [registrationFee, setRegistrationFee] = useState({ amount: 500, currency: "KES" });
   const [registrationDestination, setRegistrationDestination] = useState<RegistrationDestination | null>(null);
   const [manualPayment, setManualPayment] = useState<RegistrationDestination | null>(null);
+  const [manualReference, setManualReference] = useState("");
+  const [manualStatus, setManualStatus] = useState<"pending" | "failed">("pending");
+  const [manualCheckNow, setManualCheckNow] = useState(0);
 
   useEffect(() => {
     setCompanyAvailable(null);
@@ -112,13 +117,20 @@ export default function AdminRegister() {
           registrationFee?: { amount?: number; currency?: string };
           automaticPaymentAvailable?: boolean;
           manualPaymentRequired?: boolean;
+          manualPaybillAvailable?: boolean;
           destination?: RegistrationDestination | null;
         };
         if (data.registrationFee?.amount && data.registrationFee.currency) {
           setRegistrationFee({ amount: data.registrationFee.amount, currency: data.registrationFee.currency });
         }
         setRegistrationDestination(data.destination ?? null);
-        setPaymentReady(data.manualPaymentRequired === true || data.automaticPaymentAvailable === true);
+        setManualPaybillAvailable(data.manualPaybillAvailable === true);
+        if (data.manualPaybillAvailable === true && data.automaticPaymentAvailable === true) {
+          setPaymentMode("paybill");
+        } else if (data.manualPaybillAvailable === true) {
+          setPaymentMode("paybill");
+        }
+        setPaymentReady(data.manualPaymentRequired === true || data.automaticPaymentAvailable === true || data.manualPaybillAvailable === true);
       })
       .catch(() => setPaymentReady(false));
   }, []);
@@ -151,6 +163,40 @@ export default function AdminRegister() {
     return () => window.clearInterval(poll);
   }, [awaitingPayment, checkoutId]);
 
+  useEffect(() => {
+    if (!manualReference) return;
+    let disposed = false;
+    const check = async () => {
+      try {
+        const response = await fetch(`/api/registration/status?reference=${encodeURIComponent(manualReference)}`);
+        const data = await response.json() as {
+          paid?: boolean;
+          status?: "pending" | "paid" | "failed";
+          username?: string;
+          subdomain?: string;
+        };
+        if (disposed) return;
+        if (data.paid && data.username) {
+          setRegisteredUsername(data.username);
+          setRegisteredSubdomain(data.subdomain || slugify(company));
+          setManualStatus("pending");
+          setManualPayment(null);
+          setSuccess(true);
+        } else if (data.status === "failed") {
+          setManualStatus("failed");
+        }
+      } catch {
+        /* Keep checking while Safaricom delivers the C2B confirmation. */
+      }
+    };
+    void check();
+    const poll = window.setInterval(() => { void check(); }, 4000);
+    return () => {
+      disposed = true;
+      window.clearInterval(poll);
+    };
+  }, [manualReference, manualCheckNow, company]);
+
   const validate = () => {
     const e: Record<string, string> = {};
     if (!company || company.length < 2) e.company = "Company name must be at least 2 lowercase letters.";
@@ -164,8 +210,8 @@ export default function AdminRegister() {
     }
     if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
-    if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
-    else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
+    if (paymentMode === "stk" && !paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
+    else if (paymentMode === "stk" && !/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
     }
     if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
@@ -191,10 +237,11 @@ export default function AdminRegister() {
           displayName: displayName.trim(),
           phone: phone.trim(),
           paymentPhone: paymentPhone.trim(),
+          paymentMode,
         }),
       });
       const data = await response.json() as {
-        ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean;
+        ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean; paymentReference?: string;
         username?: string; subdomain?: string; destination?: RegistrationDestination;
       };
       if (!response.ok || !data.ok) {
@@ -204,6 +251,8 @@ export default function AdminRegister() {
         setRegisteredUsername(data.username || "");
         setRegisteredSubdomain(data.subdomain || slugify(company));
         setManualPayment(data.destination || registrationDestination);
+        setManualReference(data.paymentReference || "");
+        setManualStatus("pending");
         return;
       }
       if (!data.CheckoutRequestID) throw new Error("The registration payment prompt could not be created.");
@@ -226,7 +275,8 @@ export default function AdminRegister() {
     && phoneAvailable !== false
     && !checkingCompany
     && !checkingPhone
-    && paymentReady;
+    && paymentReady
+    && (paymentMode !== "paybill" || manualPaybillAvailable);
 
   const displayFee = new Intl.NumberFormat("en-KE", {
     style: "currency",
@@ -243,9 +293,12 @@ export default function AdminRegister() {
             <div style={{ width: 64, height: 64, margin: "0 auto 20px", borderRadius: "50%", background: "var(--isp-green-glow)", border: "1px solid rgba(34,197,94,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <CheckCircle2 size={32} style={{ color: "var(--isp-green)" }} />
             </div>
-            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 8 }}>Account Created!</h2>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 10px", borderRadius: 999, background: "var(--isp-green-glow)", color: "var(--isp-green)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 16 }}>
+              <CheckCircle2 size={13} /> Payment received
+            </div>
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 8 }}>Your account is ready</h2>
             <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: 20 }}>
-              <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>{company}</span> is now registered.
+              <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>{company}</span> has been paid for and activated.
             </p>
             <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "16px 20px", marginBottom: 20, textAlign: "left" }}>
               <p style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Your Login Credentials</p>
@@ -299,21 +352,60 @@ export default function AdminRegister() {
   }
 
   if (manualPayment) {
+    const isPaybill = manualPayment.type === "paybill";
+    const paymentAccount = registeredSubdomain || slugify(company);
     return (
       <div className="register-state-page" style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
-        <div style={{ width: "100%", maxWidth: 460, background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: "40px 32px", boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
-          <h2 style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 10px" }}>Complete your bank payment</h2>
-          <p style={{ fontSize: "0.9rem", color: "var(--isp-text-muted)", lineHeight: 1.6, margin: "0 0 18px" }}>
-            Pay <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> to <strong style={{ color: "var(--isp-text)" }}>{manualPayment.name}</strong> before your ISP is activated.
-          </p>
-          <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: 16, color: "var(--isp-text)", fontSize: "0.875rem", lineHeight: 1.65 }}>
-            <div><strong>Account:</strong> {manualPayment.number}</div>
-            {manualPayment.accountReference && <div><strong>Reference:</strong> {manualPayment.accountReference}</div>}
-            {manualPayment.instructions && <div style={{ marginTop: 8 }}>{manualPayment.instructions}</div>}
+        <div style={{ width: "100%", maxWidth: 500, background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 20, padding: "34px 30px", boxShadow: "0 18px 55px rgba(22,45,90,0.1)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+            <div>
+              <p style={{ margin: "0 0 7px", color: "var(--isp-accent)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>Step 2 of 3 · Payment</p>
+              <h2 style={{ fontSize: "1.45rem", fontWeight: 800, color: "var(--isp-text)", margin: 0 }}>{isPaybill ? "Pay by M-Pesa PayBill" : "Complete your payment"}</h2>
+            </div>
+            <div style={{ width: 46, height: 46, borderRadius: 15, display: "grid", placeItems: "center", background: isPaybill ? "rgba(0,166,81,0.1)" : "var(--isp-accent-glow)", color: isPaybill ? "#00a651" : "var(--isp-accent)" }}>
+              {isPaybill ? <WalletCards size={22} /> : <CreditCard size={22} />}
+            </div>
           </div>
-          <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55, margin: "18px 0 0" }}>
-            Your registration is pending. A Super Admin will verify the bank payment and activate your account.
+          <p style={{ fontSize: "0.9rem", color: "var(--isp-text-muted)", lineHeight: 1.6, margin: "0 0 18px" }}>
+            Pay <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> to <strong style={{ color: "var(--isp-text)" }}>{manualPayment.name}</strong>. We will activate your workspace automatically when M-Pesa confirms the payment.
           </p>
+          {isPaybill ? (
+            <>
+              <div className="register-paybill-card">
+                <div className="register-paybill-row">
+                  <span>PayBill number</span>
+                  <strong>{manualPayment.number}</strong>
+                  <button type="button" aria-label="Copy PayBill number" onClick={() => void navigator.clipboard?.writeText(manualPayment.number)}><Copy size={14} /></button>
+                </div>
+                <div className="register-paybill-divider" />
+                <div className="register-paybill-row">
+                  <span>Account number</span>
+                  <strong>{paymentAccount}</strong>
+                  <button type="button" aria-label="Copy account number" onClick={() => void navigator.clipboard?.writeText(paymentAccount)}><Copy size={14} /></button>
+                </div>
+              </div>
+              <div className="register-payment-steps">
+                <div><b>1</b><span>Open M-Pesa and choose <strong>Lipa na M-Pesa</strong>.</span></div>
+                <div><b>2</b><span>Choose <strong>Pay Bill</strong>, then enter the details above.</span></div>
+                <div><b>3</b><span>Enter <strong>{displayFee}</strong> and complete the payment.</span></div>
+              </div>
+            </>
+          ) : (
+            <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: 16, color: "var(--isp-text)", fontSize: "0.875rem", lineHeight: 1.65 }}>
+              <div><strong>Account:</strong> {manualPayment.number}</div>
+              {manualPayment.accountReference && <div><strong>Reference:</strong> {manualPayment.accountReference}</div>}
+              {manualPayment.instructions && <div style={{ marginTop: 8 }}>{manualPayment.instructions}</div>}
+            </div>
+          )}
+          <div className={`register-payment-status ${manualStatus === "failed" ? "failed" : ""}`} aria-live="polite">
+            {manualStatus === "failed" ? <AlertTriangle size={17} /> : <Loader2 size={17} />}
+            <div>
+              <strong>{manualStatus === "failed" ? "Payment needs attention" : "Pending payment"}</strong>
+              <span>{manualStatus === "failed" ? "We could not confirm this payment. Please contact support with your company name." : "This page checks automatically. Keep it open while M-Pesa confirms your payment."}</span>
+            </div>
+            <button type="button" onClick={() => setManualCheckNow(value => value + 1)} title="Check payment status"><RefreshCw size={15} /></button>
+          </div>
+          {manualPayment.instructions && isPaybill && <p style={{ fontSize: "0.76rem", color: "var(--isp-text-sub)", lineHeight: 1.5, margin: "14px 0 0" }}>{manualPayment.instructions}</p>}
         </div>
       </div>
     );
@@ -389,6 +481,8 @@ export default function AdminRegister() {
               <div className="register-fee-note">
                 {registrationDestination?.type === "bank"
                   ? <>Pay manually to <strong>{registrationDestination.name}</strong> ({registrationDestination.number}) before activation.</>
+                   : paymentMode === "paybill" && registrationDestination?.type === "paybill"
+                   ? <>Pay manually through M-Pesa PayBill <strong>{registrationDestination.number}</strong> using your company name as the account number.</>
                   : registrationDestination
                   ? <>An M-Pesa prompt will use <strong>{registrationDestination.name}</strong> ({registrationDestination.number}){registrationDestination.accountReference ? ` · ${registrationDestination.accountReference}` : ""}</>
                   : "A payment destination must be configured before registration."}
@@ -486,30 +580,53 @@ export default function AdminRegister() {
                 {errors.displayName && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.displayName}</p>}
               </div>
 
-              <div className="register-form-section">
-                <div className="register-section-heading"><span>02</span><div><strong>Payment contact</strong><small>Where should we send the M-Pesa prompt?</small></div></div>
-                <div>
-              <label className="register-label">M-Pesa Payment Number</label>
-             <div style={{ position: "relative" }}>
-               <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
-               <input
-                 type="tel"
-                 value={paymentPhone}
-                 onChange={e => setPaymentPhone(e.target.value)}
-                 placeholder="+254 700 000 000"
-                 autoComplete="tel"
-                  className="register-input"
-                  style={inputStyle(!!errors.paymentPhone, null)}
-                 onFocus={e => { if (!errors.paymentPhone) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
-                 onBlur={e => { e.target.style.boxShadow = "none"; }}
-               />
-             </div>
-             <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
-               The STK Push will be sent here. This number may be reused for multiple ISP registrations.
-             </p>
-             {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
-                </div>
-              </div>
+               <div className="register-form-section">
+                 <div className="register-section-heading"><span>02</span><div><strong>Choose how to pay</strong><small>Secure your workspace with a one-time activation payment</small></div></div>
+                 {manualPaybillAvailable && registrationDestination?.type === "paybill" && (
+                   <div className="register-payment-options">
+                     <button type="button" className={`register-payment-option ${paymentMode === "paybill" ? "selected" : ""}`} onClick={() => setPaymentMode("paybill")}>
+                       <span className="register-option-icon"><WalletCards size={17} /></span>
+                       <span><strong>Pay manually</strong><small>Use M-Pesa PayBill</small></span>
+                       <span className="register-option-radio" />
+                     </button>
+                     {registrationDestination && (
+                       <button type="button" className={`register-payment-option ${paymentMode === "stk" ? "selected" : ""}`} onClick={() => setPaymentMode("stk")}>
+                         <span className="register-option-icon"><Smartphone size={17} /></span>
+                         <span><strong>Send a prompt</strong><small>Approve on your phone</small></span>
+                         <span className="register-option-radio" />
+                       </button>
+                     )}
+                   </div>
+                 )}
+                 {paymentMode === "paybill" && manualPaybillAvailable && registrationDestination?.type === "paybill" ? (
+                   <div className="register-manual-preview">
+                     <div className="register-manual-preview-icon"><WalletCards size={18} /></div>
+                     <div><strong>PayBill instructions appear next</strong><span>Use your company name as the M-Pesa account number. We’ll watch for confirmation automatically.</span></div>
+                   </div>
+                 ) : (
+                   <div>
+                     <label className="register-label">M-Pesa Payment Number</label>
+                     <div style={{ position: "relative" }}>
+                       <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
+                       <input
+                         type="tel"
+                         value={paymentPhone}
+                         onChange={e => setPaymentPhone(e.target.value)}
+                         placeholder="+254 700 000 000"
+                         autoComplete="tel"
+                         className="register-input"
+                         style={inputStyle(!!errors.paymentPhone, null)}
+                         onFocus={e => { if (!errors.paymentPhone) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
+                         onBlur={e => { e.target.style.boxShadow = "none"; }}
+                       />
+                     </div>
+                     <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+                       The M-Pesa prompt will be sent here. This number may be reused for multiple ISP registrations.
+                     </p>
+                     {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
+                   </div>
+                 )}
+               </div>
 
           {serverErr && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, padding: "10px 14px" }}>
@@ -526,8 +643,10 @@ export default function AdminRegister() {
           >
             {loading
               ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {registrationDestination?.type === "bank" ? "Saving registration..." : "Sending payment prompt..."}</>
-              : registrationDestination?.type === "bank"
+               : registrationDestination?.type === "bank"
               ? <>Continue to bank payment instructions <ArrowRight size={16} /></>
+               : paymentMode === "paybill"
+               ? <>Continue to PayBill instructions <ArrowRight size={16} /></>
               : <>Pay {displayFee} &amp; Create Account <ArrowRight size={16} /></>}
           </button>
 
@@ -596,6 +715,33 @@ export default function AdminRegister() {
         .register-fee-copy>b{color:#2563eb;font-size:1.15rem;white-space:nowrap}
         .register-fee-note{grid-column:2 / -1;margin-top:10px;color:#718096;font-size:.68rem;line-height:1.5}
         .register-fee-note strong{color:#4c6184}
+         .register-payment-options{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px}
+         .register-payment-option{display:flex;align-items:center;gap:10px;min-height:66px;padding:11px 12px;border:1px solid #dce3ed;border-radius:13px;background:#fff;text-align:left;color:#33415b;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}
+         .register-payment-option:hover{transform:translateY(-1px);border-color:#9db8ef}
+         .register-payment-option.selected{border-color:#4f7cff;background:#f4f7ff;box-shadow:0 0 0 3px rgba(79,124,255,.1)}
+         .register-payment-option>span:nth-child(2){display:flex;flex:1;flex-direction:column;gap:4px}
+         .register-payment-option strong{font-size:.75rem}.register-payment-option small{color:#8491a7;font-size:.65rem}
+         .register-option-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:#e9efff;color:#3d70e8}
+         .register-option-radio{width:15px;height:15px;border:1.5px solid #c5cfdf;border-radius:50%;position:relative}
+         .register-payment-option.selected .register-option-radio{border-color:#3d70e8}
+         .register-payment-option.selected .register-option-radio:after{content:"";position:absolute;inset:3px;border-radius:50%;background:#3d70e8}
+         .register-manual-preview{display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid #cfe0ff;border-radius:13px;background:#f5f8ff}
+         .register-manual-preview-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#e1ebff;color:#3d70e8;flex:0 0 auto}
+         .register-manual-preview strong,.register-manual-preview span{display:block}.register-manual-preview strong{color:#263652;font-size:.75rem}.register-manual-preview span{margin-top:4px;color:#718096;font-size:.68rem;line-height:1.45}
+         .register-paybill-card{border:1px solid #d4eadf;border-radius:15px;padding:5px 15px;background:linear-gradient(135deg,#f2fbf6,#fbfefd);color:#164b31}
+         .register-paybill-row{display:grid;grid-template-columns:1fr auto 28px;align-items:center;gap:12px;min-height:55px}
+         .register-paybill-row span{font-size:.68rem;color:#5d806d}.register-paybill-row strong{font-size:1.05rem;letter-spacing:.02em}.register-paybill-row button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;background:#dcf4e6;color:#16814a;cursor:pointer}
+         .register-paybill-divider{height:1px;background:#d7ebdf}
+         .register-payment-steps{display:flex;flex-direction:column;gap:10px;margin:18px 0}
+         .register-payment-steps>div{display:flex;align-items:flex-start;gap:10px;color:#64748b;font-size:.72rem;line-height:1.5}
+         .register-payment-steps b{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e8f6ed;color:#138347;font-size:.65rem;flex:0 0 auto}
+         .register-payment-steps strong{color:#33415b}
+         .register-payment-status{display:flex;align-items:center;gap:10px;padding:12px 13px;border:1px solid #d6e3fb;border-radius:13px;background:#f5f8ff;color:#3d70e8}
+         .register-payment-status>div{display:flex;flex:1;flex-direction:column;gap:3px}.register-payment-status strong{font-size:.74rem;color:#33415b}.register-payment-status span{font-size:.67rem;line-height:1.4;color:#718096}
+         .register-payment-status>svg{animation:spin 1.4s linear infinite}
+         .register-payment-status.failed{border-color:#fecaca;background:#fff7f7;color:#dc2626}.register-payment-status.failed>svg{animation:none}
+         .register-payment-status button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;background:rgba(61,112,232,.1);color:#3d70e8;cursor:pointer}
+         .register-payment-status.failed button{background:#fee2e2;color:#dc2626}
         .register-form{display:flex;flex-direction:column;gap:25px}
         .register-form-section{padding-bottom:25px;border-bottom:1px solid #e5eaf2}
         .register-section-heading{display:flex;align-items:center;gap:11px;margin-bottom:16px}
@@ -623,7 +769,7 @@ export default function AdminRegister() {
         .register-trust-row svg{color:#5a8cf4}
         .register-state-page .register-shell{display:none}
         @media(max-width:900px){.register-shell{display:block}.register-visual{display:none}.register-form-side{min-height:100vh;padding:28px 20px 40px}.register-mobile-brand{display:flex;margin-bottom:32px}.register-progress{margin-bottom:30px}.register-form-wrap{max-width:560px;margin:0 auto}.register-heading h1{font-size:2rem}}
-        @media(max-width:560px){.register-form-side{padding:23px 16px 32px}.register-mobile-brand{margin-bottom:27px}.register-progress-line{margin:0 7px;min-width:10px}.register-step{gap:5px}.register-step strong{display:none}.register-fee-card{grid-template-columns:38px 1fr;padding:14px}.register-fee-icon{width:38px;height:38px}.register-fee-copy{display:block}.register-fee-copy>b{display:block;margin-top:5px}.register-fee-note{grid-column:1 / -1}.register-two-col{grid-template-columns:1fr;gap:18px}.register-form{gap:22px}}
+         @media(max-width:560px){.register-form-side{padding:23px 16px 32px}.register-mobile-brand{margin-bottom:27px}.register-progress-line{margin:0 7px;min-width:10px}.register-step{gap:5px}.register-step strong{display:none}.register-fee-card{grid-template-columns:38px 1fr;padding:14px}.register-fee-icon{width:38px;height:38px}.register-fee-copy{display:block}.register-fee-copy>b{display:block;margin-top:5px}.register-fee-note{grid-column:1 / -1}.register-two-col{grid-template-columns:1fr;gap:18px}.register-form{gap:22px}.register-payment-options{grid-template-columns:1fr}.register-paybill-row strong{font-size:.92rem}}
       `}</style>
     </div>
   );

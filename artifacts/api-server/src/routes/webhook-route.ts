@@ -15,8 +15,9 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "crypto";
 import { autoProvision }  from "../lib/auto-provision";
-import { sbSelect, sbInsert } from "../lib/supabase-client";
+import { sbSelect, sbInsert, sbRpc } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 
 const router: IRouter = Router();
 
@@ -59,6 +60,74 @@ async function logRaw(
       created_at: new Date().toISOString(),
     });
   } catch { /* logging must never break webhook processing */ }
+}
+
+function normalisePaybillAccount(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
+    : "";
+}
+
+/**
+ * Match a C2B PayBill confirmation to a pending ISP registration.
+ *
+ * The registration account number is the generated company subdomain, so the
+ * payment cannot be activated by phone number alone or accidentally credited
+ * to another tenant with the same payer.
+ */
+async function settlePendingPaybillRegistration(
+  amount: number,
+  billReference: string,
+  receipt: string,
+): Promise<boolean | null> {
+  const account = normalisePaybillAccount(billReference);
+  if (!account || !Number.isFinite(amount) || amount <= 0) return null;
+
+  const transactions = await sbSelect<{ id: number; admin_id: number; amount: number | string }>(
+    "isp_transactions",
+    `payment_method=eq.manual_registration&status=eq.pending&amount=eq.${encodeURIComponent(String(amount))}&select=id,admin_id,amount&order=created_at.asc&limit=100`,
+  );
+  if (!transactions.length) return null;
+
+  const adminIds = [...new Set(transactions.map(transaction => transaction.admin_id).filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (!adminIds.length) return null;
+  const admins = await sbSelect<{
+    id: number;
+    subdomain: string | null;
+    is_active: boolean;
+    status: string;
+  }>(
+    "isp_admins",
+    `id=in.(${adminIds.join(",")})&select=id,subdomain,is_active,status&limit=100`,
+  );
+  const matchingAdmin = admins.find(admin =>
+    admin.is_active === false &&
+    admin.status === "pending_payment" &&
+    normalisePaybillAccount(admin.subdomain) === account,
+  );
+  const transaction = matchingAdmin
+    ? transactions.find(row => row.admin_id === matchingAdmin.id)
+    : undefined;
+  if (!transaction) return null;
+
+  const settlements = await sbRpc<{ settled: boolean; admin_id: number | null }>(
+    "settle_verified_mpesa_transaction",
+    {
+      p_transaction_id: transaction.id,
+      p_status: "completed",
+      p_note: `M-Pesa PayBill registration payment confirmed by C2B receipt ${receipt}.`,
+    },
+  );
+  const settlement = settlements[0];
+  if (!settlement?.settled || settlement.admin_id !== transaction.admin_id) {
+    logger.warn({ transactionId: transaction.id, receipt }, "[webhook/mpesa/c2b] Registration settlement was not applied");
+    return false;
+  }
+
+  void provisionTenantCertificateForAdmin(transaction.admin_id).catch(error => {
+    logger.error({ err: error, adminId: transaction.admin_id }, "[registration] PayBill certificate provisioning failed; timer will retry");
+  });
+  return true;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -140,6 +209,20 @@ router.post("/webhooks/mpesa/c2b/confirmation", async (req: Request, res: Respon
     }
 
     await logRaw("mpesa_c2b", "received", { reference, amount, phone: rawPhone });
+
+    const registrationResult = await settlePendingPaybillRegistration(
+      amount,
+      String(b.BillRefNumber ?? ""),
+      reference,
+    );
+    if (registrationResult !== null) {
+      await logRaw(
+        "mpesa_c2b",
+        registrationResult ? "processed" : "error",
+        { reference, amount, phone: rawPhone, registration: true },
+      );
+      return;
+    }
 
     const result = await autoProvision({
       phone:         rawPhone,

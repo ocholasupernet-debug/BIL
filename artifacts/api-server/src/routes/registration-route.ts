@@ -125,12 +125,15 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
   const automaticPaymentAvailable = !!destination && destination.type !== "bank" &&
     schemaReady && isMpesaConfigured(mpesaSettings) && hasUsableCallback(mpesaSettings) &&
     !!destination.number;
+  const manualPaybillAvailable = destination?.type === "paybill" &&
+    schemaReady && !!destination.number;
 
   res.json({
     ok: true,
     registrationFee: { amount: destinations.registrationFee, currency: "KES" },
-    registrationAvailable: (destination?.type === "bank" && schemaReady) || automaticPaymentAvailable,
+    registrationAvailable: (destination?.type === "bank" && schemaReady) || automaticPaymentAvailable || manualPaybillAvailable,
     manualPaymentRequired: destination?.type === "bank" && schemaReady,
+    manualPaybillAvailable,
     automaticPaymentAvailable,
     destination: destination ? {
       type: destination.type, name: destination.name, number: destination.number,
@@ -144,6 +147,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
+  const paymentMode = req.body?.paymentMode === "paybill" ? "paybill" : "stk";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
@@ -152,8 +156,11 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(400).json({ ok: false, error: "Company name must use lowercase letters only (a-z), with no spaces, numbers, or symbols." });
     return;
   }
-  if (!/^2547\d{8}$/.test(formattedPhone) || !/^2547\d{8}$/.test(formattedPaymentPhone)) {
-    res.status(400).json({ ok: false, error: "Enter valid contact and M-Pesa payment numbers." });
+  if (!/^2547\d{8}$/.test(formattedPhone) ||
+      (paymentMode === "stk" && !/^2547\d{8}$/.test(formattedPaymentPhone))) {
+    res.status(400).json({ ok: false, error: paymentMode === "paybill"
+      ? "Enter a valid Kenyan contact number."
+      : "Enter valid contact and M-Pesa payment numbers." });
     return;
   }
   if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
@@ -182,7 +189,13 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
   if (destination.type !== "bank" && (!config || !isMpesaConfigured(config))) {
-    res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
+    if (paymentMode !== "paybill" || destination.type !== "paybill") {
+      res.status(503).json({ ok: false, error: "Registration payments are not configured yet. Contact support." });
+      return;
+    }
+  }
+  if (paymentMode === "paybill" && destination.type !== "paybill") {
+    res.status(400).json({ ok: false, error: "Manual PayBill registration is not available for the selected payment destination." });
     return;
   }
   if (!supabaseServiceRoleConfigured) {
@@ -223,12 +236,16 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   }
 
   try {
-    if (destination.type === "bank") {
+    if (destination.type === "bank" || paymentMode === "paybill") {
+      const reference = `manual:${randomUUID()}`;
       const manualTransactions = await sbInsert<{ id: number }>("isp_transactions", {
         admin_id: pendingAdmin.id, customer_id: null, plan_id: null, amount: registrationFee,
-        payment_method: "manual_registration", payment_phone: formattedPaymentPhone,
-        reference: `manual:${randomUUID()}`, status: "pending",
-        notes: `Pending manual registration payment for ${slug}`, created_at: new Date().toISOString(),
+        payment_method: "manual_registration", payment_phone: formattedPaymentPhone || null,
+        reference, status: "pending",
+        notes: destination.type === "paybill"
+          ? `Pending manual M-Pesa PayBill registration for ${slug}`
+          : `Pending manual registration payment for ${slug}`,
+        created_at: new Date().toISOString(),
       });
       if (!manualTransactions[0]) {
         await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
@@ -237,6 +254,8 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       }
       res.json({
         ok: true, manualPayment: true, registrationFee: { amount: registrationFee, currency: "KES" },
+        paymentMode,
+        paymentReference: reference,
         destination: {
           type: destination.type, name: destination.name, number: destination.number,
           accountReference: destination.accountReference, instructions: destination.instructions,
@@ -309,6 +328,45 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     logger.error({ err: error, adminId: pendingAdmin.id }, "[registration/payment] failed");
     res.status(500).json({ ok: false, error: "Could not send the registration payment prompt. Please try again." });
   }
+});
+
+router.get("/registration/status", async (req: Request, res: Response): Promise<void> => {
+  const reference = typeof req.query.reference === "string" ? req.query.reference.trim() : "";
+  if (!/^manual:[0-9a-f-]{36}$/i.test(reference)) {
+    res.status(400).json({ ok: false, error: "A valid registration payment reference is required." });
+    return;
+  }
+  const transactions = await sbSelect<{
+    admin_id: number;
+    status: string;
+    amount: number | string;
+    payment_method: string;
+  }>(
+    "isp_transactions",
+    `reference=eq.${encodeURIComponent(reference)}&payment_method=eq.manual_registration&select=admin_id,status,amount,payment_method&limit=1`,
+  );
+  const transaction = transactions[0];
+  if (!transaction) {
+    res.status(404).json({ ok: false, error: "Registration payment was not found." });
+    return;
+  }
+  const admins = await sbSelect<{
+    is_active: boolean;
+    status: string;
+    username: string | null;
+    subdomain: string | null;
+  }>(
+    "isp_admins",
+    `id=eq.${encodeURIComponent(String(transaction.admin_id))}&select=is_active,status,username,subdomain&limit=1`,
+  );
+  const admin = admins[0];
+  const paid = transaction.status === "completed" && admin?.is_active === true && admin.status === "active";
+  res.json({
+    ok: true,
+    status: paid ? "paid" : transaction.status === "failed" ? "failed" : "pending",
+    paid,
+    ...(paid ? { username: admin.username, subdomain: admin.subdomain } : {}),
+  });
 });
 
 export default router;

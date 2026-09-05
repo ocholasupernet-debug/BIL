@@ -485,6 +485,13 @@ export default function SuperAdminPaymentGateways() {
               onChange={value => setRegistrationReplacePassword(value)}
             />
           </div>
+          {destinationForm.type === "paybill" && (
+            <div style={{ margin: "2px 0 16px", padding: "11px 13px", borderRadius: 9, border: "1px solid rgba(74,222,128,0.22)", background: "rgba(74,222,128,0.06)", color: C.sub, fontSize: "0.72rem", lineHeight: 1.55 }}>
+              Manual registration payments use the company subdomain as the PayBill account number. Configure Safaricom C2B with:
+              <br /><strong style={{ color: "#86efac" }}>Validation:</strong> <span style={{ color: "white" }}>{typeof window === "undefined" ? "/api/webhooks/mpesa/c2b/validation" : new URL("/api/webhooks/mpesa/c2b/validation", window.location.origin).toString()}</span>
+              <br /><strong style={{ color: "#86efac" }}>Confirmation:</strong> <span style={{ color: "white" }}>{typeof window === "undefined" ? "/api/webhooks/mpesa/c2b/confirmation" : new URL("/api/webhooks/mpesa/c2b/confirmation", window.location.origin).toString()}</span>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 18 }}>
             {destinationForm.id && <button onClick={() => setDestinationForm(emptyDestination())} style={{ border: 0, background: "transparent", color: C.sub, fontSize: "0.76rem", cursor: "pointer" }}>Cancel edit</button>}
             <button onClick={saveDestination} disabled={destinationSaving} style={{ border: 0, borderRadius: 8, background: C.accent, color: "white", padding: "9px 13px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer", opacity: destinationSaving ? 0.6 : 1 }}>
