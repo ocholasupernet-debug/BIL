@@ -368,6 +368,14 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
   assert.match(setup, /value="\$\(printf '%s' "\$\{!f\}"\)"/);
   assert.doesNotMatch(setup, /\$\{\$f\}/);
+   assert.match(setup, /isplatty\.org-wildcard/);
+   assert.match(setup, /isplatty\.org-required-hosts/);
+   assert.match(setup, /CERT_FILE="\$PUBLIC_CERT_FILE"/);
+   assert.match(setup, /KEY_FILE="\$PUBLIC_KEY_FILE"/);
+   assert.match(setup, /CA_FILE="\$MANAGEMENT_CA_FILE"/);
+   assert.doesNotMatch(setup, /CA_FILE="\$\(conf_value ca\)"/);
+   assert.doesNotMatch(setup, /CERT_FILE="\$\(conf_value cert\)"/);
+   assert.doesNotMatch(setup, /KEY_FILE="\$\(conf_value key\)"/);
   execFileSync("bash", ["-n"], { input: setup, encoding: "utf8" });
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
   assert.doesNotMatch(setup, /curl -s http/);
