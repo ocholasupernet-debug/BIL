@@ -21,7 +21,7 @@ echo ""
 # ── 1. System packages ────────────────────────────────────
 echo "[1/8] Installing system dependencies..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl ufw nginx certbot python3-certbot-nginx
+sudo apt-get install -y -qq git curl ufw nginx certbot python3-certbot-nginx openvpn easy-rsa iptables-persistent
 
 # ── 2. Node.js 20 ─────────────────────────────────────────
 echo "[2/8] Installing Node.js 20..."
@@ -99,6 +99,12 @@ sudo ufw allow 22/tcp  || true
 sudo ufw allow 80/tcp  || true
 sudo ufw allow 443/tcp || true
 sudo ufw --force enable || true
+
+# Install and configure the isolated router-management OpenVPN services before
+# creating any router-specific profiles. This does not touch legacy VPNs.
+if [ -f "$APP_DIR/deploy/bootstrap-router-management-vpn.sh" ]; then
+  bash "$APP_DIR/deploy/bootstrap-router-management-vpn.sh"
+fi
 
 # Per-router management VPN ports are redirected to the shared OpenVPN
 # listener on TCP 1196. This keeps each generated router profile on a stable

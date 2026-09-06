@@ -236,10 +236,17 @@ NGINX
 }
 
 disable_bil_host
+# The router installer depends on the dedicated management services being
+# present before any router-specific profile is generated. This bootstrap is
+# idempotent and deliberately leaves legacy OpenVPN instances untouched.
+if [ -f "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh" ]; then
+  echo "[8/10] Bootstrapping router-management OpenVPN..."
+  bash "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh"
+fi
 # Keep the public per-router VPN ports aligned with generated RouterOS
 # profiles. The service is idempotent and survives VPS reboots.
 if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
-  echo "[8/9] Configuring per-router management VPN ports..."
+  echo "[9/10] Configuring per-router management VPN ports..."
   bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
 fi
 
@@ -299,11 +306,11 @@ ensure_management_tunnel() {
 
 ensure_management_tunnel "ochola-router" "tun-router"
 ensure_management_tunnel "ochola-router-backup" "tun-router-bkp"
-# 9. Restart API via PM2
+# 10. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
 #    a stale legacy value that could mask the canonical service-role key.
-echo "[9/9] Restarting PM2..."
+echo "[10/10] Restarting PM2..."
 mkdir -p logs
 if [ -f "$PROJECT_DIR/.env" ]; then
   set -a; source "$PROJECT_DIR/.env"; set +a
@@ -349,7 +356,7 @@ for host in vpn.isplatty.org; do
 done
 
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
-  echo "[10/10] Verifying router-management OpenVPN state..."
+  echo "[11/11] Verifying router-management OpenVPN state..."
   bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
 fi
 
