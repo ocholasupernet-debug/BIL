@@ -115,7 +115,7 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
             /file add name=$caFile contents="__EMBEDDED_ISRG_ROOT_X1__"
         }
         :if ([:tonum [/file get [/file find name=$caFile] size]] <= 0) do={ :error "public CA source was empty" }
-        /certificate import file-name=$caFile name=$caName trusted=yes
+        /certificate import file-name=$caFile name=$caName
         :do { /file remove [find name=$caFile] } on-error={}
     }
     :local caCert [/certificate find name=$caName]

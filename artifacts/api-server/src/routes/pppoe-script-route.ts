@@ -45,7 +45,7 @@ function pppoeHttpsTrustBootstrap(adminSubdomain: string): string {
       :put "RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
       /file add name="$caFile" contents="${routerOsCertificateContents(ISRG_ROOT_X1_PEM)}"
     }
-    /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}" trusted=yes
+    /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
     :do { /file remove [find name="$caFile"] } on-error={}
   }
   :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]

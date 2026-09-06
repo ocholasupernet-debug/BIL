@@ -2371,7 +2371,8 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
         :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
         /file add name="$caFile" contents="${routerOsCertificateContents(ISRG_ROOT_X1_PEM)}"
     }
-    /certificate import file-name="$caFile" name=${routerOsString(caCertificateName)} trusted=yes
+    /certificate import file-name="$caFile" name=${routerOsString(caCertificateName)}
+    /certificate set [find name=${routerOsString(caCertificateName)}] trusted=yes
     :do { /file remove [find name="$caFile"] } on-error={}
     :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={
         :error "management VPN CA was not imported"
