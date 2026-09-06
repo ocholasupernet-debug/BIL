@@ -142,20 +142,13 @@ fi
 echo "[3] Creating isolated router-management server on ${selectedTunnelBase}.0:${selectedVpnPort}..."
 if [ -f "$BASE_OVPN_CONF" ]; then
   conf_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$BASE_OVPN_CONF"; }
-  CA_FILE="$(conf_value ca)"
-  CERT_FILE="$(conf_value cert)"
-  KEY_FILE="$(conf_value key)"
   DH_FILE="$(conf_value dh)"
-  for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
+  for f in DH_FILE; do
     value="$(printf '%s' "\${!f}")"
     if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
       eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
     fi
   done
-fi
-if [ -z "$CA_FILE" ] || [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
-  echo "ERROR: OpenVPN CA/cert/key paths are unavailable."
-  exit 1
 fi
 MANAGEMENT_CA_FILE="$OVPN_DIR/${ROUTER_HTTPS_CERTIFICATE_NAME}.pem"
 $SUDO sh -c "printf '%s' '${managedCaB64}' | base64 -d > '$MANAGEMENT_CA_FILE'"
