@@ -379,6 +379,7 @@ test("VPS setup and runtime status readers use the same management paths", () =>
    assert.doesNotMatch(setup, /KEY_FILE="\$\(conf_value key\)"/);
    assert.match(setup, /echo "dh none"/);
    assert.match(setup, /echo "ecdh-curve prime256v1"/);
+   assert.match(setup, /10\.8\.5\.1\(\[\/\[:space:\]\]\|\$\)/);
   execFileSync("bash", ["-n"], { input: setup, encoding: "utf8" });
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
   assert.doesNotMatch(setup, /curl -s http/);
