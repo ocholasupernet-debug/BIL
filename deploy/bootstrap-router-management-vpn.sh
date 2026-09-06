@@ -126,8 +126,9 @@ write_config() {
   local authfile="$8"
 
   if [ -s "$config" ]; then
-    echo "[vpn-bootstrap] Preserving existing ${config}"
-    return
+    echo "[vpn-bootstrap] Rewriting existing dedicated config ${config}"
+  else
+    echo "[vpn-bootstrap] Creating dedicated config ${config}"
   fi
 
   local tmp
