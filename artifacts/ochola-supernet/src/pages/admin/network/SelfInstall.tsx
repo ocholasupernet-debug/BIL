@@ -475,7 +475,10 @@ export default function SelfInstall() {
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
   const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${installationMode}/${encodeURIComponent(takeoverGrant || "missing-grant")}`;
-  const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=yes`;
+  // The installer bootstraps the public CA inside mainhotspot.rsc. The first
+  // fetch must therefore be unverified; every child download performed by the
+  // imported script uses verified HTTPS after the CA is installed.
+  const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;

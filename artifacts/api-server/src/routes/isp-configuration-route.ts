@@ -89,7 +89,9 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
             :error ($label . " import failed: " . $importError)
         }
         :do { /file remove [find name=$dst] } on-error={}
-        /file set $fetchedFile name=$dst
+        # RouterOS 6/7 parses a find expression more reliably than a local
+        # result variable in the item position of /file set.
+        /file set [find name=$temp] name=($dst)
     } on-error={
         :local stageError $error
         :do { /file remove [find name=("failed-" . $dst)] } on-error={}
