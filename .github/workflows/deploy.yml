@@ -96,9 +96,12 @@ jobs:
             # Dedicated router-management VPN endpoint. Keep this separate
             # from any stale VPS_HOST value used by older deployments.
             upsert_env "ROUTER_OPENVPN_ENDPOINT"  "vpn.isplatty.org"
-            # The API's SSH reconciliation helper must reach the same VPS.
+            # The deployment key used by this workflow is authorized for root
+            # on the VPS. The API's SSH reconciliation helper must use the
+            # same authenticated principal; a separate admin user is not
+            # authorized by this deployment key.
             upsert_env "VPS_HOST"                 "vpn.isplatty.org"
-            upsert_env "VPS_USER"                 "$VPS_USER"
+            upsert_env "VPS_USER"                 "root"
             # Store multiline SSH material as base64: so .env remains valid.
             # The API decodes it only in memory when opening the SSH channel.
             if [ -n "${VPS_SSH_KEY:-}" ]; then
