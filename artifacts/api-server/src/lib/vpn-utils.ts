@@ -147,7 +147,7 @@ if [ -f "$BASE_OVPN_CONF" ]; then
   KEY_FILE="$(conf_value key)"
   DH_FILE="$(conf_value dh)"
   for f in CA_FILE CERT_FILE KEY_FILE DH_FILE; do
-    value="$(eval "printf '%s' \"\${$f}\"")"
+    value="$(printf '%s' "\${!f}")"
     if [ -n "$value" ] && [ "\${value#/}" = "$value" ]; then
       eval "$f=\"$(dirname "$BASE_OVPN_CONF")/$value\""
     fi

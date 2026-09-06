@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -365,6 +366,9 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /client-cert-not-required/);
   assert.match(setup, /OPENVPN_SUPPORTS_VERIFY_CLIENT_CERT/);
   assert.match(setup, /OPENVPN_SUPPORTS_DATA_CIPHERS/);
+  assert.match(setup, /value="\$\(printf '%s' "\$\{!f\}"\)"/);
+  assert.doesNotMatch(setup, /\$\{\$f\}/);
+  execFileSync("bash", ["-n"], { input: setup, encoding: "utf8" });
   assert.doesNotMatch(setup, /openvpn --help.*verify-client-cert/);
   assert.doesNotMatch(setup, /curl -s http/);
   assert.match(setup, /grep -Fqx/);
