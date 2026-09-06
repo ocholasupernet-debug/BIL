@@ -174,24 +174,28 @@ if ! command -v openssl >/dev/null 2>&1; then
 fi
 PUBLIC_CERT_FILE=""
 PUBLIC_KEY_FILE=""
+PUBLIC_CA_FILE=""
 for PUBLIC_CERT_DIR in \
   /etc/letsencrypt/live/isplatty.org-wildcard \
   /etc/letsencrypt/live/isplatty.org-required-hosts
 do
-  if [ -s "$PUBLIC_CERT_DIR/fullchain.pem" ] && [ -s "$PUBLIC_CERT_DIR/privkey.pem" ]; then
+  if [ -s "$PUBLIC_CERT_DIR/fullchain.pem" ] &&
+     [ -s "$PUBLIC_CERT_DIR/privkey.pem" ] &&
+     [ -s "$PUBLIC_CERT_DIR/chain.pem" ]; then
     PUBLIC_CERT_FILE="$PUBLIC_CERT_DIR/fullchain.pem"
     PUBLIC_KEY_FILE="$PUBLIC_CERT_DIR/privkey.pem"
+    PUBLIC_CA_FILE="$PUBLIC_CERT_DIR/chain.pem"
     break
   fi
 done
-if [ -z "$PUBLIC_CERT_FILE" ] || [ -z "$PUBLIC_KEY_FILE" ]; then
+if [ -z "$PUBLIC_CERT_FILE" ] || [ -z "$PUBLIC_KEY_FILE" ] || [ -z "$PUBLIC_CA_FILE" ]; then
   echo "ERROR: A public Let's Encrypt certificate for the router-management endpoint was not found."
   echo "       Expected isplatty.org-wildcard or isplatty.org-required-hosts."
   exit 1
 fi
 CERT_FILE="$PUBLIC_CERT_FILE"
 KEY_FILE="$PUBLIC_KEY_FILE"
-CA_FILE="$MANAGEMENT_CA_FILE"
+CA_FILE="$PUBLIC_CA_FILE"
 echo "    Using public OpenVPN certificate: $CERT_FILE"
 CERT_TMP="$(mktemp -d)"
 trap 'rm -rf "$CERT_TMP"' EXIT
@@ -232,8 +236,10 @@ fi
   echo "ca $CA_FILE"
   echo "cert $CERT_FILE"
   echo "key $KEY_FILE"
-  [ -n "$DH_FILE" ] && echo "dh $DH_FILE"
-  [ "$DH_FILE" = "none" ] && echo "ecdh-curve prime256v1"
+   # Match the bootstrapped management service. Do not inherit the legacy
+   # customer VPN's DH file or its potentially stale path.
+   echo "dh none"
+   echo "ecdh-curve prime256v1"
   echo "client-config-dir $CCDDIR"
    echo "ifconfig-pool-persist ${contract.ippPath}"
   echo "keepalive 10 60"
