@@ -172,6 +172,27 @@ if ! command -v openssl >/dev/null 2>&1; then
   echo "ERROR: openssl is required to validate the public OpenVPN server certificate."
   exit 1
 fi
+PUBLIC_CERT_FILE=""
+PUBLIC_KEY_FILE=""
+for PUBLIC_CERT_DIR in \
+  /etc/letsencrypt/live/isplatty.org-wildcard \
+  /etc/letsencrypt/live/isplatty.org-required-hosts
+do
+  if [ -s "$PUBLIC_CERT_DIR/fullchain.pem" ] && [ -s "$PUBLIC_CERT_DIR/privkey.pem" ]; then
+    PUBLIC_CERT_FILE="$PUBLIC_CERT_DIR/fullchain.pem"
+    PUBLIC_KEY_FILE="$PUBLIC_CERT_DIR/privkey.pem"
+    break
+  fi
+done
+if [ -z "$PUBLIC_CERT_FILE" ] || [ -z "$PUBLIC_KEY_FILE" ]; then
+  echo "ERROR: A public Let's Encrypt certificate for the router-management endpoint was not found."
+  echo "       Expected isplatty.org-wildcard or isplatty.org-required-hosts."
+  exit 1
+fi
+CERT_FILE="$PUBLIC_CERT_FILE"
+KEY_FILE="$PUBLIC_KEY_FILE"
+CA_FILE="$MANAGEMENT_CA_FILE"
+echo "    Using public OpenVPN certificate: $CERT_FILE"
 CERT_TMP="$(mktemp -d)"
 trap 'rm -rf "$CERT_TMP"' EXIT
 awk 'BEGIN { n=0 } /-----BEGIN CERTIFICATE-----/ { n++ } n == 1 { print } /-----END CERTIFICATE-----/ && n == 1 { exit }' "$CERT_FILE" > "$CERT_TMP/leaf.pem"
