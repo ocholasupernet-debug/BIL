@@ -118,7 +118,7 @@ test("coexistence hotspot uses a usable DHCP pool and preserves child diagnostic
   assert.match(scriptsRoute, /coexistence hotspot dry-run failed/);
   assert.match(scriptsRoute, /verbose=yes dry-run/);
   assert.match(scriptsRoute, /COEXISTENCE BUNDLE FAILED at/);
-  assert.match(scriptsRoute, /isolated hotspot bundle import failed after .*bytes; inspect failed-ochola-coexistence-hotspot\.rsc.*failing stage/);
+  assert.match(scriptsRoute, /isolated hotspot bundle failed after .*bytes; inspect the RouterOS log/);
 });
 
 test("installer bootstraps the public CA and validates managed HTTPS fetches", () => {

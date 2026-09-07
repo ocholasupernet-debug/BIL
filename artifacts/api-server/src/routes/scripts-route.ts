@@ -983,7 +983,7 @@ export function buildMainhotspotRsc(
     :local body ("step=" . [$ocholaFormEncode $1] . "&name=" . [$ocholaFormEncode $2] . "&phase=" . [$ocholaFormEncode $3] . "&err=" . [$ocholaFormEncode $4] . "&rname=" . [$ocholaFormEncode $IPRname])
     :do {
         /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
-    } on-error={}
+    } on-error={ :put "WARN: progress callback failed; continuing installer." }
 }`
     : "";
   const progressCompletionDef = progressUrl
@@ -1003,6 +1003,14 @@ export function buildMainhotspotRsc(
     validateGeneratedRouterScript(
       progressUrl ? script : script.replace(/^[ \t]*\$pg[^\n]*\n/gm, ""),
     );
+  const safeProgressCall = (
+    step: number,
+    name: string,
+    phase: string,
+    errorExpression = '""',
+  ): string => progressUrl
+    ? `:do { $pg ${step} "${name}" "${phase}" ${errorExpression} } on-error={ :put "WARN: progress update for ${name} failed; continuing installer." }`
+    : "";
   const installMarkerReset = `
 :global ocholaHotspotInstallMarker
 :global ocholaPppoeInstallMarker
@@ -1133,107 +1141,300 @@ export function buildMainhotspotRsc(
 
 ${pgDef}
 ${formEncodeDef}
-${httpsTrustBootstrap}
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :put "INSTALLER_REVISION=${installerRevision}"
 
-:local bridgeCount [:len [/interface bridge find]]
-:local hotspotCount [:len [/ip hotspot find]]
-:local dhcpCount [:len [/ip dhcp-server find]]
-:local poolCount [:len [/ip pool find]]
-:local radiusCount [:len [/radius find]]
-:local filterCount [:len [/ip firewall filter find]]
-:local natCount [:len [/ip firewall nat find]]
-:local ovpnCount [:len [/interface ovpn-client find]]
-:local ipsecCount [:len [/ip ipsec peer find]]
-:local hotspotUserCount [:len [/ip hotspot user find]]
-:local pppUserCount [:len [/ppp secret find]]
-:local fileCount [:len [/file find]]
-:put ("COEXISTENCE AUDIT — bridges=" . $bridgeCount . ", hotspots=" . $hotspotCount . ", dhcp=" . $dhcpCount . ", pools=" . $poolCount . ", radius=" . $radiusCount . ", firewall=" . $filterCount . ", nat=" . $natCount . ", ovpn=" . $ovpnCount . ", ipsec=" . $ipsecCount . ", hotspot-users=" . $hotspotUserCount . ", ppp-users=" . $pppUserCount . ", files=" . $fileCount)
-$pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . $hotspotCount . ";dhcp=" . $dhcpCount . ";pools=" . $poolCount . ";radius=" . $radiusCount . ";firewall=" . $filterCount . ";nat=" . $natCount . ";ovpn=" . $ovpnCount . ";ipsec=" . $ipsecCount . ";hotspot-users=" . $hotspotUserCount . ";ppp-users=" . $pppUserCount . ";files=" . $fileCount)
-
+:local errors ""
+:local trustStatus "FAILED"
+:local trustError ""
+:local auditStatus "FAILED"
+:local auditError ""
+:local versionStatus "FAILED"
+:local versionError ""
+:local vpnStageStatus "FAILED"
+:local vpnStageError ""
+:local hotspotStageStatus "FAILED"
+:local hotspotStageError ""
+:local heartbeatStatus "SKIPPED"
+:local heartbeatError ""
+:local finalAuditStatus "FAILED"
+:local finalAuditError ""
+:local bridgeCount 0
+:local hotspotCount 0
+:local dhcpCount 0
+:local poolCount 0
+:local radiusCount 0
+:local filterCount 0
+:local natCount 0
+:local ovpnCount 0
+:local ipsecCount 0
+:local hotspotUserCount 0
+:local pppUserCount 0
+:local fileCount 0
 :local vpnConfigured false
 :local vpnProtocol ""
+:local vpnStatus "FAILED"
 :local vpnFailureSummary ""
-:local routerOsVersion [/system resource get version]
-:local routerOsMajorDigit [:pick $routerOsVersion 0 1]
+:local routerOsVersion ""
+:local routerOsMajorDigit ""
 :local majorVersion 0
-:if ($routerOsMajorDigit = "7") do={
-    :set majorVersion 7
-} else={
-    :if ($routerOsMajorDigit = "6") do={
-        :set majorVersion 6
-    } else={
-        :error ("Unsupported RouterOS version " . $routerOsVersion . ". Only RouterOS 6.48+ and 7.x are supported.")
-    }
-}
-:if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
 :local openVpnUrl ""
- :local openVpnBackupUrl ""
-    :local wireGuardUrl ""
-    :local ipsecUrl ""
+:local openVpnBackupUrl ""
+:local wireGuardUrl ""
+:local ipsecUrl ""
+:local vpnIp ""
+:local coexistenceBundleBytes ""
+:local coexistencePreflightError ""
+
+# Stage 1: trust bootstrap. Failure is recorded; later stages still run and
+# report their own HTTPS/download failures rather than stopping this installer.
+:do {
+${httpsTrustBootstrap}
+    :set trustStatus "SUCCESS"
+    :put "SUCCESS: HTTPS trust bootstrap completed."
+    ${safeProgressCall(0, "coexistence-trust", "applied")}
+} on-error={
+    :set trustError $error
+    :if ([:len $trustError] = 0) do={ :set trustError "HTTPS trust bootstrap failed without a RouterOS error message." }
+    :set errors ($errors . "https-trust: " . $trustError . "; ")
+    :put ("FAILED: HTTPS trust bootstrap - " . $trustError)
+    ${safeProgressCall(0, "coexistence-trust", "failed", "$trustError")}
+}
+
+# Stage 2: read-only audit before any Ochola-owned resource is added.
+:do {
+    :set bridgeCount [:len [/interface bridge find]]
+    :set hotspotCount [:len [/ip hotspot find]]
+    :set dhcpCount [:len [/ip dhcp-server find]]
+    :set poolCount [:len [/ip pool find]]
+    :set radiusCount [:len [/radius find]]
+    :set filterCount [:len [/ip firewall filter find]]
+    :set natCount [:len [/ip firewall nat find]]
+    :set ovpnCount [:len [/interface ovpn-client find]]
+    :set ipsecCount [:len [/ip ipsec peer find]]
+    :set hotspotUserCount [:len [/ip hotspot user find]]
+    :set pppUserCount [:len [/ppp secret find]]
+    :set fileCount [:len [/file find]]
+    :set auditStatus "SUCCESS"
+    :put ("SUCCESS: initial coexistence audit - bridges=" . $bridgeCount . ", hotspots=" . $hotspotCount . ", dhcp=" . $dhcpCount . ", pools=" . $poolCount . ", radius=" . $radiusCount . ", firewall=" . $filterCount . ", nat=" . $natCount . ", ovpn=" . $ovpnCount . ", ipsec=" . $ipsecCount . ", hotspot-users=" . $hotspotUserCount . ", ppp-users=" . $pppUserCount . ", files=" . $fileCount)
+    ${safeProgressCall(0, "coexistence-audit", "audited")}
+} on-error={
+    :set auditError $error
+    :if ([:len $auditError] = 0) do={ :set auditError "initial audit failed without a RouterOS error message." }
+    :set errors ($errors . "initial-audit: " . $auditError . "; ")
+    :put ("FAILED: initial coexistence audit - " . $auditError)
+    ${safeProgressCall(0, "coexistence-audit", "failed", "$auditError")}
+}
+
+# Stage 3: RouterOS version and network preflight. Keep the version dispatch
+# flat so RouterOS 6 parses it before any later stage is attempted.
+:do {
+    :set routerOsVersion [/system resource get version]
+    :set routerOsMajorDigit [:pick $routerOsVersion 0 1]
+    :set majorVersion 0
+    :if ($routerOsMajorDigit = "7") do={ :set majorVersion 7 }
+    :if ($routerOsMajorDigit = "6") do={ :set majorVersion 6 }
+    :if ($majorVersion = 0) do={ :error ("Unsupported RouterOS version " . $routerOsVersion . ". Only RouterOS 6.48+ and 7.x are supported.") }
+    :if ([/ping address=8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; management VPN and hotspot downloads may fail." }
+    :set versionStatus "SUCCESS"
+    :put ("SUCCESS: RouterOS/network preflight completed - " . $routerOsVersion)
+} on-error={
+    :set versionError $error
+    :if ([:len $versionError] = 0) do={ :set versionError "RouterOS/network preflight failed without a RouterOS error message." }
+    :set errors ($errors . "version-network: " . $versionError . "; ")
+    :put ("FAILED: RouterOS/network preflight - " . $versionError)
+    ${safeProgressCall(0, "coexistence-preflight", "failed", "$versionError")}
+}
+
+# Stage 4: management VPN. Each protocol attempt already retains its child
+# diagnostics; failure of all protocols is recorded but does not stop later
+# coexistence stages.
+:do {
 ${openVpnSelection}
 ${openVpnBackupSelection}
-    ${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
-    ${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
+    :set wireGuardUrl ""
+    :set ipsecUrl ""
+${!coexistenceFallbacksDisabled && routerWireGuardUrl ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7) : `:set wireGuardUrl ""`}
+${!coexistenceFallbacksDisabled && routerIpsecUrl ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl) : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "ochola-coexist-vpn-openvpn.rsc")}
 ${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "ochola-coexist-vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt.replaceAll("vpn-wireguard.rsc", "ochola-coexist-vpn-wireguard.rsc")}
 ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
-:if (!$vpnConfigured) do={
-    :put ("COEXISTENCE STOPPED — no management VPN was installed. " . $vpnFailureSummary)
-    $pg 1 "coexistence" "failed" $vpnFailureSummary
-    :error ("Coexistence stopped without changing existing billing resources: " . $vpnFailureSummary)
+    :local verifiedVpnInterface "${safeManagementInterfaceName}"
+    :if ($vpnProtocol = "openvpn-backup") do={ :set verifiedVpnInterface "${safeBackupManagementInterfaceName}" }
+    :local expectedVpnPrefix "10.8.5."
+    :local expectedVpnGateway "10.8.5.1"
+    :if ($vpnProtocol = "openvpn-backup") do={
+        :set expectedVpnPrefix "10.8.6."
+        :set expectedVpnGateway "10.8.6.1"
+    }
+    :local vpnResourceReady false
+    :if ($vpnConfigured && ($vpnProtocol = "openvpn" || $vpnProtocol = "openvpn-backup")) do={
+        :for vpnVerifyAttempt from=1 to=12 do={
+            :if (!$vpnResourceReady) do={
+                :foreach vpnClient in=[/interface ovpn-client find where name=$verifiedVpnInterface] do={
+                    :if ([/interface ovpn-client get $vpnClient running] = true) do={
+                        :foreach addressId in=[/ip address find where interface=$verifiedVpnInterface] do={
+                            :local addressValue [/ip address get $addressId address]
+                            :local slashPos [:find $addressValue "/"]
+                            :local candidateIp $addressValue
+                            :if ($slashPos >= 0) do={ :set candidateIp [:pick $addressValue 0 $slashPos] }
+                            :if ([:len $candidateIp] > [:len $expectedVpnPrefix] && [:pick $candidateIp 0 [:len $expectedVpnPrefix]] = $expectedVpnPrefix && $candidateIp != $expectedVpnGateway) do={
+                                :set vpnIp $candidateIp
+                                :set vpnResourceReady true
+                                :set vpnStatus "CONNECTED"
+                            }
+                        }
+                    }
+                }
+                :if (!$vpnResourceReady) do={ :delay 5s }
+            }
+        }
+    } else={
+        :if ($vpnConfigured && $vpnProtocol = "wireguard") do={
+            :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10\\.8\\.5\\.[0-9]+/"]] > 0) do={
+                :set vpnResourceReady true
+                :set vpnStatus "CONNECTED"
+                :foreach addressId in=[/ip address find where interface="${safeWireGuardInterfaceName}"] do={
+                    :local addressValue [/ip address get $addressId address]
+                    :local slashPos [:find $addressValue "/"]
+                    :if ($slashPos >= 0) do={ :set vpnIp [:pick $addressValue 0 $slashPos] }
+                }
+            }
+        }
+        :if ($vpnConfigured && $vpnProtocol = "ipsec") do={
+            :if ([:len [/ip ipsec policy find where comment~"IPsec management policy"]] > 0) do={
+                :set vpnResourceReady true
+                :set vpnStatus "CONFIGURED"
+            }
+        }
+    }
+    :if ($vpnConfigured && !$vpnResourceReady) do={
+        :set vpnStatus "FAILED"
+        :set vpnFailureSummary ($vpnFailureSummary . "selected management VPN did not pass parent-level resource verification; ")
+    }
+    :if (!$vpnConfigured) do={
+        :set vpnFailureSummary ($vpnFailureSummary . "no management VPN protocol succeeded; ")
+    }
+    :if ([:len $vpnFailureSummary] > 0) do={
+        :set vpnStageError $vpnFailureSummary
+        :set errors ($errors . "management-vpn: " . $vpnFailureSummary . "; ")
+    }
+    :if ($vpnConfigured && $vpnResourceReady) do={
+        :set vpnStageStatus "SUCCESS"
+        :put ("SUCCESS: management VPN - " . $vpnProtocol . " added; existing customer configuration was not replaced.")
+        ${safeProgressCall(1, "coexistence-vpn", "applied", '("management-vpn=" . $vpnProtocol)')}
+    } else={
+        :set vpnStageStatus "FAILED"
+        :if ([:len $vpnStageError] = 0) do={ :set vpnStageError "management VPN did not become ready." }
+        :put ("FAILED: management VPN - " . $vpnStageError)
+        ${safeProgressCall(1, "coexistence-vpn", "failed", "$vpnStageError")}
+    }
+    :put ("VPN_STATUS=" . $vpnStatus)
+    :put ("VPN_IP=" . $vpnIp)
+} on-error={
+    :set vpnStageError $error
+    :if ([:len $vpnStageError] = 0) do={ :set vpnStageError "management VPN stage failed without a RouterOS error message." }
+    :set errors ($errors . "management-vpn: " . $vpnStageError . "; ")
+    :put ("FAILED: management VPN stage - " . $vpnStageError)
+    ${safeProgressCall(1, "coexistence-vpn", "failed", "$vpnStageError")}
 }
-:put ("COEXISTENCE VPN READY — " . $vpnProtocol . " added; existing customer configuration was not replaced.")
-$pg 1 "coexistence-vpn" "applied" ("management-vpn=" . $vpnProtocol)
-${coexistenceHotspotUrl ? `
-# Install Ochola's isolated hotspot service only after the management VPN is ready.
-:local coexistenceBundleBytes ""
-:local coexistencePreflightError ""
+
+# Stage 5: isolated hotspot bundle. This never removes or resets existing
+# billing, customer-access, LAN, PPPoE, or existing hotspot resources.
 :do {
+${coexistenceHotspotUrl ? `
     :global ocholaCoexistenceError
     :set ocholaCoexistenceError ""
+    :set coexistenceBundleBytes ""
+    :set coexistencePreflightError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
-    # RouterOS 7 can report the exact source line and column for import-time
-    # syntax/property failures without changing configuration. RouterOS 6
-    # does not have this import option, so the normal import remains the
-    # compatibility path there.
     :if ($majorVersion >= 7) do={
-        :do {
-            /import "ochola-coexistence-hotspot.rsc.download" verbose=yes dry-run
-        } on-error={
-            :set coexistencePreflightError $error
-        }
-        :if ([:len $coexistencePreflightError] > 0) do={
-            :error ("coexistence hotspot dry-run failed: " . $coexistencePreflightError)
-        }
+        :do { /import "ochola-coexistence-hotspot.rsc.download" verbose=yes dry-run } on-error={ :set coexistencePreflightError $error }
+        :if ([:len $coexistencePreflightError] > 0) do={ :error ("coexistence hotspot dry-run failed: " . $coexistencePreflightError) }
     }
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
-    $pg 1 "coexistence-hotspot" "applied" ""
+    :set hotspotStageStatus "SUCCESS"
+    :put "SUCCESS: isolated coexistence hotspot bundle installed; existing customer services remain untouched."
+    ${safeProgressCall(2, "coexistence-hotspot", "applied")}
+` : `
+    :error "isolated coexistence hotspot bundle URL was not provided."
+`}
 } on-error={
     :global ocholaCoexistenceError
-    :local hotspotError $ocholaCoexistenceError
-    :if ([:len $hotspotError] = 0) do={
-        :set hotspotError ("isolated hotspot bundle import failed after " . $coexistenceBundleBytes . " bytes; inspect failed-ochola-coexistence-hotspot.rsc and the RouterOS log for the failing stage.")
-    }
-    :put ("COEXISTENCE STOPPED — isolated hotspot service was not installed: " . $hotspotError)
-    $pg 1 "coexistence-hotspot" "failed" $hotspotError
+    :set hotspotStageError $error
+    :if ([:len $hotspotStageError] = 0) do={ :set hotspotStageError ("isolated hotspot bundle failed after " . $coexistenceBundleBytes . " bytes; inspect the RouterOS log.") }
+    :set errors ($errors . "isolated-hotspot: " . $hotspotStageError . "; ")
+    :put ("FAILED: isolated coexistence hotspot - " . $hotspotStageError)
+    ${safeProgressCall(2, "coexistence-hotspot", "failed", "$hotspotStageError")}
     :do { /file remove [find name="failed-ochola-coexistence-hotspot.rsc"] } on-error={}
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
-    :error ("Coexistence stopped without changing existing billing resources; isolated hotspot failed: " . $hotspotError)
 }
-` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; ${progressUrl ? '$pg 1 "coexistence-hotspot" "failed" "missing bundle";' : ""} :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
-${safeHeartbeatUrl ? `:do {
+
+# Stage 6: authenticated heartbeat. It is independent of VPN and hotspot
+# success so it can still provide recovery telemetry after a partial install.
+:do {
+${safeHeartbeatUrl ? `
     /tool fetch url="${safeHeartbeatUrl}?coexist=1" keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
-    :put "COEXISTENCE HEARTBEAT SENT — existing customer services remain under their current configuration."
-} on-error={ :put "WARN: coexistence heartbeat could not be sent; retry the installer after the VPN is up." }
-` : ""}
+    :set heartbeatStatus "SUCCESS"
+    :put "SUCCESS: coexistence heartbeat sent; existing customer services remain under their current configuration."
+    ${safeProgressCall(3, "coexistence-heartbeat", "applied")}
+` : `
+    :set heartbeatStatus "FAILED"
+    :set heartbeatError "authenticated heartbeat URL was not provided."
+    :error $heartbeatError
+`}
+} on-error={
+    :set heartbeatError $error
+    :if ([:len $heartbeatError] = 0) do={ :set heartbeatError "coexistence heartbeat failed without a RouterOS error message." }
+    :set errors ($errors . "heartbeat: " . $heartbeatError . "; ")
+    :put ("FAILED: coexistence heartbeat - " . $heartbeatError)
+    ${safeProgressCall(3, "coexistence-heartbeat", "failed", "$heartbeatError")}
+}
+
+# Stage 7: final read-only audit. This runs even when VPN or hotspot failed.
+:do {
+    :set bridgeCount [:len [/interface bridge find]]
+    :set hotspotCount [:len [/ip hotspot find]]
+    :set dhcpCount [:len [/ip dhcp-server find]]
+    :set poolCount [:len [/ip pool find]]
+    :set radiusCount [:len [/radius find]]
+    :set filterCount [:len [/ip firewall filter find]]
+    :set natCount [:len [/ip firewall nat find]]
+    :set ovpnCount [:len [/interface ovpn-client find]]
+    :set ipsecCount [:len [/ip ipsec peer find]]
+    :set hotspotUserCount [:len [/ip hotspot user find]]
+    :set pppUserCount [:len [/ppp secret find]]
+    :set fileCount [:len [/file find]]
+    :set finalAuditStatus "SUCCESS"
+    :put ("SUCCESS: final coexistence audit - bridges=" . $bridgeCount . ", hotspots=" . $hotspotCount . ", dhcp=" . $dhcpCount . ", pools=" . $poolCount . ", radius=" . $radiusCount . ", firewall=" . $filterCount . ", nat=" . $natCount . ", ovpn=" . $ovpnCount . ", ipsec=" . $ipsecCount . ", hotspot-users=" . $hotspotUserCount . ", ppp-users=" . $pppUserCount . ", files=" . $fileCount)
+    ${safeProgressCall(4, "coexistence-final-audit", "audited")}
+} on-error={
+    :set finalAuditError $error
+    :if ([:len $finalAuditError] = 0) do={ :set finalAuditError "final audit failed without a RouterOS error message." }
+    :set errors ($errors . "final-audit: " . $finalAuditError . "; ")
+    :put ("FAILED: final coexistence audit - " . $finalAuditError)
+    ${safeProgressCall(4, "coexistence-final-audit", "failed", "$finalAuditError")}
+}
+
+# Final summary: no stage above can terminate this coexistence installer.
+:put "======================================================"
+:put "COEXISTENCE INSTALLATION SUMMARY"
+:if ($trustStatus = "SUCCESS") do={ :put "SUCCESS: HTTPS trust bootstrap" } else={ :put ("FAILED: HTTPS trust bootstrap - " . $trustError) }
+:if ($auditStatus = "SUCCESS") do={ :put "SUCCESS: initial audit" } else={ :put ("FAILED: initial audit - " . $auditError) }
+:if ($versionStatus = "SUCCESS") do={ :put "SUCCESS: RouterOS/network preflight" } else={ :put ("FAILED: RouterOS/network preflight - " . $versionError) }
+:if ($vpnStageStatus = "SUCCESS") do={ :put ("SUCCESS: management VPN (" . $vpnProtocol . ")") } else={ :put ("FAILED: management VPN - " . $vpnStageError) }
+:if ($hotspotStageStatus = "SUCCESS") do={ :put "SUCCESS: isolated coexistence hotspot" } else={ :put ("FAILED: isolated coexistence hotspot - " . $hotspotStageError) }
+:if ($heartbeatStatus = "SUCCESS") do={ :put "SUCCESS: authenticated heartbeat" } else={ :put ("FAILED: authenticated heartbeat - " . $heartbeatError) }
+:if ($finalAuditStatus = "SUCCESS") do={ :put "SUCCESS: final audit" } else={ :put ("FAILED: final audit - " . $finalAuditError) }
+:if ([:len $errors] = 0) do={ :put "ERRORS: none" } else={ :put ("ERRORS: " . $errors) }
+:put "COEXISTENCE COMPLETE: existing billing, customer-access, LAN, PPPoE, and other existing configuration was not removed or reset."
+${progressCompletionDef}
 `);
   }
 

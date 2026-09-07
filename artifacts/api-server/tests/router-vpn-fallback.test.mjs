@@ -106,7 +106,7 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
 test("installer reads RouterOS version locally and never defaults an unknown router to version 6", () => {
   assert.match(scriptsRoute, /\/system resource get version/);
   assert.doesNotMatch(scriptsRoute, /:global version \[\/system package update get installed-version\]/);
-  assert.match(scriptsRoute, /:local routerOsMajorDigit \[:pick \$routerOsVersion 0 1\]/);
+  assert.match(scriptsRoute, /:set routerOsMajorDigit \[:pick \$routerOsVersion 0 1\]/);
   assert.match(scriptsRoute, /\$routerOsMajorDigit = "7"/);
   assert.match(scriptsRoute, /\$routerOsMajorDigit = "6"/);
   assert.match(scriptsRoute, /Unsupported RouterOS version/);

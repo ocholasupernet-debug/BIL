@@ -71,6 +71,14 @@ test("coexistence installer uses the same flat progress function", () => {
 
   assert.equal((script.match(/:global ocholaFormEncode do=\{/g) ?? []).length, 1);
   assert.doesNotMatch(script, /:local formEncode do=\{|\$char|\$output/);
+  assert.equal((script.match(/# Stage [1-7]/g) ?? []).length, 7);
+  assert.match(script, /:local errors ""/);
+  assert.match(script, /COEXISTENCE INSTALLATION SUMMARY/);
+  assert.match(script, /SUCCESS: management VPN/);
+  assert.match(script, /FAILED: management VPN/);
+  assert.match(script, /ERRORS: /);
+  assert.doesNotMatch(script, /COEXISTENCE STOPPED|Coexistence stopped without changing/);
+  assert.match(script, /WARN: progress callback failed; continuing installer/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });
 
@@ -119,9 +127,9 @@ test("Self Install coexistence uses a RouterOS 6-safe CA fallback argument", () 
     "coexist",
     "https://come.isplatty.org/api/scripts/coexistence-hotspot.rsc",
   );
-  const line36 = script.split("\n")[35] ?? "";
+  const caFallbackLine = script.split("\n").find((line) => line.includes("/file add name=$caFile contents=")) ?? "";
 
-  assert.match(line36, /\/file add name=\$caFile contents=/);
-  assert.doesNotMatch(line36, /name="\$caFile"/);
+  assert.match(caFallbackLine, /\/file add name=\$caFile contents=/);
+  assert.doesNotMatch(caFallbackLine, /name="\$caFile"/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });

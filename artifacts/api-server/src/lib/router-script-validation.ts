@@ -27,7 +27,8 @@ export function validateGeneratedRouterScript(script: string): string {
     column += 1;
     if (char === "\n") {
       if (inString) {
-        throw new Error(`Generated RouterOS script contains a line break inside a quoted string at line ${line}, column ${column}.`);
+        const offendingLine = normalized.split("\n")[line - 1] ?? "";
+        throw new Error(`Generated RouterOS script contains a line break inside a quoted string at line ${line}, column ${column}: ${JSON.stringify(offendingLine)}`);
       }
       line += 1;
       column = 0;
