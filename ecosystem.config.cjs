@@ -47,12 +47,13 @@ module.exports = {
       instances: 1,
       exec_mode: "fork",
 
-      // ── Mode 1: With nginx (recommended for production) ──────────────
-      // nginx serves static files, API only handles /api/* routes
+      // ── Mode 1: With nginx ────────────────────────────────────────────
+      // Nginx proxies tenant requests to this process, so the API must also
+      // serve the built SPA document for direct links such as /admin/... .
       env_production: {
         NODE_ENV: "production",
         PORT: "8080",
-        SERVE_STATIC: "false",
+        SERVE_STATIC: "true",
       },
 
       // ── Mode 2: Without nginx (simple single-port setup) ─────────────
