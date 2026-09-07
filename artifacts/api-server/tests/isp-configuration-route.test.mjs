@@ -67,6 +67,7 @@ test("Direct installation provides the staged router ports and sync flow", () =>
   assert.match(page, /router-vpn-manual/);
   assert.match(page, /ochola-management-vpn-ros\$\{routerOsMajor\}\.rsc/);
   assert.match(page, /RouterOS \{routerOsMajor\}/);
+  assert.match(page, /Download RouterOS \{routerOsMajor\} script for \{selectedRouter\.name\}/);
   assert.match(page, /creates both the primary and backup clients/);
 });
 
