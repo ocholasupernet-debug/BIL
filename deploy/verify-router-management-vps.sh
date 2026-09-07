@@ -186,6 +186,8 @@ if check_firewall; then
   echo "PASS: firewall is active"
 else
   echo "FAIL: firewall is active"
+  firewall_status="$("$UFW_BIN" status verbose 2>&1 | tr '\n' ';' || true)"
+  printf '::error title=Router-management firewall state::%s\n' "$firewall_status"
   FAILURES+=("firewall is active")
 fi
 if [ -n "$UFW_BIN" ]; then
@@ -205,6 +207,11 @@ if [ -n "$PRIMARY_SERVICE" ]; then
 fi
 if [ -n "$BACKUP_SERVICE" ]; then
   check "backup journal is readable" journalctl -u "$BACKUP_SERVICE" -n 20 --no-pager
+fi
+
+if ! check_management_forwarding; then
+  forwarding_rules="$(iptables -S FORWARD 2>&1 | tr '\n' ';' || true)"
+  printf '::error title=Router-management forwarding state::%s\n' "$forwarding_rules"
 fi
 
 if [ "${#FAILURES[@]}" -gt 0 ]; then
