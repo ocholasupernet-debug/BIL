@@ -4,10 +4,10 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import {
   getAdminApiToken, getAdminRole, getSelectedTenantId,
-  supabase, ADMIN_ID, isSuperAdmin,
+  supabase, ADMIN_ID,
 } from "@/lib/supabase";
 import {
-  Settings, Shield, CheckCircle2, XCircle, Loader2, Eye, EyeOff,
+  Settings, CheckCircle2, XCircle, Loader2, Eye, EyeOff,
   Plus, Edit2, Save, Wifi, WifiOff, Clock, AlertTriangle, X,
   Terminal, Server, RefreshCw, Lock, User, Hash, Globe, Zap,
   ChevronDown, ChevronUp,
@@ -264,9 +264,12 @@ function RouterForm({
     }
     setTesting(true); setTestResult(null);
     try {
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
       const r = await fetch("/api/router/test-raw", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           host:      form.host || form.vpn_ip || form.bridge_ip,
           port:      form.api_port || 8728,
@@ -742,7 +745,6 @@ function AdminRouterCard({
 /* ══════════════════════ Main Page ═══════════════════════════════ */
 export default function RouterAPIConfig() {
   const qc = useQueryClient();
-  const superAdmin = isSuperAdmin();
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingRouter, setEditingRouter] = useState<DbRouter | null>(null);
@@ -766,7 +768,10 @@ export default function RouterAPIConfig() {
   async function handleTestDirect(id: number) {
     setTestingId(id);
     try {
-      const r = await fetch(`/api/router/${id}/test`);
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const r = await fetch(`/api/router/${id}/test`, { headers });
       const j = await r.json() as TestResult & { warnings?: string[] };
       setTestResults(prev => ({ ...prev, [id]: j }));
 
@@ -778,7 +783,7 @@ export default function RouterAPIConfig() {
           ? { status: j.ok ? "online" : "offline", last_seen: new Date().toISOString() }
           : {}),
         ...(j.rosVersion ? { ros_version: j.rosVersion } : {}),
-      }).eq("id", id);
+       }).eq("id", id).eq("admin_id", ADMIN_ID);
 
       qc.invalidateQueries({ queryKey: ["routers_api_config"] });
     } catch {
@@ -806,50 +811,7 @@ export default function RouterAPIConfig() {
     description:           editingRouter.description ?? "",
   } : undefined;
 
-  /* ════ Read-only view for non-superadmins ════ */
-  if (!superAdmin) {
-    return (
-      <AdminLayout>
-        <div style={{ padding: "1.75rem 2rem", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          <div>
-            <h1 style={{ margin: 0, fontWeight: 800, fontSize: "1.4rem", color: "var(--isp-text)" }}>Router API Status</h1>
-            <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--isp-text-muted)" }}>Connection status for all configured routers</p>
-          </div>
-          <NetworkTabs active="router-api-config" />
-
-          {/* Access notice */}
-          <div style={{ background: "rgba(167,139,250,0.07)", border: "1px solid var(--isp-accent-glow)", borderRadius: 10, padding: "12px 16px", display: "flex", gap: 10, alignItems: "center" }}>
-            <Shield size={14} style={{ color: "var(--isp-accent)", flexShrink: 0 }} />
-            <p style={{ margin: 0, fontSize: 12, color: "var(--isp-accent)" }}>
-              <strong>Read-only view.</strong> Only SuperAdmins can edit router API credentials. Contact your platform administrator to update connection settings.
-            </p>
-          </div>
-
-          {isLoading ? (
-            <div style={{ textAlign: "center", padding: "40px 0", color: "var(--isp-text-muted)" }}>
-              <Loader2 size={22} className="animate-spin" style={{ display: "block", margin: "0 auto 8px" }} />
-              Loading routers…
-            </div>
-          ) : routers.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "60px 0", color: "var(--isp-text-muted)", fontSize: 14 }}>
-              No routers configured yet. Ask your SuperAdmin to add one.
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {routers.map(r => (
-                <RouterStatusCard
-                  key={r.id} router={r}
-                  onTest={handleTestDirect}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </AdminLayout>
-    );
-  }
-
-  /* ════ Full superadmin view ════ */
+  /* ════ Full tenant-admin view ════ */
   return (
     <AdminLayout>
       <div style={{ padding: "1.75rem 2rem", display: "flex", flexDirection: "column", gap: "1.5rem", minHeight: "100%" }}>
@@ -860,7 +822,7 @@ export default function RouterAPIConfig() {
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <h1 style={{ margin: 0, fontWeight: 800, fontSize: "1.4rem", color: "var(--isp-text)" }}>Router API Configuration</h1>
               <span style={{ padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700, background: "var(--isp-accent-glow)", color: "var(--isp-accent)", border: "1px solid var(--isp-accent-border)" }}>
-                SuperAdmin
+                ISP admin
               </span>
             </div>
             <p style={{ margin: 0, fontSize: 13, color: "var(--isp-text-muted)" }}>

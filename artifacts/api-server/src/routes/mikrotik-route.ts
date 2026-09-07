@@ -343,10 +343,12 @@ router.get("/router/live-by-host", async (req, res): Promise<void> => {
  * Quick connectivity test — does NOT fetch live data, just attempts to connect.
  * Returns latency, SSL status, whether VPN fallback was used, and any warnings.
  */
-router.get("/router/:id/test", async (req, res): Promise<void> => {
+router.get("/router/:id/test", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  const found = await getRouterCreds(id);
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) { res.status(403).json({ error: "A valid signed-in ISP account is required." }); return; }
+  const found = await getRouterCreds(id, adminId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP configured" }); return; }
 
   const { creds, row } = found;
@@ -1185,7 +1187,7 @@ router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
 });
 
 /* ─── POST /api/router/test-raw — test raw credentials before saving ───── */
-router.post("/router/test-raw", async (req, res): Promise<void> => {
+router.post("/router/test-raw", requireAdmin(), async (req, res): Promise<void> => {
   const { host, port, username, password, bridgeIp } = req.body as {
     host?: string; port?: number; username?: string; password?: string; bridgeIp?: string;
   };
