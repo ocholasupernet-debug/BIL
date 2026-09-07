@@ -318,6 +318,8 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);
   assert.match(scriptsRoute, /:local attemptPhase "start"/);
   assert.match(scriptsRoute, /server rejected \$\{safeLabel\}/);
+  assert.match(scriptsRoute, /function rejectMarkedServerResponse/);
+  assert.match(scriptsRoute, /OCHOLA_COEXISTENCE_ERROR/);
   assert.match(scriptsRoute, /child import/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });

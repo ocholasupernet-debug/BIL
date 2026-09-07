@@ -400,6 +400,26 @@ function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVp
 :if ([:tonum $fetchedSize] <= 0) do={ ${fail(`download created an empty file: ${label}`)} }${routerVpnErrorCheck}`;
 }
 
+function rejectMarkedServerResponse(
+  pathExpression: string,
+  label: string,
+  marker: string,
+  errorVariable: string,
+): string {
+  const safeLabel = rosString(label);
+  const safeMarker = rosString(marker);
+  return `:global ${errorVariable}
+:local serverResponse ""
+:do { :set serverResponse [/file get [find name=${pathExpression}] contents] } on-error={
+    :set ${errorVariable} "downloaded ${safeLabel} could not be inspected for a server error"
+    :error $${errorVariable}
+}
+:if ([:len $serverResponse] >= [:len "${safeMarker}"] && [:pick $serverResponse 0 [:len "${safeMarker}"]] = "${safeMarker}") do={
+    :set ${errorVariable} ("server rejected ${safeLabel}: " . $serverResponse)
+    :error $${errorVariable}
+}`;
+}
+
 const ROUTER_HTTPS_FETCH_OPTIONS =
   `mode=https check-certificate=yes`;
 type RouterCertificateMode = "verified" | "unverified";
@@ -1402,6 +1422,7 @@ ${coexistenceHotspotUrl ? `
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
+    ${rejectMarkedServerResponse('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download", "# OCHOLA_COEXISTENCE_ERROR", "ocholaCoexistenceError")}
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     /import "ochola-coexistence-hotspot.rsc.download"
@@ -2376,7 +2397,10 @@ router.get([
           routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
           routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
         }
-        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=on`;
+        const coexistenceGrantQuery = `grant=${encodeURIComponent(takeoverGrant)}`;
+        coexistenceHotspotUrl = installationMode === "coexist"
+          ? `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?${coexistenceGrantQuery}`
+          : `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=takeover&${coexistenceGrantQuery}`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
           `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
@@ -3513,9 +3537,18 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     ? "takeover"
     : "coexist";
   const certificateMode: RouterCertificateMode = "verified";
+  const sendCoexistenceError = (status: number, body: string): void => {
+    /* RouterOS fetch may discard non-2xx response bodies. This URL is only
+       embedded in a router-scoped installer, so preserve the HTTP status in
+       the text while returning 200 for reliable RouterOS diagnostics. */
+    res
+      .status(200)
+      .type("text/plain")
+      .send(`# OCHOLA_COEXISTENCE_ERROR\n# HTTP_STATUS=${status}\n${body}`);
+  };
 
   if (!Number.isInteger(routerId) || routerId <= 0 || !grant) {
-    res.status(401).type("text/plain").send("# Invalid or missing router installer authorization.");
+    sendCoexistenceError(401, "# Invalid or missing router installer authorization.");
     return;
   }
 
@@ -3523,7 +3556,7 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     ? verifyTakeoverGrant(grant, routerId)
     : verifyInstallerGrant(grant, routerId);
   if (!authorization) {
-    res.status(403).type("text/plain").send("# Router installer authorization is invalid, expired, or scoped to another router.");
+    sendCoexistenceError(403, "# Router installer authorization is invalid, expired, or scoped to another router.");
     return;
   }
 
@@ -3533,7 +3566,7 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     );
     const currentRouter = routers[0];
     if (!currentRouter) {
-      res.status(404).type("text/plain").send("# Router was not found for this ISP account.");
+      sendCoexistenceError(404, "# Router was not found for this ISP account.");
       return;
     }
     const admins = await sbGet<{ id: number; name: string }>(
@@ -3557,7 +3590,8 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
       .set("Cache-Control", "no-store")
       .send(content);
   } catch (error) {
-    res.status(503).type("text/plain").send(
+    sendCoexistenceError(
+      503,
       `# Could not generate the isolated coexistence hotspot bundle: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
