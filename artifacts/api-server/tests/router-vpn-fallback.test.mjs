@@ -122,6 +122,8 @@ test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on Ro
   assert.match(scriptsRoute, /ros-version=/);
   assert.doesNotMatch(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
+  assert.match(scriptsRoute, /diagnosticResponse/);
+  assert.match(scriptsRoute, /status\(diagnosticResponse \? 200 : status\)/);
 });
 
 test("authenticated installer reports machine-readable gates and validates backup pool", () => {

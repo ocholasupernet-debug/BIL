@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqnnn6s
+# INSTALLER_REVISION=rmtqo8v28
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqnnn6s"
+:put "INSTALLER_REVISION=rmtqo8v28"
 
 :local errors ""
 :local trustStatus "FAILED"

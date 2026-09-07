@@ -620,7 +620,7 @@ function buildCoexistenceHotspotRsc(
     `}`,
     `:local existingDhcp [/ip dhcp-server find name=$dhcpName]`,
     `:if ([:len $existingDhcp] = 0) do={`,
-    `  /ip dhcp-server add name=$dhcpName interface=$bridgeName address-pool=$poolName disabled=no comment=$bridgeTag`,
+    `  /ip dhcp-server add name=$dhcpName interface=$bridgeName address-pool=$poolName disabled=no`,
     `} else={`,
     `  :if ([/ip dhcp-server get $existingDhcp interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence DHCP name collision: $dhcpName is bound to another interface."; :error $ocholaCoexistenceError }`,
     `  /ip dhcp-server enable $existingDhcp`,
@@ -2322,12 +2322,12 @@ router.get([
            bake it into a daily auto-update scheduler; operators can request a
            fresh scoped grant when they start another install. */
         installerUrl = "";
-        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}${takeoverGrantQuery}`;
+        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
         routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
         coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=on`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
-          `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}${takeoverGrantQuery}`;
+          `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&protocol=${protocol}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
 
         try {
           const provisioning = await provisionRouterManagementOpenVpn({
@@ -2553,9 +2553,13 @@ router.get([
     ? "takeover"
     : "coexist";
   const takeoverGrant = String(req.query.grant ?? "").trim();
+  const diagnosticResponse = String(req.query.diagnostic ?? "").trim() === "1";
+  const sendRouterVpnError = (status: number, body: string): void => {
+    res.status(diagnosticResponse ? 200 : status).type("text/plain").send(body);
+  };
 
   if (!routerId || !/^[A-Za-z0-9_-]{8,128}$/.test(token)) {
-    res.status(401).type("text/plain").send(
+    sendRouterVpnError(401,
       "# OCHOLA_ROUTER_VPN_ERROR\n" +
       "# Invalid or expired router VPN bootstrap session.",
     );
@@ -2573,7 +2577,7 @@ router.get([
       `isp_routers?id=eq.${routerId}&or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})&select=id,admin_id,name,vpn_ip&limit=1`,
     );
     if (!rows[0]) {
-      res.status(401).type("text/plain").send(
+      sendRouterVpnError(401,
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
         "# Router VPN bootstrap is not authorized.",
       );
@@ -2582,7 +2586,7 @@ router.get([
     if (installationMode === "takeover") {
       const grant = verifyTakeoverGrant(takeoverGrant, routerId);
       if (!grant || grant.adminId !== Number(rows[0].admin_id)) {
-        res.status(403).type("text/plain").send(
+        sendRouterVpnError(403,
           "# OCHOLA_ROUTER_VPN_ERROR\n" +
           "# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.",
         );
@@ -2594,14 +2598,14 @@ router.get([
     const protocol = requestedRouterVpnProtocol(req.query.protocol);
     const routerOsMajor = requestedRouterOsMajor(req.params.rosVersion ?? req.query["ros-version"]);
     if (!routerOsMajor) {
-      res.status(400).type("text/plain").send(
+      sendRouterVpnError(400,
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
         "# RouterOS major version is required. The installer must read /system resource version first and request ros-version=6 or ros-version=7.",
       );
       return;
     }
     if (installationMode === "coexist" && !protocol.startsWith("openvpn")) {
-      res.status(410).type("text/plain").send(
+      sendRouterVpnError(410,
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
         "# WireGuard and IPsec fallbacks are disabled for coexistence installs. " +
         "Use the OpenVPN management child or select takeover mode.",
@@ -2619,7 +2623,7 @@ router.get([
       const isBackup = protocol === "openvpn-backup";
       const readiness = routerManagementVpnReadiness();
       if (!readiness.endpointConfigured) {
-        res.status(503).type("text/plain").send(
+        sendRouterVpnError(503,
           "# OCHOLA_ROUTER_VPN_ERROR\n" +
           "# Router-management VPN endpoint is not configured. " +
           "Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST, then retry.",
@@ -2628,7 +2632,7 @@ router.get([
       }
       const vpsHost = await routerVpnEndpointAddress(requestOrigin(req));
       if (!vpsHost) {
-        res.status(503).type("text/plain").send(
+        sendRouterVpnError(503,
           "# OCHOLA_ROUTER_VPN_ERROR\n" +
           "# VPS OpenVPN endpoint is not configured. Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST.",
         );
@@ -2663,7 +2667,7 @@ router.get([
       if ((!material && !routerWireGuardFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(dbServerPublicKey) ||
            !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
-         res.status(503).type("text/plain").send(
+         sendRouterVpnError(503,
            "# OCHOLA_ROUTER_VPN_ERROR\n" +
            "# Router WireGuard fallback is unavailable because server-side prerequisites are incomplete.\n" +
            "# Required: endpoint, server public key, router private key, and a ready server-side WireGuard peer.\n" +
@@ -2673,7 +2677,7 @@ router.get([
       }
       const endpointPort = material?.endpointPort ?? (Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820);
       if (endpointPort < 1 || endpointPort > 65535) {
-        res.status(503).type("text/plain").send("# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback has an invalid endpoint port.");
+         sendRouterVpnError(503, "# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback has an invalid endpoint port.");
         return;
       }
       script = generateRouterWireGuardClientScript({
@@ -2691,7 +2695,7 @@ router.get([
       const endpoint = material?.endpoint || routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
       const preSharedKey = material?.secret || routerEnv("ROUTER_IPSEC_PSK", routerId);
       if ((!material && !routerIpsecFallbackConfigured(routerId)) || !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
-         res.status(503).type("text/plain").send(
+         sendRouterVpnError(503,
            "# OCHOLA_ROUTER_VPN_ERROR\n" +
            "# Router IPsec fallback is unavailable because server-side prerequisites are incomplete.\n" +
            "# Required: endpoint, PSK, and a ready server-side IPsec peer/policy.\n" +
@@ -2720,7 +2724,7 @@ router.get([
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("ROUTER_OPENVPN_PORT") ? 503 : 500;
-    res.status(status).type("text/plain").send(`# OCHOLA_ROUTER_VPN_ERROR\n# Error generating router VPN bootstrap: ${message}`);
+    sendRouterVpnError(status, `# OCHOLA_ROUTER_VPN_ERROR\n# Error generating router VPN bootstrap: ${message}`);
   }
 });
 

@@ -129,6 +129,7 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
   assert.match(scriptsRoute, /certificate find where common-name="ISRG Root X1"/);
   assert.doesNotMatch(scriptsRoute, /\/certificate import[^\n]*trusted=yes/);
   assert.match(scriptsRoute, /\/certificate set \[find where common-name="ISRG Root X1"\] trusted=yes/);
+  assert.doesNotMatch(scriptsRoute, /\/ip dhcp-server add[^\n]*comment=\$bridgeTag/);
   assert.match(scriptsRoute, /certificate trust setup failed - /);
   assert.match(scriptsRoute, /ROUTER_HTTPS_FETCH_OPTIONS/);
   assert.match(scriptsRoute, /const ROUTER_HTTPS_FETCH_OPTIONS =\s+`mode=https check-certificate=yes`/);
