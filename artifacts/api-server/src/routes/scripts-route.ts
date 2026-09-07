@@ -698,7 +698,7 @@ function buildCoexistenceHotspotRsc(
     const timeout = toSessionTimeout(plan.validity, plan.validity_unit || "days");
     const shared = plan.shared_users || 1;
     lines.push(
-      `:if ([:len [/ip hotspot user profile find name="${safe(profile)}"]] = 0) do={ /ip hotspot user profile add name="${safe(profile)}" rate-limit="${safe(rateLimit)}" session-timeout=${safe(timeout)} shared-users=${shared} comment="${safe(tag)} plan" }`,
+      `:if ([:len [/ip hotspot user profile find name="${safe(profile)}"]] = 0) do={ /ip hotspot user profile add name="${safe(profile)}" rate-limit="${safe(rateLimit)}" session-timeout=${safe(timeout)} shared-users=${shared} }`,
     );
   }
   lines.push(
@@ -1067,7 +1067,25 @@ export function buildMainhotspotRsc(
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
     const failureDiagnostics = protocol.startsWith("openvpn")
-      ? `:put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
+      ? `:put "  OpenVPN diagnostic state (secret values are never printed):"
+          :put "  OpenVPN credential fields:"
+          :do {
+              :local childIds [/file find name="${tempFileName}"]
+              :if ([:len $childIds] > 0) do={
+                  :local childId [:pick $childIds 0]
+                  :local childText ""
+                  :do { :set childText [/file get $childId contents] } on-error={}
+                  :local userField "missing"
+                  :local passwordField "missing"
+                  :local certificateField "missing"
+                  :if ([:find $childText "user="] != nil) do={ :set userField "present" }
+                  :if ([:find $childText "password="] != nil) do={ :set passwordField "present" }
+                  :if ([:find $childText "certificate="] != nil) do={ :set certificateField "present" }
+                  :put ("    username-field=" . $userField . " password-field=" . $passwordField . " certificate-field=" . $certificateField)
+              } else={
+                  :put "    child script is unavailable, so credential fields could not be inspected."
+              }
+          } on-error={ :put "    credential-field inspection failed without exposing secret values." }
          :do {
              :local ovpnIds [/interface ovpn-client find]
              :if ([:len $ovpnIds] > 0) do={

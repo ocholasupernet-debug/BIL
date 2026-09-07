@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqogiq1
+# INSTALLER_REVISION=rmtqon0kt
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqogiq1"
+:put "INSTALLER_REVISION=rmtqon0kt"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -247,8 +247,8 @@
 # diagnostics; failure of all protocols is recorded but does not stop later
 # coexistence stages.
 :do {
-:set openVpnUrl ("https://come.isplatty.org/api/scripts/router-vpn.rsc?rid=90&token=example12345&mode=coexist&ros-version=" . [:tostr $majorVersion])
-:set openVpnBackupUrl ("https://come.isplatty.org/api/scripts/router-vpn.rsc?rid=90&token=example12345&mode=coexist&protocol=openvpn-backup&ros-version=" . [:tostr $majorVersion])
+:set openVpnUrl ("https://come.isplatty.org/api/scripts/router-vpn.rsc?rid=90&token=example12345&mode=coexist&diagnostic=1&ros-version=" . [:tostr $majorVersion])
+:set openVpnBackupUrl ("https://come.isplatty.org/api/scripts/router-vpn.rsc?rid=90&token=example12345&mode=coexist&protocol=openvpn-backup&diagnostic=1&ros-version=" . [:tostr $majorVersion])
     :set wireGuardUrl ""
     :set ipsecUrl ""
 :set wireGuardUrl ""
@@ -319,7 +319,25 @@
             }
         }
         :put ("  WARN [vpn-openvpn] FAILED: " . $vpnError)
-        :put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
+        :put "  OpenVPN diagnostic state (secret values are never printed):"
+          :put "  OpenVPN credential fields:"
+          :do {
+              :local childIds [/file find name="ochola-coexist-vpn-openvpn.rsc.download"]
+              :if ([:len $childIds] > 0) do={
+                  :local childId [:pick $childIds 0]
+                  :local childText ""
+                  :do { :set childText [/file get $childId contents] } on-error={}
+                  :local userField "missing"
+                  :local passwordField "missing"
+                  :local certificateField "missing"
+                  :if ([:find $childText "user="] != nil) do={ :set userField "present" }
+                  :if ([:find $childText "password="] != nil) do={ :set passwordField "present" }
+                  :if ([:find $childText "certificate="] != nil) do={ :set certificateField "present" }
+                  :put ("    username-field=" . $userField . " password-field=" . $passwordField . " certificate-field=" . $certificateField)
+              } else={
+                  :put "    child script is unavailable, so credential fields could not be inspected."
+              }
+          } on-error={ :put "    credential-field inspection failed without exposing secret values." }
          :do {
              :local ovpnIds [/interface ovpn-client find]
              :if ([:len $ovpnIds] > 0) do={
@@ -404,7 +422,25 @@
             }
         }
         :put ("  WARN [vpn-openvpn-backup] FAILED: " . $vpnError)
-        :put "  OpenVPN diagnostic state (credentials are intentionally omitted):"
+        :put "  OpenVPN diagnostic state (secret values are never printed):"
+          :put "  OpenVPN credential fields:"
+          :do {
+              :local childIds [/file find name="ochola-coexist-vpn-openvpn-backup.rsc.download"]
+              :if ([:len $childIds] > 0) do={
+                  :local childId [:pick $childIds 0]
+                  :local childText ""
+                  :do { :set childText [/file get $childId contents] } on-error={}
+                  :local userField "missing"
+                  :local passwordField "missing"
+                  :local certificateField "missing"
+                  :if ([:find $childText "user="] != nil) do={ :set userField "present" }
+                  :if ([:find $childText "password="] != nil) do={ :set passwordField "present" }
+                  :if ([:find $childText "certificate="] != nil) do={ :set certificateField "present" }
+                  :put ("    username-field=" . $userField . " password-field=" . $passwordField . " certificate-field=" . $certificateField)
+              } else={
+                  :put "    child script is unavailable, so credential fields could not be inspected."
+              }
+          } on-error={ :put "    credential-field inspection failed without exposing secret values." }
          :do {
              :local ovpnIds [/interface ovpn-client find]
              :if ([:len $ovpnIds] > 0) do={
