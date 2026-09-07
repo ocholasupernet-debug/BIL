@@ -1701,6 +1701,7 @@ export interface ConnectionTestResult {
   /** Router identity / model info detected during test */
   routerIdentity?: string;
   rosVersion?: string;
+  model?: string;
 }
 
 /* ─── Detect bridge interfaces from a live MikroTik router ──────────────── */
@@ -1788,26 +1789,35 @@ export async function testConnection(
     const latencyMs = Date.now() - start;
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    /* Fetch identity, resource info, and bridge interfaces in parallel */
+    /* Fetch identity, resource info, routerboard model, and bridge interfaces
+       in parallel. Each enrichment is independent because older RouterOS
+       versions and CHR may not expose routerboard or bridge resources. */
     let routerIdentity: string | undefined;
     let rosVersion: string | undefined;
+    let model: string | undefined;
     let bridgeInterfaces: string[] = [];
     let detectedBridgeInterface: string | undefined;
-    try {
-      const [identRows, resRows, bridgeRows] = await Promise.all([
-        withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
-      ]);
-      routerIdentity = identRows[0]?.name;
-      rosVersion     = resRows[0]?.version;
-      bridgeInterfaces = bridgeRows.map(r => r.name).filter(Boolean);
-      detectedBridgeInterface =
-        bridgeInterfaces.find(n => n === "hotspot-bridge") ??
-        bridgeInterfaces.find(n => n.toLowerCase().includes("hotspot")) ??
-        bridgeInterfaces.find(n => n.toLowerCase().includes("bridge")) ??
-        bridgeInterfaces[0];
-    } catch { /* enrichment failure is non-fatal */ }
+    const [identResult, resourceResult, bridgeResult, routerboardResult] = await Promise.allSettled([
+      withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/system/routerboard/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+    const identRows = identResult.status === "fulfilled" ? identResult.value : [];
+    const resourceRows = resourceResult.status === "fulfilled" ? resourceResult.value : [];
+    const bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
+    const routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
+    routerIdentity = identRows[0]?.name;
+    rosVersion = resourceRows[0]?.version;
+    model = routerboardRows[0]?.model
+      || routerboardRows[0]?.["board-name"]
+      || resourceRows[0]?.["board-name"];
+    bridgeInterfaces = bridgeRows.map(r => r.name).filter(Boolean);
+    detectedBridgeInterface =
+      bridgeInterfaces.find(n => n === "hotspot-bridge") ??
+      bridgeInterfaces.find(n => n.toLowerCase().includes("hotspot")) ??
+      bridgeInterfaces.find(n => n.toLowerCase().includes("bridge")) ??
+      bridgeInterfaces[0];
 
     try { conn.close(); } catch { /* ignore */ }
     const method: ConnectionTestResult["method"] =
@@ -1822,6 +1832,7 @@ export async function testConnection(
       portProbes,
       routerIdentity,
       rosVersion,
+      model,
       bridgeInterfaces,
       detectedBridgeInterface,
     };

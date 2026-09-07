@@ -2,7 +2,10 @@ import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, isSuperAdmin } from "@/lib/supabase";
+import {
+  getAdminApiToken, getAdminRole, getSelectedTenantId,
+  supabase, ADMIN_ID, isSuperAdmin,
+} from "@/lib/supabase";
 import {
   Settings, Shield, CheckCircle2, XCircle, Loader2, Eye, EyeOff,
   Plus, Edit2, Save, Wifi, WifiOff, Clock, AlertTriangle, X,
@@ -34,6 +37,7 @@ interface DbRouter {
   description: string | null;
   model: string | null;
   ros_version: string | null;
+  api_port: number | null;
   status: string;
   last_seen: string | null;
   created_at: string;
@@ -50,6 +54,7 @@ interface TestResult {
   usedVpnFallback?: boolean;
   bridgeInterfaces?: string[];
   detectedBridgeInterface?: string;
+  model?: string;
 }
 
 /* ══════════════════════ Styles ══════════════════════════════════ */
@@ -174,7 +179,7 @@ const EMPTY_FORM: RouterForm = {
   name: "", host: "",
   bridge_ip: "", vpn_ip: "", proxy_ip: "",
   bridge_interface: "", main_bridge_interface: "bridge",
-  router_username: "", router_secret: "", api_port: 8728, description: "",
+  router_username: "admin", router_secret: "", api_port: 8728, description: "",
 };
 
 /* ── FirewallScriptLink: collects VPS IP then generates a download link ──── */
@@ -253,6 +258,10 @@ function RouterForm({
       setTestResult({ ok: false, error: "Enter a MikroTik IP address first." });
       return;
     }
+    if (!form.router_username.trim()) {
+      setTestResult({ ok: false, error: "Enter the MikroTik API username." });
+      return;
+    }
     setTesting(true); setTestResult(null);
     try {
       const r = await fetch("/api/router/test-raw", {
@@ -261,94 +270,74 @@ function RouterForm({
         body: JSON.stringify({
           host:      form.host || form.vpn_ip || form.bridge_ip,
           port:      form.api_port || 8728,
-        username:  form.name.trim(),
-        password:  form.name.trim(),
+          username:  form.router_username.trim(),
+          password:  form.router_secret,
           bridgeIp:  form.vpn_ip || undefined,
         }),
       });
       const j = await r.json() as TestResult;
       setTestResult(j);
 
-      /* Auto-fill bridge_interface from detection if field is blank or still default */
-      if (j.ok && j.detectedBridgeInterface) {
+      /* The router identity belongs to the live RouterOS response, not to
+         credentials entered before the connection. Use it as the initial
+         record name only when this is a new manual configuration. */
+      if (j.ok) {
         setForm(f => ({
           ...f,
+          name: f.name.trim() || j.routerIdentity || "",
           bridge_interface: f.bridge_interface && f.bridge_interface !== "hotspot-bridge"
             ? f.bridge_interface
-            : j.detectedBridgeInterface!,
+            : j.detectedBridgeInterface || f.bridge_interface,
         }));
       }
 
       /* A raw credential test is not an installation-complete signal. It may
          update RouterOS metadata but must not promote a temporary setup record. */
-      if (j.ok && routerId) {
-        await supabase
-          .from("isp_routers")
-          .update({
-            ros_version: j.rosVersion || undefined,
-          })
-          .eq("id", routerId);
-      }
     } catch (e) {
       setTestResult({ ok: false, error: e instanceof Error ? e.message : "Test failed" });
     } finally { setTesting(false); }
   }
 
   async function handleSave() {
-    if (!form.name.trim()) { setSaveErr("Router name is required."); return; }
     if (!form.host.trim() && !form.vpn_ip.trim() && !form.bridge_ip.trim()) { setSaveErr("Enter a public IP, management VPN IP, or router LAN address."); return; }
+    if (!form.router_username.trim()) { setSaveErr("API username is required."); return; }
+    if (!testResult?.ok || !testResult.routerIdentity) {
+      setSaveErr("Test the connection first so the VPS can detect the router identity.");
+      return;
+    }
     setSaving(true); setSaveErr("");
     try {
-      const now = new Date();
-      const fmtDate = now.toLocaleString("en-KE", {
-        day: "2-digit", month: "short", year: "numeric",
-        hour: "2-digit", minute: "2-digit", hour12: true,
-      });
-
-      const userDesc = form.description.trim();
-      const autoDesc = `Manually installed on ${fmtDate}`;
-      const routerName = form.name.trim();
-
-      const payload = {
-        admin_id:              ADMIN_ID,
-        name:                  routerName,
-        host:                  form.host.trim(),
-        bridge_ip:             form.bridge_ip.trim()             || null,
-        vpn_ip:                form.vpn_ip.trim()                || null,
-        proxy_ip:              form.proxy_ip.trim()              || null,
-        bridge_interface:      form.bridge_interface.trim()      || "hotspot-bridge",
-        main_bridge_interface: form.main_bridge_interface.trim() || "bridge",
-        router_username:       routerName,
-        router_secret:         routerName,
-        description:           userDesc || null,
-        updated_at:            now.toISOString(),
-      };
-
-      let err;
-      let savedRouterId = routerId;
-      if (routerId) {
-        ({ error: err } = await supabase.from("isp_routers").update(payload).eq("id", routerId));
-      } else {
-        const result = await supabase.from("isp_routers").insert({
-          ...payload,
-          description: userDesc || autoDesc,
-          status:      "unknown",
-          created_at:  now.toISOString(),
-        }).select("id").single();
-        err = result.error;
-        savedRouterId = result.data?.id ?? null;
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const selectedTenantId = getSelectedTenantId();
+      if (getAdminRole() === "superadmin" && selectedTenantId) {
+        headers["X-Impersonated-Admin-Id"] = String(selectedTenantId);
       }
-      if (err) throw new Error(err.message);
-      if (savedRouterId) {
-        const poolResponse = await fetch("/api/admin/router/default-pools", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ adminId: ADMIN_ID, routerId: savedRouterId }),
-        });
-        const poolResult = await poolResponse.json().catch(() => ({})) as { ok?: boolean; error?: string };
-        if (!poolResponse.ok || !poolResult.ok) {
-          throw new Error(poolResult.error || "Router saved, but its default IP pools could not be created.");
-        }
+      const response = await fetch("/api/admin/router/manual-config", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          routerId,
+          name: form.name.trim() || testResult.routerIdentity,
+          host: form.host.trim(),
+          vpnIp: form.vpn_ip.trim(),
+          bridgeIp: form.bridge_ip.trim(),
+          proxyIp: form.proxy_ip.trim(),
+          bridgeInterface: form.bridge_interface.trim(),
+          mainBridgeInterface: form.main_bridge_interface.trim(),
+          username: form.router_username.trim(),
+          password: form.router_secret,
+          apiPort: form.api_port || 8728,
+          description: form.description.trim(),
+        }),
+      });
+      const result = await response.json().catch(() => ({})) as {
+        ok?: boolean; error?: string; router?: { identity?: string };
+      };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "The VPS could not save this router configuration.");
       }
       onSaved();
     } catch (e) {
@@ -373,8 +362,9 @@ function RouterForm({
       </div>
 
       <div style={field}>
-        <label style={lbl}><Server size={11} /> Router Name</label>
-        <input value={form.name} onChange={e => set("name", e.target.value)} style={inp} placeholder="e.g. Main Router - Nairobi" />
+           <label style={lbl}><Server size={11} /> Router Record Name</label>
+         <input value={form.name} onChange={e => set("name", e.target.value)} style={inp} placeholder="Filled from RouterOS identity after connection" />
+         <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Leave blank to use the identity detected by the VPS after a successful connection.</p>
       </div>
 
       <div style={{ ...grid2, marginBottom: 16 }}>
@@ -385,8 +375,8 @@ function RouterForm({
         </div>
         <div>
           <label style={lbl}><User size={11} /> API Username</label>
-          <input value={form.name.trim()} readOnly style={{ ...inp, opacity: 0.75 }} placeholder="Router name" />
-          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Same as the router name</p>
+           <input value={form.router_username} onChange={e => set("router_username", e.target.value)} style={inp} placeholder="e.g. admin" autoComplete="username" />
+           <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Forwarded to the VPS for the RouterOS connection.</p>
         </div>
       </div>
 
@@ -402,8 +392,8 @@ function RouterForm({
         </div>
         <div>
           <label style={lbl}><Lock size={11} /> API Password</label>
-          <PwInput value={form.name.trim()} onChange={() => undefined} placeholder="Router name" />
-          <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Same as the router name</p>
+           <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="MikroTik API password" />
+           <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Forwarded securely to the VPS; it is never returned in the response.</p>
         </div>
       </div>
 
@@ -557,7 +547,8 @@ function RouterForm({
           {testResult.ok && (
             <div style={{ fontSize: 11, color: "var(--isp-text-muted)", paddingLeft: 21, lineHeight: 1.7 }}>
               {testResult.routerIdentity && <p style={{ margin: 0 }}>Identity: <strong style={{ color: "var(--isp-text)" }}>{testResult.routerIdentity}</strong></p>}
-              {testResult.rosVersion && <p style={{ margin: 0 }}>RouterOS: <strong style={{ color: "var(--isp-text)" }}>{testResult.rosVersion}</strong></p>}
+               {testResult.rosVersion && <p style={{ margin: 0 }}>RouterOS: <strong style={{ color: "var(--isp-text)" }}>{testResult.rosVersion}</strong></p>}
+               {testResult.model && <p style={{ margin: 0 }}>Model: <strong style={{ color: "var(--isp-text)" }}>{testResult.model}</strong></p>}
               {testResult.usedVpnFallback && <p style={{ margin: 0, color: "#fbbf24" }}>⚠ Connected via VPN fallback IP</p>}
               {testResult.detectedBridgeInterface && (
                 <p style={{ margin: "2px 0 0" }}>
@@ -730,7 +721,7 @@ function AdminRouterCard({
             {[
               ["Public IP / Host", router.host || "—", true],
               ["API User",         router.router_username || "admin", true],
-              ["API Port",         "8728", false],
+              ["API Port",         String(router.api_port || 8728), false],
               ["API Password",     "••••••••", false],
               ["Model",            router.model || "—", false],
               ["ROS Version",      router.ros_version || "—", false],
@@ -764,7 +755,7 @@ export default function RouterAPIConfig() {
     queryFn: async () => {
       const { data } = await supabase
         .from("isp_routers")
-        .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,description,model,ros_version,status,last_seen,created_at,updated_at")
+        .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,api_port,description,model,ros_version,status,last_seen,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
         .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("name");
@@ -809,9 +800,9 @@ export default function RouterAPIConfig() {
     proxy_ip:              editingRouter.proxy_ip ?? "",
     bridge_interface:      editingRouter.bridge_interface ?? "",
     main_bridge_interface: editingRouter.main_bridge_interface ?? "bridge",
-    router_username:       editingRouter.name ?? "admin",
-    router_secret:         editingRouter.name ?? "",
-    api_port:              8728,
+    router_username:       editingRouter.router_username ?? "admin",
+    router_secret:         editingRouter.router_secret ?? "",
+    api_port:              editingRouter.api_port ?? 8728,
     description:           editingRouter.description ?? "",
   } : undefined;
 

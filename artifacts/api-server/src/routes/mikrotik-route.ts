@@ -34,7 +34,7 @@ import {
   generateVpsOvpnSetupScript,
   describeVpnArchitecture,
 } from "../lib/vpn-utils";
-import { sbSelect, supabaseConfigured } from "../lib/supabase-client";
+import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
@@ -42,7 +42,8 @@ import { routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { ROUTER_HTTPS_CERTIFICATE_FILE } from "../lib/router-https-trust.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
-import { requireAdmin } from "../lib/api-auth.js";
+import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -1146,10 +1147,13 @@ router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
 /* ─── POST /api/router/test-raw — test raw credentials before saving ───── */
 router.post("/router/test-raw", async (req, res): Promise<void> => {
   const { host, port, username, password, bridgeIp } = req.body as {
-    host: string; port?: number; username: string; password: string; bridgeIp?: string;
+    host?: string; port?: number; username?: string; password?: string; bridgeIp?: string;
   };
-  if (!host || !username) {
-    res.status(400).json({ error: "host and username are required" });
+  const requestedHost = String(host ?? "").trim();
+  const requestedBridgeIp = String(bridgeIp ?? "").trim();
+  const connectionHost = requestedHost || requestedBridgeIp;
+  if (!connectionHost || !String(username ?? "").trim()) {
+    res.status(400).json({ error: "host or bridgeIp and username are required" });
     return;
   }
 
@@ -1158,17 +1162,17 @@ router.post("/router/test-raw", async (req, res): Promise<void> => {
      Otherwise look up the tunnel IP by the router's WAN/host IP so
      withConn() can try the VPN path first (avoids 6-second WAN timeout). */
    const isVpnAddr = (ip: string) => /^10\.8\.[56]\./.test(ip);
-  let resolvedBridgeIp = bridgeIp?.trim() || undefined;
+  let resolvedBridgeIp = requestedBridgeIp || undefined;
   if (!resolvedBridgeIp || !isVpnAddr(resolvedBridgeIp)) {
     const vpnClients = readVpnClients();
-    const found = vpnIpFor(host.trim(), vpnClients);
+    const found = vpnIpFor(connectionHost, vpnClients);
     if (found) resolvedBridgeIp = found;
   }
 
   const creds: RouterCredentials = {
-    host:     host.trim(),
+    host:     connectionHost,
     port:     port ?? 8728,
-    username: username.trim(),
+    username: String(username).trim(),
     password: password ?? "",
     useSSL:   (port ?? 8728) === 8729,
     bridgeIp: resolvedBridgeIp,
@@ -1178,6 +1182,191 @@ router.post("/router/test-raw", async (req, res): Promise<void> => {
     res.status(result.ok ? 200 : 503).json(result);
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+/* ─── POST /api/admin/router/manual-config — probe and save from the VPS ────
+ *
+ * Manual router configuration deliberately does not trust a browser-supplied
+ * identity. The VPS connects with the supplied API fields, reads the live
+ * RouterOS identity/model/version, and only then persists the configuration.
+ * Credentials never appear in the response or application logs.
+ */
+router.post("/admin/router/manual-config", requireAdmin(), async (req, res): Promise<void> => {
+  const body = req.body as {
+    adminId?: number;
+    routerId?: number;
+    name?: string;
+    host?: string;
+    vpnIp?: string;
+    bridgeIp?: string;
+    proxyIp?: string;
+    bridgeInterface?: string;
+    mainBridgeInterface?: string;
+    username?: string;
+    password?: string;
+    apiPort?: number;
+    description?: string;
+  };
+  const adminId = authenticatedAdminId(req, body.adminId);
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  if (!supabaseConfigured) {
+    res.status(503).json({ ok: false, error: "Supabase is not configured on the API server." });
+    return;
+  }
+
+  const host = String(body.host ?? "").trim();
+  const vpnIp = String(body.vpnIp ?? "").trim();
+  const bridgeIp = String(body.bridgeIp ?? "").trim();
+  const connectionHost = host || vpnIp || bridgeIp;
+  const username = String(body.username ?? "").trim();
+  const password = String(body.password ?? "");
+  const rawPort = Number(body.apiPort ?? 8728);
+  const routerId = body.routerId === undefined || body.routerId === null
+    ? null
+    : Number(body.routerId);
+
+  if (!connectionHost || !username) {
+    res.status(400).json({ ok: false, error: "A public host, VPN IP, or LAN address and API username are required." });
+    return;
+  }
+  if (!Number.isInteger(rawPort) || rawPort < 1 || rawPort > 65535) {
+    res.status(400).json({ ok: false, error: "API port must be an integer between 1 and 65535." });
+    return;
+  }
+  if (routerId !== null && (!Number.isInteger(routerId) || routerId <= 0)) {
+    res.status(400).json({ ok: false, error: "routerId must be a positive integer." });
+    return;
+  }
+
+  const isVpnAddr = (ip: string) => /^10\.8\.[56]\./.test(ip);
+  let resolvedBridgeIp = vpnIp || undefined;
+  if (!resolvedBridgeIp || !isVpnAddr(resolvedBridgeIp)) {
+    const found = vpnIpFor(connectionHost, readVpnClients());
+    if (found) resolvedBridgeIp = found;
+  }
+
+  const result = await testConnection({
+    host: connectionHost,
+    port: rawPort,
+    username,
+    password,
+    useSSL: rawPort === 8729,
+    bridgeIp: resolvedBridgeIp,
+  });
+  if (!result.ok) {
+    res.status(503).json({
+      ok: false,
+      error: result.error || "The VPS could not connect to the MikroTik router.",
+      warnings: result.warnings,
+      portProbes: result.portProbes,
+    });
+    return;
+  }
+
+  const identity = String(result.routerIdentity ?? "").trim();
+  if (!identity) {
+    res.status(503).json({
+      ok: false,
+      error: "The router connected, but RouterOS did not return its identity. Nothing was saved.",
+      warnings: result.warnings,
+    });
+    return;
+  }
+
+  const routerName = String(body.name ?? "").trim() || identity;
+  const now = new Date().toISOString();
+  const payload: Record<string, unknown> = {
+    admin_id: adminId,
+    name: routerName,
+    host,
+    ip_address: host || connectionHost,
+    bridge_ip: bridgeIp || null,
+    vpn_ip: vpnIp || null,
+    proxy_ip: String(body.proxyIp ?? "").trim() || null,
+    bridge_interface: String(body.bridgeInterface ?? "").trim() || result.detectedBridgeInterface || null,
+    main_bridge_interface: String(body.mainBridgeInterface ?? "").trim() || "bridge",
+    router_username: username,
+    router_secret: password,
+    api_port: rawPort,
+    api_use_ssl: rawPort === 8729,
+    model: result.model || null,
+    ros_version: result.rosVersion || null,
+    status: "online",
+    last_seen: now,
+    last_connected_host: result.connectedHost || connectionHost,
+    description: String(body.description ?? "").trim() || null,
+    updated_at: now,
+  };
+
+  try {
+    let saved: Array<Record<string, unknown>>;
+    if (routerId !== null) {
+      const existing = await sbSelect<Record<string, unknown>>(
+        "isp_routers",
+        `id=eq.${routerId}&admin_id=eq.${adminId}&select=id&limit=1`,
+      );
+      if (!existing[0]) {
+        res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+        return;
+      }
+      saved = await sbUpdate<Record<string, unknown>>(
+        "isp_routers",
+        `id=eq.${routerId}&admin_id=eq.${adminId}`,
+        payload,
+      );
+    } else {
+      const duplicate = await sbSelect<Record<string, unknown>>(
+        "isp_routers",
+        `admin_id=eq.${adminId}&name=eq.${encodeURIComponent(routerName)}&select=id&limit=1`,
+      );
+      if (duplicate[0]) {
+        res.status(409).json({ ok: false, error: `A router named "${routerName}" already exists for this ISP account.` });
+        return;
+      }
+      saved = await sbInsert<Record<string, unknown>>("isp_routers", {
+        ...payload,
+        created_at: now,
+      });
+    }
+    const savedId = Number(saved[0]?.id ?? routerId ?? 0);
+    if (!savedId) {
+      res.status(503).json({ ok: false, error: "The router connected, but its configuration could not be saved." });
+      return;
+    }
+
+    try {
+      await ensureDefaultRouterPools(adminId, savedId, bridgeIp);
+    } catch (poolError) {
+      res.status(503).json({
+        ok: false,
+        error: `Router configuration was saved, but default IP pools could not be created: ${poolError instanceof Error ? poolError.message : String(poolError)}`,
+        routerId: savedId,
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      router: {
+        id: savedId,
+        name: routerName,
+        identity,
+        model: result.model || "MikroTik",
+        rosVersion: result.rosVersion || "",
+        connectedHost: result.connectedHost || connectionHost,
+        detectedBridgeInterface: result.detectedBridgeInterface || null,
+      },
+      warnings: result.warnings,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `The router connected, but its configuration could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+    });
   }
 });
 
