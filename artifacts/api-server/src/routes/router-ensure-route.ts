@@ -93,14 +93,50 @@ async function nextCompanyRouterName(adminId: number, requestHost: string): Prom
   throw new Error(`No available router name remains for company prefix "${base}"`);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function unfinishedRouterName(adminId: number): Promise<string> {
+  let tenantBase = "";
+  try {
+    const adminRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/isp_admins?id=eq.${adminId}&select=subdomain&limit=1`,
+      { headers: sbHeaders(BEST_KEY) },
+    );
+    if (adminRes.ok) {
+      const admins = await adminRes.json() as Array<{ subdomain?: string | null }>;
+      const subdomain = String(admins[0]?.subdomain ?? "").trim();
+      if (subdomain) tenantBase = routerNameBase(subdomain);
+    }
+  } catch {
+    /* Fall back to the oldest unfinished record if the admin lookup is
+       temporarily unavailable. */
+  }
+
   const unfinishedRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=name&order=updated_at.desc&limit=1`,
+    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=name,created_at&order=created_at.asc,updated_at.asc`,
     { headers: sbHeaders(BEST_KEY) },
   );
   if (!unfinishedRes.ok) return "";
-  const rows = await unfinishedRes.json() as Array<{ name?: string | null }>;
-  return String(rows[0]?.name ?? "").trim();
+  const rows = await unfinishedRes.json() as Array<{ name?: string | null; created_at?: string | null }>;
+  const names = rows
+    .map(row => String(row.name ?? "").trim())
+    .filter(Boolean);
+
+  /* Resume the first conventional company router before later numbered
+     records. This prevents a stale/failed come2 profile from stealing a
+     fresh generic self-install request away from come1. */
+  if (tenantBase) {
+    const numbered = new RegExp(`^${escapeRegExp(tenantBase)}([0-9]+)$`, "i");
+    const matching = names
+      .map(name => ({ name, ordinal: Number(name.match(numbered)?.[1] ?? Number.MAX_SAFE_INTEGER) }))
+      .filter(item => Number.isSafeInteger(item.ordinal))
+      .sort((a, b) => a.ordinal - b.ordinal);
+    if (matching.length > 0) return matching[0].name;
+  }
+
+  return names[0] ?? "";
 }
 
 /* Credentials are consumed by server-side RouterOS routes and by the

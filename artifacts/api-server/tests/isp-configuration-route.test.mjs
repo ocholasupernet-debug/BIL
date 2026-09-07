@@ -71,6 +71,9 @@ test("router profile creation resumes an unfinished company router", async () =>
   assert.match(ensureRoute, /status=in\.\(setup,awaiting_ports,awaiting_sync,awaiting_connection\)/);
   assert.match(ensureRoute, /unfinishedRouterName\(adminId\)/);
   assert.match(ensureRoute, /name = await unfinishedRouterName\(adminId\)/);
+  assert.match(ensureRoute, /select=name,created_at&order=created_at\.asc,updated_at\.asc/);
+  assert.match(ensureRoute, /Resume the first conventional company router/);
+  assert.match(ensureRoute, /Number\(name\.match\(numbered\)\?\.\[1\]/);
 });
 
 test("the public Main ISP path is tenant-scoped and Self Install uses its separate path", async () => {
