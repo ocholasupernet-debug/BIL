@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqo8v28
+# INSTALLER_REVISION=rmtqogiq1
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqo8v28"
+:put "INSTALLER_REVISION=rmtqogiq1"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -267,12 +267,14 @@
          :set attemptPhase "download"
         /tool fetch url=$openVpnUrl dst-path="ochola-coexist-vpn-openvpn.rsc.download" keep-result=yes mode=https check-certificate=yes
          :set attemptPhase "download verification"
-        :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn.rsc.download"]
-:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn.rsc.download" }
+        :global ocholaVpnChildError
+:set ocholaVpnChildError ""
+:local fetchedFile [/file find name="ochola-coexist-vpn-openvpn.rsc.download"]
+:if ([:len $fetchedFile] = 0) do={ :set ocholaVpnChildError "download did not create ochola-coexist-vpn-openvpn.rsc.download"; :error $ocholaVpnChildError }
 :local fetchedType [/file get $fetchedFile type]
-:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn.rsc.download" }
+:if ($fetchedType = "directory") do={ :set ocholaVpnChildError "download destination is a directory: ochola-coexist-vpn-openvpn.rsc.download"; :error $ocholaVpnChildError }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn.rsc.download" }
+:if ([:tonum $fetchedSize] <= 0) do={ :set ocholaVpnChildError "download created an empty file: ochola-coexist-vpn-openvpn.rsc.download"; :error $ocholaVpnChildError }
  :global ocholaVpnChildError
  :local fetchedContents ""
  :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={
@@ -350,12 +352,14 @@
          :set attemptPhase "download"
         /tool fetch url=$openVpnBackupUrl dst-path="ochola-coexist-vpn-openvpn-backup.rsc.download" keep-result=yes mode=https check-certificate=yes
          :set attemptPhase "download verification"
-        :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn-backup.rsc.download"]
-:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn-backup.rsc.download" }
+        :global ocholaVpnChildError
+:set ocholaVpnChildError ""
+:local fetchedFile [/file find name="ochola-coexist-vpn-openvpn-backup.rsc.download"]
+:if ([:len $fetchedFile] = 0) do={ :set ocholaVpnChildError "download did not create ochola-coexist-vpn-openvpn-backup.rsc.download"; :error $ocholaVpnChildError }
 :local fetchedType [/file get $fetchedFile type]
-:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn-backup.rsc.download" }
+:if ($fetchedType = "directory") do={ :set ocholaVpnChildError "download destination is a directory: ochola-coexist-vpn-openvpn-backup.rsc.download"; :error $ocholaVpnChildError }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn-backup.rsc.download" }
+:if ([:tonum $fetchedSize] <= 0) do={ :set ocholaVpnChildError "download created an empty file: ochola-coexist-vpn-openvpn-backup.rsc.download"; :error $ocholaVpnChildError }
  :global ocholaVpnChildError
  :local fetchedContents ""
  :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={

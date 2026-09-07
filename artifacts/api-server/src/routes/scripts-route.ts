@@ -375,25 +375,29 @@ function ovpnAdd(slug: string, baseFields: string, password: string): string {
    directory or an empty result. Keep this inside the fetch's :do block so the
    caller's on-error handler reports the exact destination. ── */
 function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVpnError = false): string {
+  const safeLabel = rosString(label);
+  const fail = (message: string): string => rejectRouterVpnError
+    ? `:set ocholaVpnChildError "${rosString(message)}"; :error $ocholaVpnChildError`
+    : `:error "${rosString(message)}"`;
   const routerVpnErrorCheck = rejectRouterVpnError
     ? `
  :global ocholaVpnChildError
  :local fetchedContents ""
  :do { :set fetchedContents [/file get $fetchedFile contents] } on-error={
-     :set ocholaVpnChildError "downloaded ${label} could not be inspected before import"
+     :set ocholaVpnChildError "downloaded ${safeLabel} could not be inspected before import"
      :error $ocholaVpnChildError
  }
  :if ([:len $fetchedContents] >= [:len "# OCHOLA_ROUTER_VPN_ERROR"] && [:pick $fetchedContents 0 [:len "# OCHOLA_ROUTER_VPN_ERROR"]] = "# OCHOLA_ROUTER_VPN_ERROR") do={
-     :set ocholaVpnChildError ("server rejected ${label}: " . $fetchedContents)
+     :set ocholaVpnChildError ("server rejected ${safeLabel}: " . $fetchedContents)
      :error $ocholaVpnChildError
  }`
     : "";
-  return `:local fetchedFile [/file find name=${pathExpression}]
-:if ([:len $fetchedFile] = 0) do={ :error "download did not create ${label}" }
+  return `${rejectRouterVpnError ? ":global ocholaVpnChildError\n:set ocholaVpnChildError \"\"\n" : ""}:local fetchedFile [/file find name=${pathExpression}]
+:if ([:len $fetchedFile] = 0) do={ ${fail(`download did not create ${label}`)} }
 :local fetchedType [/file get $fetchedFile type]
-:if ($fetchedType = "directory") do={ :error "download destination is a directory: ${label}" }
+:if ($fetchedType = "directory") do={ ${fail(`download destination is a directory: ${label}`)} }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }${routerVpnErrorCheck}`;
+:if ([:tonum $fetchedSize] <= 0) do={ ${fail(`download created an empty file: ${label}`)} }${routerVpnErrorCheck}`;
 }
 
 const ROUTER_HTTPS_FETCH_OPTIONS =
@@ -474,7 +478,7 @@ function portalFetch(
   filename: string,
   fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS,
 ): string {
-  const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const variableName = `portalPath${filename.replace(/[^a-zA-Z0-9]/g, "")}`;
   return `:local ${variableName} ($hsdir . "/${subpath}")
 :do {
     /tool fetch url="${url}" dst-path=$${variableName} keep-result=yes ${fetchOptions}
