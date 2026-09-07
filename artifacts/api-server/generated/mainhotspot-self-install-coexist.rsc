@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqmycvq
+# INSTALLER_REVISION=rmtqn52gq
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqmycvq"
+:put "INSTALLER_REVISION=rmtqn52gq"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -69,12 +69,14 @@
 # Install the public CA used by the VPS HTTPS certificate before verified fetches.
 # The CA certificate is public; no private certificate key is downloaded.
 :do {
+    :local trustPhase "certificate lookup"
     :local caFile "ochola-isrg-root-x1.pem"
     :local caBuildBase "ochola-isrg-root-x1-bootstrap"
     :local caBuildFile "ochola-isrg-root-x1-bootstrap.txt"
     :local caImportFile $caFile
     :local caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={
+        :set trustPhase "certificate source"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
         :local fetchedViaTrustedStore false
@@ -150,18 +152,24 @@
             /file set [find name=$caBuildFile] contents=$caText
             :set caImportFile $caBuildFile
         }
+        :set trustPhase "certificate import"
         /certificate import file-name="$caImportFile" name="ochola-isrg-root-x1"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
+    :set trustPhase "certificate trust"
     :set caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
-    /certificate set $caCert trusted=yes
+    /certificate set [find name="ochola-isrg-root-x1"] trusted=yes
+    :set trustPhase "certificate verification"
+    :if ([/certificate get [find name="ochola-isrg-root-x1"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
+    :local trustDetail $error
+    :if ([:len $trustDetail] = 0) do={ :set trustDetail ("failed during " . $trustPhase) }
     :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
-    :error ("HTTPS certificate trust setup failed - " . $error)
+    :error ("HTTPS certificate trust setup failed - " . $trustDetail)
 }
     :set trustStatus "SUCCESS"
     :put "SUCCESS: HTTPS trust bootstrap completed."
