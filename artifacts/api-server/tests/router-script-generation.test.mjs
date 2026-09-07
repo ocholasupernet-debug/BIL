@@ -134,3 +134,35 @@ test("Self Install coexistence uses a RouterOS 6-safe CA fallback argument", () 
   assert.doesNotMatch(script, /\\r\\n/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });
+
+test("coexistence VPN children use versioned path bootstrap URLs", () => {
+  const script = buildMainhotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "",
+    "come1",
+    "Ochola SuperNet",
+    "",
+    "",
+    "",
+    "https://come.isplatty.org/api/scripts/router-vpn-bootstrap/90/Abcdefghijklmno_1234567890",
+    "https://come.isplatty.org/api/scripts/router-vpn-bootstrap/90/Abcdefghijklmno_1234567890/openvpn-backup",
+    "",
+    "",
+    "10.8.5.90",
+    "ochola-mgmt-vpn-90",
+    "",
+    "verified",
+    "coexist",
+  );
+
+  assert.match(
+    script,
+    /:if \(\$majorVersion = 7\) do=\{ :set openVpnUrl "https:\/\/come\.isplatty\.org\/api\/scripts\/router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890\/7\.rsc" \} else=\{ :set openVpnUrl "https:\/\/come\.isplatty\.org\/api\/scripts\/router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890\/6\.rsc" \}/,
+  );
+  assert.match(
+    script,
+    /Abcdefghijklmno_1234567890\/7\/openvpn-backup\.rsc/,
+  );
+  assert.doesNotMatch(script, /router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890[^\n]*&ros-version=/);
+  assert.equal(validateGeneratedRouterScript(script), script);
+});

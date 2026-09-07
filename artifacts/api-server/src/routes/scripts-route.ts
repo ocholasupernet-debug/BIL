@@ -1058,9 +1058,25 @@ export function buildMainhotspotRsc(
     variableName: string,
     url: string,
     minimumMajor = 6,
-  ): string => minimumMajor >= 7
-    ? `:if ($majorVersion >= 7) do={ :set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion]) } else={ :set ${variableName} "" }`
-    : `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
+  ): string => {
+    /* RouterOS 6/early RouterOS 7 can mishandle a tokenized child URL after
+       it has been assigned to a variable when the URL contains several query
+       parameters. The path bootstrap keeps the router id, token, and OS
+       version in the path instead. The optional suffix is used for the
+       isolated backup OpenVPN child. */
+    const pathBootstrap = /\/router-vpn-bootstrap\/\d+\/[A-Za-z0-9_-]{8,128}(?:\/openvpn-backup)?$/.test(url);
+    if (pathBootstrap) {
+      const isBackup = url.endsWith("/openvpn-backup");
+      const baseUrl = isBackup ? url.slice(0, -"/openvpn-backup".length) : url;
+      const pathSuffix = isBackup ? "/openvpn-backup.rsc" : ".rsc";
+      return minimumMajor >= 7
+        ? `:if ($majorVersion >= 7) do={ :set ${variableName} "${baseUrl}/7${pathSuffix}" } else={ :set ${variableName} "" }`
+        : `:if ($majorVersion = 7) do={ :set ${variableName} "${baseUrl}/7${pathSuffix}" } else={ :set ${variableName} "${baseUrl}/6${pathSuffix}" }`;
+    }
+    return minimumMajor >= 7
+      ? `:if ($majorVersion >= 7) do={ :set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion]) } else={ :set ${variableName} "" }`
+      : `:set ${variableName} ("${url}&ros-version=" . [:tostr $majorVersion])`;
+  };
   const openVpnSelection = routerVpnUrl
     ? versionedUrlAssignment("openVpnUrl", safeRouterVpnUrl)
     : `:if ($majorVersion >= 7) do={ :set openVpnUrl "${scriptsBase}/vpn7.rsc" } else={ :set openVpnUrl "${scriptsBase}/vpn6.rsc" }`;
@@ -2347,8 +2363,19 @@ router.get([
            bake it into a daily auto-update scheduler; operators can request a
            fresh scoped grant when they start another install. */
         installerUrl = "";
-        routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
-        routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
+        if (installationMode === "coexist") {
+          /* Keep coexistence child URLs query-free. Older RouterOS fetch
+             implementations can corrupt several query parameters after a URL
+             is assigned to a local variable. The child route carries the
+             router id, token, OS version, and backup protocol in its path. */
+          const routerVpnBootstrapBase = `${origin}/api/scripts/router-vpn-bootstrap/${encodeURIComponent(rid)}/${encodeURIComponent(resolvedToken)}`;
+          routerVpnUrl = routerVpnBootstrapBase;
+          routerVpnBackupUrl = `${routerVpnBootstrapBase}/openvpn-backup`;
+        } else {
+          /* Takeover still carries its signed grant and mode to the child. */
+          routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=${installationMode}&diagnostic=1${takeoverGrantQuery}`;
+          routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
+        }
         coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=${installationMode}&grant=${encodeURIComponent(takeoverGrant)}&certificate=on`;
         routerVpnIp = assignedIp;
         const fallbackUrl = (protocol: "wireguard" | "ipsec"): string =>
@@ -2568,6 +2595,7 @@ function routerIpsecFallbackConfigured(routerId: number): boolean {
 
 router.get([
   "/scripts/router-vpn.rsc",
+  "/scripts/router-vpn-bootstrap/:routerId/:token/:rosVersion/:protocol.rsc",
   "/scripts/router-vpn-bootstrap/:routerId/:token/:rosVersion.rsc",
 ], async (req, res): Promise<void> => {
   const pathBootstrap = Boolean(req.params.routerId);
@@ -2620,7 +2648,7 @@ router.get([
     }
 
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
-    const protocol = requestedRouterVpnProtocol(req.query.protocol);
+    const protocol = requestedRouterVpnProtocol(req.params.protocol ?? req.query.protocol);
     const routerOsMajor = requestedRouterOsMajor(req.params.rosVersion ?? req.query["ros-version"]);
     if (!routerOsMajor) {
       sendRouterVpnError(400,
