@@ -80,6 +80,29 @@ interface PortsPayload {
   bridgePorts: BridgePort[];
 }
 
+interface ManagementVpnProfile {
+  role: "primary" | "backup";
+  endpoint: string;
+  port: number;
+  tunnelIp: string;
+  gateway: string;
+  interfaceName: string;
+  username: string;
+}
+
+interface ManagementVpnDetailsPayload {
+  ok: boolean;
+  error?: string;
+  router?: {
+    name: string;
+    endpoint: string;
+    username: string;
+    passwordAvailable: boolean;
+  };
+  profiles?: ManagementVpnProfile[];
+  note?: string;
+}
+
 interface SyncCategoryResult {
   ok: boolean;
   count: number;
@@ -173,6 +196,10 @@ export default function AddRouterScript() {
   const [adminId, setAdminId] = useState(ADMIN_ID);
   const [script, setScript] = useState("");
   const [installerGrant, setInstallerGrant] = useState("");
+  const [vpnDetails, setVpnDetails] = useState<ManagementVpnDetailsPayload | null>(null);
+  const [vpnDetailsLoading, setVpnDetailsLoading] = useState(false);
+  const [vpnDetailsError, setVpnDetailsError] = useState("");
+  const [profileDownloading, setProfileDownloading] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const [recoveryCopy, setRecoveryCopy] = useState<6 | 7 | null>(null);
   const [phase, setPhase] = useState<Phase>("script");
@@ -282,6 +309,9 @@ export default function AddRouterScript() {
       ? `/tool fetch url="${url}" dst-path=ochola-management-vpn-ros${routerOsMajor}.rsc keep-result=yes mode=https check-certificate=no; /import ochola-management-vpn-ros${routerOsMajor}.rsc`
       : "";
   };
+  const managementProfileUrl = selectedRouterId && installerGrant
+    ? `/api/scripts/router-vpn-profile/${selectedRouterId}/${adminId}/${encodeURIComponent(installerGrant)}`
+    : "";
   const bootstrapCommand = buildBootstrapCommand();
   const canGenerate = !!bootstrapCommand;
 
@@ -319,8 +349,21 @@ export default function AddRouterScript() {
       setSelectedRouterId(result.router.id);
       setInstallerGrant(prepared.grantToken);
       setScript(buildBootstrapCommand(result.router.id, prepared.grantToken));
+      setVpnDetails(null);
+      setVpnDetailsError("");
+      setVpnDetailsLoading(true);
       setCopyState("idle");
       setRecoveryCopy(null);
+      try {
+        const details = await jsonRequest<ManagementVpnDetailsPayload>(
+          `/api/scripts/router-vpn-details/${result.router.id}/${adminId}/${encodeURIComponent(prepared.grantToken)}`,
+        );
+        setVpnDetails(details);
+      } catch (error) {
+        setVpnDetailsError(error instanceof Error ? error.message : "OpenVPN details could not be loaded.");
+      } finally {
+        setVpnDetailsLoading(false);
+      }
       await refetchRouters();
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Could not create the router profile.");
@@ -527,6 +570,29 @@ export default function AddRouterScript() {
     window.setTimeout(() => setRecoveryCopy(current => current === routerOsMajor ? null : current), 2_000);
   };
 
+  const downloadManagementProfile = async () => {
+    if (!managementProfileUrl) return;
+    setProfileDownloading(true);
+    setPageError("");
+    try {
+      const response = await fetch(managementProfileUrl);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `OpenVPN profile download failed (${response.status}).`);
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${selectedRouter?.name || "router"}-management.ovpn`;
+      anchor.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "OpenVPN profile download failed.");
+    } finally {
+      setProfileDownloading(false);
+    }
+  };
+
   const downloadScript = () => {
     if (!script) return;
     const blobUrl = URL.createObjectURL(new Blob([script], { type: "text/plain;charset=utf-8" }));
@@ -541,6 +607,10 @@ export default function AddRouterScript() {
     setPhase("script");
     setScript("");
     setInstallerGrant("");
+    setVpnDetails(null);
+    setVpnDetailsError("");
+    setVpnDetailsLoading(false);
+    setProfileDownloading(false);
     setCreatedRouter(null);
     setSelectedRouterId(null);
     setRecoveryCopy(null);
@@ -736,6 +806,56 @@ export default function AddRouterScript() {
                   </button>
                 </div>
                 <pre style={{ margin: 0, background: "#0a0f1a", borderRadius: 8, padding: ".85rem", color: "#cbd5e1", fontSize: ".7rem", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{script}</pre>
+                {selectedRouter && installerGrant && (
+                  <div style={{ marginTop: ".85rem", padding: ".85rem", borderRadius: 9, background: "rgba(59,130,246,.07)", border: "1px solid rgba(96,165,250,.28)" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "#93c5fd", fontSize: ".78rem", fontWeight: 800 }}>
+                      <Shield size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>Automatic OpenVPN details</span>
+                    </div>
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5, margin: ".4rem 0 .7rem" }}>
+                      These are the primary and backup management tunnels for <strong style={{ color: "var(--isp-text)" }}>{selectedRouter.name}</strong>. The downloaded profile contains the router-scoped password, so keep it private.
+                    </p>
+                    {vpnDetailsLoading && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
+                        <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Loading router VPN details…
+                      </div>
+                    )}
+                    {vpnDetailsError && (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 7, color: "#fca5a5", fontSize: ".7rem", lineHeight: 1.45 }}>
+                        <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {vpnDetailsError}
+                      </div>
+                    )}
+                    {vpnDetails?.profiles && (
+                      <>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))", gap: 8 }}>
+                          {vpnDetails.profiles.map(profile => (
+                            <div key={profile.role} style={{ background: "#0a0f1a", borderRadius: 8, padding: ".7rem", border: "1px solid rgba(148,163,184,.16)" }}>
+                              <div style={{ color: profile.role === "primary" ? "#5eead4" : "#c4b5fd", fontSize: ".72rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: ".5rem" }}>
+                                {profile.role === "primary" ? "Primary management VPN" : "Backup management VPN"}
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: ".28rem .65rem", color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.4 }}>
+                                <span>Endpoint</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.endpoint}</strong>
+                                <span>Port</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.port}/TCP</strong>
+                                <span>Username</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.username}</strong>
+                                <span>Password</span><strong style={{ color: "#fbbf24" }}>Included in download</strong>
+                                <span>Tunnel IP</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.tunnelIp}</strong>
+                                <span>Gateway</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.gateway}</strong>
+                                <span>Interface</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace", wordBreak: "break-word" }}>{profile.interfaceName}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: ".7rem" }}>
+                          <span style={{ color: "var(--isp-text-muted)", fontSize: ".66rem" }}>The profile tries the primary endpoint first, then the backup endpoint.</span>
+                          <button type="button" onClick={() => void downloadManagementProfile()} disabled={profileDownloading} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(96,165,250,.14)", border: "1px solid rgba(96,165,250,.4)", borderRadius: 7, color: "#bfdbfe", padding: ".48rem .65rem", fontSize: ".68rem", fontWeight: 800, cursor: profileDownloading ? "not-allowed" : "pointer", opacity: profileDownloading ? .7 : 1 }}>
+                            {profileDownloading ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Download size={13} />}
+                            {profileDownloading ? "Preparing profile…" : "Download router .ovpn"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {selectedRouter && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: ".75rem", padding: ".65rem .75rem", borderRadius: 8, background: "rgba(20,184,166,.07)", border: "1px solid rgba(20,184,166,.2)", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
                     <CheckCircle2 size={15} color="#4ade80" />

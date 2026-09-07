@@ -94,3 +94,21 @@ test("the public Main ISP path is tenant-scoped and Self Install uses its separa
    assert.match(selfInstall, /mode=https check-certificate=no/);
    assert.doesNotMatch(selfInstall, /certificate=off|Generate without certificate/);
 });
+
+test("Direct installation exposes signed primary and backup OpenVPN details", async () => {
+  const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+  const page = await readFile("../ochola-supernet/src/pages/admin/network/SelfProvision.tsx", "utf8");
+  assert.match(scriptsRoute, /router\.get\("\/scripts\/router-vpn-details\/:routerId\/:adminId\/:grant"/);
+  assert.match(scriptsRoute, /router\.get\("\/scripts\/router-vpn-profile\/:routerId\/:adminId\/:grant"/);
+  assert.match(scriptsRoute, /verifyInstallerGrant\(grant, routerId\)/);
+  assert.match(scriptsRoute, /routerManagementVpnPortForRouter\(input\.routerId\)/);
+  assert.match(scriptsRoute, /ROUTER_MANAGEMENT_VPN_BACKUP\.port/);
+  assert.match(scriptsRoute, /<auth-user-pass>/);
+  assert.match(scriptsRoute, /<ca>/);
+  assert.match(page, /Automatic OpenVPN details/);
+  assert.match(page, /Primary management VPN/);
+  assert.match(page, /Backup management VPN/);
+  assert.match(page, /Download router \.ovpn/);
+  assert.match(page, /router-vpn-details/);
+  assert.match(page, /router-vpn-profile/);
+});

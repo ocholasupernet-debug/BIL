@@ -883,6 +883,73 @@ function defaultRouterTunnelIp(routerId: number): string {
   return `10.8.5.${2 + ((routerId - 1) % 253)}`;
 }
 
+type RouterManagementProfile = {
+  role: "primary" | "backup";
+  endpoint: string;
+  port: number;
+  tunnelIp: string;
+  gateway: string;
+  interfaceName: string;
+  username: string;
+};
+
+function readRouterManagementCaCertificate(): string {
+  const caPath = ROUTER_MANAGEMENT_VPN.caPaths.find(candidate => existsSync(candidate));
+  if (!caPath) {
+    throw new Error("The router-management OpenVPN CA certificate is not available on the server.");
+  }
+  const certificate = readFileSync(caPath, "utf8").trim();
+  if (!certificate) throw new Error("The router-management OpenVPN CA certificate is empty.");
+  return certificate;
+}
+
+function buildRouterManagementOvpnProfile(input: {
+  routerId: number;
+  routerName: string;
+  endpoint: string;
+  username: string;
+  password: string;
+  primaryIp: string;
+  caCertificate: string;
+}): string {
+  const backupIp = routerManagementBackupIp(input.primaryIp);
+  const safeName = input.routerName.replace(/[\r\n#]/g, " ").trim();
+  return `# OcholaSuperNet router-management OpenVPN profile
+# Router: ${safeName}
+# Primary tunnel: ${input.primaryIp} via TCP ${routerManagementVpnPortForRouter(input.routerId)}
+# Backup tunnel: ${backupIp} via TCP ${ROUTER_MANAGEMENT_VPN_BACKUP.port}
+# Keep this file private: it contains router-scoped VPN credentials.
+
+client
+dev tun
+proto tcp-client
+remote ${input.endpoint} ${routerManagementVpnPortForRouter(input.routerId)}
+remote ${input.endpoint} ${ROUTER_MANAGEMENT_VPN_BACKUP.port}
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+auth-user-pass
+auth-nocache
+remote-cert-tls server
+auth SHA1
+cipher AES-128-CBC
+data-ciphers AES-128-CBC
+verb 3
+route 10.8.5.0 255.255.255.0
+route 10.8.6.0 255.255.255.0
+
+<auth-user-pass>
+${input.username}
+${input.password}
+</auth-user-pass>
+
+<ca>
+${input.caCertificate}
+</ca>
+`;
+}
+
 async function ensurePersistentRouterTunnelIp(routerId: number, existingIp?: string | null): Promise<string> {
   const used = new Set<string>(readIppEntries().values());
   const currentIp = isRouterVpnIp(existingIp) ? existingIp!.trim() : "";
@@ -3608,6 +3675,154 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
       503,
       `# Could not generate the isolated coexistence hotspot bundle: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+});
+
+class RouterManagementProfileError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "RouterManagementProfileError";
+  }
+}
+
+async function loadRouterManagementProfileContext(
+  routerId: number,
+  adminId: number,
+  grant: string,
+  origin: string,
+): Promise<{
+  routerName: string;
+  endpoint: string;
+  username: string;
+  password: string;
+  primaryIp: string;
+  profiles: RouterManagementProfile[];
+}> {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0
+      || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    throw new RouterManagementProfileError(400, "Router ID and ISP account ID are required.");
+  }
+  const authorization = verifyInstallerGrant(grant, routerId);
+  if (!authorization || authorization.adminId !== adminId) {
+    throw new RouterManagementProfileError(403, "Router installer authorization is invalid, expired, or scoped to another router.");
+  }
+
+  const rows = await sbGet<{
+    id: number;
+    admin_id: number;
+    name: string;
+    vpn_ip: string | null;
+  }>(
+    `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,vpn_ip&limit=1`,
+  );
+  const currentRouter = rows[0];
+  if (!currentRouter) {
+    throw new RouterManagementProfileError(404, "Router profile was not found for this ISP account.");
+  }
+
+  const endpoint = await routerVpnEndpointAddress(origin);
+  const credentials = await ensureRouterManagementOvpnCredentials({
+    routerId,
+    adminId,
+    routerName: currentRouter.name,
+  });
+  const primaryIp = await ensurePersistentRouterTunnelIp(routerId, currentRouter.vpn_ip);
+  const profiles: RouterManagementProfile[] = [
+    {
+      role: "primary",
+      endpoint,
+      port: routerManagementVpnPortForRouter(routerId),
+      tunnelIp: primaryIp,
+      gateway: ROUTER_VPN_GATEWAY,
+      interfaceName: routerManagementClientInterfaceName(routerId, "primary"),
+      username: credentials.username,
+    },
+    {
+      role: "backup",
+      endpoint,
+      port: ROUTER_MANAGEMENT_VPN_BACKUP.port,
+      tunnelIp: routerManagementBackupIp(primaryIp),
+      gateway: ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
+      interfaceName: routerManagementClientInterfaceName(routerId, "backup"),
+      username: credentials.username,
+    },
+  ];
+  return {
+    routerName: currentRouter.name,
+    endpoint,
+    username: credentials.username,
+    password: credentials.password,
+    primaryIp,
+    profiles,
+  };
+}
+
+router.get("/scripts/router-vpn-details/:routerId/:adminId/:grant", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.routerId);
+  const adminId = Number(req.params.adminId);
+  const grant = String(req.params.grant ?? "").trim();
+  try {
+    const context = await loadRouterManagementProfileContext(
+      routerId,
+      adminId,
+      grant,
+      requestOrigin(req),
+    );
+    res.set("Cache-Control", "no-store").json({
+      ok: true,
+      router: {
+        name: context.routerName,
+        endpoint: context.endpoint,
+        username: context.username,
+        passwordAvailable: true,
+      },
+      profiles: context.profiles,
+      note: "The downloadable profile contains the router-scoped VPN password.",
+    });
+  } catch (error) {
+    const status = error instanceof RouterManagementProfileError ? error.status : 503;
+    res.status(status).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Router-management VPN details are unavailable.",
+    });
+  }
+});
+
+router.get("/scripts/router-vpn-profile/:routerId/:adminId/:grant", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.routerId);
+  const adminId = Number(req.params.adminId);
+  const grant = String(req.params.grant ?? "").trim();
+  try {
+    const context = await loadRouterManagementProfileContext(
+      routerId,
+      adminId,
+      grant,
+      requestOrigin(req),
+    );
+    const profile = buildRouterManagementOvpnProfile({
+      routerId,
+      routerName: context.routerName,
+      endpoint: context.endpoint,
+      username: context.username,
+      password: context.password,
+      primaryIp: context.primaryIp,
+      caCertificate: readRouterManagementCaCertificate(),
+    });
+    const filename = `${context.routerName.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}-management.ovpn`;
+    res
+      .set("Content-Type", "application/x-openvpn-profile")
+      .set("Content-Disposition", `attachment; filename="${filename}"`)
+      .set("Cache-Control", "no-store")
+      .send(profile);
+  } catch (error) {
+    const status = error instanceof RouterManagementProfileError ? error.status : 503;
+    res.status(status).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Router-management OpenVPN profile is unavailable.",
+    });
   }
 });
 
