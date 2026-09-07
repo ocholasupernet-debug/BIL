@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqmkh6e
+# INSTALLER_REVISION=rmtqms0de
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqmkh6e"
+:put "INSTALLER_REVISION=rmtqms0de"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -266,19 +266,18 @@
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
-            :if ([:len $importError] = 0) do={ :set importError "openvpn: $attemptPhase failed; inspect failed-ochola-coexist-vpn-openvpn.rsc and /log for the exact RouterOS command." }
+            :if ([:len $importError] = 0) do={ :set importError "openvpn: $attemptPhase failed; inspect ochola-coexist-vpn-openvpn.rsc.download and /log for the exact RouterOS command." }
             :set ocholaVpnChildError $importError
             :error $importError
         }
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="ochola-coexist-vpn-openvpn.rsc"] } on-error={}
-        /file set [find name="ochola-coexist-vpn-openvpn.rsc.download"] name="ochola-coexist-vpn-openvpn.rsc"
-         :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn.rsc"]
-:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn.rsc" }
+         :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn.rsc.download"]
+:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn.rsc.download" }
 :local fetchedType [/file get $fetchedFile type]
-:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn.rsc" }
+:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn.rsc.download" }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn.rsc" }
+:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn.rsc.download" }
         :set vpnConfigured true
         :set vpnProtocol "openvpn"
         :put "      OPENVPN router-management VPN verified."
@@ -290,7 +289,7 @@
             :if ([:len $rawVpnError] > 0) do={
                 :set vpnError ("openvpn: " . $attemptPhase . " failed: " . $rawVpnError)
             } else={
-                :set vpnError "openvpn: $attemptPhase failed. Check failed-ochola-coexist-vpn-openvpn.rsc and /log for the RouterOS error."
+                :set vpnError "openvpn: $attemptPhase failed. Check ochola-coexist-vpn-openvpn.rsc.download and /log for the RouterOS error."
             }
         }
         :put ("  WARN [vpn-openvpn] FAILED: " . $vpnError)
@@ -310,7 +309,7 @@
         :set vpnFailureSummary ($vpnFailureSummary . "openvpn: " . $vpnError . "; ")
         $pg 1 "vpn-openvpn" "failed" $vpnError
         :do { /file remove [find name="failed-ochola-coexist-vpn-openvpn.rsc"] } on-error={}
-        :do { /file set [find name="ochola-coexist-vpn-openvpn.rsc.download"] name="failed-ochola-coexist-vpn-openvpn.rsc" } on-error={}
+        :put ("  Retained child download for diagnosis: ochola-coexist-vpn-openvpn.rsc.download")
     }
 }
 :if (!$vpnConfigured) do={
@@ -350,19 +349,18 @@
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
-            :if ([:len $importError] = 0) do={ :set importError "openvpn-backup: $attemptPhase failed; inspect failed-ochola-coexist-vpn-openvpn-backup.rsc and /log for the exact RouterOS command." }
+            :if ([:len $importError] = 0) do={ :set importError "openvpn-backup: $attemptPhase failed; inspect ochola-coexist-vpn-openvpn-backup.rsc.download and /log for the exact RouterOS command." }
             :set ocholaVpnChildError $importError
             :error $importError
         }
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="ochola-coexist-vpn-openvpn-backup.rsc"] } on-error={}
-        /file set [find name="ochola-coexist-vpn-openvpn-backup.rsc.download"] name="ochola-coexist-vpn-openvpn-backup.rsc"
-         :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn-backup.rsc"]
-:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn-backup.rsc" }
+         :local fetchedFile [/file find name="ochola-coexist-vpn-openvpn-backup.rsc.download"]
+:if ([:len $fetchedFile] = 0) do={ :error "download did not create ochola-coexist-vpn-openvpn-backup.rsc.download" }
 :local fetchedType [/file get $fetchedFile type]
-:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn-backup.rsc" }
+:if ($fetchedType = "directory") do={ :error "download destination is a directory: ochola-coexist-vpn-openvpn-backup.rsc.download" }
 :local fetchedSize [/file get $fetchedFile size]
-:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn-backup.rsc" }
+:if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexist-vpn-openvpn-backup.rsc.download" }
         :set vpnConfigured true
         :set vpnProtocol "openvpn-backup"
         :put "      OPENVPN-BACKUP router-management VPN verified."
@@ -374,7 +372,7 @@
             :if ([:len $rawVpnError] > 0) do={
                 :set vpnError ("openvpn-backup: " . $attemptPhase . " failed: " . $rawVpnError)
             } else={
-                :set vpnError "openvpn-backup: $attemptPhase failed. Check failed-ochola-coexist-vpn-openvpn-backup.rsc and /log for the RouterOS error."
+                :set vpnError "openvpn-backup: $attemptPhase failed. Check ochola-coexist-vpn-openvpn-backup.rsc.download and /log for the RouterOS error."
             }
         }
         :put ("  WARN [vpn-openvpn-backup] FAILED: " . $vpnError)
@@ -394,7 +392,7 @@
         :set vpnFailureSummary ($vpnFailureSummary . "openvpn-backup: " . $vpnError . "; ")
         $pg 1 "vpn-openvpn-backup" "failed" $vpnError
         :do { /file remove [find name="failed-ochola-coexist-vpn-openvpn-backup.rsc"] } on-error={}
-        :do { /file set [find name="ochola-coexist-vpn-openvpn-backup.rsc.download"] name="failed-ochola-coexist-vpn-openvpn-backup.rsc" } on-error={}
+        :put ("  Retained child download for diagnosis: ochola-coexist-vpn-openvpn-backup.rsc.download")
     }
 }
 
@@ -497,7 +495,6 @@
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     /import "ochola-coexistence-hotspot.rsc.download"
-    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     :set hotspotStageStatus "SUCCESS"
     :put "SUCCESS: isolated coexistence hotspot bundle installed; existing customer services remain untouched."
     :do { $pg 2 "coexistence-hotspot" "applied" "" } on-error={ :put "WARN: progress update for coexistence-hotspot failed; continuing installer." }
@@ -510,7 +507,7 @@
     :put ("FAILED: isolated coexistence hotspot - " . $hotspotStageError)
     :do { $pg 2 "coexistence-hotspot" "failed" $hotspotStageError } on-error={ :put "WARN: progress update for coexistence-hotspot failed; continuing installer." }
     :do { /file remove [find name="failed-ochola-coexistence-hotspot.rsc"] } on-error={}
-    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
+    :put "  Retained coexistence hotspot download for diagnosis: ochola-coexistence-hotspot.rsc.download"
 }
 
 # Stage 6: authenticated heartbeat. It is independent of VPN and hotspot

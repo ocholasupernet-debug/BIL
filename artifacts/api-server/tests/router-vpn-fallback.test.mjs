@@ -306,7 +306,8 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /:if \(!\$vpnConfigured\) do=\{/);
   assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
-  assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.doesNotMatch(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
+  assert.match(scriptsRoute, /Retained child download for diagnosis/);
   assert.match(scriptsRoute, /\/import "\$\{tempFileName\}"/);
   assert.doesNotMatch(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
   assert.match(scriptsRoute, /:local importError \$error/);

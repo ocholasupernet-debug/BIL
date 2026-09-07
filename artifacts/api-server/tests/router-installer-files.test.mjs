@@ -87,7 +87,7 @@ test("required child imports use completion markers, resource checks, and final 
   assert.match(scriptsRoute, /SafeNet - allow API.*was not verified/);
   assert.match(scriptsRoute, /heartbeat\.rsc import completed.*scheduler was not verified/);
   assert.match(scriptsRoute, /syncfull\.rsc import completed.*scheduler was not verified/);
-  assert.match(scriptsRoute, /fileCompletionCheck\(fileName\)/);
+  assert.match(scriptsRoute, /fileCompletionCheck\(tempFileName\)/);
   assert.match(scriptsRoute, /fileCompletionCheck\("hotspotsetup\.rsc"\)/);
 });
 

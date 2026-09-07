@@ -1083,14 +1083,13 @@ export function buildMainhotspotRsc(
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
-            :if ([:len $importError] = 0) do={ :set importError "${protocol}: $attemptPhase failed; inspect failed-${fileName} and /log for the exact RouterOS command." }
+            :if ([:len $importError] = 0) do={ :set importError "${protocol}: $attemptPhase failed; inspect ${tempFileName} and /log for the exact RouterOS command." }
             :set ocholaVpnChildError $importError
             :error $importError
         }
         :if ([:len $ocholaVpnChildError] > 0) do={ :error $ocholaVpnChildError }
         :do { /file remove [find name="${fileName}"] } on-error={}
-        /file set [find name="${tempFileName}"] name="${fileName}"
-         ${fileCompletionCheck(fileName)}
+         ${fileCompletionCheck(tempFileName)}
         :set vpnConfigured true
         :set vpnProtocol "${protocol}"
         :put "      ${protocol.toUpperCase()} router-management VPN verified."
@@ -1102,7 +1101,7 @@ export function buildMainhotspotRsc(
             :if ([:len $rawVpnError] > 0) do={
                 :set vpnError ("${protocol}: " . $attemptPhase . " failed: " . $rawVpnError)
             } else={
-                :set vpnError "${protocol}: $attemptPhase failed. Check failed-${fileName} and /log for the RouterOS error."
+                :set vpnError "${protocol}: $attemptPhase failed. Check ${tempFileName} and /log for the RouterOS error."
             }
         }
         :put ("  WARN [vpn-${protocol}] FAILED: " . $vpnError)
@@ -1110,7 +1109,7 @@ export function buildMainhotspotRsc(
         :set vpnFailureSummary ($vpnFailureSummary . "${protocol}: " . $vpnError . "; ")
         $pg 1 "vpn-${protocol}" "failed" $vpnError
         :do { /file remove [find name="failed-${fileName}"] } on-error={}
-        :do { /file set [find name="${tempFileName}"] name="failed-${fileName}" } on-error={}
+        :put ("  Retained child download for diagnosis: ${tempFileName}")
     }
 }`;
   };
@@ -1341,7 +1340,6 @@ ${coexistenceHotspotUrl ? `
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
     /import "ochola-coexistence-hotspot.rsc.download"
-    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     :set hotspotStageStatus "SUCCESS"
     :put "SUCCESS: isolated coexistence hotspot bundle installed; existing customer services remain untouched."
     ${safeProgressCall(2, "coexistence-hotspot", "applied")}
@@ -1356,7 +1354,7 @@ ${coexistenceHotspotUrl ? `
     :put ("FAILED: isolated coexistence hotspot - " . $hotspotStageError)
     ${safeProgressCall(2, "coexistence-hotspot", "failed", "$hotspotStageError")}
     :do { /file remove [find name="failed-ochola-coexistence-hotspot.rsc"] } on-error={}
-    :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
+    :put "  Retained coexistence hotspot download for diagnosis: ochola-coexistence-hotspot.rsc.download"
 }
 
 # Stage 6: authenticated heartbeat. It is independent of VPN and hotspot
