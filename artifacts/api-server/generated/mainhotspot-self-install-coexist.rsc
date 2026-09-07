@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqms0de
+# INSTALLER_REVISION=rmtqmycvq
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqms0de"
+:put "INSTALLER_REVISION=rmtqmycvq"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -429,7 +429,7 @@
         }
     } else={
         :if ($vpnConfigured && $vpnProtocol = "wireguard") do={
-            :if ([:len [/interface wireguard find where name="ochola-mgmt-wg-90"]] > 0 && [:len [/ip address find where interface="ochola-mgmt-wg-90" && address~"^10\.8\.5\.[0-9]+/"]] > 0) do={
+            :if ([:len [/interface wireguard find where name="ochola-mgmt-wg-90"]] > 0 && [:len [/ip address find where interface="ochola-mgmt-wg-90" && address~"^10[.]8[.]5[.][0-9]+/"]] > 0) do={
                 :set vpnResourceReady true
                 :set vpnStatus "CONNECTED"
                 :foreach addressId in=[/ip address find where interface="ochola-mgmt-wg-90"] do={

@@ -1279,7 +1279,7 @@ ${ipsecAttempt.replaceAll("vpn-ipsec.rsc", "ochola-coexist-vpn-ipsec.rsc")}
         }
     } else={
         :if ($vpnConfigured && $vpnProtocol = "wireguard") do={
-            :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10\\.8\\.5\\.[0-9]+/"]] > 0) do={
+            :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10[.]8[.]5[.][0-9]+/"]] > 0) do={
                 :set vpnResourceReady true
                 :set vpnStatus "CONNECTED"
                 :foreach addressId in=[/ip address find where interface="${safeWireGuardInterfaceName}"] do={
@@ -1590,7 +1590,7 @@ ${ipsecAttempt}
     }
 } else={
     :if ($vpnConfigured && $vpnProtocol = "wireguard") do={
-        :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10\\.8\\.5\\.[0-9]+/"]] > 0) do={
+        :if ([:len [/interface wireguard find where name="${safeWireGuardInterfaceName}"]] > 0 && [:len [/ip address find where interface="${safeWireGuardInterfaceName}" && address~"^10[.]8[.]5[.][0-9]+/"]] > 0) do={
             :set vpnResourceReady true
             :set vpnStatus "CONNECTED"
             :foreach addressId in=[/ip address find where interface="${safeWireGuardInterfaceName}"] do={
