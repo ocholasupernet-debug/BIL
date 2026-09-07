@@ -231,7 +231,7 @@ function ifaceKind(iface: Iface): "wlan" | "ether" | "protected" | "other" {
   const name = iface.name.toLowerCase();
   const type = iface.type.toLowerCase();
   if (type === "wlan" || name.startsWith("wlan") || name.startsWith("wifi")) return "wlan";
-  if (name === "ether1" || name.includes("ovpn") || name.includes("vpn") ||
+  if (name === "ether1" || name === "ocholasupernet" || name.includes("ovpn") || name.includes("vpn") ||
       type === "bridge" || type === "loopback") return "protected";
   if (type === "ether" || name.startsWith("ether") || name.startsWith("sfp")) return "ether";
   return "other";
@@ -272,7 +272,7 @@ function RouterRecovery({
 }) {
   const interfaceName = installationMode === "coexist" && routerId
     ? `ochola-mgmt-vpn-${routerId}`
-    : "corebillingvpn";
+    : "ocholasupernet";
   const title = vpnConnected ? "RouterOS API is not ready yet" : "Waiting for the router-management VPN";
   const defaultMessage = vpnConnected
     ? "The management VPN is connected, but the RouterOS API did not return the router identity and version yet. Confirm API access on port 8728 and refresh."

@@ -2309,10 +2309,10 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
   const interfaceName = routerId
     ? routerManagementClientInterfaceName(routerId, vpnRole)
-    : `corebillingvpn${roleSuffix}`;
+    : `ocholasupernet${roleSuffix}`;
   const tag = routerId
     ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
-    : `corebillingvpn${roleSuffix}`;
+    : `ocholasupernet${roleSuffix}`;
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client

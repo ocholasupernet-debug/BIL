@@ -406,7 +406,7 @@ export function buildMainIspConfigurationRsc(
       "__MANAGEMENT_INTERFACE_NAME__",
       routerId && Number.isSafeInteger(routerId)
         ? routerManagementClientInterfaceName(routerId)
-        : "ochola-mgmt-vpn",
+        : "ocholasupernet",
     );
 
   if (routerVpnBaseUrl) {

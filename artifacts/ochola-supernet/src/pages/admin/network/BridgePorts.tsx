@@ -148,7 +148,7 @@ function classifyIface(name: string, type: string): IfaceKind {
   if (t === "loopback") return "loopback";
   if (t === "wlan" || t.startsWith("wlan")) return "wlan";
   if (n === "ocholasuperproxy" || n.includes("superproxy") || n.includes("ovpn-out2") || n.includes("proxy")) return "vpn-proxy";
-  if (n.startsWith("ovpn") || n.includes("vpn") || t === "ovpn-client") return "vpn-main";
+  if (n === "ocholasupernet" || n.startsWith("ovpn") || n.includes("vpn") || t === "ovpn-client") return "vpn-main";
   if (n.includes("hotspot") || n.includes("hs-bridge") || n.includes("hsbridge")) return "hotspot-bridge";
   if (t === "bridge") return "bridge";
   if (n.startsWith("ether") || t === "ether") return "ether";
@@ -169,6 +169,7 @@ function IfaceIcon({ name, type, running }: { name: string; type: string; runnin
 function bridgeType(bridgeName: string): "hotspot" | "pppoe" | "vpn-proxy" | "vpn-main" | "unknown" {
   const n = bridgeName.toLowerCase();
   if (n === "ocholasuperproxy" || n.includes("superproxy")) return "vpn-proxy";
+  if (n === "ocholasupernet") return "vpn-main";
   if (n.startsWith("ovpn") || n.includes("vpn"))            return "vpn-main";
   if (n.includes("hotspot") || n.includes("hs-bridge") || n.includes("hsbridge")) return "hotspot";
   if (n.includes("pppoe")   || n.includes("ppp"))           return "pppoe";

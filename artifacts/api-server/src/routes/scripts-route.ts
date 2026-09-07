@@ -980,6 +980,9 @@ export function buildMainhotspotRsc(
     /^10\.8\.5\.\d+$/.test(routerVpnIp) ? routerVpnIp.replace(/^10\.8\.5\./, "10.8.6.") : "",
   );
   const safeManagementInterfaceName = rscEscape(managementInterfaceName);
+  /* Generic installs use the stable OcholaSupernet management name. Router
+     scoped installs continue using their isolated per-router interface. */
+  const managementClientInterfaceName = safeManagementInterfaceName || "ocholasupernet";
   const managementRouterId = /(?:^|-)vpn-(\d+)$/.exec(managementInterfaceName)?.[1] ?? "";
   const safeBackupManagementInterfaceName = rscEscape(
     managementRouterId ? `ochola-mgmt-vpn-${managementRouterId}-backup` : "",
@@ -3735,6 +3738,10 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
     /* ── Step 4: Derive config values ── */
     const routerName  = router_row.name;
     const routerSlug  = slug === "mainhotspot" || slug === "main-hotspot" ? slugify(routerName) : slug;
+     /* Keep the legacy tenant installer compatible with routers that use
+        OcholaSupernet as the management-interface name. Router-scoped
+        installers use the isolated ochola-mgmt-vpn-<id> name instead. */
+     const managementClientInterfaceName = "ocholasupernet";
     const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
       routerId: router_row.id,
       adminId,
@@ -4000,7 +4007,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:do { :set certFlags [/certificate get [find name="${routerSlug}"] flags] } on-error={ :set certFlags "NOT FOUND" }`,
       `:put ("      cert flags for ${routerSlug}: " . $certFlags)`,
       `# === OVPN Management Tunnel (cert-based auth) ===`,
-        ovpnAdd(routerSlug, `name=corebillingvpn connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, openVpnCredentials.password),
+        ovpnAdd(routerSlug, `name=${managementClientInterfaceName} connect-to="${routerVpnHost}" port=${routerManagementVpnPortForRouter(router_row.id)} mode=ip cipher=aes128 auth=sha1 add-default-route=no disabled=no`, openVpnCredentials.password),
       ``,
       `# === RouterOS Local System User (System -> Users in WinBox) ===`,
       `# Create / refresh a full-access login on the router itself with the same`,
@@ -4010,7 +4017,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# is always refreshed to match what is stored in the backend / VPS auth file.`,
       safeRm(`/user remove [find name="${routerSlug}"]`),
         safeRos(`/user add name="${routerSlug}" password="${routerApiPassword}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
-       `:put "      VPN tunnel 'corebillingvpn' added  OK"`,
+       `:put ("      VPN tunnel '" . "${managementClientInterfaceName}" . "' added  OK")`,
       ``,
       `# === Default User Profile ===`,
       safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),
@@ -4046,7 +4053,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `:put " Setup complete! ${companyName} — ${routerName}"`,
       `:put (" RouterOS : v" . $rosVer . " | Storage: " . $storage)`,
       `:put " Hotspot  : '${bridgeIface}' (${bridgeIp})"`,
-       `:put " VPN      : corebillingvpn -> ${adminSubdomain}.isplatty.org"`,
+       `:put " VPN      : ${managementClientInterfaceName} -> ${adminSubdomain}.isplatty.org"`,
       `:put " Pool     : ${poolStart} - ${poolEnd}"`,
       `:put " Check the admin dashboard for green indicator."`,
       `:put " If any WARN lines appeared above, check /log for details."`,
