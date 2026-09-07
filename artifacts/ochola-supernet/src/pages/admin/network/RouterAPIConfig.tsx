@@ -70,6 +70,15 @@ interface VpnInfoResponse {
   managementTunnel?: ManagementTunnelInfo;
 }
 
+async function fetchManagementTunnelInfo(routerId: number): Promise<VpnInfoResponse> {
+  const token = getAdminApiToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`/api/router/${routerId}/vpn-info`, { headers });
+  if (!response.ok) throw new Error("Management tunnel details are unavailable.");
+  return response.json() as Promise<VpnInfoResponse>;
+}
+
 /* ══════════════════════ Styles ══════════════════════════════════ */
 const inp: React.CSSProperties = {
   background: "var(--isp-input-bg,#0f1923)",
@@ -263,14 +272,7 @@ function RouterForm({
   const { data: vpnInfo, isLoading: vpnInfoLoading, isError: vpnInfoError } = useQuery<VpnInfoResponse>({
     queryKey: ["router-management-vpn-info", routerId],
     enabled: Boolean(routerId),
-    queryFn: async () => {
-      const token = getAdminApiToken();
-      const headers: Record<string, string> = {};
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const response = await fetch(`/api/router/${routerId}/vpn-info`, { headers });
-      if (!response.ok) throw new Error("Management tunnel details are unavailable.");
-      return response.json() as Promise<VpnInfoResponse>;
-    },
+    queryFn: () => fetchManagementTunnelInfo(routerId as number),
   });
   const managementTunnel = vpnInfo?.managementTunnel;
 
@@ -681,6 +683,48 @@ function RouterForm({
   );
 }
 
+function ManagementTunnelSummary({ routerId }: { routerId: number }) {
+  const { data, isLoading, isError } = useQuery<VpnInfoResponse>({
+    queryKey: ["router-management-vpn-info", routerId],
+    queryFn: () => fetchManagementTunnelInfo(routerId),
+    staleTime: 60_000,
+  });
+  const tunnel = data?.managementTunnel;
+
+  return (
+    <div style={{ padding: "12px 18px", borderBottom: "1px solid rgba(56,189,248,0.12)", background: "rgba(56,189,248,0.025)" }}>
+      <p style={{ margin: "0 0 10px", fontSize: 10, fontWeight: 800, color: "#38bdf8", letterSpacing: "0.09em", textTransform: "uppercase" as const }}>
+        Management connection
+      </p>
+      {isLoading ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--isp-text-muted)" }}>
+          <Loader2 size={12} className="animate-spin" /> Loading connect-to and port…
+        </div>
+      ) : isError || !tunnel ? (
+        <p style={{ margin: 0, fontSize: 11, color: "#fbbf24" }}>
+          Connect-to and port details are unavailable for this router record.
+        </p>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+          {[
+            ["Connect-to", tunnel.connectTo],
+            ["OpenVPN port", `${tunnel.primaryPort}/TCP`],
+            ["Tunnel IP", tunnel.routerTunnelIp],
+            ["RouterOS API", `${tunnel.routerTunnelIp}:${tunnel.routerApiPort}/TCP`],
+            ["Shared listener", `${tunnel.sharedPort}/TCP`],
+            ["Backup listener", `${tunnel.backupPort}/TCP`],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <p style={{ margin: 0, fontSize: 9.5, color: "var(--isp-text-muted)", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{label}</p>
+              <p style={{ margin: "3px 0 0", fontSize: 11, color: "var(--isp-text)", fontFamily: "monospace", wordBreak: "break-word" }}>{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ══════════════════════ Superadmin router card ═══════════════════ */
 function AdminRouterCard({
   router, onEdit, onTestDirect,
@@ -744,6 +788,8 @@ function AdminRouterCard({
 
       {expanded && (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+          <ManagementTunnelSummary routerId={router.id} />
+
           {/* Interfaces panel */}
           <div style={{ padding: "12px 18px", borderBottom: "1px solid rgba(37,99,235,0.08)" }}>
             <p style={{ margin: "0 0 10px", fontSize: 10, fontWeight: 800, color: "var(--isp-accent)", letterSpacing: "0.09em", textTransform: "uppercase" as const }}>Interfaces</p>
