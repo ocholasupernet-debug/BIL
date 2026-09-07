@@ -58,12 +58,12 @@ check_router_port_filter() {
 
 check_management_forwarding() {
   iptables -S FORWARD |
-    grep -Eq 'tun-router|tun-router-bkp|10\.8\.[56]\.0/24'
+    awk '/tun-router|tun-router-bkp|10\.8\.[56]\.0\/24/ { found=1 } END { exit found ? 0 : 1 }'
 }
 
 check_management_nat() {
   iptables -t nat -S |
-    grep -Eq '10\.8\.[56]\.0/24|11960:12959'
+    awk '/10\.8\.[56]\.0\/24|11960:12959/ { found=1 } END { exit found ? 0 : 1 }'
 }
 
 resolve_ufw() {

@@ -25,6 +25,27 @@ resolve_ufw() {
 
 resolve_ufw
 
+prepare_ufw_ipv6() {
+  local ip6tables_bin
+  ip6tables_bin="$(command -v ip6tables 2>/dev/null || true)"
+  if [ -n "$ip6tables_bin" ] && "$ip6tables_bin" -S >/dev/null 2>&1; then
+    return
+  fi
+
+  if ip -6 route show default 2>/dev/null | grep -q .; then
+    echo "ERROR: IPv6 has a default route but ip6tables is unavailable." >&2
+    exit 1
+  fi
+
+  if [ -f /etc/default/ufw ]; then
+    sudo sed -i -E 's/^IPV6=.*/IPV6=no/' /etc/default/ufw
+    grep -q '^IPV6=' /etc/default/ufw ||
+      echo 'IPV6=no' | sudo tee -a /etc/default/ufw >/dev/null
+  fi
+}
+
+prepare_ufw_ipv6
+
 sudo iptables -t nat -C PREROUTING -p tcp --dport "${PORT_START}:${PORT_END}" \
   -j REDIRECT --to-ports "$LISTENER_PORT" 2>/dev/null ||
   sudo iptables -t nat -A PREROUTING -p tcp --dport "${PORT_START}:${PORT_END}" \
