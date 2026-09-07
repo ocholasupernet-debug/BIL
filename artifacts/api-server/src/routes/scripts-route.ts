@@ -400,6 +400,72 @@ function verifyFetchedFile(pathExpression: string, label: string, rejectRouterVp
 :if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ${label}" }${routerVpnErrorCheck}`;
 }
 
+/**
+ * Validate the rendered RouterOS file, not only the TypeScript template.
+ * RouterOS treats a physical line break inside a quoted string as a parser
+ * error. Keep this check at the final response boundary so a future template
+ * literal cannot reintroduce that failure.
+ */
+export function validateGeneratedRouterScript(script: string): string {
+  const normalized = script
+    .replace(/â€”/g, "-")
+    .replace(/[—–]/g, "-")
+    .replace(/→/g, "->")
+    .replace(/↔/g, "<->")
+    .replace(/·/g, "-")
+    .replace(/•/g, "*")
+    .replace(/…/g, "...")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/⚠/g, "WARNING")
+    .replace(/[^\x00-\x7F]/g, "?")
+    .replace(/\r\n?/g, "\n");
+  let inString = false;
+  let escaped = false;
+  let line = 1;
+  let column = 0;
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    column += 1;
+    if (char === "\n") {
+      if (inString) {
+        throw new Error(`Generated RouterOS script contains a line break inside a quoted string at line ${line}, column ${column}.`);
+      }
+      line += 1;
+      column = 0;
+      escaped = false;
+      continue;
+    }
+    if (!inString && char === "#") {
+      while (index + 1 < normalized.length && normalized[index + 1] !== "\n") {
+        index += 1;
+        column += 1;
+      }
+      continue;
+    }
+    if (char.charCodeAt(0) > 0x7e || (char.charCodeAt(0) < 0x20 && char !== "\t")) {
+      throw new Error(`Generated RouterOS script contains a non-ASCII control character at line ${line}, column ${column}.`);
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+    }
+  }
+
+  if (inString) {
+    throw new Error(`Generated RouterOS script ends inside a quoted string at line ${line}, column ${column}.`);
+  }
+  return normalized;
+}
+
 const ROUTER_HTTPS_FETCH_OPTIONS =
   `mode=https check-certificate=yes`;
 type RouterCertificateMode = "verified" | "unverified";
@@ -895,7 +961,7 @@ async function ensurePersistentRouterTunnelIp(routerId: number, existingIp?: str
    Sub-script URLs use the requesting ISP's own subdomain so each
    ISP downloads from their own origin, not a hardcoded company.
 ═══════════════════════════════════════════════════════════════ */
-function buildMainhotspotRsc(
+export function buildMainhotspotRsc(
   scriptsBase: string,
   progressUrl: string = "",
   routerName: string = "",
@@ -937,8 +1003,8 @@ function buildMainhotspotRsc(
      otherwise terminate the string early or break the script. We escape
      backslashes and double-quotes; control characters are stripped so a
      copy-pasted name with newlines can't inject extra script lines. */
-  const rscEscape = (s: string): string =>
-    s.replace(/[\u0000-\u001F\u007F]/g, "")
+   const rscEscape = (s: string): string =>
+     s.replace(/[^\x20-\x7E]/g, " ")
      .replace(/\\/g, "\\\\")
      .replace(/"/g, '\\"');
   const safeProgressUrl = rscEscape(progressUrl);
@@ -978,8 +1044,8 @@ function buildMainhotspotRsc(
             :if ($char = " ") do={ :set output ($output . "%20") } else={
             :if ($char = "?") do={ :set output ($output . "%3F") } else={
             :if ($char = "#") do={ :set output ($output . "%23") } else={
-            :if ($char = "\r") do={ :set output ($output . "%0D") } else={
-            :if ($char = "\n") do={ :set output ($output . "%0A") } else={
+             :if ($char = "\\r") do={ :set output ($output . "%0D") } else={
+             :if ($char = "\\n") do={ :set output ($output . "%0A") } else={
                 :set output ($output . $char)
             }}}}}}}}}
         }
@@ -1005,8 +1071,8 @@ function buildMainhotspotRsc(
                 :if ($char = " ") do={ :set output ($output . "%20") } else={
                 :if ($char = "?") do={ :set output ($output . "%3F") } else={
                 :if ($char = "#") do={ :set output ($output . "%23") } else={
-                :if ($char = "\r") do={ :set output ($output . "%0D") } else={
-                :if ($char = "\n") do={ :set output ($output . "%0A") } else={
+                 :if ($char = "\\r") do={ :set output ($output . "%0D") } else={
+                 :if ($char = "\\n") do={ :set output ($output . "%0A") } else={
                     :set output ($output . $char)
                 }}}}}}}}}
             }
@@ -1180,7 +1246,7 @@ $pg 0 "coexistence-audit" "audited" ("bridges=" . $bridgeCount . ";hotspots=" . 
     :if ($routerOsMajorDigit = "6") do={
         :set majorVersion 6
     } else={
-        :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
+        :error ("Unsupported RouterOS version " . $routerOsVersion . ". Only RouterOS 6.48+ and 7.x are supported.")
     }
 }
 :if ([/ping 8.8.8.8 count=3] = 0) do={ :error "The router has no internet access; coexistence stopped before any configuration was added." }
@@ -1267,7 +1333,7 @@ ${safeHeartbeatUrl ? `:do {
 `
     : "";
 
-  return `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
+  const renderedScript = `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
 # INSTALLER_REVISION=${installerRevision}
 # Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
 # Router: ${safeRouterName || "new router"}
@@ -1302,10 +1368,10 @@ ${installMarkerReset}
 :local routerOsVersion [/system resource get version]
 :local firstVersionDot [:find $routerOsVersion "."]
 :if ([:len $routerOsVersion] = 0 || [:len $firstVersionDot] = 0) do={
-    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+    :error ("Unsupported RouterOS version format " . $routerOsVersion . ".")
 }
 :if ($firstVersionDot < 1) do={
-    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+    :error ("Unsupported RouterOS version format " . $routerOsVersion . ".")
 }
 :local routerOsMajorText [:pick $routerOsVersion 0 $firstVersionDot]
 :local versionRemainder [:pick $routerOsVersion ($firstVersionDot + 1) [:len $routerOsVersion]]
@@ -1320,10 +1386,10 @@ ${installMarkerReset}
     :set majorVersion [:tonum $routerOsMajorText]
     :set minorVersion [:tonum $routerOsMinorText]
 } on-error={
-    :error ("Unsupported RouterOS version format \"" . $routerOsVersion . "\".")
+    :error ("Unsupported RouterOS version format " . $routerOsVersion . ".")
 }
 :if ($majorVersion != 6 && $majorVersion != 7) do={
-    :error ("Unsupported RouterOS version \"" . $routerOsVersion . "\". Only RouterOS 6.48+ and 7.x are supported.")
+    :error ("Unsupported RouterOS version " . $routerOsVersion . ". Only RouterOS 6.48+ and 7.x are supported.")
 }
 :if ($majorVersion < 6 || ($majorVersion = 6 && $minorVersion < 48)) do={
     :put "RouterOS version 6.48 or higher is required."
@@ -1878,6 +1944,7 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     }
 } on-error={}
 `;
+  return validateGeneratedRouterScript(renderedScript);
 }
 
 router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {

@@ -297,7 +297,7 @@ test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {
 });
 
 test("fallback order is OpenVPN then WireGuard then IPsec and stops after success", () => {
-  const renderedBundle = scriptsRoute.slice(scriptsRoute.indexOf("return `# ${safeCompanyName} Main ISP Setup Script"));
+  const renderedBundle = scriptsRoute.slice(scriptsRoute.indexOf("const renderedScript = `# ${safeCompanyName} Main ISP Setup Script"));
   const openVpn = renderedBundle.indexOf('${vpnAttempt("openvpn"');
   const wireGuard = renderedBundle.indexOf("${wireGuardAttempt}");
   const ipsec = renderedBundle.indexOf("${ipsecAttempt}");

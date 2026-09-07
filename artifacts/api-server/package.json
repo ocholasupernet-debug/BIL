@@ -8,6 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "test": "tsx --test src/**/*.test.ts",
+    "test:router-script": "tsx --test tests/router-script-generation.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:migration": "node --test tests/router-migration.test.mjs",
     "test:vpn-fallback": "node --test tests/router-vpn-fallback.test.mjs",
