@@ -64,6 +64,10 @@ test("Direct installation provides the staged router ports and sync flow", () =>
   assert.match(page, /\/api\/admin\/router\/ensure/);
   assert.match(page, /\/api\/admin\/router\/self-install\/grant/);
   assert.match(page, /Create profile &amp; generate command|Create profile & generate command/);
+  assert.match(page, /router-vpn-manual/);
+  assert.match(page, /ochola-management-vpn-ros\$\{routerOsMajor\}\.rsc/);
+  assert.match(page, /RouterOS \{routerOsMajor\}/);
+  assert.match(page, /creates both the primary and backup clients/);
 });
 
 test("router profile creation resumes an unfinished company router", async () => {

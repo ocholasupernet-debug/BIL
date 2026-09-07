@@ -172,7 +172,9 @@ export default function AddRouterScript() {
   );
   const [adminId, setAdminId] = useState(ADMIN_ID);
   const [script, setScript] = useState("");
+  const [installerGrant, setInstallerGrant] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [recoveryCopy, setRecoveryCopy] = useState<6 | 7 | null>(null);
   const [phase, setPhase] = useState<Phase>("script");
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [createdRouter, setCreatedRouter] = useState<RouterRecord | null>(null);
@@ -270,6 +272,16 @@ export default function AddRouterScript() {
       : "/scripts/mainhotspot.rsc";
     return `/tool fetch url="https://${companyHost}${authorizedPath}" dst-path=mainhotspot.rsc mode=https; /import mainhotspot.rsc`;
   };
+  const manualVpnUrl = (routerOsMajor: 6 | 7) => {
+    if (!companyHost || !selectedRouterId || !installerGrant) return "";
+    return `https://${companyHost}/scripts/router-vpn-manual/${selectedRouterId}/${adminId}/${routerOsMajor}/${encodeURIComponent(installerGrant)}`;
+  };
+  const manualVpnCommand = (routerOsMajor: 6 | 7) => {
+    const url = manualVpnUrl(routerOsMajor);
+    return url
+      ? `/tool fetch url="${url}" dst-path=ochola-management-vpn-ros${routerOsMajor}.rsc keep-result=yes mode=https check-certificate=no; /import ochola-management-vpn-ros${routerOsMajor}.rsc`
+      : "";
+  };
   const bootstrapCommand = buildBootstrapCommand();
   const canGenerate = !!bootstrapCommand;
 
@@ -305,8 +317,10 @@ export default function AddRouterScript() {
       }
       setCreatedRouter(result.router);
       setSelectedRouterId(result.router.id);
+      setInstallerGrant(prepared.grantToken);
       setScript(buildBootstrapCommand(result.router.id, prepared.grantToken));
       setCopyState("idle");
+      setRecoveryCopy(null);
       await refetchRouters();
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Could not create the router profile.");
@@ -505,6 +519,14 @@ export default function AddRouterScript() {
     window.setTimeout(() => setCopyState("idle"), 2_000);
   };
 
+  const copyRecoveryCommand = async (routerOsMajor: 6 | 7) => {
+    const command = manualVpnCommand(routerOsMajor);
+    if (!command) return;
+    await navigator.clipboard.writeText(command);
+    setRecoveryCopy(routerOsMajor);
+    window.setTimeout(() => setRecoveryCopy(current => current === routerOsMajor ? null : current), 2_000);
+  };
+
   const downloadScript = () => {
     if (!script) return;
     const blobUrl = URL.createObjectURL(new Blob([script], { type: "text/plain;charset=utf-8" }));
@@ -518,8 +540,10 @@ export default function AddRouterScript() {
   const resetFlow = () => {
     setPhase("script");
     setScript("");
+    setInstallerGrant("");
     setCreatedRouter(null);
     setSelectedRouterId(null);
+    setRecoveryCopy(null);
     setPorts(null);
     setSelectedPorts(new Set());
     setSyncResult(null);
@@ -716,6 +740,34 @@ export default function AddRouterScript() {
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: ".75rem", padding: ".65rem .75rem", borderRadius: 8, background: "rgba(20,184,166,.07)", border: "1px solid rgba(20,184,166,.2)", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
                     <CheckCircle2 size={15} color="#4ade80" />
                     <span>Router profile ready: <strong style={{ color: "var(--isp-text)" }}>{selectedRouter.name}</strong>{selectedRouter.vpn_ip ? ` · management ${selectedRouter.vpn_ip}` : ""}</span>
+                  </div>
+                )}
+                {selectedRouter && installerGrant && (
+                  <div style={{ marginTop: ".85rem", padding: ".8rem", borderRadius: 9, background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.28)" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "#fbbf24", fontSize: ".78rem", fontWeight: 800 }}>
+                      <Shield size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>VPN recovery — create both management OpenVPN clients manually</span>
+                    </div>
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5, margin: ".4rem 0 .7rem" }}>
+                      If mainhotspot.rsc reports that its VPN child downloads failed, run the command matching the router's installed RouterOS major version. It creates both the primary and backup clients. Then run <code>/import mainhotspot.rsc</code> again; the installer will reuse those clients.
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: ".55rem" }}>
+                      {([6, 7] as const).map(routerOsMajor => {
+                        const command = manualVpnCommand(routerOsMajor);
+                        return (
+                          <div key={routerOsMajor}>
+                            <div style={{ color: "var(--isp-text-muted)", fontSize: ".66rem", fontWeight: 800, marginBottom: ".3rem" }}>RouterOS {routerOsMajor}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".55rem .65rem" }}>
+                              <code style={{ color: "#7dd3fc", fontSize: ".68rem", lineHeight: 1.45, flex: 1, wordBreak: "break-word" }}>{command}</code>
+                              <button type="button" onClick={() => void copyRecoveryCommand(routerOsMajor)} style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, background: "rgba(255,255,255,.06)", border: "1px solid var(--isp-border)", borderRadius: 6, color: "var(--isp-text)", padding: ".38rem .5rem", fontSize: ".64rem", fontWeight: 800, cursor: "pointer" }}>
+                                {recoveryCopy === routerOsMajor ? <Check size={12} /> : <Copy size={12} />}
+                                {recoveryCopy === routerOsMajor ? "Copied" : "Copy"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: ".85rem" }}>
