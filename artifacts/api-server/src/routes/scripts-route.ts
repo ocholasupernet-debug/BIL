@@ -405,16 +405,17 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
   return `# Install the public CA used by the VPS HTTPS certificate before verified fetches.
 # The CA certificate is public; no private certificate key is downloaded.
 :global ocholaHttpsTrustError
+:global ocholaHttpsTrustPhase
 :set ocholaHttpsTrustError ""
+:set ocholaHttpsTrustPhase "certificate lookup"
 :do {
-    :local trustPhase "certificate lookup"
     :local caFile "${ROUTER_HTTPS_CERTIFICATE_FILE}"
     :local caBuildBase "ochola-isrg-root-x1-bootstrap"
     :local caBuildFile "ochola-isrg-root-x1-bootstrap.txt"
     :local caImportFile $caFile
     :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={
-        :set trustPhase "certificate source"
+        :set ocholaHttpsTrustPhase "certificate source"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
         :local fetchedViaTrustedStore false
@@ -427,24 +428,24 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
 ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "            ")}
             :set caImportFile $caBuildFile
         }
-        :set trustPhase "certificate import"
-        :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
+        :set ocholaHttpsTrustPhase "certificate import"
+        :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
         /certificate import file-name="$caImportFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
-    :set trustPhase "certificate trust"
-    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
+    :set ocholaHttpsTrustPhase "certificate trust"
+    :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
     :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
     /certificate set [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted=yes
-    :set trustPhase "certificate verification"
-    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
+    :set ocholaHttpsTrustPhase "certificate verification"
+    :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
     :if ([/certificate get [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
     :local trustDetail $error
-    :if ([:len $trustDetail] = 0) do={ :set trustDetail ("failed during " . $trustPhase) }
+    :if ([:len $trustDetail] = 0) do={ :set trustDetail ("failed during " . $ocholaHttpsTrustPhase) }
     :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
     :set ocholaHttpsTrustError ("HTTPS certificate trust setup failed - " . $trustDetail)
