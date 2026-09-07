@@ -123,6 +123,7 @@ test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on Ro
   assert.doesNotMatch(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
   assert.match(scriptsRoute, /diagnosticResponse/);
+  assert.match(scriptsRoute, /const diagnosticResponse = pathBootstrap \|\|/);
   assert.match(scriptsRoute, /status\(diagnosticResponse \? 200 : status\)/);
 });
 

@@ -2606,7 +2606,12 @@ router.get([
     ? "takeover"
     : "coexist";
   const takeoverGrant = String(req.query.grant ?? "").trim();
-  const diagnosticResponse = String(req.query.diagnostic ?? "").trim() === "1";
+  /* RouterOS fetch may discard an HTTP error body. Path-based bootstrap
+     requests are installer-specific and already carry the router token, so
+     return their marked error body with HTTP 200 to preserve actionable
+     diagnostics in the downloaded .rsc file. The public query endpoint keeps
+     normal HTTP statuses unless diagnostic=1 is explicitly requested. */
+  const diagnosticResponse = pathBootstrap || String(req.query.diagnostic ?? "").trim() === "1";
   const sendRouterVpnError = (status: number, body: string): void => {
     res.status(diagnosticResponse ? 200 : status).type("text/plain").send(body);
   };
