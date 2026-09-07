@@ -885,12 +885,23 @@ function defaultRouterTunnelIp(routerId: number): string {
 
 type RouterManagementProfile = {
   role: "primary" | "backup";
+  name: string;
+  connectTo: string;
   endpoint: string;
   port: number;
   tunnelIp: string;
   gateway: string;
   interfaceName: string;
   username: string;
+  protocol: "tcp";
+  mode: "ip";
+  auth: "sha1";
+  cipher: {
+    routerOs6: "aes128";
+    routerOs7: "aes128-cbc";
+  };
+  addDefaultRoute: false;
+  certificateName: string;
 };
 
 function readRouterManagementCaCertificate(): string {
@@ -916,6 +927,10 @@ function buildRouterManagementOvpnProfile(input: {
   const safeName = input.routerName.replace(/[\r\n#]/g, " ").trim();
   return `# OcholaSuperNet router-management OpenVPN profile
 # Router: ${safeName}
+# RouterOS primary name: ${routerManagementClientInterfaceName(input.routerId, "primary")}
+# RouterOS primary connect-to: ${input.endpoint}
+# RouterOS backup name: ${routerManagementClientInterfaceName(input.routerId, "backup")}
+# RouterOS backup connect-to: ${input.endpoint}
 # Primary tunnel: ${input.primaryIp} via TCP ${routerManagementVpnPortForRouter(input.routerId)}
 # Backup tunnel: ${backupIp} via TCP ${ROUTER_MANAGEMENT_VPN_BACKUP.port}
 # Keep this file private: it contains router-scoped VPN credentials.
@@ -3733,21 +3748,37 @@ async function loadRouterManagementProfileContext(
   const profiles: RouterManagementProfile[] = [
     {
       role: "primary",
+      name: routerManagementClientInterfaceName(routerId, "primary"),
+      connectTo: endpoint,
       endpoint,
       port: routerManagementVpnPortForRouter(routerId),
       tunnelIp: primaryIp,
       gateway: ROUTER_VPN_GATEWAY,
       interfaceName: routerManagementClientInterfaceName(routerId, "primary"),
       username: credentials.username,
+      protocol: "tcp",
+      mode: "ip",
+      auth: "sha1",
+      cipher: { routerOs6: "aes128", routerOs7: "aes128-cbc" },
+      addDefaultRoute: false,
+      certificateName: "ochola-router-management-ca",
     },
     {
       role: "backup",
+      name: routerManagementClientInterfaceName(routerId, "backup"),
+      connectTo: endpoint,
       endpoint,
       port: ROUTER_MANAGEMENT_VPN_BACKUP.port,
       tunnelIp: routerManagementBackupIp(primaryIp),
       gateway: ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
       interfaceName: routerManagementClientInterfaceName(routerId, "backup"),
       username: credentials.username,
+      protocol: "tcp",
+      mode: "ip",
+      auth: "sha1",
+      cipher: { routerOs6: "aes128", routerOs7: "aes128-cbc" },
+      addDefaultRoute: false,
+      certificateName: "ochola-router-management-ca",
     },
   ];
   return {

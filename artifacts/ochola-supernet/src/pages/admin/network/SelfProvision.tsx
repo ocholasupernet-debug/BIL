@@ -82,12 +82,23 @@ interface PortsPayload {
 
 interface ManagementVpnProfile {
   role: "primary" | "backup";
+  name: string;
+  connectTo: string;
   endpoint: string;
   port: number;
   tunnelIp: string;
   gateway: string;
   interfaceName: string;
   username: string;
+  protocol: "tcp";
+  mode: "ip";
+  auth: "sha1";
+  cipher: {
+    routerOs6: "aes128";
+    routerOs7: "aes128-cbc";
+  };
+  addDefaultRoute: false;
+  certificateName: string;
 }
 
 interface ManagementVpnDetailsPayload {
@@ -834,10 +845,18 @@ export default function AddRouterScript() {
                                 {profile.role === "primary" ? "Primary management VPN" : "Backup management VPN"}
                               </div>
                               <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: ".28rem .65rem", color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.4 }}>
-                                <span>Endpoint</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.endpoint}</strong>
+                                <span>Router name</span><strong style={{ color: "var(--isp-text)" }}>{selectedRouter.name}</strong>
+                                <span>OVPN name</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace", wordBreak: "break-word" }}>{profile.name}</strong>
+                                <span>Connect to</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.connectTo}</strong>
                                 <span>Port</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.port}/TCP</strong>
                                 <span>Username</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.username}</strong>
                                 <span>Password</span><strong style={{ color: "#fbbf24" }}>Included in download</strong>
+                                <span>Protocol</span><strong style={{ color: "var(--isp-text)" }}>{profile.protocol}</strong>
+                                <span>Mode</span><strong style={{ color: "var(--isp-text)" }}>{profile.mode}</strong>
+                                <span>Auth</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.auth}</strong>
+                                <span>Cipher</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>ROS 6: {profile.cipher.routerOs6} · ROS 7: {profile.cipher.routerOs7}</strong>
+                                <span>Certificate</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace", wordBreak: "break-word" }}>{profile.certificateName}</strong>
+                                <span>Default route</span><strong style={{ color: "var(--isp-text)" }}>{profile.addDefaultRoute ? "Enabled" : "Disabled"}</strong>
                                 <span>Tunnel IP</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.tunnelIp}</strong>
                                 <span>Gateway</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace" }}>{profile.gateway}</strong>
                                 <span>Interface</span><strong style={{ color: "var(--isp-text)", fontFamily: "monospace", wordBreak: "break-word" }}>{profile.interfaceName}</strong>

@@ -103,11 +103,17 @@ test("Direct installation exposes signed primary and backup OpenVPN details", as
   assert.match(scriptsRoute, /verifyInstallerGrant\(grant, routerId\)/);
   assert.match(scriptsRoute, /routerManagementVpnPortForRouter\(input\.routerId\)/);
   assert.match(scriptsRoute, /ROUTER_MANAGEMENT_VPN_BACKUP\.port/);
+  assert.match(scriptsRoute, /connectTo: endpoint/);
+  assert.match(scriptsRoute, /name: routerManagementClientInterfaceName\(routerId, "primary"\)/);
+  assert.match(scriptsRoute, /certificateName: "ochola-router-management-ca"/);
   assert.match(scriptsRoute, /<auth-user-pass>/);
   assert.match(scriptsRoute, /<ca>/);
   assert.match(page, /Automatic OpenVPN details/);
   assert.match(page, /Primary management VPN/);
   assert.match(page, /Backup management VPN/);
+  assert.match(page, /Connect to/);
+  assert.match(page, /OVPN name/);
+  assert.match(page, /ROS 6: \{profile\.cipher\.routerOs6\}/);
   assert.match(page, /Download router \.ovpn/);
   assert.match(page, /router-vpn-details/);
   assert.match(page, /router-vpn-profile/);
