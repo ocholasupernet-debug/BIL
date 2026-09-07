@@ -56,9 +56,32 @@ then
   exit 1
 fi
 
+if ! sudo "$UFW_BIN" status verbose 2>/dev/null | grep -Eq '^Status: active'; then
+  echo "ERROR: UFW did not remain active after applying the management rules." >&2
+  exit 1
+fi
+
+# UFW may reload/replace the filter tables when it is enabled. Reapply the
+# isolated router-management forwarding rules after that reload so the
+# verification gate and the live tunnels see the same policy. These rules are
+# deliberately limited to the two dedicated management interfaces/subnets.
+for interface in tun-router tun-router-bkp; do
+  sudo iptables -C FORWARD -i "$interface" -j ACCEPT 2>/dev/null ||
+    sudo iptables -I FORWARD -i "$interface" -j ACCEPT
+  sudo iptables -C FORWARD -o "$interface" -j ACCEPT 2>/dev/null ||
+    sudo iptables -I FORWARD -o "$interface" -j ACCEPT
+done
+for network in 10.8.5.0/24 10.8.6.0/24; do
+  sudo iptables -t nat -C POSTROUTING -s "$network" -j MASQUERADE 2>/dev/null ||
+    sudo iptables -t nat -A POSTROUTING -s "$network" -j MASQUERADE
+done
+
 if ! sudo iptables -C INPUT -p tcp --dport "${PORT_START}:${PORT_END}" -j ACCEPT 2>/dev/null; then
   echo "ERROR: Could not install the router-management INPUT rule." >&2
   exit 1
+fi
+if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
+  sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null
 fi
 sudo tee /etc/systemd/system/ochola-router-vpn-ports.service >/dev/null <<EOF
 [Unit]
