@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqn52gq
+# INSTALLER_REVISION=rmtqnc33q
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqn52gq"
+:put "INSTALLER_REVISION=rmtqnc33q"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -68,6 +68,8 @@
 :do {
 # Install the public CA used by the VPS HTTPS certificate before verified fetches.
 # The CA certificate is public; no private certificate key is downloaded.
+:global ocholaHttpsTrustError
+:set ocholaHttpsTrustError ""
 :do {
     :local trustPhase "certificate lookup"
     :local caFile "ochola-isrg-root-x1.pem"
@@ -153,15 +155,18 @@
             :set caImportFile $caBuildFile
         }
         :set trustPhase "certificate import"
+        :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
         /certificate import file-name="$caImportFile" name="ochola-isrg-root-x1"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
     :set trustPhase "certificate trust"
+    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
     :set caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
     /certificate set [find name="ochola-isrg-root-x1"] trusted=yes
     :set trustPhase "certificate verification"
+    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
     :if ([/certificate get [find name="ochola-isrg-root-x1"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
@@ -169,11 +174,20 @@
     :if ([:len $trustDetail] = 0) do={ :set trustDetail ("failed during " . $trustPhase) }
     :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
-    :error ("HTTPS certificate trust setup failed - " . $trustDetail)
+    :set ocholaHttpsTrustError ("HTTPS certificate trust setup failed - " . $trustDetail)
+    :put ("FAILED: HTTPS certificate trust setup - " . $ocholaHttpsTrustError)
 }
-    :set trustStatus "SUCCESS"
-    :put "SUCCESS: HTTPS trust bootstrap completed."
-    :do { $pg 0 "coexistence-trust" "applied" "" } on-error={ :put "WARN: progress update for coexistence-trust failed; continuing installer." }
+    :global ocholaHttpsTrustError
+    :if ([:len $ocholaHttpsTrustError] = 0) do={
+        :set trustStatus "SUCCESS"
+        :put "SUCCESS: HTTPS trust bootstrap completed."
+        :do { $pg 0 "coexistence-trust" "applied" "" } on-error={ :put "WARN: progress update for coexistence-trust failed; continuing installer." }
+    } else={
+        :set trustError $ocholaHttpsTrustError
+        :set errors ($errors . "https-trust: " . $trustError . "; ")
+        :put ("FAILED: HTTPS trust bootstrap - " . $trustError)
+        :do { $pg 0 "coexistence-trust" "failed" $trustError } on-error={ :put "WARN: progress update for coexistence-trust failed; continuing installer." }
+    }
 } on-error={
     :set trustError $error
     :if ([:len $trustError] = 0) do={ :set trustError "HTTPS trust bootstrap failed without a RouterOS error message." }

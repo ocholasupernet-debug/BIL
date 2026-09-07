@@ -404,6 +404,8 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
   const caUrl = `${scriptsBase}/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
   return `# Install the public CA used by the VPS HTTPS certificate before verified fetches.
 # The CA certificate is public; no private certificate key is downloaded.
+:global ocholaHttpsTrustError
+:set ocholaHttpsTrustError ""
 :do {
     :local trustPhase "certificate lookup"
     :local caFile "${ROUTER_HTTPS_CERTIFICATE_FILE}"
@@ -426,15 +428,18 @@ ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", 
             :set caImportFile $caBuildFile
         }
         :set trustPhase "certificate import"
+        :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
         /certificate import file-name="$caImportFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
     :set trustPhase "certificate trust"
+    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
     :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
     /certificate set [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted=yes
     :set trustPhase "certificate verification"
+    :put ("HTTPS_TRUST_PHASE=" . $trustPhase)
     :if ([/certificate get [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
@@ -442,7 +447,8 @@ ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", 
     :if ([:len $trustDetail] = 0) do={ :set trustDetail ("failed during " . $trustPhase) }
     :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
-    :error ("HTTPS certificate trust setup failed - " . $trustDetail)
+    :set ocholaHttpsTrustError ("HTTPS certificate trust setup failed - " . $trustDetail)
+    :put ("FAILED: HTTPS certificate trust setup - " . $ocholaHttpsTrustError)
 }`;
 }
 
@@ -1185,9 +1191,17 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 # report their own HTTPS/download failures rather than stopping this installer.
 :do {
 ${httpsTrustBootstrap}
-    :set trustStatus "SUCCESS"
-    :put "SUCCESS: HTTPS trust bootstrap completed."
-    ${safeProgressCall(0, "coexistence-trust", "applied")}
+    :global ocholaHttpsTrustError
+    :if ([:len $ocholaHttpsTrustError] = 0) do={
+        :set trustStatus "SUCCESS"
+        :put "SUCCESS: HTTPS trust bootstrap completed."
+        ${safeProgressCall(0, "coexistence-trust", "applied")}
+    } else={
+        :set trustError $ocholaHttpsTrustError
+        :set errors ($errors . "https-trust: " . $trustError . "; ")
+        :put ("FAILED: HTTPS trust bootstrap - " . $trustError)
+        ${safeProgressCall(0, "coexistence-trust", "failed", "$trustError")}
+    }
 } on-error={
     :set trustError $error
     :if ([:len $trustError] = 0) do={ :set trustError "HTTPS trust bootstrap failed without a RouterOS error message." }
@@ -1466,6 +1480,8 @@ ${takeoverBackup}
 
 # Bootstrap the public CA before any HTTPS download is verified.
 ${httpsTrustBootstrap}
+:global ocholaHttpsTrustError
+:if ([:len $ocholaHttpsTrustError] > 0) do={ :error $ocholaHttpsTrustError }
 
 ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 
