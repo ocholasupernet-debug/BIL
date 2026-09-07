@@ -109,6 +109,7 @@ interface ManagementVpnDetailsPayload {
     endpoint: string;
     username: string;
     passwordAvailable: boolean;
+    vpsLinked: boolean;
   };
   profiles?: ManagementVpnProfile[];
   note?: string;
@@ -826,6 +827,11 @@ export default function AddRouterScript() {
                     <p style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5, margin: ".4rem 0 .7rem" }}>
                       These are the primary and backup management tunnels for <strong style={{ color: "var(--isp-text)" }}>{selectedRouter.name}</strong>. The downloaded profile contains the router-scoped password, so keep it private.
                     </p>
+                    {vpnDetails?.router?.vpsLinked && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#86efac", fontSize: ".7rem", fontWeight: 750, marginBottom: ".7rem" }}>
+                        <CheckCircle2 size={14} /> VPS linkage verified for both primary and backup OpenVPN listeners.
+                      </div>
+                    )}
                     {vpnDetailsLoading && (
                       <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
                         <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Loading router VPN details…

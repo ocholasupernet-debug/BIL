@@ -3745,6 +3745,36 @@ async function loadRouterManagementProfileContext(
     routerName: currentRouter.name,
   });
   const primaryIp = await ensurePersistentRouterTunnelIp(routerId, currentRouter.vpn_ip);
+  try {
+    const [primaryProvisioning, backupProvisioning] = await Promise.all([
+      provisionRouterManagementOpenVpn({
+        adminId,
+        routerId,
+        routerName: currentRouter.name,
+        routerIp: primaryIp,
+      }),
+      provisionRouterManagementOpenVpnBackup({
+        adminId,
+        routerId,
+        routerName: currentRouter.name,
+        routerIp: primaryIp,
+      }),
+    ]);
+    const backupIp = routerManagementBackupIp(primaryIp);
+    if (
+      primaryProvisioning.assignedIp !== primaryIp
+      || backupProvisioning.assignedIp !== backupIp
+      || !primaryProvisioning.endpoint
+      || !backupProvisioning.endpoint
+    ) {
+      throw new Error("The VPS returned an unexpected router-management VPN address or endpoint.");
+    }
+  } catch (error) {
+    throw new RouterManagementProfileError(
+      503,
+      `VPS router-management VPN linkage is not ready: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const profiles: RouterManagementProfile[] = [
     {
       role: "primary",
@@ -3809,9 +3839,10 @@ router.get("/scripts/router-vpn-details/:routerId/:adminId/:grant", async (req, 
         endpoint: context.endpoint,
         username: context.username,
         passwordAvailable: true,
+        vpsLinked: true,
       },
       profiles: context.profiles,
-      note: "The downloadable profile contains the router-scoped VPN password.",
+      note: "VPS linkage verified for both primary and backup listeners. The downloadable profile contains the router-scoped VPN password.",
     });
   } catch (error) {
     const status = error instanceof RouterManagementProfileError ? error.status : 503;
