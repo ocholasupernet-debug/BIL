@@ -1077,22 +1077,9 @@ export function buildMainhotspotRsc(
          :set attemptPhase "download verification"
         ${verifyFetchedFile(`"${tempFileName}"`, tempFileName, true)}
         :delay 2s
-         :if ($majorVersion >= 7) do={
-             :local preflightError ""
-              :set attemptPhase "RouterOS 7 dry-run"
-             :do {
-                 /import "${tempFileName}" verbose=yes dry-run
-             } on-error={
-                 :set preflightError $error
-             }
-             :if ([:len $preflightError] > 0) do={
-                 :set ocholaVpnChildError ("${protocol}: RouterOS 7 dry-run rejected the child script: " . $preflightError)
-                 :error $ocholaVpnChildError
-             }
-         }
          :set attemptPhase "child import"
         :do {
-            /import "${tempFileName}" verbose=yes
+            /import "${tempFileName}"
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
@@ -1186,7 +1173,6 @@ ${safeRouterVpnWarning ? `:put "WARNING: ${safeRouterVpnWarning}"` : ""}
 :local ipsecUrl ""
 :local vpnIp ""
 :local coexistenceBundleBytes ""
-:local coexistencePreflightError ""
 
 # Stage 1: trust bootstrap. Failure is recorded; later stages still run and
 # report their own HTTPS/download failures rather than stopping this installer.
@@ -1349,16 +1335,11 @@ ${coexistenceHotspotUrl ? `
     :global ocholaCoexistenceError
     :set ocholaCoexistenceError ""
     :set coexistenceBundleBytes ""
-    :set coexistencePreflightError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="${rscEscape(coexistenceHotspotUrl)}" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
     ${verifyFetchedFile('"ochola-coexistence-hotspot.rsc.download"', "ochola-coexistence-hotspot.rsc.download")}
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
-    :if ($majorVersion >= 7) do={
-        :do { /import "ochola-coexistence-hotspot.rsc.download" verbose=yes dry-run } on-error={ :set coexistencePreflightError $error }
-        :if ([:len $coexistencePreflightError] > 0) do={ :error ("coexistence hotspot dry-run failed: " . $coexistencePreflightError) }
-    }
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     :set hotspotStageStatus "SUCCESS"

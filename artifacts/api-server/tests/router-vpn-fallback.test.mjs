@@ -120,7 +120,7 @@ test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on Ro
   assert.match(scriptsRoute, /versionedUrlAssignment\("wireGuardUrl", safeRouterWireGuardUrl, 7\)/);
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{\\n\$\{vpnAttempt\("wireguard"/);
   assert.match(scriptsRoute, /ros-version=/);
-  assert.match(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
+  assert.doesNotMatch(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
 });
 
@@ -307,7 +307,8 @@ test("fallback order is OpenVPN then WireGuard then IPsec and stops after succes
   assert.match(scriptsRoute, /const tempFileName = `\$\{fileName\}\.download`/);
   assert.match(scriptsRoute, /failed-\$\{fileName\}/);
   assert.match(scriptsRoute, /:do \{ \/file set \[find name="\$\{tempFileName\}"\] name="failed-\$\{fileName\}" \}/);
-  assert.match(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
+  assert.match(scriptsRoute, /\/import "\$\{tempFileName\}"/);
+  assert.doesNotMatch(scriptsRoute, /\/import "\$\{tempFileName\}" verbose=yes/);
   assert.match(scriptsRoute, /:local importError \$error/);
   assert.match(scriptsRoute, /:local rawVpnError \$error/);
   assert.match(scriptsRoute, /:set vpnError \("\$\{protocol\}: " \. \$attemptPhase \. " failed: " \. \$rawVpnError\)/);

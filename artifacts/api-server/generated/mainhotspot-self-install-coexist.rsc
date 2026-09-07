@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqmf3uc
+# INSTALLER_REVISION=rmtqmkh6e
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqmf3uc"
+:put "INSTALLER_REVISION=rmtqmkh6e"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -62,7 +62,6 @@
 :local ipsecUrl ""
 :local vpnIp ""
 :local coexistenceBundleBytes ""
-:local coexistencePreflightError ""
 
 # Stage 1: trust bootstrap. Failure is recorded; later stages still run and
 # report their own HTTPS/download failures rather than stopping this installer.
@@ -261,22 +260,9 @@
      :error $ocholaVpnChildError
  }
         :delay 2s
-         :if ($majorVersion >= 7) do={
-             :local preflightError ""
-              :set attemptPhase "RouterOS 7 dry-run"
-             :do {
-                 /import "ochola-coexist-vpn-openvpn.rsc.download" verbose=yes dry-run
-             } on-error={
-                 :set preflightError $error
-             }
-             :if ([:len $preflightError] > 0) do={
-                 :set ocholaVpnChildError ("openvpn: RouterOS 7 dry-run rejected the child script: " . $preflightError)
-                 :error $ocholaVpnChildError
-             }
-         }
          :set attemptPhase "child import"
         :do {
-            /import "ochola-coexist-vpn-openvpn.rsc.download" verbose=yes
+            /import "ochola-coexist-vpn-openvpn.rsc.download"
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
@@ -358,22 +344,9 @@
      :error $ocholaVpnChildError
  }
         :delay 2s
-         :if ($majorVersion >= 7) do={
-             :local preflightError ""
-              :set attemptPhase "RouterOS 7 dry-run"
-             :do {
-                 /import "ochola-coexist-vpn-openvpn-backup.rsc.download" verbose=yes dry-run
-             } on-error={
-                 :set preflightError $error
-             }
-             :if ([:len $preflightError] > 0) do={
-                 :set ocholaVpnChildError ("openvpn-backup: RouterOS 7 dry-run rejected the child script: " . $preflightError)
-                 :error $ocholaVpnChildError
-             }
-         }
          :set attemptPhase "child import"
         :do {
-            /import "ochola-coexist-vpn-openvpn-backup.rsc.download" verbose=yes
+            /import "ochola-coexist-vpn-openvpn-backup.rsc.download"
         } on-error={
             :local importError $error
             :if ([:len $ocholaVpnChildError] > 0) do={ :set importError $ocholaVpnChildError }
@@ -513,7 +486,6 @@
     :global ocholaCoexistenceError
     :set ocholaCoexistenceError ""
     :set coexistenceBundleBytes ""
-    :set coexistencePreflightError ""
     :do { /file remove [find name="ochola-coexistence-hotspot.rsc.download"] } on-error={}
     /tool fetch url="https://come.isplatty.org/api/scripts/coexistence-hotspot/90.rsc" dst-path="ochola-coexistence-hotspot.rsc.download" keep-result=yes mode=https check-certificate=yes
     :local fetchedFile [/file find name="ochola-coexistence-hotspot.rsc.download"]
@@ -524,10 +496,6 @@
 :if ([:tonum $fetchedSize] <= 0) do={ :error "download created an empty file: ochola-coexistence-hotspot.rsc.download" }
     :set coexistenceBundleBytes [/file get [find name="ochola-coexistence-hotspot.rsc.download"] size]
     :put ("COEXISTENCE BUNDLE DOWNLOADED: " . $coexistenceBundleBytes . " bytes")
-    :if ($majorVersion >= 7) do={
-        :do { /import "ochola-coexistence-hotspot.rsc.download" verbose=yes dry-run } on-error={ :set coexistencePreflightError $error }
-        :if ([:len $coexistencePreflightError] > 0) do={ :error ("coexistence hotspot dry-run failed: " . $coexistencePreflightError) }
-    }
     /import "ochola-coexistence-hotspot.rsc.download"
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="ochola-coexistence-hotspot.rsc" } on-error={}
     :set hotspotStageStatus "SUCCESS"
