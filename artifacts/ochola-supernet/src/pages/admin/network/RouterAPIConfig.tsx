@@ -57,6 +57,19 @@ interface TestResult {
   model?: string;
 }
 
+interface ManagementTunnelInfo {
+  connectTo: string;
+  primaryPort: number;
+  sharedPort: number;
+  backupPort: number;
+  routerTunnelIp: string;
+  routerApiPort: number;
+}
+
+interface VpnInfoResponse {
+  managementTunnel?: ManagementTunnelInfo;
+}
+
 /* ══════════════════════ Styles ══════════════════════════════════ */
 const inp: React.CSSProperties = {
   background: "var(--isp-input-bg,#0f1923)",
@@ -247,6 +260,25 @@ function RouterForm({
   const [testing, setTesting] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const { data: vpnInfo, isLoading: vpnInfoLoading, isError: vpnInfoError } = useQuery<VpnInfoResponse>({
+    queryKey: ["router-management-vpn-info", routerId],
+    enabled: Boolean(routerId),
+    queryFn: async () => {
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(`/api/router/${routerId}/vpn-info`, { headers });
+      if (!response.ok) throw new Error("Management tunnel details are unavailable.");
+      return response.json() as Promise<VpnInfoResponse>;
+    },
+  });
+  const managementTunnel = vpnInfo?.managementTunnel;
+
+  useEffect(() => {
+    const tunnelIp = managementTunnel?.routerTunnelIp?.trim();
+    if (!tunnelIp) return;
+    setForm(current => current.vpn_ip.trim() ? current : { ...current, vpn_ip: tunnelIp });
+  }, [managementTunnel?.routerTunnelIp]);
 
   function set(k: keyof RouterForm, v: string | number) {
     setForm(f => ({ ...f, [k]: v }));
@@ -397,6 +429,46 @@ function RouterForm({
           <label style={lbl}><Lock size={11} /> API Password</label>
            <PwInput value={form.router_secret} onChange={v => set("router_secret", v)} placeholder="MikroTik API password" />
            <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "4px 0 0" }}>Forwarded securely to the VPS; it is never returned in the response.</p>
+        </div>
+      </div>
+
+      {/* ── Interfaces section ─────────────────────────────────── */}
+      <div style={{ margin: "4px 0 18px", borderRadius: 10, border: "1px solid rgba(56,189,248,0.2)", overflow: "hidden" }}>
+        <div style={{ background: "rgba(56,189,248,0.06)", padding: "9px 14px", borderBottom: "1px solid rgba(56,189,248,0.15)", display: "flex", alignItems: "center", gap: 7 }}>
+          <Wifi size={12} style={{ color: "#38bdf8" }} />
+          <span style={{ fontSize: 11, fontWeight: 800, color: "#38bdf8", letterSpacing: "0.06em", textTransform: "uppercase" as const }}>Management tunnel</span>
+          <span style={{ fontSize: 10, color: "var(--isp-text-muted)", marginLeft: 4 }}>— auto-filled from the created router record</span>
+        </div>
+        <div style={{ padding: "13px 15px" }}>
+          {!routerId ? (
+            <p style={{ margin: 0, fontSize: 11, color: "var(--isp-text-muted)", lineHeight: 1.6 }}>
+              Save the router record first. The VPS connect-to address and router-specific OpenVPN port will then be filled here automatically.
+            </p>
+          ) : vpnInfoLoading ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11, color: "var(--isp-text-muted)" }}>
+              <Loader2 size={12} className="animate-spin" /> Loading management tunnel details…
+            </div>
+          ) : vpnInfoError || !managementTunnel ? (
+            <p style={{ margin: 0, fontSize: 11, color: "#fbbf24", lineHeight: 1.6 }}>
+              Management tunnel details could not be loaded. The saved router VPN IP remains unchanged.
+            </p>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              {[
+                ["OpenVPN connect-to", managementTunnel.connectTo],
+                ["Router-specific port", `${managementTunnel.primaryPort}/TCP`],
+                ["Router tunnel IP", managementTunnel.routerTunnelIp],
+                ["RouterOS API target", `${managementTunnel.routerTunnelIp}:${managementTunnel.routerApiPort}/TCP`],
+                ["Shared VPS listener", `${managementTunnel.sharedPort}/TCP`],
+                ["Backup listener", `${managementTunnel.backupPort}/TCP`],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <p style={{ margin: "0 0 4px", fontSize: 9.5, color: "var(--isp-text-muted)", fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{label}</p>
+                  <input value={value} readOnly style={{ ...inp, fontFamily: "monospace", fontSize: 11, color: "var(--isp-text)", background: "rgba(0,0,0,0.14)" }} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -759,7 +831,6 @@ export default function RouterAPIConfig() {
         .from("isp_routers")
         .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,api_port,description,model,ros_version,status,last_seen,created_at,updated_at")
         .eq("admin_id", ADMIN_ID)
-        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
         .order("name");
       return (data ?? []) as DbRouter[];
     },
@@ -872,7 +943,7 @@ export default function RouterAPIConfig() {
           <>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--isp-text)" }}>
-                {routers.length} Router{routers.length !== 1 ? "s" : ""} Configured
+                {routers.length} Router Record{routers.length !== 1 ? "s" : ""}
               </h2>
               <button
                 onClick={() => routers.forEach(r => handleTestDirect(r.id))}

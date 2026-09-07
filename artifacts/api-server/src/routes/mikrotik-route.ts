@@ -911,6 +911,14 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
     configuredHost: found.row.host,
     bridgeIp: found.row.bridge_ip,
     vpnIp: found.row.vpn_ip,
+    managementTunnel: {
+      connectTo: vpsIp || "SET_VPS_HOST_OR_QUERY_PARAM",
+      primaryPort: routerManagementVpnPortForRouter(id),
+      sharedPort: routerManagementVpnContract("primary").port,
+      backupPort: routerManagementVpnContract("backup").port,
+      routerTunnelIp: tunnelRouterIp,
+      routerApiPort: 8728,
+    },
     scripts: {
       vpsSetup:       `/api/router/${id}/vps-ovpn-setup${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
       routerAsClient: `/api/router/${id}/router-as-client${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
