@@ -98,3 +98,30 @@ test("router-scoped Main ISP installer validates the actual public route output"
   assert.doesNotMatch(script, /\[\/ping \$internetTarget count=2\]/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });
+
+test("Self Install coexistence uses a RouterOS 6-safe CA fallback argument", () => {
+  const script = buildMainhotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "https://come.isplatty.org/api/isp/router/install-progress/90?token=example",
+    "come1",
+    "Ochola SuperNet",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "ochola-mgmt-vpn-90",
+    "",
+    "verified",
+    "coexist",
+    "https://come.isplatty.org/api/scripts/coexistence-hotspot.rsc",
+  );
+  const line36 = script.split("\n")[35] ?? "";
+
+  assert.match(line36, /\/file add name=\$caFile contents=/);
+  assert.doesNotMatch(line36, /name="\$caFile"/);
+  assert.equal(validateGeneratedRouterScript(script), script);
+});

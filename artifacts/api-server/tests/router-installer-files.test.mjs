@@ -91,10 +91,10 @@ test("required child imports use completion markers, resource checks, and final 
   assert.match(scriptsRoute, /fileCompletionCheck\("hotspotsetup\.rsc"\)/);
 });
 
-test("installer callback values are form-encoded before posting", () => {
+test("installer callback values use the shared flat callback encoder", () => {
   assert.match(scriptsRoute, /global ocholaFormEncode do=/);
-  assert.match(scriptsRoute, /%26/);
-  assert.match(scriptsRoute, /%3D/);
+  assert.match(scriptsRoute, /:return \[:tostr \$1\]/);
+  assert.doesNotMatch(scriptsRoute, /:for i from=0 to=\(\[:len \$input\] - 1\)/);
   assert.match(scriptsRoute, /installation_status=.*ocholaFormEncode/);
   assert.match(scriptsRoute, /error=.*ocholaFormEncode/);
 });

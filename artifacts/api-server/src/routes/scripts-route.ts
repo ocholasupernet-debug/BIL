@@ -422,7 +422,7 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
         } on-error={}
         :if (!$fetchedViaTrustedStore) do={
             :put "      RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
-            /file add name="$caFile" contents="${rosCertificateContents(ISRG_ROOT_X1_PEM)}"
+            /file add name=$caFile contents="${rosCertificateContents(ISRG_ROOT_X1_PEM)}"
         }
         /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
         :do { /file remove [find name="$caFile"] } on-error={}
