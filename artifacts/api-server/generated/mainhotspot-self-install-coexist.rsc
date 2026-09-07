@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqm8zv8
+# INSTALLER_REVISION=rmtqmf3uc
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqm8zv8"
+:put "INSTALLER_REVISION=rmtqmf3uc"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -73,6 +73,7 @@
     :local caFile "ochola-isrg-root-x1.pem"
     :local caBuildBase "ochola-isrg-root-x1-bootstrap"
     :local caBuildFile "ochola-isrg-root-x1-bootstrap.txt"
+    :local caImportFile $caFile
     :local caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={
         :do { /file remove [find name="$caFile"] } on-error={}
@@ -148,16 +149,18 @@
             /file set [find name=$caBuildFile] contents=$caText
             :set caText ($caText . "\n" . "-----END CERTIFICATE-----")
             /file set [find name=$caBuildFile] contents=$caText
-            /file set [find name=$caBuildFile] name=$caFile
+            :set caImportFile $caBuildFile
         }
-        /certificate import file-name="$caFile" name="ochola-isrg-root-x1"
+        /certificate import file-name="$caImportFile" name="ochola-isrg-root-x1"
         :do { /file remove [find name="$caFile"] } on-error={}
+        :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
     :set caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
     /certificate set $caCert trusted=yes
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
+    :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
     :error ("HTTPS certificate trust setup failed - " . $error)
 }
