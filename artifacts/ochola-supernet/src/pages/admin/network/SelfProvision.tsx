@@ -891,7 +891,7 @@ export default function AddRouterScript() {
                   <div style={{ marginTop: ".85rem", padding: ".8rem", borderRadius: 9, background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.28)" }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: "#fbbf24", fontSize: ".78rem", fontWeight: 800 }}>
                       <Shield size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-                      <span>VPN recovery — create both management OpenVPN clients manually</span>
+                      <span>VPN recovery — create both management OpenVPN clients manually for {selectedRouter.name}</span>
                     </div>
                     <p style={{ color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5, margin: ".4rem 0 .7rem" }}>
                       If mainhotspot.rsc reports that its VPN child downloads failed, run the command matching the router's installed RouterOS major version. It creates both the primary and backup clients. Then run <code>/import mainhotspot.rsc</code> again; the installer will reuse those clients.
@@ -909,6 +909,9 @@ export default function AddRouterScript() {
                                 {recoveryCopy === routerOsMajor ? "Copied" : "Copy"}
                               </button>
                             </div>
+                            <a href={manualVpnUrl(routerOsMajor)} download={`ochola-management-vpn-ros${routerOsMajor}.rsc`} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: ".3rem", color: "#93c5fd", fontSize: ".66rem", fontWeight: 700, textDecoration: "none" }}>
+                              <Download size={12} /> Download RouterOS {routerOsMajor} script for {selectedRouter.name}
+                            </a>
                           </div>
                         );
                       })}
