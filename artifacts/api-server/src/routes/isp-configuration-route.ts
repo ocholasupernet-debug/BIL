@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import { ISRG_ROOT_X1_PEM } from "../lib/router-https-trust.js";
 import { routerManagementClientInterfaceName } from "../lib/router-management-vpn.js";
+import { validateGeneratedRouterScript } from "../lib/router-script-validation.js";
 
 const router: IRouter = Router();
 
@@ -54,7 +55,7 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
 :foreach internetTarget in={"1.1.1.1";"8.8.8.8";"9.9.9.9"} do={
     :if (!$internetReachable) do={
         :do {
-            :if ([/ping $internetTarget count=2] > 0) do={ :set internetReachable true }
+            :if ([/ping address=$internetTarget count=2] > 0) do={ :set internetReachable true }
         } on-error={}
     }
 }
@@ -422,7 +423,7 @@ export function buildMainIspConfigurationRsc(
       .replaceAll(`https://${companyHost}/scripts/vpn6.rsc`, routerVpn6Url);
   }
 
-  return script;
+  return validateGeneratedRouterScript(script);
 }
 
 router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, res): void => {

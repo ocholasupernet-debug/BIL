@@ -4,6 +4,7 @@ import {
   buildMainhotspotRsc,
   validateGeneratedRouterScript,
 } from "../src/routes/scripts-route.ts";
+import { buildMainIspConfigurationRsc } from "../src/routes/isp-configuration-route.ts";
 
 test("rendered mainhotspot.rsc keeps RouterOS encoder escapes on one line", () => {
   const script = buildMainhotspotRsc(
@@ -82,4 +83,18 @@ test("rendered script validation rejects a physical newline inside RouterOS quot
     validateGeneratedRouterScript(':put "first\\\\nsecond"\n'),
     ':put "first\\\\nsecond"\n',
   );
+});
+
+test("router-scoped Main ISP installer validates the actual public route output", () => {
+  const script = buildMainIspConfigurationRsc(
+    "come",
+    "come1",
+    "https://come.isplatty.org/scripts/router-vpn-bootstrap/90/Abcdefghijklmno_1234567890",
+    90,
+  );
+
+  assert.equal(/[^\x00-\x7F]/.test(script), false);
+  assert.match(script, /:if \(\[\/ping address=\$internetTarget count=2\] > 0\)/);
+  assert.doesNotMatch(script, /\[\/ping \$internetTarget count=2\]/);
+  assert.equal(validateGeneratedRouterScript(script), script);
 });
