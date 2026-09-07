@@ -492,6 +492,29 @@ export async function provisionRouterManagementOpenVpnBackup(input: {
   return provisionRouterManagementOpenVpnInstance(input, "backup");
 }
 
+/**
+ * Reconcile both isolated management OpenVPN listeners before returning a
+ * configuration that contains the matching router credentials. This is the
+ * shared boundary for generated RouterOS scripts and downloadable profiles:
+ * the VPS receives endpoint, port, tunnel address, username, and password
+ * before the corresponding client configuration is released.
+ */
+export async function provisionRouterManagementOpenVpnPair(input: {
+  adminId: number;
+  routerId: number;
+  routerName: string;
+  routerIp: string;
+}): Promise<{
+  primary: Awaited<ReturnType<typeof provisionRouterManagementOpenVpn>>;
+  backup: Awaited<ReturnType<typeof provisionRouterManagementOpenVpnBackup>>;
+}> {
+  const [primary, backup] = await Promise.all([
+    provisionRouterManagementOpenVpn(input),
+    provisionRouterManagementOpenVpnBackup(input),
+  ]);
+  return { primary, backup };
+}
+
 async function provisionRouterManagementOpenVpnInstance(input: {
   adminId: number;
   routerId: number;

@@ -109,6 +109,8 @@ test("Direct installation exposes signed primary and backup OpenVPN details", as
   assert.match(scriptsRoute, /certificateName: "ochola-router-management-ca"/);
   assert.match(scriptsRoute, /provisionRouterManagementOpenVpn\(\{/);
   assert.match(scriptsRoute, /provisionRouterManagementOpenVpnBackup\(\{/);
+  assert.match(scriptsRoute, /provisionRouterManagementOpenVpnPair\(\{/);
+  assert.match(scriptsRoute, /provisionRouterManagementVpn\(\{/);
   assert.match(scriptsRoute, /VPS linkage verified for both primary and backup listeners/);
   assert.match(scriptsRoute, /<auth-user-pass>/);
   assert.match(scriptsRoute, /<ca>/);

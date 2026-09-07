@@ -31,8 +31,10 @@ import {
 import { buildMainIspConfigurationRsc } from "./isp-configuration-route.js";
 import {
   generatedRouterVpnChildScript,
+  provisionRouterManagementVpn,
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnBackup,
+  provisionRouterManagementOpenVpnPair,
   routerFallbackMaterial,
 } from "../lib/router-vpn-provisioning.js";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
@@ -2528,6 +2530,21 @@ router.get([
             ? `${vpnProvisioningError}; backup: ${backupError}`
             : `backup: ${backupError}`;
         }
+        if (installationMode === "takeover" && !vpnProvisioningError) {
+          try {
+            const fallbackProvisioning = await provisionRouterManagementVpn({
+              adminId: currentRouter.admin_id,
+              routerId: Number(rid),
+              routerName: currentRouter.name,
+              routerIp: assignedIp,
+            });
+            if (!fallbackProvisioning.ready) {
+              throw new Error("VPS fallback VPN reconciliation did not report ready.");
+            }
+          } catch (error) {
+            vpnProvisioningError = error instanceof Error ? error.message : String(error);
+          }
+        }
 
         /* Takeover may use the complete fallback chain. Coexistence is
            intentionally OpenVPN-only: it must not add WireGuard or IPsec
@@ -2792,6 +2809,27 @@ router.get([
     }
     let script: string;
 
+    if (installationMode === "takeover") {
+      try {
+        const fallbackProvisioning = await provisionRouterManagementVpn({
+          adminId: Number(rows[0].admin_id),
+          routerId,
+          routerName: rows[0].name,
+          routerIp: tunnelRouterIp,
+        });
+        if (!fallbackProvisioning.ready) {
+          throw new Error("VPS fallback VPN reconciliation did not report ready.");
+        }
+      } catch (error) {
+        sendRouterVpnError(
+          503,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          `# VPS VPN details could not be reconciled before generating this configuration: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+    }
+
     if (protocol === "openvpn" || protocol === "openvpn-backup") {
       const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
         routerId,
@@ -2817,6 +2855,31 @@ router.get([
         return;
       }
        const vpnPort = isBackup ? ROUTER_MANAGEMENT_VPN_BACKUP.port : routerManagementVpnPortForRouter(routerId);
+      try {
+        const provisioned = isBackup
+          ? await provisionRouterManagementOpenVpnBackup({
+              adminId: Number(rows[0].admin_id),
+              routerId,
+              routerName: rows[0].name,
+              routerIp: tunnelRouterIp,
+            })
+          : await provisionRouterManagementOpenVpn({
+              adminId: Number(rows[0].admin_id),
+              routerId,
+              routerName: rows[0].name,
+              routerIp: tunnelRouterIp,
+            });
+        if (!provisioned.ready || provisioned.endpoint !== vpsHost) {
+          throw new Error("VPS returned incomplete router-management OpenVPN linkage.");
+        }
+      } catch (error) {
+        sendRouterVpnError(
+          503,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          `# VPS OpenVPN credentials could not be reconciled before generating this configuration: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
       const readinessWarning = readiness.ready
         ? ""
         : `# WARNING: API could not verify local OpenVPN files (${readiness.missing.join(", ")}).\n` +
@@ -3950,6 +4013,21 @@ router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", a
       routerName: currentRouter.name,
     });
     const tunnelIp = await ensurePersistentRouterTunnelIp(routerId, currentRouter.vpn_ip);
+    const provisioning = await provisionRouterManagementOpenVpnPair({
+      adminId,
+      routerId,
+      routerName: currentRouter.name,
+      routerIp: tunnelIp,
+    });
+    if (
+      !provisioning.primary.ready
+      || !provisioning.backup.ready
+      || provisioning.primary.endpoint !== endpoint
+      || provisioning.backup.endpoint !== endpoint
+    ) {
+      sendManualVpnError(503, "VPS OpenVPN credentials were not fully reconciled for both management listeners.");
+      return;
+    }
     const origin = requestOrigin(req);
     const child = (vpnRole: "primary" | "backup"): string => {
       const backup = vpnRole === "backup";

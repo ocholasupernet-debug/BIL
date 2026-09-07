@@ -41,6 +41,10 @@ import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { ROUTER_HTTPS_CERTIFICATE_FILE } from "../lib/router-https-trust.js";
+import {
+  provisionRouterManagementOpenVpn,
+} from "../lib/router-vpn-provisioning.js";
+import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -757,11 +761,29 @@ router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Pro
     return;
   }
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
+  try {
+    const provisioning = await provisionRouterManagementOpenVpn({
+      adminId: found.row.admin_id,
+      routerId: id,
+      routerName: found.row.name,
+      routerIp: tunnelRouterIp,
+    });
+    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
+      res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
+      return;
+    }
+  } catch (error) {
+    res.status(503).json({
+      error: "VPS router-management OpenVPN provisioning failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
 
   const script = generateRouterAsClientScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
+    vpnPort:        routerManagementVpnPortForRouter(id),
     vpnUsername: openVpnCredentials.username,
     vpnPassword: openVpnCredentials.password,
     caCertificateUrl: `${requestOrigin(req)}/api/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`,
@@ -817,11 +839,29 @@ router.get("/router/:id/vps-ovpn-setup", requireAdmin(), async (req, res): Promi
     routerName: found.row.name,
   });
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
+  try {
+    const provisioning = await provisionRouterManagementOpenVpn({
+      adminId: found.row.admin_id,
+      routerId: id,
+      routerName: found.row.name,
+      routerIp: tunnelRouterIp,
+    });
+    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
+      res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
+      return;
+    }
+  } catch (error) {
+    res.status(503).json({
+      error: "VPS router-management OpenVPN provisioning failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
 
   const script = generateVpsOvpnSetupScript({
     vpsPublicIp:    vpsIp,
     routerId:       id,
-    vpnPort:        req.query.vpnPort        ? parseInt(String(req.query.vpnPort),        10) : 1196,
+    vpnPort:        routerManagementVpnPortForRouter(id),
     vpnUsername: openVpnCredentials.username,
     vpnPassword: openVpnCredentials.password,
     tunnelBase:     String(req.query.tunnelBase     ?? "10.8.5"),
