@@ -430,18 +430,19 @@ ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", 
         }
         :set ocholaHttpsTrustPhase "certificate import"
         :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
-        /certificate import file-name="$caImportFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
+        /certificate import file-name=$caImportFile
         :do { /file remove [find name="$caFile"] } on-error={}
         :do { /file remove [find name="$caBuildFile"] } on-error={}
     }
     :set ocholaHttpsTrustPhase "certificate trust"
     :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
     :set caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
+    :if ([:len $caCert] = 0) do={ :set caCert [/certificate find where common-name="ISRG Root X1"] }
     :if ([:len $caCert] = 0) do={ :error "public HTTPS CA certificate was not imported" }
-    /certificate set [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted=yes
+    /certificate set [find where common-name="ISRG Root X1"] trusted=yes
     :set ocholaHttpsTrustPhase "certificate verification"
     :put ("HTTPS_TRUST_PHASE=" . $ocholaHttpsTrustPhase)
-    :if ([/certificate get [find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
+    :if ([/certificate get [find where common-name="ISRG Root X1"] trusted] != true) do={ :error "public HTTPS CA certificate was imported but is not trusted" }
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
     :local trustDetail $error

@@ -125,9 +125,10 @@ test("installer bootstraps the public CA and validates managed HTTPS fetches", (
   assert.match(scriptsRoute, /ISRG_ROOT_X1_PEM/);
   assert.match(httpsTrust, /ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1"/);
   assert.match(httpsTrust, /-----BEGIN CERTIFICATE-----/);
-  assert.match(scriptsRoute, /\/certificate import file-name="\$caImportFile" name="\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}"\n/);
+  assert.match(scriptsRoute, /\/certificate import file-name=\$caImportFile\n/);
+  assert.match(scriptsRoute, /certificate find where common-name="ISRG Root X1"/);
   assert.doesNotMatch(scriptsRoute, /\/certificate import[^\n]*trusted=yes/);
-  assert.match(scriptsRoute, /\/certificate set \[find name="\$\{ROUTER_HTTPS_CERTIFICATE_NAME\}"\] trusted=yes/);
+  assert.match(scriptsRoute, /\/certificate set \[find where common-name="ISRG Root X1"\] trusted=yes/);
   assert.match(scriptsRoute, /certificate trust setup failed - /);
   assert.match(scriptsRoute, /ROUTER_HTTPS_FETCH_OPTIONS/);
   assert.match(scriptsRoute, /const ROUTER_HTTPS_FETCH_OPTIONS =\s+`mode=https check-certificate=yes`/);
