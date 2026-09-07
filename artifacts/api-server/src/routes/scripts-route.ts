@@ -424,6 +424,7 @@ export function validateGeneratedRouterScript(script: string): string {
   let escaped = false;
   let line = 1;
   let column = 0;
+  let braceDepth = 0;
 
   for (let index = 0; index < normalized.length; index += 1) {
     const char = normalized[index];
@@ -457,11 +458,21 @@ export function validateGeneratedRouterScript(script: string): string {
     }
     if (char === '"') {
       inString = !inString;
+    } else if (char === "{") {
+      braceDepth += 1;
+    } else if (char === "}") {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        throw new Error(`Generated RouterOS script closes a block before opening it at line ${line}, column ${column}.`);
+      }
     }
   }
 
   if (inString) {
     throw new Error(`Generated RouterOS script ends inside a quoted string at line ${line}, column ${column}.`);
+  }
+  if (braceDepth !== 0) {
+    throw new Error(`Generated RouterOS script has ${braceDepth > 0 ? "unclosed" : "unexpected"} block brace(s).`);
   }
   return normalized;
 }
@@ -1030,61 +1041,43 @@ export function buildMainhotspotRsc(
     installationMode === "coexist" && managementRouterId ? `ochola-mgmt-wg-${managementRouterId}` : "ochola-wg",
   );
   const safeRouterVpnWarning = rscEscape(routerVpnWarning);
-  const formEncodeDef = `
+  const formEncodeDef = progressUrl
+    ? `
 :global ocholaFormEncode do={
-    :local input [:tostr $1]
-    :local output ""
-    :if ([:len $input] > 0) do={
-        :for i from=0 to=([:len $input] - 1) do={
-            :local char [:pick $input $i ($i + 1)]
-            :if ($char = "%") do={ :set output ($output . "%25") } else={
-            :if ($char = "&") do={ :set output ($output . "%26") } else={
-            :if ($char = "=") do={ :set output ($output . "%3D") } else={
-            :if ($char = "+") do={ :set output ($output . "%2B") } else={
-            :if ($char = " ") do={ :set output ($output . "%20") } else={
-            :if ($char = "?") do={ :set output ($output . "%3F") } else={
-            :if ($char = "#") do={ :set output ($output . "%23") } else={
-             :if ($char = "\\r") do={ :set output ($output . "%0D") } else={
-             :if ($char = "\\n") do={ :set output ($output . "%0A") } else={
-                :set output ($output . $char)
-            }}}}}}}}}
-        }
-    }
-    :return $output
-}`;
+    :return [:tostr $1]
+}`
+    : "";
   const pgDef = progressUrl
     ? `:global IPProgUrl "${safeProgressUrl}"
 :global IPRname "${safeRouterName}"
+:global ocholaFormEncode
 :global pg do={
     :global IPProgUrl
     :global IPRname
-    :local formEncode do={
-        :local input [:tostr $1]
-        :local output ""
-        :if ([:len $input] > 0) do={
-            :for i from=0 to=([:len $input] - 1) do={
-                :local char [:pick $input $i ($i + 1)]
-                :if ($char = "%") do={ :set output ($output . "%25") } else={
-                :if ($char = "&") do={ :set output ($output . "%26") } else={
-                :if ($char = "=") do={ :set output ($output . "%3D") } else={
-                :if ($char = "+") do={ :set output ($output . "%2B") } else={
-                :if ($char = " ") do={ :set output ($output . "%20") } else={
-                :if ($char = "?") do={ :set output ($output . "%3F") } else={
-                :if ($char = "#") do={ :set output ($output . "%23") } else={
-                 :if ($char = "\\r") do={ :set output ($output . "%0D") } else={
-                 :if ($char = "\\n") do={ :set output ($output . "%0A") } else={
-                    :set output ($output . $char)
-                }}}}}}}}}
-            }
-        }
-        :return $output
-    }
-    :local body ("step=" . [$formEncode $1] . "&name=" . [$formEncode $2] . "&phase=" . [$formEncode $3] . "&err=" . [$formEncode $4] . "&rname=" . [$formEncode $IPRname])
+    :global ocholaFormEncode
+    :local body ("step=" . [$ocholaFormEncode $1] . "&name=" . [$ocholaFormEncode $2] . "&phase=" . [$ocholaFormEncode $3] . "&err=" . [$ocholaFormEncode $4] . "&rname=" . [$ocholaFormEncode $IPRname])
     :do {
         /tool fetch url=$IPProgUrl http-method=post http-data=$body keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     } on-error={}
 }`
-    : `:global pg do={}`;
+    : "";
+  const progressCompletionDef = progressUrl
+    ? `
+# Final completion ping for the admin progress timeline.
+:do {
+    :global IPProgUrl
+    :global IPRname
+    :global ocholaFormEncode
+    :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
+        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . [$ocholaFormEncode $IPRname] . "&installation_status=" . [$ocholaFormEncode $installationStatus] . "&routeros_version=" . [$ocholaFormEncode $routerOsVersion] . "&vpn_status=" . [$ocholaFormEncode $vpnStatus] . "&vpn_ip=" . [$ocholaFormEncode $vpnIp] . "&proxy_status=" . [$ocholaFormEncode $proxyStatus] . "&api_lockdown=" . [$ocholaFormEncode $apiLockdownStatus] . "&dns_scheduler=" . [$ocholaFormEncode $dnsSchedulerStatus] . "&hotspot_status=" . [$ocholaFormEncode $hotspotStatus] . "&pppoe_status=" . [$ocholaFormEncode $pppoeStatus] . "&users_status=" . [$ocholaFormEncode $usersStatus] . "&sync_status=" . [$ocholaFormEncode $syncStatus] . "&heartbeat_status=" . [$ocholaFormEncode $heartbeatStatus] . "&failed_component=" . [$ocholaFormEncode $failedComponent] . "&error=" . [$ocholaFormEncode $lastError]) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
+    }
+} on-error={}
+`
+    : "";
+  const finalizeRenderedScript = (script: string): string =>
+    validateGeneratedRouterScript(
+      progressUrl ? script : script.replace(/^[ \t]*\$pg[^\n]*\n/gm, ""),
+    );
   const installMarkerReset = `
 :global ocholaHotspotInstallMarker
 :global ocholaPppoeInstallMarker
@@ -1208,7 +1201,7 @@ export function buildMainhotspotRsc(
     : "";
 
   if (installationMode === "coexist") {
-    return `# ${safeCompanyName} — Coexistence management installer
+    return finalizeRenderedScript(`# ${safeCompanyName} — Coexistence management installer
 # INSTALLER_REVISION=${installerRevision}
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
@@ -1310,13 +1303,13 @@ ${coexistenceHotspotUrl ? `
     :do { /file set [find name="ochola-coexistence-hotspot.rsc.download"] name="failed-ochola-coexistence-hotspot.rsc" } on-error={}
     :error ("Coexistence stopped without changing existing billing resources; isolated hotspot failed: " . $hotspotError)
 }
-` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; $pg 1 "coexistence-hotspot" "failed" "missing bundle"; :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
+` : `:put "COEXISTENCE STOPPED — isolated hotspot bundle missing."; ${progressUrl ? '$pg 1 "coexistence-hotspot" "failed" "missing bundle";' : ""} :error "Coexistence stopped without changing existing billing resources: isolated hotspot bundle missing."`}
 ${safeHeartbeatUrl ? `:do {
     /tool fetch url="${safeHeartbeatUrl}?coexist=1" keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
     :put "COEXISTENCE HEARTBEAT SENT — existing customer services remain under their current configuration."
 } on-error={ :put "WARN: coexistence heartbeat could not be sent; retry the installer after the VPN is up." }
 ` : ""}
-`;
+`);
   }
 
   const takeoverBackupStem = installationMode === "takeover" ? `ochola-takeover-${Date.now()}` : "";
@@ -1934,17 +1927,9 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
     }
 }
 
-# Final completion ping for the admin progress timeline (no-op when pg was disabled)
-:do {
-    :global IPProgUrl
-    :global IPRname
-    :global ocholaFormEncode
-    :if ([:typeof $IPProgUrl] = "str" && [:len $IPProgUrl] > 0) do={
-        /tool fetch url=$IPProgUrl http-method=post http-data=("done=1&rname=" . [$ocholaFormEncode $IPRname] . "&installation_status=" . [$ocholaFormEncode $installationStatus] . "&routeros_version=" . [$ocholaFormEncode $routerOsVersion] . "&vpn_status=" . [$ocholaFormEncode $vpnStatus] . "&vpn_ip=" . [$ocholaFormEncode $vpnIp] . "&proxy_status=" . [$ocholaFormEncode $proxyStatus] . "&api_lockdown=" . [$ocholaFormEncode $apiLockdownStatus] . "&dns_scheduler=" . [$ocholaFormEncode $dnsSchedulerStatus] . "&hotspot_status=" . [$ocholaFormEncode $hotspotStatus] . "&pppoe_status=" . [$ocholaFormEncode $pppoeStatus] . "&users_status=" . [$ocholaFormEncode $usersStatus] . "&sync_status=" . [$ocholaFormEncode $syncStatus] . "&heartbeat_status=" . [$ocholaFormEncode $heartbeatStatus] . "&failed_component=" . [$ocholaFormEncode $failedComponent] . "&error=" . [$ocholaFormEncode $lastError]) keep-result=no ${ROUTER_HTTPS_FETCH_OPTIONS}
-    }
-} on-error={}
+${progressCompletionDef}
 `;
-  return validateGeneratedRouterScript(renderedScript);
+  return finalizeRenderedScript(renderedScript);
 }
 
 router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
