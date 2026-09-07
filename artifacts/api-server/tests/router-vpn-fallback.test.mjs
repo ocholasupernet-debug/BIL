@@ -94,6 +94,10 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   const ros7 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 7 });
   assert.match(ros6, /VERSION PATH: RouterOS 6/);
   assert.match(ros6, /protocol=tcp mode=ip cipher=aes128 auth=sha1/);
+  assert.match(ros6, /\/file print file=\$caBuildBase/);
+  assert.match(ros6, /\/file set \[find name=\$caBuildFile\] contents=\$caText/);
+  assert.doesNotMatch(ros6, /\/file add name="\$caFile" contents=/);
+  assert.doesNotMatch(ros6, /\\r\\n/);
   assert.doesNotMatch(ros6, /cipher=aes128-cbc/);
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);

@@ -8,7 +8,7 @@ import {
   routerManagementClientInterfaceName,
   type RouterManagementVpnRole,
 } from "./router-management-vpn.js";
-import { ISRG_ROOT_X1_PEM } from "./router-https-trust.js";
+import { ISRG_ROOT_X1_PEM, routerOsCertificateFileWriter } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
@@ -2212,13 +2212,6 @@ function routerOsString(value: string): string {
     .replace(/"/g, '\\"')}"`;
 }
 
-function routerOsCertificateContents(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r?\n/g, "\\r\\n");
-}
-
 function validateRouterOpenVpnEndpoint(value: string): string {
   const endpoint = value.trim();
   if (!endpoint || endpoint.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(endpoint)) {
@@ -2371,8 +2364,12 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
 # endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
 # an unverified download.
 :local caFile "${caCertificateName}.crt"
+:local caBuildBase "${caCertificateName}-bootstrap"
+:local caBuildFile "${caCertificateName}-bootstrap.txt"
+:local caImportFile $caFile
 :do {
     :do { /file remove [find name="$caFile"] } on-error={}
+    :do { /file remove [find name="$caBuildFile"] } on-error={}
     :local fetchedViaTrustedStore false
     :do {
         /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=yes
@@ -2380,11 +2377,13 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
     } on-error={}
     :if (!$fetchedViaTrustedStore) do={
         :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
-        /file add name="$caFile" contents="${routerOsCertificateContents(ISRG_ROOT_X1_PEM)}"
+${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "        ")}
+        :set caImportFile $caBuildFile
     }
-    /certificate import file-name="$caFile" name=${routerOsString(caCertificateName)}
+    /certificate import file-name=$caImportFile name=${routerOsString(caCertificateName)}
     /certificate set [find name=${routerOsString(caCertificateName)}] trusted=yes
     :do { /file remove [find name="$caFile"] } on-error={}
+    :do { /file remove [find name="$caBuildFile"] } on-error={}
     :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={
         :error "management VPN CA was not imported"
     }
