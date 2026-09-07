@@ -155,6 +155,7 @@ function Router() {
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
       <Route path="/admin/network/ppp"            component={NetworkPPP}           />
       <Route path="/admin/network/router-api-config" component={RouterAPIConfig}  />
+      <Route path="/admin/network/api-config"      component={RouterAPIConfig}  />
       <Route path="/admin/network/files"          component={NetworkFiles}       />
       <Route path="/admin/network/load-balancing" component={NetworkLoadBalancing} />
       {/* Legacy redirects — keep old paths working */}

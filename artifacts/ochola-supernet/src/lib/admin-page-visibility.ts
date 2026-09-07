@@ -115,6 +115,7 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
   { prefix: "/admin/network/add-router", featureKey: "network.self-install" },
   { prefix: "/admin/network/self-install", featureKey: "network.self-install" },
   { prefix: "/admin/network/router-api-config", featureKey: "network.router-api-config" },
+  { prefix: "/admin/network/api-config", featureKey: "network.router-api-config" },
   { prefix: "/admin/network/ip-pools", featureKey: "network.ip-pools" },
   { prefix: "/admin/network/ippool", featureKey: "network.ip-pools" },
   { prefix: "/admin/network/bridge-ports", featureKey: "network.bridge-ports" },
