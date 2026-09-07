@@ -50,9 +50,9 @@ test("standalone installer checks both management VPN address pools and cleans s
   assert.match(route, /trusted\] != true/);
 });
 
-test("Add Router (Script) provides the staged router ports and sync flow", () => {
+test("Direct installation provides the staged router ports and sync flow", () => {
   assert.match(page, /<AdminLayout hiddenNavHrefs=\{\["\/admin\/network\/self-install"\]\}>/);
-  assert.match(page, /Add Router \(Script\)/);
+  assert.match(page, /Direct installation/);
   assert.match(page, /scripts\/mainhotspot\.rsc/);
   assert.match(page, /dst-path=mainhotspot\.rsc mode=https; \/import mainhotspot\.rsc/);
   assert.match(page, /from\("isp_admins"\)/);
@@ -87,5 +87,6 @@ test("the public Main ISP path is tenant-scoped and Self Install uses its separa
    assert.match(scriptsRoute, /self-install-mainhotspot\/:pathRouterId\/:pathAdminId\/:pathMode\/:pathGrant/);
    assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\/\$\{encodeURIComponent/);
    assert.doesNotMatch(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc\?/);
-   assert.doesNotMatch(selfInstall, /check-certificate=no|certificate=off|Generate without certificate/);
+   assert.match(selfInstall, /mode=https check-certificate=no/);
+   assert.doesNotMatch(selfInstall, /certificate=off|Generate without certificate/);
 });

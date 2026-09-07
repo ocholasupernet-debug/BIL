@@ -2245,7 +2245,7 @@ router.get([
     res
       .status(403)
       .type("text/plain")
-      .send("# Router-specific installer authorization is required. Generate a fresh command from Add Router (Script).");
+      .send("# Router-specific installer authorization is required. Generate a fresh command from Direct installation.");
     return;
   }
 
@@ -2270,7 +2270,7 @@ router.get([
       .map(value => String(value ?? "").trim())
       .find(value => /^[A-Za-z0-9_-]{8,128}$/.test(value) && !/^(admin|password|secret|test|default)$/i.test(value));
     if (!installerToken) {
-      res.status(503).type("text/plain").send("# Router installer token is not available. Return to Add Router (Script) and generate a fresh command.");
+      res.status(503).type("text/plain").send("# Router installer token is not available. Return to Direct installation and generate a fresh command.");
       return;
     }
 

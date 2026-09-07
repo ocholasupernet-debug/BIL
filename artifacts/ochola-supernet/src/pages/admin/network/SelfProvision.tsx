@@ -531,7 +531,7 @@ export default function AddRouterScript() {
       <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 1120 }}>
         <div>
-          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>Add Router</h1>
+          <h1 style={{ color: "var(--isp-text)", fontSize: "1.35rem", margin: 0, fontWeight: 800 }}>Direct installation</h1>
           <p style={{ color: "var(--isp-text-muted)", margin: "0.35rem 0 0", fontSize: "0.82rem" }}>
             Choose a guided script setup or save the connection details for a router you configured manually.
           </p>

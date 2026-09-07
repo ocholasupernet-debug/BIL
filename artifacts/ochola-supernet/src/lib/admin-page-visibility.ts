@@ -45,7 +45,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
     pages: [
       { key: "network.routers", label: "Routers", description: "Connected MikroTik routers and status." },
       { key: "network.self-install", label: "Self Install", description: "Install and register a router." },
-      { key: "network.add-router-script", label: "Add Router (Script)", description: "Add a router with the standalone Main ISP configuration script." },
+      { key: "network.add-router-script", label: "Direct installation", description: "Install a router with the standalone Main ISP configuration script." },
       { key: "network.replace-router", label: "Replace Router", description: "Replace an existing router." },
       { key: "network.migration", label: "Migration & Recovery", description: "Migrate and recover RouterOS configurations." },
       { key: "network.pppoe", label: "PPPoE", description: "PPPoE network settings." },

@@ -431,7 +431,7 @@ router.get("/admin/isp-configuration/mainhotspot.rsc", requireAdmin(), (_req, re
     .status(410)
     .type("text/plain")
     .set("Cache-Control", "no-store")
-    .send("# This legacy installer has been retired.\n# Generate a router-scoped Main ISP command from Add Router (Script) so VPN bootstrap authorization and per-router URLs are included.\n");
+    .send("# This legacy installer has been retired.\n# Generate a router-scoped Main ISP command from Direct installation so VPN bootstrap authorization and per-router URLs are included.\n");
 });
 
 export default router;
