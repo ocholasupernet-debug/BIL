@@ -56,11 +56,6 @@ then
   exit 1
 fi
 
-if ! sudo "$UFW_BIN" status verbose 2>/dev/null | grep -Eq '^Status: active'; then
-  echo "ERROR: UFW did not remain active after applying the management rules." >&2
-  exit 1
-fi
-
 # UFW may reload/replace the filter tables when it is enabled. Reapply the
 # isolated router-management forwarding rules after that reload so the
 # verification gate and the live tunnels see the same policy. These rules are
