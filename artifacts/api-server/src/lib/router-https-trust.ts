@@ -8,6 +8,41 @@ export const ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1";
 export const ROUTER_HTTPS_CERTIFICATE_FILE = "ochola-isrg-root-x1.pem";
 export const ROUTER_HTTPS_CERTIFICATE_PATH = `/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
 
+/**
+ * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
+ * command. Build the file from short base64 lines instead, using the
+ * documented `/file print` + `/file set` workaround.
+ */
+export function routerOsCertificateFileWriter(
+  value: string,
+  fileVariable = "caBuildFile",
+  fileBaseVariable = "caBuildBase",
+  indent = "",
+): string {
+  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length === 0) throw new Error("Cannot render an empty RouterOS certificate.");
+
+  const escaped = (line: string) =>
+    line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const file = `$${fileVariable}`;
+  const output = [
+    `${indent}/file print file=$${fileBaseVariable}`,
+    `${indent}/file set [find name=${file}] contents=""`,
+    `${indent}:local caText "${escaped(lines[0])}"`,
+    `${indent}/file set [find name=${file}] contents=$caText`,
+  ];
+
+  for (const line of lines.slice(1)) {
+    output.push(
+      `${indent}:set caText ($caText . "\\n" . "${escaped(line)}")`,
+      `${indent}/file set [find name=${file}] contents=$caText`,
+    );
+  }
+
+  return output.join("\n");
+}
+
 export const ISRG_ROOT_X1_PEM = `-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
 TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh

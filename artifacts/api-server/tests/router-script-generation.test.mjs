@@ -127,9 +127,10 @@ test("Self Install coexistence uses a RouterOS 6-safe CA fallback argument", () 
     "coexist",
     "https://come.isplatty.org/api/scripts/coexistence-hotspot.rsc",
   );
-  const caFallbackLine = script.split("\n").find((line) => line.includes("/file add name=$caFile contents=")) ?? "";
-
-  assert.match(caFallbackLine, /\/file add name=\$caFile contents=/);
-  assert.doesNotMatch(caFallbackLine, /name="\$caFile"/);
+  assert.match(script, /\/file print file=\$caBuildBase/);
+  assert.match(script, /\/file set \[find name=\$caBuildFile\] contents=\$caText/);
+  assert.match(script, /:set caText \(\$caText \. "\\n" \./);
+  assert.doesNotMatch(script, /\/file add name=\$caFile contents=/);
+  assert.doesNotMatch(script, /\\r\\n/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });

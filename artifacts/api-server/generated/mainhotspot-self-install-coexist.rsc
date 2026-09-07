@@ -1,5 +1,5 @@
 # Ochola SuperNet - Coexistence management installer
-# INSTALLER_REVISION=rmtqlxv4j
+# INSTALLER_REVISION=rmtqm8zv8
 # This path never replaces billing, customer-access, or LAN configuration.
 # It audits existing resources, then adds only Ochola management resources.
 
@@ -20,7 +20,7 @@
     :return [:tostr $1]
 }
 
-:put "INSTALLER_REVISION=rmtqlxv4j"
+:put "INSTALLER_REVISION=rmtqm8zv8"
 
 :local errors ""
 :local trustStatus "FAILED"
@@ -71,9 +71,12 @@
 # The CA certificate is public; no private certificate key is downloaded.
 :do {
     :local caFile "ochola-isrg-root-x1.pem"
+    :local caBuildBase "ochola-isrg-root-x1-bootstrap"
+    :local caBuildFile "ochola-isrg-root-x1-bootstrap.txt"
     :local caCert [/certificate find name="ochola-isrg-root-x1"]
     :if ([:len $caCert] = 0) do={
         :do { /file remove [find name="$caFile"] } on-error={}
+        :do { /file remove [find name="$caBuildFile"] } on-error={}
         :local fetchedViaTrustedStore false
         :do {
             /tool fetch url="https://come.isplatty.org/api/scripts/ochola-isrg-root-x1.pem" dst-path="$caFile" keep-result=yes mode=https check-certificate=yes
@@ -81,7 +84,71 @@
         } on-error={}
         :if (!$fetchedViaTrustedStore) do={
             :put "      RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
-            /file add name=$caFile contents="-----BEGIN CERTIFICATE-----\r\nMIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\r\nTzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\r\ncmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\r\nWhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\r\nZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\r\nMTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\r\nh77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\r\n0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\r\nA5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\r\nT8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\r\nB5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\r\nB5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\r\nKBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\r\nOlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\r\njh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\r\nqHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\r\nrU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\r\nHRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\r\nhkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\r\nubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\r\n3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\r\nNFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\r\nORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\r\nTkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\r\njNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\r\noyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\r\n4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\r\nmRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\r\nemyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\r\n-----END CERTIFICATE-----\r\n"
+            /file print file=$caBuildBase
+            /file set [find name=$caBuildFile] contents=""
+            :local caText "-----BEGIN CERTIFICATE-----"
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=")
+            /file set [find name=$caBuildFile] contents=$caText
+            :set caText ($caText . "\n" . "-----END CERTIFICATE-----")
+            /file set [find name=$caBuildFile] contents=$caText
+            /file set [find name=$caBuildFile] name=$caFile
         }
         /certificate import file-name="$caFile" name="ochola-isrg-root-x1"
         :do { /file remove [find name="$caFile"] } on-error={}
@@ -91,6 +158,7 @@
     /certificate set $caCert trusted=yes
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
+    :do { /file remove [find name="$caBuildFile"] } on-error={}
     :error ("HTTPS certificate trust setup failed - " . $error)
 }
     :set trustStatus "SUCCESS"

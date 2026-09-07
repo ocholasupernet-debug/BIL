@@ -26,6 +26,7 @@ import {
   ISRG_ROOT_X1_PEM,
   ROUTER_HTTPS_CERTIFICATE_FILE,
   ROUTER_HTTPS_CERTIFICATE_NAME,
+  routerOsCertificateFileWriter,
 } from "../lib/router-https-trust.js";
 import { buildMainIspConfigurationRsc } from "./isp-configuration-route.js";
 import {
@@ -340,13 +341,6 @@ function rosString(value: string): string {
     .replace(/"/g, '\\"');
 }
 
-function rosCertificateContents(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r?\n/g, "\\r\\n");
-}
-
 /* ── Safe ros: wraps a command in on-error so one failure can't abort
    the whole script. Prints a WARN line instead so the user sees it. ── */
 function safeRos(cmd: string, label: string): string {
@@ -412,9 +406,12 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
 # The CA certificate is public; no private certificate key is downloaded.
 :do {
     :local caFile "${ROUTER_HTTPS_CERTIFICATE_FILE}"
+    :local caBuildBase "ochola-isrg-root-x1-bootstrap"
+    :local caBuildFile "ochola-isrg-root-x1-bootstrap.txt"
     :local caCert [/certificate find name="${ROUTER_HTTPS_CERTIFICATE_NAME}"]
     :if ([:len $caCert] = 0) do={
         :do { /file remove [find name="$caFile"] } on-error={}
+        :do { /file remove [find name="$caBuildFile"] } on-error={}
         :local fetchedViaTrustedStore false
         :do {
             /tool fetch url="${caUrl}" dst-path="$caFile" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
@@ -422,7 +419,8 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
         } on-error={}
         :if (!$fetchedViaTrustedStore) do={
             :put "      RouterOS built-in trust did not validate the CA endpoint; using the embedded ISRG Root X1 trust anchor."
-            /file add name=$caFile contents="${rosCertificateContents(ISRG_ROOT_X1_PEM)}"
+${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "            ")}
+            /file set [find name=$caBuildFile] name=$caFile
         }
         /certificate import file-name="$caFile" name="${ROUTER_HTTPS_CERTIFICATE_NAME}"
         :do { /file remove [find name="$caFile"] } on-error={}
@@ -432,6 +430,7 @@ function routerHttpsTrustBootstrap(scriptsBase: string): string {
     /certificate set $caCert trusted=yes
     :put "      HTTPS certificate trust configured for verified downloads."
 } on-error={
+    :do { /file remove [find name="$caBuildFile"] } on-error={}
     :error ("HTTPS certificate trust setup failed - " . $error)
 }`;
 }
