@@ -1103,6 +1103,19 @@ export function buildMainhotspotRsc(
   const openVpnBackupSelection = routerVpnBackupUrl
     ? versionedUrlAssignment("openVpnBackupUrl", safeRouterVpnBackupUrl)
     : `:set openVpnBackupUrl ""`;
+  const existingCoexistenceOpenVpn = installationMode === "coexist" && managementRouterId
+    ? `
+:if (!$vpnConfigured) do={
+    :local existingPrimaryVpn [/interface ovpn-client find where name="${managementClientInterfaceName}"]
+    :local existingBackupVpn [/interface ovpn-client find where name="${safeBackupManagementInterfaceName}"]
+    :if ([:len $existingPrimaryVpn] > 0 && [:len $existingBackupVpn] > 0) do={
+        :set vpnConfigured true
+        :set vpnProtocol "openvpn"
+        :set vpnStatus "CONFIGURED"
+        :put "Existing primary and backup management OpenVPN clients found; skipping VPN child downloads."
+    }
+}`
+    : "";
   const vpnAttempt = (protocol: string, urlVariable: string, fileName: string): string => {
     const tempFileName = `${fileName}.download`;
     const failureDiagnostics = protocol.startsWith("openvpn")
@@ -1322,6 +1335,7 @@ ${httpsTrustBootstrap}
 # diagnostics; failure of all protocols is recorded but does not stop later
 # coexistence stages.
 :do {
+${existingCoexistenceOpenVpn}
 ${openVpnSelection}
 ${openVpnBackupSelection}
     :set wireGuardUrl ""
@@ -3594,6 +3608,114 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
       503,
       `# Could not generate the isolated coexistence hotspot bundle: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+});
+
+/* Manual recovery bundle for the two isolated management OpenVPN clients.
+   This deliberately bypasses child-file downloads, while retaining the same
+   signed router grant and server-side credential lookup as Self Install. */
+router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.routerId);
+  const adminId = Number(req.params.adminId);
+  const routerOsMajor = Number(req.params.rosVersion);
+  const grant = String(req.params.grant ?? "").trim();
+  const sendManualVpnError = (status: number, message: string): void => {
+    res
+      .status(200)
+      .type("text/plain")
+      .send(`# OCHOLA_MANUAL_VPN_ERROR\n# HTTP_STATUS=${status}\n# ${message}`);
+  };
+
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 ||
+      !Number.isSafeInteger(adminId) || adminId <= 0 ||
+      (routerOsMajor !== 6 && routerOsMajor !== 7)) {
+    sendManualVpnError(400, "Router ID, ISP account ID, and RouterOS major version 6 or 7 are required.");
+    return;
+  }
+  const authorization = verifyInstallerGrant(grant, routerId);
+  if (!authorization || authorization.adminId !== adminId) {
+    sendManualVpnError(403, "Manual VPN authorization is invalid, expired, or scoped to another router.");
+    return;
+  }
+
+  try {
+    interface ManualVpnRouter {
+      id: number;
+      admin_id: number;
+      name: string;
+      vpn_ip?: string | null;
+      router_secret?: string | null;
+      token?: string | null;
+    }
+    const routers = await sbGet<ManualVpnRouter>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,vpn_ip,router_secret,token&limit=1`,
+    );
+    const currentRouter = routers[0];
+    if (!currentRouter) {
+      sendManualVpnError(404, "Router profile was not found for this ISP account.");
+      return;
+    }
+    const registrationToken = [currentRouter.router_secret, currentRouter.token]
+      .map(value => String(value ?? "").trim())
+      .find(value => /^[A-Za-z0-9_-]{8,128}$/.test(value));
+    if (!registrationToken) {
+      sendManualVpnError(503, "Router registration token is not available. Generate a fresh Self Install profile.");
+      return;
+    }
+    const endpoint = await routerVpnEndpointAddress(requestOrigin(req));
+    if (!endpoint) {
+      sendManualVpnError(503, "Router-management OpenVPN endpoint is not configured on the server.");
+      return;
+    }
+    const credentials = await ensureRouterManagementOvpnCredentials({
+      routerId,
+      adminId,
+      routerName: currentRouter.name,
+    });
+    const tunnelIp = await ensurePersistentRouterTunnelIp(routerId, currentRouter.vpn_ip);
+    const origin = requestOrigin(req);
+    const child = (vpnRole: "primary" | "backup"): string => {
+      const backup = vpnRole === "backup";
+      return generateRouterAsClientScript({
+        vpsPublicIp: endpoint,
+        vpnPort: backup ? ROUTER_MANAGEMENT_VPN_BACKUP.port : routerManagementVpnPortForRouter(routerId),
+        vpnUsername: credentials.username,
+        vpnPassword: credentials.password,
+        caCertificateUrl: `${origin}/api/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`,
+        backendRegistrationUrl: `${origin}/api/isp/router/register/${encodeURIComponent(registrationToken)}`,
+        tunnelRouterIp: backup ? routerManagementBackupIp(tunnelIp) : tunnelIp,
+        tunnelVpsIp: backup ? ROUTER_MANAGEMENT_VPN_BACKUP.gateway : ROUTER_VPN_GATEWAY,
+        routerId,
+        installationMode: "coexist",
+        routerOsMajor,
+        vpnRole,
+      });
+    };
+    const script = `# OcholaSuperNet manual management VPN recovery
+# Router ${routerId}: ${currentRouter.name.replace(/[\r\n#]/g, " ")}
+# RouterOS ${routerOsMajor}; run this file with:
+# /import ochola-management-vpn-ros${routerOsMajor}.rsc
+# This creates only the router-scoped primary and backup OpenVPN clients.
+# Existing billing, customer-access, LAN, PPPoE, hotspot, and foreign VPN resources are not changed.
+
+:do {
+${child("primary")}
+} on-error={ :put "PRIMARY MANAGEMENT OPENVPN FAILED; inspect the preceding RouterOS output and /log." }
+
+:do {
+${child("backup")}
+} on-error={ :put "BACKUP MANAGEMENT OPENVPN FAILED; inspect the preceding RouterOS output and /log." }
+
+:put "Manual management VPN recovery script finished. Verify both clients with:"
+:put "/interface ovpn-client print detail where name~\\"ochola-mgmt-vpn-${routerId}\\""
+`;
+    res
+      .type("text/plain; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="ochola-management-vpn-ros${routerOsMajor}.rsc"`)
+      .set("Cache-Control", "no-store")
+      .send(script);
+  } catch (error) {
+    sendManualVpnError(503, `Could not generate the manual management VPN script: ${error instanceof Error ? error.message : String(error)}`);
   }
 });
 

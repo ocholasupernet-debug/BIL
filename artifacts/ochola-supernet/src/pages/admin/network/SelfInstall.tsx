@@ -479,6 +479,10 @@ export default function SelfInstall() {
   // fetch must therefore be unverified; every child download performed by the
   // imported script uses verified HTTPS after the CA is installed.
   const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
+  const manualVpnUrl = (routerOsMajor: 6 | 7) =>
+    `${publicApiOrigin}/api/scripts/router-vpn-manual/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${routerOsMajor}/${encodeURIComponent(takeoverGrant || "missing-grant")}`;
+  const manualVpnFetchCommand = (routerOsMajor: 6 | 7) =>
+    `/tool fetch url="${manualVpnUrl(routerOsMajor)}" dst-path=ochola-management-vpn-ros${routerOsMajor}.rsc keep-result=yes mode=https check-certificate=no`;
 
   const loadPorts = async () => {
     if (!activeRouterId) return;
@@ -821,6 +825,31 @@ export default function SelfInstall() {
                 </div>
               </div>
               <a href={scriptUrl} style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: ".8rem", color: "#93c5fd", fontSize: ".72rem", fontWeight: 700, textDecoration: "none" }}><Download size={13} /> Download .rsc file</a>
+            </div>
+
+            <div style={{ ...panelStyle(), padding: "1rem 1.15rem", borderColor: "rgba(251,191,36,.25)", background: "rgba(251,191,36,.035)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#fbbf24", fontWeight: 800, fontSize: ".84rem", marginBottom: ".35rem" }}>
+                <Settings size={14} /> VPN recovery — create both OpenVPN clients manually
+              </div>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: ".72rem", lineHeight: 1.55, margin: "0 0 .7rem" }}>
+                If the main installer cannot download its VPN child files, run the command matching the router's installed RouterOS major version. It creates both the primary and backup management clients. Then run <code>/import mainhotspot.rsc</code> again; the installer will detect both clients and skip the VPN downloads.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: ".55rem" }}>
+                {([6, 7] as const).map(routerOsMajor => (
+                  <div key={routerOsMajor}>
+                    <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", fontWeight: 700, marginBottom: ".28rem" }}>
+                      RouterOS {routerOsMajor} — confirm with <code>/system resource get version</code>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#0a0f1a", borderRadius: 7, padding: ".55rem .65rem" }}>
+                      <code style={{ color: "#fde68a", fontSize: ".68rem", lineHeight: 1.5, wordBreak: "break-all", flex: 1 }}>{manualVpnFetchCommand(routerOsMajor)}</code>
+                      <CopyButton text={manualVpnFetchCommand(routerOsMajor)} />
+                    </div>
+                    <a href={manualVpnUrl(routerOsMajor)} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: ".3rem", color: "#93c5fd", fontSize: ".68rem", fontWeight: 700, textDecoration: "none" }}>
+                      <Download size={12} /> Download RouterOS {routerOsMajor} recovery script
+                    </a>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>

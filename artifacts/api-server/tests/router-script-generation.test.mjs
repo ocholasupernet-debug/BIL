@@ -166,3 +166,29 @@ test("coexistence VPN children use versioned path bootstrap URLs", () => {
   assert.doesNotMatch(script, /router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890[^\n]*&ros-version=/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });
+
+test("coexistence can reuse both manually created management OpenVPN clients", () => {
+  const script = buildMainhotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "",
+    "come1",
+    "Ochola SuperNet",
+    "",
+    "",
+    "",
+    "https://come.isplatty.org/api/scripts/router-vpn-bootstrap/90/Abcdefghijklmno_1234567890",
+    "https://come.isplatty.org/api/scripts/router-vpn-bootstrap/90/Abcdefghijklmno_1234567890/openvpn-backup",
+    "",
+    "",
+    "10.8.5.90",
+    "ochola-mgmt-vpn-90",
+    "",
+    "verified",
+    "coexist",
+  );
+
+  assert.match(script, /Existing primary and backup management OpenVPN clients found; skipping VPN child downloads/);
+  assert.match(script, /name="ochola-mgmt-vpn-90"/);
+  assert.match(script, /name="ochola-mgmt-vpn-90-backup"/);
+  assert.equal(validateGeneratedRouterScript(script), script);
+});
