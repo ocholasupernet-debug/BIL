@@ -69,9 +69,6 @@ export function generateVpsOvpnSetupScript(opts: VpsOvpnSetupOptions): string {
   if (!vpnPassword || /[\u0000-\u001F\u007F]/.test(vpnPassword)) {
     throw new Error("VPS OpenVPN password is required and must not contain control characters.");
   }
-  if (vpnUsername === vpnPassword) {
-    throw new Error("VPS OpenVPN username and password must be different.");
-  }
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(vpnUsername)) {
     throw new Error("VPS OpenVPN username must contain only letters, numbers, '_' or '-'.");
   }

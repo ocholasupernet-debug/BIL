@@ -2288,9 +2288,6 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
-  if (safeVpnUsername === safeVpnPassword) {
-    throw new Error("VPS OpenVPN username and password must be different.");
-  }
   const coexistence = installationMode === "coexist";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
