@@ -28,6 +28,7 @@ const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 const scriptsRoute = await readFile("src/routes/scripts-route.ts", "utf8");
+const routerEnsureRoute = await readFile("src/routes/router-ensure-route.ts", "utf8");
 const provisioningRoute = await readFile("src/lib/router-vpn-provisioning.ts", "utf8");
 const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
@@ -47,6 +48,8 @@ test("management OpenVPN credentials use the configured router name", () => {
   );
   assert.match(scriptsRoute, /ensureRouterManagementOvpnCredentials/);
   assert.doesNotMatch(scriptsRoute, /vpnUsername: `router-\$\{routerId\}`/);
+  assert.match(routerEnsureRoute, /provisionRouterManagementOpenVpnPair/);
+  assert.match(routerEnsureRoute, /managementVpn/);
   assert.match(syncRoute, /client\.cn === openVpnCredentials\.username/);
 });
 
