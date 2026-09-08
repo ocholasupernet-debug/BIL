@@ -35,7 +35,7 @@ test("generates weighted RouterOS 6 PCC, routes, failover, and NAT", () => {
   const script = buildLoadBalancingScript(config).script;
   assert.match(script, /per-connection-classifier=both-addresses-and-ports:4\/0/);
   assert.match(script, /per-connection-classifier=both-addresses-and-ports:4\/3/);
-  assert.match(script, /routing-mark="isp_lb_wan1"/);
+  assert.match(script, /routing-mark="isplatty_lb_wan1"/);
   assert.doesNotMatch(script, /\srouting-table=/);
   assert.match(script, /ISPLATTY-LB-LOCAL/);
   assert.match(script, /out-interface="ether1" action=masquerade/);
@@ -44,7 +44,19 @@ test("generates weighted RouterOS 6 PCC, routes, failover, and NAT", () => {
 
 test("generates RouterOS 7 routing tables without RouterOS 6 route syntax", () => {
   const script = buildLoadBalancingScript({ ...config, routerOsVersion: "7" }).script;
-  assert.match(script, /\/routing table add name="isp_lb_wan1" fib=yes/);
-  assert.match(script, /routing-table="isp_lb_wan1"/);
-  assert.doesNotMatch(script, /\srouting-mark="isp_lb_wan1"/);
+  assert.match(script, /\/routing table add name="isplatty_lb_wan1" fib=yes/);
+  assert.match(script, /routing-table="isplatty_lb_wan1"/);
+  assert.doesNotMatch(script, /\srouting-mark="isplatty_lb_wan1"/);
+});
+
+test("does not require incomplete disabled WAN drafts", () => {
+  const result = validateLoadBalancingConfig({
+    ...config,
+    enabled: false,
+    wans: [
+      { ...config.wans[0], enabled: true },
+      { name: "Future WAN", interfaceName: "", gateway: "", healthCheckIp: "", weight: 1, enabled: false, position: 1 },
+    ],
+  }, 7, 3);
+  assert.deepEqual(result.errors, []);
 });

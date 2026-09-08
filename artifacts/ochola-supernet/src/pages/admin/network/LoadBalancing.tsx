@@ -51,6 +51,12 @@ interface RouterOption {
   status: string;
 }
 
+interface RouterInterface {
+  name: string;
+  type: string;
+  running: boolean;
+}
+
 interface LoadBalancingResponse {
   ok: boolean;
   config: LoadBalancingConfig;
@@ -122,6 +128,7 @@ function localValidation(config: LoadBalancingConfig): string[] {
   const interfaces = new Set<string>();
   const targets = new Set<string>();
   config.wans.forEach((wan, index) => {
+    if (!wan.enabled) return;
     const label = wan.name.trim() || `WAN ${index + 1}`;
     if (!wan.interfaceName.trim()) errors.push(`${label}: interface is required.`);
     if (wan.interfaceName.trim() === config.lanInterface.trim()) errors.push(`${label}: cannot be the LAN interface.`);
@@ -199,12 +206,16 @@ function ActionButton({
 
 export default function LoadBalancing() {
   const [routers, setRouters] = useState<RouterOption[]>([]);
+  const [interfaces, setInterfaces] = useState<RouterInterface[]>([]);
   const [routerId, setRouterId] = useState<number | null>(null);
   const [config, setConfig] = useState<LoadBalancingConfig | null>(null);
   const [script, setScript] = useState("");
   const [effectiveVersion, setEffectiveVersion] = useState<"6" | "7">("7");
   const [loadingRouters, setLoadingRouters] = useState(true);
   const [loadingConfig, setLoadingConfig] = useState(false);
+  const [loadingInterfaces, setLoadingInterfaces] = useState(false);
+  const [interfaceError, setInterfaceError] = useState("");
+  const [interfaceRefreshKey, setInterfaceRefreshKey] = useState(0);
   const [busy, setBusy] = useState<"save" | "preview" | "apply" | "download" | "">("");
   const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
@@ -256,6 +267,36 @@ export default function LoadBalancing() {
     return () => { cancelled = true; };
   }, [routerId]);
 
+  useEffect(() => {
+    if (!routerId) {
+      setInterfaces([]);
+      setInterfaceError("");
+      return;
+    }
+    let cancelled = false;
+    setLoadingInterfaces(true);
+    setInterfaceError("");
+    fetch(`/api/router/${routerId}/interfaces`)
+      .then(async response => {
+        const body = await response.json() as { interfaces?: RouterInterface[]; error?: string };
+        if (!response.ok) throw new Error(body.error || "Could not read router interfaces.");
+        return body.interfaces ?? [];
+      })
+      .then(items => {
+        if (!cancelled) setInterfaces(items);
+      })
+      .catch(error => {
+        if (!cancelled) {
+          setInterfaces([]);
+          setInterfaceError(error instanceof Error ? error.message : "Router interfaces could not be loaded.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingInterfaces(false);
+      });
+    return () => { cancelled = true; };
+  }, [routerId, interfaceRefreshKey]);
+
   const selectedRouter = routers.find(router => router.id === routerId);
   const activeWans = config?.wans.filter(wan => wan.enabled) ?? [];
   const totalWeight = activeWans.reduce((sum, wan) => sum + Number(wan.weight || 0), 0);
@@ -263,6 +304,7 @@ export default function LoadBalancing() {
 
   function updateConfig(patch: Partial<LoadBalancingConfig>) {
     setConfig(current => current ? { ...current, ...patch } : current);
+    setScript("");
     setMessage(null);
   }
 
@@ -271,6 +313,7 @@ export default function LoadBalancing() {
       if (!current) return current;
       return { ...current, wans: current.wans.map((wan, i) => i === index ? { ...wan, ...patch } : wan) };
     });
+    setScript("");
     setMessage(null);
   }
 
@@ -283,7 +326,15 @@ export default function LoadBalancing() {
       [next[index], next[target]] = [next[target], next[index]];
       return { ...current, wans: next.map((wan, position) => ({ ...wan, position })) };
     });
+    setScript("");
+    setMessage(null);
   }
+
+  const interfaceNames = useMemo(
+    () => interfaces.map(item => item.name).filter(Boolean),
+    [interfaces],
+  );
+  const interfaceListId = `router-interfaces-${routerId ?? "none"}`;
 
   async function preview() {
     if (!config) return;
@@ -430,7 +481,7 @@ export default function LoadBalancing() {
                   <p style={{ margin: "0.2rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>These settings are saved separately for each router.</p>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1.3fr) minmax(150px,1fr) minmax(150px,1fr) auto", gap: 12, alignItems: "end" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, alignItems: "end" }}>
                 <div>
                   <label style={labelStyle}>Target router</label>
                   <select
@@ -445,7 +496,7 @@ export default function LoadBalancing() {
                 </div>
                 <div>
                   <label style={labelStyle}>Customer LAN interface</label>
-                  <input value={config?.lanInterface ?? ""} onChange={event => updateConfig({ lanInterface: event.target.value })} placeholder="bridge" style={inputStyle} disabled={!config} />
+                  <input value={config?.lanInterface ?? ""} onChange={event => updateConfig({ lanInterface: event.target.value })} placeholder="bridge" style={inputStyle} disabled={!config} list={interfaceListId} />
                 </div>
                 <div>
                   <label style={labelStyle}>RouterOS syntax</label>
@@ -459,6 +510,25 @@ export default function LoadBalancing() {
                   <input type="checkbox" checked={config?.enabled ?? false} onChange={event => updateConfig({ enabled: event.target.checked })} disabled={!config} style={{ width: 16, height: 16, accentColor: "var(--isp-accent)" }} />
                   Enabled
                 </label>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--isp-border-subtle)", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+                <span>
+                  {loadingInterfaces
+                    ? "Reading live interfaces from the router…"
+                    : interfaceError
+                      ? interfaceError
+                      : interfaces.length
+                        ? `${interfaces.length} live interface${interfaces.length === 1 ? "" : "s"} detected. Use the suggestions when assigning WANs.`
+                        : "No live interfaces detected. You can still enter names manually."}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setInterfaceRefreshKey(current => current + 1)}
+                  disabled={!routerId || loadingInterfaces}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5, border: 0, background: "transparent", color: "var(--isp-accent)", cursor: loadingInterfaces ? "wait" : "pointer", fontFamily: "inherit", fontSize: "0.7rem", fontWeight: 800 }}
+                >
+                  <RefreshCw size={12} className={loadingInterfaces ? "animate-spin" : ""} /> Refresh interfaces
+                </button>
               </div>
             </div>
 
@@ -493,9 +563,9 @@ export default function LoadBalancing() {
                           <button type="button" title="Remove WAN" disabled={config.wans.length <= 2} onClick={() => updateConfig({ wans: config.wans.filter((_, i) => i !== index).map((item, position) => ({ ...item, position })) })} style={{ ...iconButton, color: "#f87171" }}><Trash2 size={14} /></button>
                         </div>
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "minmax(120px,1fr) minmax(140px,1fr) minmax(140px,1fr) 90px minmax(140px,1fr)", gap: 10 }}>
+                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
                         <div><label style={labelStyle}>Label</label><input value={wan.name} onChange={event => updateWan(index, { name: event.target.value })} placeholder={`WAN ${index + 1}`} style={inputStyle} /></div>
-                        <div><label style={labelStyle}>WAN interface</label><input value={wan.interfaceName} onChange={event => updateWan(index, { interfaceName: event.target.value })} placeholder="ether1" style={inputStyle} /></div>
+                         <div><label style={labelStyle}>WAN interface</label><input value={wan.interfaceName} onChange={event => updateWan(index, { interfaceName: event.target.value })} placeholder="ether1" style={inputStyle} list={interfaceListId} /></div>
                         <div><label style={labelStyle}>Gateway</label><input value={wan.gateway} onChange={event => updateWan(index, { gateway: event.target.value })} placeholder="192.168.1.1" style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
                         <div><label style={labelStyle}>Weight</label><input type="number" min={1} max={100} value={wan.weight} onChange={event => updateWan(index, { weight: Number(event.target.value) })} style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
                         <div><label style={labelStyle}>Health-check IP</label><input value={wan.healthCheckIp} onChange={event => updateWan(index, { healthCheckIp: event.target.value })} placeholder="1.1.1.1" style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
@@ -505,6 +575,9 @@ export default function LoadBalancing() {
                 </div>
               )}
             </div>
+            <datalist id={interfaceListId}>
+              {interfaceNames.map(name => <option key={name} value={name} />)}
+            </datalist>
           </section>
 
           <aside style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -521,6 +594,19 @@ export default function LoadBalancing() {
                   <div style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", marginTop: 3 }}>{card.label}</div>
                 </div>
               ))}
+            </div>
+
+            <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 11, padding: "0.9rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <Activity size={15} style={{ color: "#60a5fa" }} />
+                <strong style={{ color: "var(--isp-text)", fontSize: "0.78rem" }}>Router readiness</strong>
+              </div>
+              <div style={{ display: "grid", gap: 6, color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span>Router</span><strong style={{ color: "var(--isp-text)" }}>{selectedRouter?.name ?? "Not selected"}</strong></div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span>Connection address</span><strong style={{ color: selectedRouter?.host ? "#4ade80" : "#fbbf24" }}>{selectedRouter?.host ? "Configured" : "Missing"}</strong></div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span>RouterOS</span><strong style={{ color: "var(--isp-text)" }}>{selectedRouter?.ros_version || "Auto-detect"}</strong></div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span>Live interfaces</span><strong style={{ color: interfaces.length ? "#4ade80" : "#fbbf24" }}>{interfaces.length || "Not loaded"}</strong></div>
+              </div>
             </div>
 
             <div style={{ background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.2)", borderRadius: 11, padding: "0.9rem" }}>

@@ -94,6 +94,9 @@ export function validateLoadBalancingConfig(
   const interfaces = new Set<string>();
   const healthTargets = new Set<string>();
   for (const [index, wan] of wans.entries()) {
+    /* Disabled rows are drafts. They may be incomplete because they are not
+       emitted into the RouterOS script until the operator enables them. */
+    if (!wan.enabled) continue;
     const label = wan.name || `WAN ${index + 1}`;
     if (!wan.interfaceName || !INTERFACE_RE.test(wan.interfaceName)) {
       errors.push(`${label}: enter a valid interface name.`);
@@ -147,7 +150,7 @@ function routeOption(version: "6" | "7", table: string): string {
 }
 
 function routeTableName(index: number): string {
-  return `isp_lb_wan${index + 1}`;
+  return `isplatty_lb_wan${index + 1}`;
 }
 
 function connectionMark(index: number): string {
