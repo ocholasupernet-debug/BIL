@@ -41,14 +41,31 @@ export async function ensureRouterManagementOvpnCredentials(input: {
       && row.management_vpn_password_iv
       && row.management_vpn_password_auth_tag
     ) {
-      return {
-        username: row.management_vpn_username,
-        password: decryptVpnSecret({
-          ciphertext: row.management_vpn_password_ciphertext,
-          iv: row.management_vpn_password_iv,
-          auth_tag: row.management_vpn_password_auth_tag,
-        }),
-      };
+      const existingPassword = decryptVpnSecret({
+        ciphertext: row.management_vpn_password_ciphertext,
+        iv: row.management_vpn_password_iv,
+        auth_tag: row.management_vpn_password_auth_tag,
+      });
+      const expected = routerManagementOvpnCredentials(input.routerName);
+      if (row.management_vpn_username === expected.username && existingPassword === expected.password) {
+        return expected;
+      }
+
+      /* Migrate older random credentials and renamed routers to the
+         name-matching management VPN credential before provisioning the VPS. */
+      const encrypted = encryptVpnSecret(expected.password);
+      await sbUpdateStrict(
+        "isp_routers",
+        `id=eq.${encodeURIComponent(String(input.routerId))}&admin_id=eq.${encodeURIComponent(String(input.adminId))}`,
+        {
+          management_vpn_username: expected.username,
+          management_vpn_password_ciphertext: encrypted.ciphertext,
+          management_vpn_password_iv: encrypted.iv,
+          management_vpn_password_auth_tag: encrypted.auth_tag,
+          updated_at: new Date().toISOString(),
+        },
+      );
+      return expected;
     }
 
     const credentials = routerManagementOvpnCredentials(input.routerName);

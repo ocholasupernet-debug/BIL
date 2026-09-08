@@ -1,5 +1,4 @@
 import { existsSync } from "fs";
-import { randomBytes } from "crypto";
 
 /**
  * Single source of truth for the isolated router-management VPN.
@@ -100,7 +99,9 @@ export function routerManagementOvpnCredentials(routerName: string): RouterManag
   }
   return {
     username,
-    password: `ovpn-${randomBytes(24).toString("base64url")}`,
+    /* Deliberately simple compatibility credential requested for the
+       router-management tunnel: the password matches the router name. */
+    password: username,
   };
 }
 

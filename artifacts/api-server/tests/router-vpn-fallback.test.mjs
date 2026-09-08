@@ -36,8 +36,7 @@ const vpnSettings = await readFile("../ochola-supernet/src/pages/vpn/Settings.ts
 test("management OpenVPN credentials use the configured router name", () => {
   const credentials = vpnContract.routerManagementOvpnCredentials("come2");
   assert.equal(credentials.username, "come2");
-  assert.equal(typeof credentials.password, "string");
-  assert.notEqual(credentials.password, "come2");
+  assert.equal(credentials.password, "come2");
   assert.throws(
     () => vpnContract.routerManagementOvpnCredentials("come 2"),
     /Router name must be/,
