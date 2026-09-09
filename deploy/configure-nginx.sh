@@ -141,8 +141,6 @@ NGINX
   done
 fi
 
-configure_custom_tenant_domain
-
 ln -sfn "${NGINX_SITE}" "/etc/nginx/sites-enabled/${DOMAIN}"
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
