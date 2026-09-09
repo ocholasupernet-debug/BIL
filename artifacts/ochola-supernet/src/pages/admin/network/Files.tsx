@@ -444,6 +444,10 @@ export default function Files() {
       let data: {
         error?: string;
         detail?: string;
+        jobId?: string;
+        status?: string;
+        total?: number;
+        processed?: number;
         deployed?: Array<{ sourceName: string }>;
         skipped?: Array<{ sourceName: string; reason: string }>;
         failed?: Array<{ sourceName: string; error: string }>;
@@ -458,6 +462,48 @@ export default function Files() {
           .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
           .join(": ");
         throw new Error(serverMessage || `Bulk deployment failed (HTTP ${response.status})`);
+      }
+
+      if (response.status === 202 && data.jobId) {
+        setBulkDeployMessage(`Bulk deployment started: 0 of ${data.total ?? hotspotSources.length} assets processed…`);
+        const maxPolls = 180;
+        for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+          await new Promise(resolve => window.setTimeout(resolve, 2000));
+          const pollResponse = await fetch(
+            `/api/router/${selectedRouter.id}/files/deploy-bulk/${encodeURIComponent(data.jobId)}?adminId=${encodeURIComponent(String(adminId))}`,
+            { headers },
+          );
+          let progress: typeof data = {};
+          try {
+            progress = await pollResponse.json();
+          } catch {
+            /* Keep the HTTP status as the fallback error below. */
+          }
+          if (!pollResponse.ok) {
+            const serverMessage = [progress.error, progress.detail]
+              .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+              .join(": ");
+            throw new Error(serverMessage || `Could not read bulk deployment progress (HTTP ${pollResponse.status})`);
+          }
+
+          const total = progress.total ?? data.total ?? hotspotSources.length;
+          const processed = progress.processed ?? 0;
+          if (progress.status === "queued" || progress.status === "running") {
+            setBulkDeployMessage(`Deploying hotspot assets… ${processed} of ${total} processed.`);
+            continue;
+          }
+
+          const deployedCount = progress.deployed?.length ?? 0;
+          const skippedCount = progress.skipped?.length ?? 0;
+          const failedCount = progress.failed?.length ?? 0;
+          setBulkDeployMessage(
+            `Processed ${total} assets: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
+          );
+          setBulkDeployError(progress.status === "failed" || failedCount > 0);
+          void filesQuery.refetch();
+          return;
+        }
+        throw new Error("Bulk deployment is taking longer than expected. Reopen Files later to check the router.");
       }
 
       const deployedCount = data.deployed?.length ?? 0;

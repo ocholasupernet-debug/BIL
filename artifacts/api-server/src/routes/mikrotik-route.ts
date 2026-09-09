@@ -65,11 +65,37 @@ interface PendingRouterFileSource {
 
 const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
 const ROUTER_FILE_SOURCE_TTL_MS = 5 * 60 * 1000;
+type BulkDeployJobStatus = "queued" | "running" | "complete" | "failed";
+interface BulkDeployJob {
+  id: string;
+  routerId: number;
+  adminId: number;
+  status: BulkDeployJobStatus;
+  total: number;
+  processed: number;
+  deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
+  skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
+  failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
+  sourceNames: string[];
+  connectedHost?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+const bulkDeployJobs = new Map<string, BulkDeployJob>();
+const BULK_DEPLOY_JOB_TTL_MS = 15 * 60 * 1000;
 
 function cleanPendingRouterFileSources(): void {
   const now = Date.now();
   for (const [token, source] of pendingRouterFileSources) {
     if (source.expiresAt <= now) pendingRouterFileSources.delete(token);
+  }
+}
+
+function cleanBulkDeployJobs(): void {
+  const cutoff = Date.now() - BULK_DEPLOY_JOB_TTL_MS;
+  for (const [jobId, job] of bulkDeployJobs) {
+    if (job.updatedAt < cutoff) bulkDeployJobs.delete(jobId);
   }
 }
 
@@ -539,9 +565,114 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
 /* ─── POST /api/router/:id/files/deploy-bulk ─────────────────────────────── */
 /**
  * Publishes every approved hotspot asset that is missing from flash/hotspot.
- * Existing files and assets whose parent directory is not present are skipped;
- * this endpoint never overwrites router files.
+ * The request creates a short-lived server-side job so a large asset set does
+ * not stay on an HTTP connection long enough for the reverse proxy to time
+ * out. Existing files and assets whose parent directory is not present are
+ * skipped; this job never overwrites router files.
  */
+async function runBulkHotspotDeployment(
+  job: BulkDeployJob,
+  creds: RouterCredentials,
+  origin: string,
+): Promise<void> {
+  job.status = "running";
+  job.updatedAt = Date.now();
+  try {
+    const currentFiles = await fetchRouterFiles(creds);
+    job.connectedHost = currentFiles.connectedHost;
+    const normaliseName = (value: string): string => value
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "")
+      .toLowerCase();
+    const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
+    const directories = new Set(
+      currentFiles.files
+        .filter(file => file.type.toLowerCase().includes("directory"))
+        .map(file => normaliseName(file.name)),
+    );
+
+    for (const sourceName of job.sourceNames) {
+      const destinationPath = `flash/hotspot/${sourceName.replaceAll("\\", "/").replace(/^\/+/, "")}`;
+      const normalisedDestination = normaliseName(destinationPath);
+      if (existingFiles.has(normalisedDestination)) {
+        job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+
+      const lastSlash = destinationPath.lastIndexOf("/");
+      const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
+      if (!directories.has(parentDirectory)) {
+        job.skipped.push({ sourceName, destinationPath, reason: "parent directory is missing" });
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+
+      const sourceContent = getDeployableSource("hotspot", sourceName, origin);
+      if (!sourceContent) {
+        job.failed.push({ sourceName, destinationPath, error: "Approved source could not be read" });
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+
+      cleanPendingRouterFileSources();
+      const token = randomBytes(24).toString("hex");
+      pendingRouterFileSources.set(token, {
+        content: sourceContent.content,
+        contentType: contentTypeForFile(sourceName),
+        fileName: sourceName.split("/").pop() ?? sourceName,
+        expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+      });
+
+      try {
+        const result = await deployRouterFile(creds, {
+          destinationPath,
+          sourceUrl: `${origin}/api/router-file-source/${token}`,
+          overwrite: false,
+          uploadId: token.slice(0, 16),
+        });
+        job.deployed.push({ sourceName, destinationPath: result.destinationPath, size: result.size });
+        existingFiles.add(normalisedDestination);
+      } catch (error) {
+        if (error instanceof RouterFileExistsError) {
+          job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
+        } else {
+          job.failed.push({
+            sourceName,
+            destinationPath,
+            error: error instanceof Error ? error.message : "Deployment failed",
+          });
+        }
+      } finally {
+        pendingRouterFileSources.delete(token);
+        job.processed += 1;
+        job.updatedAt = Date.now();
+      }
+    }
+
+    job.status = "complete";
+    job.updatedAt = Date.now();
+    logger.info({
+      routerId: job.routerId,
+      adminId: job.adminId,
+      destinationDirectory: "flash/hotspot",
+      total: job.total,
+      deployed: job.deployed.length,
+      skipped: job.skipped.length,
+      failed: job.failed.length,
+    }, "Bulk hotspot assets processed");
+  } catch (error) {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "Bulk deployment failed";
+    job.updatedAt = Date.now();
+    logger.error({ routerId: job.routerId, adminId: job.adminId, error: job.error }, "Bulk hotspot deployment failed");
+  }
+}
+
 router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
@@ -569,102 +700,64 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     return;
   }
 
-  try {
-    const currentFiles = await fetchRouterFiles(found.creds);
-    const normaliseName = (value: string): string => value
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/^\/+|\/+$/g, "")
-      .toLowerCase();
-    const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
-    const directories = new Set(
-      currentFiles.files
-        .filter(file => file.type.toLowerCase().includes("directory"))
-        .map(file => normaliseName(file.name)),
-    );
-    const deployed: Array<{ sourceName: string; destinationPath: string; size: number }> = [];
-    const skipped: Array<{ sourceName: string; destinationPath: string; reason: string }> = [];
-    const failed: Array<{ sourceName: string; destinationPath: string; error: string }> = [];
+  cleanBulkDeployJobs();
+  const now = Date.now();
+  const job: BulkDeployJob = {
+    id: randomBytes(18).toString("hex"),
+    routerId: id,
+    adminId,
+    status: "queued",
+    total: sources.length,
+    processed: 0,
+    deployed: [],
+    skipped: [],
+    failed: [],
+    sourceNames: sources.map(source => source.name),
+    createdAt: now,
+    updatedAt: now,
+  };
+  bulkDeployJobs.set(job.id, job);
+  res.status(202).json({
+    ok: true,
+    jobId: job.id,
+    status: job.status,
+    total: job.total,
+    destinationDirectory: "flash/hotspot",
+  });
+  void runBulkHotspotDeployment(job, found.creds, requestOrigin(req));
+});
 
-    for (const source of sources) {
-      const relativeName = source.name.replaceAll("\\", "/").replace(/^\/+/, "");
-      const destinationPath = `${destinationDirectory}/${relativeName}`;
-      const normalisedDestination = normaliseName(destinationPath);
-      if (existingFiles.has(normalisedDestination)) {
-        skipped.push({ sourceName: source.name, destinationPath, reason: "already exists" });
-        continue;
-      }
+router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
 
-      const lastSlash = destinationPath.lastIndexOf("/");
-      const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
-      if (!directories.has(parentDirectory)) {
-        skipped.push({ sourceName: source.name, destinationPath, reason: "parent directory is missing" });
-        continue;
-      }
-
-      const sourceContent = getDeployableSource("hotspot", source.name, requestOrigin(req));
-      if (!sourceContent) {
-        failed.push({ sourceName: source.name, destinationPath, error: "Approved source could not be read" });
-        continue;
-      }
-
-      cleanPendingRouterFileSources();
-      const token = randomBytes(24).toString("hex");
-      pendingRouterFileSources.set(token, {
-        content: sourceContent.content,
-        contentType: contentTypeForFile(source.name),
-        fileName: source.name.split("/").pop() ?? source.name,
-        expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
-      });
-
-      try {
-        const result = await deployRouterFile(found.creds, {
-          destinationPath,
-          sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
-          overwrite: false,
-          uploadId: token.slice(0, 16),
-        });
-        deployed.push({ sourceName: source.name, destinationPath: result.destinationPath, size: result.size });
-        existingFiles.add(normalisedDestination);
-      } catch (error) {
-        if (error instanceof RouterFileExistsError) {
-          skipped.push({ sourceName: source.name, destinationPath, reason: "already exists" });
-        } else {
-          failed.push({
-            sourceName: source.name,
-            destinationPath,
-            error: error instanceof Error ? error.message : "Deployment failed",
-          });
-        }
-      } finally {
-        pendingRouterFileSources.delete(token);
-      }
-    }
-
-    logger.info({
-      routerId: id,
-      adminId,
-      destinationDirectory,
-      total: sources.length,
-      deployed: deployed.length,
-      skipped: skipped.length,
-      failed: failed.length,
-    }, "Bulk hotspot assets processed");
-
-    res.json({
-      ok: failed.length === 0,
-      routerId: id,
-      routerName: found.row.name,
-      destinationDirectory,
-      connectedHost: currentFiles.connectedHost,
-      total: sources.length,
-      deployed,
-      skipped,
-      failed,
-    });
-  } catch (err) {
-    routerErrorResponse(res, err);
+  cleanBulkDeployJobs();
+  const job = bulkDeployJobs.get(String(req.params.jobId));
+  if (!job || job.routerId !== id || job.adminId !== adminId) {
+    res.status(404).json({ error: "Bulk deployment job not found" });
+    return;
   }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  res.json({
+    ok: job.status === "complete" && job.failed.length === 0,
+    jobId: job.id,
+    routerId: job.routerId,
+    status: job.status,
+    total: job.total,
+    processed: job.processed,
+    deployed: job.deployed,
+    skipped: job.skipped,
+    failed: job.failed,
+    connectedHost: job.connectedHost,
+    error: job.error,
+  });
 });
 
 /* ─── POST /api/router/:id/hotspot-portal/deploy ─────────────────────────── */
