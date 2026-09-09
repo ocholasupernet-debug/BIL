@@ -414,7 +414,7 @@ export async function runRouterCommand(
 export async function syncHotspotPortalHostname(
   creds: RouterCredentials,
   hostname: string,
-): Promise<{ hostname: string; hotspotAddress: string; connectedHost: string }> {
+): Promise<{ hostname: string; hotspotAddress: string; hotspotServer: string; connectedHost: string }> {
   return withConn(creds, async (conn, connectedHost) => {
     const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
     const profiles = await withTimeout(
@@ -459,7 +459,46 @@ export async function syncHotspotPortalHostname(
       ]),
       timeoutMs,
     );
-    return { hostname, hotspotAddress, connectedHost };
+
+    const hotspotServers = await withTimeout(
+      conn.write([
+        "/ip/hotspot/print",
+        "=.proplist=.id,name,disabled",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const hotspotServer = hotspotServers.find(row => row.disabled !== "true")?.name ?? "";
+    if (!hotspotServer) throw new Error("The router has no enabled hotspot server.");
+
+    const walledGardenRows = await withTimeout(
+      conn.write([
+        "/ip/hotspot/walled-garden/ip/print",
+        "=.proplist=.id,server,dst-host",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
+      if (
+        row["dst-host"]?.toLowerCase() === hostname.toLowerCase()
+        && row.server === hotspotServer
+        && row[".id"]
+      ) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
+          timeoutMs,
+        );
+      }
+    }
+    await withTimeout(
+      conn.write([
+        "/ip/hotspot/walled-garden/ip/add",
+        `=server=${hotspotServer}`,
+        `=dst-host=${hostname}`,
+        "=action=accept",
+      ]),
+      timeoutMs,
+    );
+    return { hostname, hotspotAddress, hotspotServer, connectedHost };
   });
 }
 
