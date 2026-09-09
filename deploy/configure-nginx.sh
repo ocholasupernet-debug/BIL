@@ -2,12 +2,6 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [ -f "$PROJECT_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$PROJECT_DIR/.env"
-  set +a
-fi
 DOMAIN="isplatty.org"
 CERT_NAME="${DOMAIN}-wildcard"
 CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
@@ -17,6 +11,12 @@ APEX_CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
 TENANT_VHOST_DIR="/etc/nginx/tenant-sites.d"
 CUSTOM_TENANT_DOMAIN="${CUSTOM_TENANT_DOMAIN:-}"
+if [ -z "$CUSTOM_TENANT_DOMAIN" ] && [ -r "$PROJECT_DIR/.env" ]; then
+  CUSTOM_TENANT_DOMAIN="$(
+    awk -F= '$1 == "CUSTOM_TENANT_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' \
+      "$PROJECT_DIR/.env"
+  )"
+fi
 has_wildcard_certificate() {
   [ -r "${CERT_DIR}/fullchain.pem" ] &&
     [ -r "${CERT_DIR}/privkey.pem" ] &&
@@ -58,7 +58,34 @@ configure_custom_tenant_domain() {
     cert_ok=true
   fi
   if [ "$cert_ok" != true ]; then
-    echo "A valid certificate for ${CUSTOM_TENANT_DOMAIN} is required before enabling its VPS vhost." >&2
+    echo "Issuing a certificate for ${CUSTOM_TENANT_DOMAIN}..."
+    local nginx_was_active=false
+    if systemctl is-active --quiet nginx; then
+      systemctl stop nginx
+      nginx_was_active=true
+    fi
+    local certbot_status=0
+    certbot certonly \
+      --standalone \
+      --non-interactive \
+      --agree-tos \
+      --email "${CERTBOT_EMAIL:-admin@isplatty.org}" \
+      --preferred-challenges http \
+      --http-01-port 80 \
+      --keep-until-expiring \
+      --cert-name "${CUSTOM_TENANT_DOMAIN}" \
+      -d "${CUSTOM_TENANT_DOMAIN}" || certbot_status=$?
+    if [ "$nginx_was_active" = true ]; then
+      systemctl start nginx
+    fi
+    if [ "$certbot_status" -ne 0 ]; then
+      echo "Unable to issue a certificate for ${CUSTOM_TENANT_DOMAIN}. Confirm its DNS points to this VPS." >&2
+      return "$certbot_status"
+    fi
+  fi
+
+  if [ ! -r "${cert_dir}/fullchain.pem" ] || [ ! -r "${cert_dir}/privkey.pem" ]; then
+    echo "Certificate files for ${CUSTOM_TENANT_DOMAIN} are missing after issuance." >&2
     return 1
   fi
 
