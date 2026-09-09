@@ -67,6 +67,7 @@ function stagingSettings() {
     ispName: "Acme <script>alert('x')</script>",
     freeTrial: "Enable",
     vouchers: "Yes",
+    mpesaPrompt: "Enable",
     tagline: "Fast & <reliable>",
     routerId: "3",
     advertPos: "Bottom",
@@ -123,6 +124,12 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
         headers: { "content-type": "application/json" },
       });
     }
+    if (url.pathname === "/api/plans") {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     throw new Error(`unexpected export request: ${raw}`);
   };
 
@@ -147,6 +154,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     assert.equal(config.ispName, stagingSettings().ispName);
     assert.equal(config.freeTrialEnabled, true);
     assert.equal(config.vouchersEnabled, true);
+    assert.equal(config.mpesaPromptEnabled, true);
     for (const key of [
       "routerId",
       "routerSecret",
@@ -157,7 +165,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     ]) assert.equal(config[key], undefined, `${key} must not be embedded in portal config`);
 
     for (const value of sensitiveFixtures) assert.doesNotMatch(html, new RegExp(value));
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.ok(calls.every(url => !/\/api\/admin|\/router|\/sync|\/upload/i.test(url)));
   } finally {
     globalThis.fetch = realFetch;

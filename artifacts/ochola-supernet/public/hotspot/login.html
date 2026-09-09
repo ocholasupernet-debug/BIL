@@ -161,7 +161,7 @@
 </section>
 
 <!-- M-Pesa Banner -->
-<div style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
+<div id="mpesaBanner" style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
   <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
     <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(52,211,153,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
       <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -409,7 +409,7 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
- var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0;
+ var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, MPESA_PROMPT_ENABLED=true;
 var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
@@ -466,6 +466,9 @@ function normalisePlanList(value){
 }
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
+  MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled!==false;
+  var mpesaBanner=document.getElementById("mpesaBanner");
+  if(mpesaBanner)mpesaBanner.style.display=MPESA_PROMPT_ENABLED?"":"none";
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
   var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
@@ -532,7 +535,7 @@ function applyPortalConfig(data){
     if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
   }
   var plansSection=document.getElementById("plansSection");
-  if(plansSection&&maintenance)plansSection.style.display="none";
+  if(plansSection&&(maintenance||!MPESA_PROMPT_ENABLED))plansSection.style.display="none";
   var voucherSection=document.getElementById("voucherSection");
   if(voucherSection&&data.vouchersEnabled===false)voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
@@ -667,6 +670,7 @@ function renderPlans(){
 
 /* ── STK Modal ── */
 function openModal(i){
+  if(!MPESA_PROMPT_ENABLED)return;
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
   document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" Unlimited";
@@ -743,6 +747,7 @@ function renderModal(){
 }
 
 function sendStk(){
+  if(!MPESA_PROMPT_ENABLED)return;
   var phone=document.getElementById("stkPhoneInput")?document.getElementById("stkPhoneInput").value:"";
   if(!phone.trim())return;
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
