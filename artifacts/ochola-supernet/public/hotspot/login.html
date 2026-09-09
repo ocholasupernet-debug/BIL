@@ -663,9 +663,10 @@ function renderPlans(){
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
       '</div>'+
-      '<button onclick="openModal('+i+')" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:pointer;font-family:inherit;transition:opacity .15s" onmouseover="this.style.opacity=\'.88\'" onmouseout="this.style.opacity=\'1\'">'+
+       '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:pointer;font-family:inherit;transition:opacity .15s" onmouseover="this.style.opacity=\'.88\'" onmouseout="this.style.opacity=\'1\'">'+
       'Connect Now</button></div>';
   }).join("");
+   bindPlanButtons();
 }
 
 /* ── STK Modal ── */
@@ -788,6 +789,21 @@ function sendStk(){
     });
 }
 
+/* Captive-browser-safe plan activation. Some RouterOS/WebView clients
+   ignore inline onclick handlers even when the page itself loads normally. */
+function bindPlanButtons(){
+  document.querySelectorAll(".plan-connect-button").forEach(function(button){
+    if(button.getAttribute("data-plan-bound")==="1")return;
+    button.setAttribute("data-plan-bound","1");
+    button.addEventListener("click",function(event){
+      event.preventDefault();
+      openModal(Number(button.getAttribute("data-plan-index")||"0"));
+    });
+  });
+}
+window.openModal=openModal;
+window.sendStk=sendStk;
+
 function scrollToLogin(){document.getElementById("loginSection").scrollIntoView({behavior:"smooth"});}
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
 
@@ -837,6 +853,7 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
 }
 loadPlans();
+bindPlanButtons();
 loadPortalTypography(loadPlans);
 </script>
 </body>

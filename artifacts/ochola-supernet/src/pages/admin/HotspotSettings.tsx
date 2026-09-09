@@ -216,7 +216,7 @@ function renderStaticPlanCards(plans: PortalPlan[]): string {
         <div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em"><span style="font-size:.8125rem;font-weight:600;color:#a78bfa">Ksh</span>&nbsp;${price}</div>
         <p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">${validity} ${unit} Unlimited</p>
       </div>
-      <button onclick="openModal(${index})" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,#2f6fed,#7c3aed);border:none;cursor:pointer;font-family:inherit">Connect Now</button>
+      <button type="button" class="plan-connect-button" data-plan-index="${index}" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,#2f6fed,#7c3aed);border:none;cursor:pointer;font-family:inherit">Connect Now</button>
     </div>`;
   }).join("");
 }
