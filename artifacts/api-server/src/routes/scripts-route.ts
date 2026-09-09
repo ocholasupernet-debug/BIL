@@ -3645,20 +3645,26 @@ const MANAGEMENT_FIREWALL_RSC = `# OcholaSuperNet management firewall rules
 :local backupComment "DO NOT DELETE - OcholaSupernet backup management API"
 
 :do {
-  :if ([:len [/ip firewall filter find where comment=$primaryComment]] = 0) do={
+  :local primaryRule [/ip firewall filter find where comment=$primaryComment]
+  :if ([:len $primaryRule] = 0) do={
     /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 comment=$primaryComment place-before=0
     :put "Added primary management API firewall rule"
   } else={
-    :put "Primary management API firewall rule already exists"
+    /ip firewall filter set $primaryRule chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 disabled=no comment=$primaryComment
+    :do { /ip firewall filter move $primaryRule destination=0 } on-error={}
+    :put "Refreshed primary management API firewall rule"
   }
 } on-error={ :put "WARN: primary management API firewall rule could not be added" }
 
 :do {
-  :if ([:len [/ip firewall filter find where comment=$backupComment]] = 0) do={
+  :local backupRule [/ip firewall filter find where comment=$backupComment]
+  :if ([:len $backupRule] = 0) do={
     /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.6.0/24 comment=$backupComment place-before=0
     :put "Added backup management API firewall rule"
   } else={
-    :put "Backup management API firewall rule already exists"
+    /ip firewall filter set $backupRule chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.6.0/24 disabled=no comment=$backupComment
+    :do { /ip firewall filter move $backupRule destination=0 } on-error={}
+    :put "Refreshed backup management API firewall rule"
   }
 } on-error={ :put "WARN: backup management API firewall rule could not be added" }
 
