@@ -592,14 +592,20 @@ function loadPortalTypography(done){
 function loadPlans(){
   var query=PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
   var embeddedPlans=EMBEDDED_PLANS.slice();
-  fetch(apiUrl("/api/plans?type=hotspot"+query))
+  PLANS=embeddedPlans.length?embeddedPlans:FALLBACK_PLANS;
+  renderPlans();
+
+  /* A pre-authenticated RouterOS request can remain pending instead of
+     rejecting when the walled garden blocks the API. Never make the initial
+     package display wait for that request. */
+  var request=fetch(apiUrl("/api/plans?type=hotspot"+query))
     .then(function(r){return r.ok?r.json():null;})
-    .then(function(data){
-      var remotePlans=normalisePlanList(data);
-      PLANS=remotePlans.length?remotePlans:(embeddedPlans.length?embeddedPlans:FALLBACK_PLANS);
-      renderPlans();
-    })
-    .catch(function(){PLANS=embeddedPlans.length?embeddedPlans:FALLBACK_PLANS;renderPlans();});
+    .catch(function(){return null;});
+  var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
+  Promise.race([request,timeout]).then(function(data){
+    var remotePlans=normalisePlanList(data);
+    if(remotePlans.length){PLANS=remotePlans;renderPlans();}
+  });
 }
 
 function renderPlans(){
