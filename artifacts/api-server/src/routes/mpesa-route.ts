@@ -20,6 +20,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { addHotspotIpBinding, resolveHotspotClientMac, type RouterCredentials } from "../lib/mikrotik.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 
 const router: IRouter = Router();
 
@@ -47,6 +48,49 @@ const callbackIntakeLimits = new Map<string, { count: number; startedAt: number 
 const CALLBACK_RECONCILIATION_WINDOW_MS = 10 * 60 * 1000;
 const CALLBACK_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 let lastCallbackPurgeAt = 0;
+
+type HotspotRouterRow = {
+  id?: number;
+  name?: string | null;
+  host: string | null;
+  bridge_ip: string | null;
+  vpn_ip: string | null;
+  router_username: string | null;
+  router_secret: string | null;
+};
+
+function isManagementVpnIp(ip: string | null | undefined): boolean {
+  return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[4])$/.test(String(ip ?? "").trim());
+}
+
+/**
+ * Payment requests run outside the admin router route, so they must apply the
+ * same management-VPN preference and OpenVPN status auto-discovery as the
+ * normal MikroTik routes. The hotspot gateway (for example 10.254.x.1) is
+ * reachable by the customer, but it is never a RouterOS API endpoint.
+ */
+function hotspotRouterCredentials(row: HotspotRouterRow): RouterCredentials {
+  const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp) ?? "";
+  let discoveredManagementIp = "";
+  if (!storedManagementIp) {
+    const vpnClients = readVpnClients();
+    discoveredManagementIp =
+      vpnIpFor(row.host ?? "", vpnClients) ??
+      vpnIpFor(row.name ?? "", vpnClients) ??
+      "";
+  }
+  const managementIp = storedManagementIp || discoveredManagementIp;
+  return {
+    host: managementIp || row.host?.trim() || "",
+    bridgeIp: managementIp && row.host?.trim() !== managementIp ? managementIp : undefined,
+    port: 8728,
+    username: row.router_username || "admin",
+    password: row.router_secret || "",
+    useSSL: false,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+}
 
 interface BankStkPushConfig {
   bankName: string;
@@ -595,16 +639,16 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
       return;
     }
     try {
-      resolvedMac = await resolveHotspotClientMac({
-        host: routerRow.host || routerRow.vpn_ip || routerRow.bridge_ip || "",
-        bridgeIp: routerRow.vpn_ip || routerRow.bridge_ip || undefined,
-        port: 8728,
-        username: routerRow.router_username || "admin",
-        password: routerRow.router_secret || "",
-        useSSL: false,
-        connectTimeoutMs: 10_000,
-        requestTimeoutMs: 12_000,
-      }, clientIp) ?? "";
+      resolvedMac = await resolveHotspotClientMac(
+        hotspotRouterCredentials({
+          host: routerRow.host,
+          bridge_ip: routerRow.bridge_ip,
+          vpn_ip: routerRow.vpn_ip,
+          router_username: routerRow.router_username,
+          router_secret: routerRow.router_secret,
+        }),
+        clientIp,
+      ) ?? "";
     } catch (error) {
       logger.warn({ err: error, adminId, planId, clientIp }, "[mpesa/intent] router client lookup failed");
     }
@@ -1221,16 +1265,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-  const credentials: RouterCredentials = {
-    host: routerRow.host || routerRow.vpn_ip || routerRow.bridge_ip || "",
-    bridgeIp: routerRow.vpn_ip || routerRow.bridge_ip || undefined,
-    port: 8728,
-    username: routerRow.router_username || "admin",
-    password: routerRow.router_secret || "",
-    useSSL: false,
-    connectTimeoutMs: 10_000,
-    requestTimeoutMs: 12_000,
-  };
+  const credentials = hotspotRouterCredentials(routerRow);
 
   try {
     await addHotspotIpBinding(credentials, {
