@@ -4318,6 +4318,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
 
     const profileName = routerSlug;
     const portalBase  = `https://${adminSubdomain}.isplatty.org`;
+    const portalHost  = `${adminSubdomain}.isplatty.org`;
     const now         = new Date().toISOString();
 
     /* ── Auto-register the hotspot IP pool in isp_ip_pools ──
@@ -4514,6 +4515,8 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       safeRos(`/ip dns static add name="connectivitycheck.gstatic.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static gstatic"),
       safeRos(`/ip dns static add name="connectivitycheck.android.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static android"),
       safeRos(`/ip dns static add name="clients3.google.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static google-clients3"),
+      `# Tenant portal hostname — use the ISP's assigned branded hostname as an additional check target`,
+      safeRos(`/ip dns static add name="${portalHost}" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static tenant portal"),
       `# Windows captive portal detection`,
       safeRos(`/ip dns static add name="www.msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static msft1"),
       safeRos(`/ip dns static add name="msftconnecttest.com" address=${bridgeIp} ttl=10s comment="${safeCompanyName} - captive-portal"`, "dns static msft2"),
