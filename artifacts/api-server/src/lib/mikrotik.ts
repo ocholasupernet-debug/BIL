@@ -2685,6 +2685,63 @@ export interface BridgePortLayout {
   connectedVia: string;
 }
 
+export interface RouterSecurityState {
+  firewallFilter: Record<string, string>[];
+  firewallNat: Record<string, string>[];
+  firewallMangle: Record<string, string>[];
+  firewallRaw: Record<string, string>[];
+  addresses: Record<string, string>[];
+  routes: Record<string, string>[];
+  bridgePorts: Record<string, string>[];
+  connectedVia: string;
+}
+
+/**
+ * Read the live routing and firewall state without changing the router.
+ * This is intentionally kept separate from the bridge layout so diagnostics
+ * can identify a blocking rule before any destructive cleanup is attempted.
+ */
+export async function fetchRouterSecurityState(
+  creds: RouterCredentials
+): Promise<RouterSecurityState> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const read = (path: string) => withTimeout(
+      conn.write([path]),
+      ms,
+    ) as Promise<Record<string, string>[]>;
+
+    const [
+      firewallFilter,
+      firewallNat,
+      firewallMangle,
+      firewallRaw,
+      addresses,
+      routes,
+      bridgePorts,
+    ] = await Promise.all([
+      read("/ip/firewall/filter/print"),
+      read("/ip/firewall/nat/print"),
+      read("/ip/firewall/mangle/print"),
+      read("/ip/firewall/raw/print"),
+      read("/ip/address/print"),
+      read("/ip/route/print"),
+      read("/interface/bridge/port/print"),
+    ]);
+
+    return {
+      firewallFilter,
+      firewallNat,
+      firewallMangle,
+      firewallRaw,
+      addresses,
+      routes,
+      bridgePorts,
+      connectedVia: connectedHost,
+    };
+  });
+}
+
 /**
  * Fetch all interfaces, bridge objects, and bridge port memberships.
  * Used by the Bridge Ports admin page.

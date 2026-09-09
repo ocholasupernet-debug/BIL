@@ -23,6 +23,7 @@ import {
   generateOvpnClientConfig,
   generateRouterAsClientScript,
   fetchRouterFiles,
+  fetchRouterSecurityState,
   deployRouterFile,
   RouterFileExistsError,
   getEnvCredentials,
@@ -699,6 +700,31 @@ router.get("/router/:id/probe", async (req, res): Promise<void> => {
       : `Port ${creds.port} is NOT reachable on any configured host. ` +
         `Check the router firewall (/ip firewall filter) and ensure API service is enabled (/ip service).`,
   });
+});
+
+/* ─── GET /api/router/:id/security-state ───────────────────────────────── */
+/**
+ * Read-only live firewall, NAT, routing, address, and bridge membership state.
+ * Used to diagnose access or forwarding problems before changing rules.
+ */
+router.get("/router/:id/security-state", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  try {
+    const state = await fetchRouterSecurityState(found.creds);
+    res.json({ routerId: id, routerName: found.row.name, ...state });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
 });
 
 /* ─── GET /api/probe?host=x&port=8728 ───────────────────────────────────── */
