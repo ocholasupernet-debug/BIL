@@ -116,7 +116,12 @@ jobs:
             # deployment starts on minimal VPS images.
             bash deploy/configure-nginx.sh
 
+            # This release changes application source only; package manifests
+            # and the lockfile are unchanged, so avoid a fragile registry
+            # install on the VPS. deploy.sh still fails explicitly if the
+            # required workspace binaries are absent.
             DEPLOY_FROM_ARCHIVE=1 \
+            DEPLOY_SKIP_INSTALL=1 \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
             api_ready=false
