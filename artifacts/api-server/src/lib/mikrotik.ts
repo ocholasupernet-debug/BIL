@@ -545,17 +545,19 @@ export async function deployRouterFile(
       throw new RouterFileExistsError(existing);
     }
 
-    const temporaryPath = `${options.destinationPath}.ochola-upload-${options.uploadId}`;
-    let temporaryFile: RouterFile | undefined;
     try {
-      /* Fetch into a sibling temporary file. This preserves binary assets and
-         keeps the current file intact if the router cannot complete the
-         transfer. */
+      /*
+       * RouterOS 6.49 accepts a nested dst-path but does not expose a
+       * portable /file/set rename operation through the API. Fetch directly
+       * to the final destination instead of creating a temporary sibling that
+       * cannot be finalized. The preflight above still prevents accidental
+       * replacement unless overwrite was explicitly confirmed.
+       */
       await withTimeout(
         conn.write([
           "/tool/fetch",
           `=url=${options.sourceUrl}`,
-          `=dst-path=${temporaryPath}`,
+          `=dst-path=${options.destinationPath}`,
           `=mode=${options.sourceUrl.startsWith("https://") ? "https" : "http"}`,
           ...(options.sourceUrl.startsWith("https://") ? ["=check-certificate=yes"] : []),
           "=keep-result=yes",
@@ -563,41 +565,21 @@ export async function deployRouterFile(
         Math.max(ms, 120_000),
       );
 
-      temporaryFile = (await listFiles()).find(file => file.name === temporaryPath);
-      if (!temporaryFile) {
-        throw new Error("The router did not create the temporary upload file");
+      const transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+      if (!transferredFile) {
+        throw new Error("The router did not create the destination upload file");
       }
-
-      /* Protect against a concurrent upload that created the destination after
-         the initial preflight check. */
-      const currentDestination = (await listFiles()).find(file => file.name === options.destinationPath);
-      if (currentDestination && !options.overwrite) {
-        throw new RouterFileExistsError(currentDestination);
-      }
-
-      if (currentDestination) {
-        await withTimeout(conn.write(["/file/remove", `=.id=${currentDestination.id}`]), ms);
-      }
-      await withTimeout(
-        conn.write(["/file/set", `=.id=${temporaryFile.id}`, `=name=${options.destinationPath}`]),
-        ms,
-      );
 
       return {
         destinationPath: options.destinationPath,
-        size: temporaryFile.size,
+        size: transferredFile.size,
         connectedHost,
-        replaced: Boolean(currentDestination),
+        replaced: Boolean(existing),
       };
     } catch (error) {
-      /* Best-effort cleanup prevents failed uploads from accumulating on the
-         router. Do not mask the original, more useful error. */
-      try {
-        const leftover = (await listFiles()).find(file => file.name === temporaryPath);
-        if (leftover) await withTimeout(conn.write(["/file/remove", `=.id=${leftover.id}`]), ms);
-      } catch {
-        /* The connection may already be unavailable. */
-      }
+      /* Direct RouterOS fetch may leave a partial destination on failure.
+         Keep it available for diagnosis rather than deleting an existing
+         file that an explicit overwrite operation was replacing. */
       throw error;
     }
   });

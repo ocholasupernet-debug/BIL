@@ -73,31 +73,25 @@ before(async () => {
           "creation-time": entry.creationTime,
         }));
       case "/tool/fetch": {
-        const temporaryPath = commandValue(command, "dst-path");
+        const destinationPath = commandValue(command, "dst-path");
         assert.ok(
-          temporaryPath,
-          "fetch should include a temporary destination",
-        );
-        state.files.push(
-          file(temporaryPath, `temporary-${state.files.length}`),
+          destinationPath,
+          "fetch should include a destination",
         );
         if (state.fetchError) throw state.fetchError;
+        const transferred = file(destinationPath, `temporary-${state.files.length}`);
+        const existingIndex = state.files.findIndex((entry) => entry.name === destinationPath);
+        if (existingIndex >= 0) {
+          state.files[existingIndex] = transferred;
+        } else {
+          state.files.push(transferred);
+        }
         return [];
       }
       case "/file/remove": {
         const id = commandValue(command, ".id");
         assert.ok(id, "remove should include a file id");
         state.files = state.files.filter((entry) => entry.id !== id);
-        return [];
-      }
-      case "/file/set": {
-        const id = commandValue(command, ".id");
-        const name = commandValue(command, "name");
-        assert.ok(id, "set should include a file id");
-        assert.ok(name, "set should include a destination name");
-        const entry = state.files.find((candidate) => candidate.id === id);
-        assert.ok(entry, "set should target an existing file");
-        entry.name = name;
         return [];
       }
       default:
@@ -214,7 +208,7 @@ test("returns an existing-file conflict without removing the original", async ()
   );
 });
 
-test("removes the old file only after an explicit replacement transfer succeeds", async () => {
+test("reports an explicit replacement after a direct destination transfer", async () => {
   await withFakeRouter(
     {
       files: [file("router-setup.rsc", "original-id", 99)],
@@ -234,16 +228,15 @@ test("removes the old file only after an explicit replacement transfer succeeds"
       const fetchIndex = state.calls.findIndex(
         ([command]) => command === "/tool/fetch",
       );
-      const removeIndex = state.calls.findIndex(
-        ([command]) => command === "/file/remove",
-      );
-      const setIndex = state.calls.findIndex(
-        ([command]) => command === "/file/set",
-      );
-
       assert.ok(fetchIndex >= 0);
-      assert.ok(removeIndex > fetchIndex);
-      assert.ok(setIndex > removeIndex);
+      assert.equal(
+        state.calls.some(([command]) => command === "/file/remove"),
+        false,
+      );
+      assert.equal(
+        state.calls.some(([command]) => command === "/file/set"),
+        false,
+      );
       assert.equal(result.replaced, true);
       assert.deepEqual(
         state.files.map((entry) => entry.name),
@@ -254,7 +247,7 @@ test("removes the old file only after an explicit replacement transfer succeeds"
   );
 });
 
-test("cleans up a temporary router file when the transfer fails", async () => {
+test("leaves the existing destination when the transfer fails", async () => {
   await withFakeRouter(
     {
       files: [file("router-setup.rsc", "original-id", 99)],
@@ -282,15 +275,7 @@ test("cleans up a temporary router file when the transfer fails", async () => {
       assert.equal(state.files[0]?.id, "original-id");
       assert.equal(
         state.calls.filter(([command]) => command === "/file/remove").length,
-        1,
-      );
-      assert.equal(
-        state.calls.some(
-          ([command, ...parts]) =>
-            command === "/file/remove" &&
-            parts.some((part) => part.startsWith("=.id=temporary-")),
-        ),
-        true,
+        0,
       );
     },
   );
