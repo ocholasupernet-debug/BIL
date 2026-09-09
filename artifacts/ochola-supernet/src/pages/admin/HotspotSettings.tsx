@@ -586,24 +586,68 @@ export default function HotspotSettings() {
     reader.readAsDataURL(file);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const error = validateSettings(settings);
     if (error) {
       setNotice({ type: "error", text: error });
       return;
     }
     setSaving(true);
+    setNotice(null);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-      window.setTimeout(() => {
-        setSaving(false);
-        setSaved(true);
-        setNotice({ type: "success", text: "Hotspot settings saved on this admin workspace." });
-        window.setTimeout(() => setSaved(false), 2500);
-      }, 350);
-    } catch {
-      setSaving(false);
+      const routerId = Number(settings.routerId);
+      const adminId = getSelectedTenantId();
+      let noticeText = "Hotspot settings saved on this admin workspace.";
+
+      if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
+        const html = await buildPortalHtml(settings, brand.domain);
+        const headers = new Headers({ "Content-Type": "application/json" });
+        let token = "";
+        let role = "";
+        try {
+          token = localStorage.getItem("ochola_api_token")
+            || localStorage.getItem("ochola_superadmin_token")
+            || "";
+          role = localStorage.getItem("ochola_admin_role") || "isp_admin";
+        } catch {
+          /* The API enforces tenant ownership server-side. */
+        }
+        if (token) headers.set("Authorization", `Bearer ${token}`);
+        if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
+
+        const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ adminId, html, overwrite: true }),
+        });
+        let data: { error?: string; detail?: string; destinationPath?: string } = {};
+        try {
+          data = await response.json();
+        } catch {
+          /* Use the HTTP status below when the server did not return JSON. */
+        }
+        if (!response.ok) {
+          const serverMessage = [data.error, data.detail]
+            .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+            .join(": ");
+          throw new Error(serverMessage || `Portal refresh failed (HTTP ${response.status})`);
+        }
+        noticeText = "Settings saved and the hotspot page was refreshed with the latest plans.";
+      } else {
+        noticeText = "Settings saved. Select a linked router to refresh its hotspot page automatically.";
+      }
+
+      setSaved(true);
+      setNotice({ type: "success", text: noticeText });
+      window.setTimeout(() => setSaved(false), 2500);
+    } catch (error) {
       setNotice({ type: "error", text: "Settings could not be saved in this browser. Check available storage and try again." });
+      if (error instanceof Error && error.message !== "Failed to fetch") {
+        setNotice({ type: "error", text: error.message });
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
