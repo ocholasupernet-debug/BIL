@@ -372,6 +372,8 @@ export default function Files() {
       });
       let data: {
         error?: string;
+        detail?: string;
+        hint?: string;
         destinationPath?: string;
         replaced?: boolean;
         existingFile?: { name: string; size: number; type: string };
@@ -389,7 +391,10 @@ export default function Files() {
         return;
       }
       if (!response.ok) {
-        throw new Error(data.error ?? `Deployment failed (HTTP ${response.status})`);
+        const serverMessage = [data.error, data.detail]
+          .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+          .join(": ");
+        throw new Error(serverMessage || `Deployment failed (HTTP ${response.status})`);
       }
 
       setDeployStatus("success");

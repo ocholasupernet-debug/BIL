@@ -625,6 +625,8 @@ export default function HotspotSettings() {
         });
         let data: {
           error?: string;
+           detail?: string;
+           hint?: string;
           destinationPath?: string;
           replaced?: boolean;
           existingFile?: { name: string; size: number; type: string };
@@ -650,7 +652,10 @@ export default function HotspotSettings() {
       }
 
       if (!result.response.ok) {
-        throw new Error(result.data.error ?? `Portal deployment failed (HTTP ${result.response.status})`);
+        const serverMessage = [result.data.error, result.data.detail]
+          .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+          .join(": ");
+        throw new Error(serverMessage || `Portal deployment failed (HTTP ${result.response.status})`);
       }
       setNotice({
         type: "success",
