@@ -39,6 +39,7 @@ interface HSettings {
   routerId: string;
   advertPos: string;
   enableAdvert: string;
+  mpesaPrompt: string;
   testimonials: string;
   faqSection: string;
   logoUrl: string;
@@ -65,6 +66,7 @@ const DEFAULT_SETTINGS: HSettings = {
   routerId: "",
   advertPos: "Bottom",
   enableAdvert: "Disable",
+  mpesaPrompt: "Enable",
   testimonials: "Disable",
   faqSection: "Disable",
   logoUrl: "",
@@ -175,6 +177,7 @@ type ExportConfig = {
   advertUrl: string;
   advertEnabled: boolean;
   advertPosition: string;
+  mpesaPromptEnabled: boolean;
   vouchersEnabled: boolean;
   freeTrialEnabled: boolean;
   announcement: string;
@@ -229,6 +232,7 @@ function makeExportConfig(settings: HSettings, apiBase: string, plans: PortalPla
     advertUrl: settings.advertUrl,
     advertEnabled: settings.enableAdvert === "Enable" && !!settings.advertUrl,
     advertPosition: settings.advertPos,
+    mpesaPromptEnabled: settings.mpesaPrompt === "Enable",
     vouchersEnabled: settings.vouchers === "Yes",
     freeTrialEnabled: settings.freeTrial === "Enable",
     announcement: settings.announcement.trim(),
@@ -912,6 +916,9 @@ export default function HotspotSettings() {
             </Section>
 
             <Section icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
+              <Field label="M-Pesa STK prompt" help="Show the phone-number checkout that sends a PIN approval prompt to the customer's M-Pesa line.">
+                <SelectField value={settings.mpesaPrompt} onChange={value => update("mpesaPrompt", value)} options={["Enable", "Disable"]} />
+              </Field>
               <Field label="Free trial" help="Keep the existing free-trial setting available to the portal installer.">
                 <SelectField value={settings.freeTrial} onChange={value => update("freeTrial", value)} options={["Disable", "Enable"]} />
               </Field>
