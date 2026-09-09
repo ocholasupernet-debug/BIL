@@ -176,8 +176,41 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
         const { error: err } = await supabase.from("isp_plans").update(payload).eq("id", initialData.id);
         if (err) throw err;
       } else {
-        const { error: err } = await supabase.from("isp_plans").insert({ ...payload, created_at: new Date().toISOString() });
-        if (err) throw err;
+        /*
+         * Create through the API proxy instead of inserting the full UI
+         * payload directly into Supabase. The UI still carries fields used by
+         * newer plan variants, but the deployed isp_plans schema is narrower
+         * than that form payload. The proxy normalizes the supported fields
+         * and keeps the tenant context explicit.
+         */
+        const response = await fetch("/api/plans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adminId: ADMIN_ID,
+            name,
+            type: planType,
+            speedDown,
+            speedUp,
+            price: parseFloat(price) || 0,
+            validity: parseInt(validity) || 1,
+            description: null,
+            sharedUsers,
+            routerId: routerId ? parseInt(routerId) : null,
+            dataLimitMb,
+            isActive: status === "enable",
+          }),
+        });
+        if (!response.ok) {
+          let detail = `Plan creation failed (${response.status}).`;
+          try {
+            const body = await response.json() as { error?: unknown };
+            if (typeof body.error === "string" && body.error.trim()) detail = body.error;
+          } catch {
+            /* Keep the useful HTTP status when the server did not return JSON. */
+          }
+          throw new Error(detail);
+        }
       }
       onSaved();
     } catch (err: unknown) {

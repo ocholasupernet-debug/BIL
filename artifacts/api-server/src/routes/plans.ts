@@ -16,7 +16,23 @@ router.get("/plans", async (req, res): Promise<void> => {
 });
 
 router.post("/plans", async (req, res): Promise<void> => {
-  const { adminId = 1, ispId, name, type, speed, speedDown, speedUp, price, durationDays, validity, description } = req.body;
+  const {
+    adminId = 1,
+    ispId,
+    name,
+    type,
+    speed,
+    speedDown,
+    speedUp,
+    price,
+    durationDays,
+    validity,
+    description,
+    sharedUsers,
+    routerId,
+    dataLimitMb,
+    isActive,
+  } = req.body;
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
     return;
@@ -32,8 +48,11 @@ router.post("/plans", async (req, res): Promise<void> => {
     validity:     durationDays ?? validity ?? 30,
     validity_unit: "days",
     validity_days: durationDays ?? validity ?? 30,
+    shared_users:  sharedUsers ?? 1,
+    router_id:     routerId ?? null,
+    data_limit_mb: dataLimitMb ?? null,
+    is_active:     isActive ?? true,
     description:  description ?? null,
-    is_active:    true,
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }
   void logActivity({ adminId: Number(effectiveAdminId), type: "plan", action: "added", subject: name, details: { price: Number(price), type: type ?? "hotspot" } });
