@@ -102,6 +102,11 @@ jobs:
             # authorized by this deployment key.
             upsert_env "VPS_HOST"                 "vpn.isplatty.org"
             upsert_env "VPS_USER"                 "root"
+            # The custom tenant domain already resolves to this VPS and has
+            # its own certificate. Map it to the tenant named "come" without
+            # changing the default isplatty.org tenant routing.
+            upsert_env "CUSTOM_TENANT_DOMAIN"    "come.org"
+            upsert_env "CUSTOM_TENANT_SUBDOMAIN" "come"
             # Store multiline SSH material as base64: so .env remains valid.
             # The API decodes it only in memory when opening the SSH channel.
             if [ -n "${VPS_SSH_KEY:-}" ]; then

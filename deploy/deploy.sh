@@ -351,7 +351,12 @@ verify_public_health() {
   return 1
 }
 
-for host in vpn.isplatty.org; do
+verify_hosts=(vpn.isplatty.org)
+if [ -n "${CUSTOM_TENANT_DOMAIN:-}" ]; then
+  verify_hosts+=("$CUSTOM_TENANT_DOMAIN")
+fi
+
+for host in "${verify_hosts[@]}"; do
   verify_public_health "$host" || exit 1
 done
 
