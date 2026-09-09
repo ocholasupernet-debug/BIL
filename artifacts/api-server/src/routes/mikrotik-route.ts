@@ -79,12 +79,17 @@ interface BulkDeployJob {
   routerId: number;
   adminId: number;
   status: BulkDeployJobStatus;
+  scope: "hotspot" | "all";
   total: number;
   processed: number;
   deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
   skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
-  sourceNames: string[];
+  sources: Array<{
+    type: DeployableSourceType;
+    sourceName: string;
+    destinationPath: string;
+  }>;
   connectedHost?: string;
   error?: string;
   createdAt: number;
@@ -589,13 +594,13 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
 
 /* ─── POST /api/router/:id/files/deploy-bulk ─────────────────────────────── */
 /**
- * Publishes every approved hotspot asset that is missing from flash/hotspot.
+ * Publishes every approved file that is missing from its destination.
  * The request creates a short-lived server-side job so a large asset set does
  * not stay on an HTTP connection long enough for the reverse proxy to time
  * out. Existing files and assets whose parent directory is not present are
  * skipped; this job never overwrites router files.
  */
-async function runBulkHotspotDeployment(
+async function runBulkFileDeployment(
   job: BulkDeployJob,
   creds: RouterCredentials,
   origin: string,
@@ -617,8 +622,8 @@ async function runBulkHotspotDeployment(
         .map(file => normaliseName(file.name)),
     );
 
-    for (const sourceName of job.sourceNames) {
-      const destinationPath = `flash/hotspot/${sourceName.replaceAll("\\", "/").replace(/^\/+/, "")}`;
+    for (const source of job.sources) {
+      const { sourceName, destinationPath } = source;
       const normalisedDestination = normaliseName(destinationPath);
       if (existingFiles.has(normalisedDestination)) {
         job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
@@ -629,14 +634,14 @@ async function runBulkHotspotDeployment(
 
       const lastSlash = destinationPath.lastIndexOf("/");
       const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
-      if (!directories.has(parentDirectory)) {
+      if (source.type === "hotspot" && !directories.has(parentDirectory)) {
         job.skipped.push({ sourceName, destinationPath, reason: "parent directory is missing" });
         job.processed += 1;
         job.updatedAt = Date.now();
         continue;
       }
 
-      const sourceContent = getDeployableSource("hotspot", sourceName, origin);
+      const sourceContent = getDeployableSource(source.type, sourceName, origin);
       if (!sourceContent) {
         job.failed.push({ sourceName, destinationPath, error: "Approved source could not be read" });
         job.processed += 1;
@@ -684,17 +689,17 @@ async function runBulkHotspotDeployment(
     logger.info({
       routerId: job.routerId,
       adminId: job.adminId,
-      destinationDirectory: "flash/hotspot",
+      scope: job.scope,
       total: job.total,
       deployed: job.deployed.length,
       skipped: job.skipped.length,
       failed: job.failed.length,
-    }, "Bulk hotspot assets processed");
+    }, "Bulk files processed");
   } catch (error) {
     job.status = "failed";
     job.error = error instanceof Error ? error.message : "Bulk deployment failed";
     job.updatedAt = Date.now();
-    logger.error({ routerId: job.routerId, adminId: job.adminId, error: job.error }, "Bulk hotspot deployment failed");
+    logger.error({ routerId: job.routerId, adminId: job.adminId, error: job.error }, "Bulk file deployment failed");
   }
 }
 
@@ -708,8 +713,17 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
-  if (destinationDirectory.toLowerCase() !== "flash/hotspot") {
+  const scope = String(req.body?.scope ?? "hotspot").trim().toLowerCase();
+  if (scope !== "hotspot" && scope !== "all") {
+    res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
+    return;
+  }
+  if (scope === "hotspot" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
     res.status(400).json({ error: "Bulk hotspot deployment is restricted to flash/hotspot" });
+    return;
+  }
+  if (scope === "all" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
+    res.status(400).json({ error: "Bulk deployment destination must be flash/hotspot for hotspot assets" });
     return;
   }
 
@@ -719,9 +733,16 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     return;
   }
 
-  const sources = listDeployableSources().filter(source => source.type === "hotspot");
+  const approvedSources = listDeployableSources().filter(source => scope === "all" || source.type === "hotspot");
+  const sources = approvedSources.map(source => ({
+    type: source.type,
+    sourceName: source.name,
+    destinationPath: source.type === "hotspot"
+      ? `flash/hotspot/${source.name.replaceAll("\\", "/").replace(/^\/+/, "")}`
+      : source.name,
+  }));
   if (sources.length === 0) {
-    res.status(400).json({ error: "No approved hotspot assets are available to deploy" });
+    res.status(400).json({ error: scope === "all" ? "No approved files are available to deploy" : "No approved hotspot assets are available to deploy" });
     return;
   }
 
@@ -732,12 +753,13 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     routerId: id,
     adminId,
     status: "queued",
+    scope,
     total: sources.length,
     processed: 0,
     deployed: [],
     skipped: [],
     failed: [],
-    sourceNames: sources.map(source => source.name),
+    sources,
     createdAt: now,
     updatedAt: now,
   };
@@ -747,9 +769,10 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     jobId: job.id,
     status: job.status,
     total: job.total,
+    scope,
     destinationDirectory: "flash/hotspot",
   });
-  void runBulkHotspotDeployment(job, found.creds, requestOrigin(req));
+  void runBulkFileDeployment(job, found.creds, requestOrigin(req));
 });
 
 router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<void> => {

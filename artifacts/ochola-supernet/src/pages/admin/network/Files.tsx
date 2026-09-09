@@ -336,10 +336,7 @@ export default function Files() {
     () => (deployableSourcesQuery.data ?? []).filter(source => source.type === sourceType),
     [deployableSourcesQuery.data, sourceType],
   );
-  const hotspotSources = useMemo(
-    () => (deployableSourcesQuery.data ?? []).filter(source => source.type === "hotspot"),
-    [deployableSourcesQuery.data],
-  );
+  const allDeployableSources = deployableSourcesQuery.data ?? [];
 
   useEffect(() => {
     if (availableSources.length > 0 && !availableSources.some(source => source.name === sourceName)) {
@@ -422,10 +419,10 @@ export default function Files() {
     }
   }
 
-  async function deployMissingHotspotAssets(): Promise<void> {
-    if (!selectedRouter || hotspotSources.length === 0 || bulkDeploying) return;
+  async function deployAllApprovedFiles(): Promise<void> {
+    if (!selectedRouter || allDeployableSources.length === 0 || bulkDeploying) return;
     const confirmed = window.confirm(
-      `Deploy ${hotspotSources.length} approved hotspot assets to flash/hotspot on ${selectedRouter.name}? Existing files will be skipped and never replaced.`,
+      `Deploy all ${allDeployableSources.length} approved files to ${selectedRouter.name}? Portal assets go to flash/hotspot and RouterOS scripts, including PPPoE files, go to the router root. Existing files will be skipped. Scripts will not be imported or executed.`,
     );
     if (!confirmed) return;
 
@@ -444,7 +441,7 @@ export default function Files() {
       const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy-bulk`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ adminId, destinationDirectory: "flash/hotspot" }),
+        body: JSON.stringify({ adminId, scope: "all", destinationDirectory: "flash/hotspot" }),
       });
       let data: {
         error?: string;
@@ -470,7 +467,7 @@ export default function Files() {
       }
 
       if (response.status === 202 && data.jobId) {
-        setBulkDeployMessage(`Bulk deployment started: 0 of ${data.total ?? hotspotSources.length} assets processed…`);
+        setBulkDeployMessage(`Bulk deployment started: 0 of ${data.total ?? allDeployableSources.length} files processed…`);
         const maxPolls = 180;
         for (let attempt = 0; attempt < maxPolls; attempt += 1) {
           await new Promise(resolve => window.setTimeout(resolve, 2000));
@@ -491,10 +488,10 @@ export default function Files() {
             throw new Error(serverMessage || `Could not read bulk deployment progress (HTTP ${pollResponse.status})`);
           }
 
-          const total = progress.total ?? data.total ?? hotspotSources.length;
+          const total = progress.total ?? data.total ?? allDeployableSources.length;
           const processed = progress.processed ?? 0;
           if (progress.status === "queued" || progress.status === "running") {
-            setBulkDeployMessage(`Deploying hotspot assets… ${processed} of ${total} processed.`);
+            setBulkDeployMessage(`Deploying approved files… ${processed} of ${total} processed.`);
             continue;
           }
 
@@ -515,7 +512,7 @@ export default function Files() {
       const skippedCount = data.skipped?.length ?? 0;
       const failedCount = data.failed?.length ?? 0;
       setBulkDeployMessage(
-        `Processed ${hotspotSources.length} assets: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
+        `Processed ${allDeployableSources.length} files: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
       );
       setBulkDeployError(failedCount > 0);
       void filesQuery.refetch();
@@ -948,16 +945,16 @@ export default function Files() {
             }}>
               <div>
                 <strong style={{ display: "block", color: "var(--isp-text)", fontSize: "0.76rem" }}>
-                  Deploy missing hotspot assets to flash/hotspot
+                  Deploy all approved files
                 </strong>
                 <span style={{ display: "block", marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
-                  Publishes all {hotspotSources.length} approved portal assets. Existing router files are skipped.
+                  Publishes {allDeployableSources.length} approved files: portal assets to flash/hotspot and RouterOS scripts, including PPPoE files, to the router root. Existing files are skipped and scripts are not executed.
                 </span>
               </div>
               <button
                 type="button"
-                onClick={() => void deployMissingHotspotAssets()}
-                disabled={bulkDeploying || hotspotSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading"}
+                onClick={() => void deployAllApprovedFiles()}
+                disabled={bulkDeploying || allDeployableSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading"}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -971,15 +968,15 @@ export default function Files() {
                   color: "#93c5fd",
                   fontSize: "0.75rem",
                   fontWeight: 750,
-                  cursor: bulkDeploying || hotspotSources.length === 0 ? "not-allowed" : "pointer",
+                  cursor: bulkDeploying || allDeployableSources.length === 0 ? "not-allowed" : "pointer",
                   fontFamily: "inherit",
-                  opacity: bulkDeploying || hotspotSources.length === 0 ? 0.55 : 1,
+                  opacity: bulkDeploying || allDeployableSources.length === 0 ? 0.55 : 1,
                 }}
               >
                 {bulkDeploying
                   ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
                   : <FileUp size={13} />}
-                {bulkDeploying ? "Deploying all…" : "Deploy all missing"}
+                {bulkDeploying ? "Deploying all…" : "Deploy all files"}
               </button>
             </div>
             {bulkDeployMessage && (
