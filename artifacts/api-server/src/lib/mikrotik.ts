@@ -4,6 +4,8 @@ import { logger } from "./logger";
 import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME,
   routerManagementBackupIp,
   routerManagementClientInterfaceName,
   type RouterManagementVpnRole,
@@ -2279,13 +2281,19 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
   const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
-  const interfaceName = routerId
-    ? routerManagementClientInterfaceName(routerId, vpnRole)
-    : `ocholasupernet${roleSuffix}`;
+  const interfaceName = vpnRole === "primary"
+    ? ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME
+    : routerId
+      ? routerManagementClientInterfaceName(routerId, vpnRole)
+      : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME}${roleSuffix}`;
   const tag = routerId
     ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
     : `ocholasupernet${roleSuffix}`;
-  const interfaceComment = routerId ? `${tag} VPS tunnel` : "mainbillingvpn";
+  const interfaceComment = vpnRole === "primary"
+    ? ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT
+    : routerId
+      ? `${tag} VPS tunnel`
+      : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}${roleSuffix}`;
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
@@ -2315,7 +2323,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     :error $ocholaVpnChildError
 }`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
-:do { /interface ovpn-client remove [find where name="ocholasupernet"] } on-error={}
+:do { /interface ovpn-client remove [find where name="ocholasupernet" comment="mainbillingvpn"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence

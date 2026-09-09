@@ -52,6 +52,10 @@ export const ROUTER_MANAGEMENT_VPN_BACKUP = {
   ],
 } as const;
 
+/** Stable primary RouterOS management interface requested by the installer. */
+export const ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME = "ocholasupernet";
+export const ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT = "mainbillingvpn";
+
 export type RouterManagementVpnRole = "primary" | "backup";
 
 export function routerManagementClientInterfaceName(

@@ -16,6 +16,8 @@ import { getTenantSubdomain } from "../lib/tenant-host.js";
 import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME,
   routerManagementBackupIp,
   routerManagementClientInterfaceName,
   routerManagementVpnPortForRouter,
@@ -4297,7 +4299,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
      /* Keep the legacy tenant installer compatible with routers that use
         OcholaSupernet as the management-interface name. Router-scoped
         installers use the isolated ochola-mgmt-vpn-<id> name instead. */
-     const managementClientInterfaceName = "ocholasupernet";
+     const managementClientInterfaceName = ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME;
     const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
       routerId: router_row.id,
       adminId,
@@ -4576,7 +4578,7 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       `# is always refreshed to match what is stored in the backend / VPS auth file.`,
       safeRm(`/user remove [find name="${routerSlug}"]`),
         safeRos(`/user add name="${routerSlug}" password="${routerApiPassword}" group=full comment="${companyName} - auto-created by install"`, `local user "${routerSlug}" add`),
-       `:put ("      VPN tunnel '" . "${managementClientInterfaceName}" . "' added  OK")`,
+       `:put ("      VPN tunnel '" . "${managementClientInterfaceName}" . "' (comment=${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}) added  OK")`,
       ``,
       `# === Default User Profile ===`,
       safeRos(`/ip hotspot user profile set [find name=default] shared-users=1 keepalive-timeout=2m idle-timeout=none`, "default profile set"),

@@ -65,11 +65,12 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
     tunnelVpsIp: "10.8.5.1",
     routerId: 42,
   });
-  assert.match(script, /\/interface ovpn-client add name="ochola-mgmt-vpn-42"/);
+  assert.match(script, /\/interface ovpn-client add name="ocholasupernet"/);
+  assert.match(script, /name="ocholasupernet"[^\r\n]*comment="mainbillingvpn"/);
   assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
-  assert.match(script, /name="ochola-mgmt-vpn-42" && running=yes/);
+  assert.match(script, /name="ocholasupernet" && running=yes/);
   assert.doesNotMatch(script, /remove \[find where name="coreispbilling"\]/);
-  assert.match(script, /name="ochola-mgmt-vpn-42"/);
+  assert.match(script, /name="ocholasupernet"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
   assert.match(script, /did not establish a running session within 60 seconds/);
@@ -196,7 +197,7 @@ test("Main ISP bootstrap supports a RouterOS-safe path authorization form", () =
   assert.match(scriptsRoute, /RouterOS terminal quirk/);
 });
 
-test("Coexistence OpenVPN uses a router-specific interface without blocking legacy VPNs", () => {
+test("Coexistence OpenVPN uses the requested management interface without blocking legacy VPNs", () => {
   const script = mikrotik.generateRouterAsClientScript({
     vpsPublicIp: "vpn.example.test",
     vpnPort: 1196,
@@ -209,15 +210,15 @@ test("Coexistence OpenVPN uses a router-specific interface without blocking lega
     caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
     backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
   });
-  assert.match(script, /interface ovpn-client add name="ochola-mgmt-vpn-42"/);
-  assert.match(script, /comment="ochola-mgmt-vpn-42 VPS tunnel"/);
+  assert.match(script, /interface ovpn-client add name="ocholasupernet"/);
+  assert.match(script, /comment="mainbillingvpn"/);
   assert.match(script, /previous incomplete management interface/);
-  assert.match(script, /active or foreign ochola-mgmt-vpn-42 interface/);
+  assert.match(script, /active or foreign ocholasupernet interface/);
   assert.match(script, /existingOvpnComment/);
   assert.match(script, /existingOvpnRunning/);
   assert.doesNotMatch(script, /coreispbilling VPN interface exists/);
   assert.doesNotMatch(script, /ovpn-to-vps VPN interface exists/);
-  assert.doesNotMatch(script, /ocholasupernet VPN interface exists/);
+  assert.doesNotMatch(script, /ochola-mgmt-vpn-42 VPN interface exists/);
 });
 
 test("WireGuard child is isolated and contains no RouterOS 6 import path", () => {

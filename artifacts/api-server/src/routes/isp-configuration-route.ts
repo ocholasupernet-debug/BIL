@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import { ISRG_ROOT_X1_PEM } from "../lib/router-https-trust.js";
-import { routerManagementClientInterfaceName } from "../lib/router-management-vpn.js";
+import { ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME } from "../lib/router-management-vpn.js";
 import { validateGeneratedRouterScript } from "../lib/router-script-validation.js";
 
 const router: IRouter = Router();
@@ -404,9 +404,7 @@ export function buildMainIspConfigurationRsc(
     )
     .replaceAll(
       "__MANAGEMENT_INTERFACE_NAME__",
-      routerId && Number.isSafeInteger(routerId)
-        ? routerManagementClientInterfaceName(routerId)
-        : "ocholasupernet",
+      ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME,
     );
 
   if (routerVpnBaseUrl) {

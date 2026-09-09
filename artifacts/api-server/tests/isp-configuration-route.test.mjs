@@ -11,7 +11,7 @@ test("standalone ISP configuration route serves only the supplied script family"
   assert.match(route, /String\.raw`# OcholaSuperNet Main ISP Configuration Script/);
   assert.match(route, /https:\/\/bil\.isplatty\.org\/scripts\/vpn7\.rsc/);
   assert.match(route, /__MANAGEMENT_INTERFACE_NAME__/);
-  assert.match(route, /routerManagementClientInterfaceName/);
+  assert.match(route, /ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME/);
   assert.match(route, /check-certificate=yes/);
   assert.doesNotMatch(route, /check-certificate=no/);
   assert.match(route, /proxyserver\.isplatty\.org\/ipp\.php/);
