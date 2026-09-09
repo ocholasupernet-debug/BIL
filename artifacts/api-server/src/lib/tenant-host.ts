@@ -22,28 +22,8 @@ function hostnameOnly(value: string): string {
   return value.trim().toLowerCase().replace(/\.$/, "").split(":")[0] ?? "";
 }
 
-function configuredCustomTenant(hostname: string): string | null {
-  const customDomain = hostnameOnly(process.env.CUSTOM_TENANT_DOMAIN ?? "");
-  const customSubdomain = hostnameOnly(process.env.CUSTOM_TENANT_SUBDOMAIN ?? "");
-  if (
-    !customDomain ||
-    !customSubdomain ||
-    !/^[a-z0-9.-]+$/.test(customDomain) ||
-    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(customSubdomain)
-  ) {
-    return null;
-  }
-
-  return hostname === customDomain || hostname === `www.${customDomain}`
-    ? customSubdomain
-    : null;
-}
-
 export function getTenantSubdomain(host: string): string | null {
   const hostname = hostnameOnly(host);
-  const customTenant = configuredCustomTenant(hostname);
-  if (customTenant) return customTenant;
-
   const suffix = `.${TENANT_BASE_DOMAIN}`;
 
   if (!hostname || hostname === TENANT_BASE_DOMAIN || !hostname.endsWith(suffix)) {

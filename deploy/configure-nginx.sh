@@ -10,13 +10,6 @@ REQUIRED_CERT_DIR="/etc/letsencrypt/live/${REQUIRED_CERT_NAME}"
 APEX_CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 NGINX_SITE="/etc/nginx/sites-available/${DOMAIN}"
 TENANT_VHOST_DIR="/etc/nginx/tenant-sites.d"
-CUSTOM_TENANT_DOMAIN="${CUSTOM_TENANT_DOMAIN:-}"
-if [ -z "$CUSTOM_TENANT_DOMAIN" ] && [ -r "$PROJECT_DIR/.env" ]; then
-  CUSTOM_TENANT_DOMAIN="$(
-    awk -F= '$1 == "CUSTOM_TENANT_DOMAIN" { sub(/^[^=]*=/, ""); print; exit }' \
-      "$PROJECT_DIR/.env"
-  )"
-fi
 has_wildcard_certificate() {
   [ -r "${CERT_DIR}/fullchain.pem" ] &&
     [ -r "${CERT_DIR}/privkey.pem" ] &&
@@ -40,102 +33,6 @@ has_apex_certificate() {
     [ -r "${APEX_CERT_DIR}/privkey.pem" ] &&
     openssl x509 -in "${APEX_CERT_DIR}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
       grep -Fq "DNS:${DOMAIN}"
-}
-
-configure_custom_tenant_domain() {
-  [ -n "$CUSTOM_TENANT_DOMAIN" ] || return 0
-  if [[ ! "$CUSTOM_TENANT_DOMAIN" =~ ^[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?$ ]]; then
-    echo "Invalid CUSTOM_TENANT_DOMAIN: $CUSTOM_TENANT_DOMAIN" >&2
-    return 1
-  fi
-
-  local cert_dir="/etc/letsencrypt/live/${CUSTOM_TENANT_DOMAIN}"
-  local site="/etc/nginx/sites-available/${CUSTOM_TENANT_DOMAIN}"
-  local cert_ok=false
-  if [ -r "${cert_dir}/fullchain.pem" ] && [ -r "${cert_dir}/privkey.pem" ] &&
-     openssl x509 -in "${cert_dir}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
-       grep -Fq "DNS:${CUSTOM_TENANT_DOMAIN}"; then
-    cert_ok=true
-  fi
-  if [ "$cert_ok" != true ]; then
-    echo "Issuing a certificate for ${CUSTOM_TENANT_DOMAIN}..."
-    local nginx_was_active=false
-    if systemctl is-active --quiet nginx; then
-      systemctl stop nginx
-      nginx_was_active=true
-    fi
-    local certbot_status=0
-    certbot certonly \
-      --standalone \
-      --non-interactive \
-      --agree-tos \
-      --email "${CERTBOT_EMAIL:-admin@isplatty.org}" \
-      --preferred-challenges http \
-      --http-01-port 80 \
-      --keep-until-expiring \
-      --cert-name "${CUSTOM_TENANT_DOMAIN}" \
-      -d "${CUSTOM_TENANT_DOMAIN}" || certbot_status=$?
-    if [ "$nginx_was_active" = true ]; then
-      systemctl start nginx
-    fi
-    if [ "$certbot_status" -ne 0 ]; then
-      echo "Unable to issue a certificate for ${CUSTOM_TENANT_DOMAIN}. Confirm its DNS points to this VPS." >&2
-      return "$certbot_status"
-    fi
-  fi
-
-  if [ ! -r "${cert_dir}/fullchain.pem" ] || [ ! -r "${cert_dir}/privkey.pem" ]; then
-    echo "Certificate files for ${CUSTOM_TENANT_DOMAIN} are missing after issuance." >&2
-    return 1
-  fi
-
-  install -d -m 0755 "${TENANT_VHOST_DIR}" /var/www/letsencrypt/.well-known/acme-challenge
-  cat > "${site}.tmp" <<NGINX
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${CUSTOM_TENANT_DOMAIN};
-
-    location ^~ /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-        try_files \$uri =404;
-    }
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name ${CUSTOM_TENANT_DOMAIN};
-
-    ssl_certificate     ${cert_dir}/fullchain.pem;
-    ssl_certificate_key ${cert_dir}/privkey.pem;
-    include             /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
-    add_header          Strict-Transport-Security "max-age=31536000" always;
-
-    location / {
-        proxy_pass         http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade           \$http_upgrade;
-        proxy_set_header   Connection        "upgrade";
-        proxy_set_header   Host              \$http_host;
-        proxy_set_header   X-Forwarded-Host  \$http_host;
-        proxy_set_header   X-Real-IP         \$remote_addr;
-        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 60s;
-        proxy_buffering    off;
-    }
-}
-NGINX
-  install -m 0644 "${site}.tmp" "$site"
-  rm -f "${site}.tmp"
-  ln -sfn "$site" "/etc/nginx/sites-enabled/${CUSTOM_TENANT_DOMAIN}"
-  echo "Configured HTTPS VPS routing for ${CUSTOM_TENANT_DOMAIN}."
 }
 
 if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
