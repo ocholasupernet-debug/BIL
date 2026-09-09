@@ -437,7 +437,7 @@ function darkenHex(value){
   var r=Math.max(0,parseInt(hex.slice(0,2),16)-45);
   var g=Math.max(0,parseInt(hex.slice(2,4),16)-45);
   var b=Math.max(0,parseInt(hex.slice(4,6),16)-45);
-  return "#"+[r,g,b].map(function(part){return part.toString(16).padStart(2,"0");}).join("");
+  return "#"+[r,g,b].map(function(part){return ("0"+part.toString(16)).slice(-2);}).join("");
 }
 function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
 function setPortalText(id,value){
@@ -789,9 +789,11 @@ function submitMpesa(){
     });
 }
 
-function checkWidth(){document.getElementById("alreadyPaidBtn").style.display=window.innerWidth>=640?"block":"none";}
+function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display=window.innerWidth>=640?"block":"none";}
 window.addEventListener("resize",checkWidth); checkWidth();
-applyPortalConfig(EMBEDDED_CONFIG);
+try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
+  EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
+}
 loadPlans();
 loadPortalTypography(loadPlans);
 </script>
