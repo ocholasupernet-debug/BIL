@@ -537,11 +537,17 @@ export async function ensureRouterManagementAccess(
       await withTimeout(conn.write(command), timeoutMs);
     }
 
+    const services = await withTimeout(
+      conn.write(["/ip/service/print", "=.proplist=.id,name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
     for (const service of ["api", "api-ssl"]) {
+      const serviceId = services.find(row => row.name === service)?.[".id"];
+      if (!serviceId) continue;
       await withTimeout(
         conn.write([
           "/ip/service/set",
-          `[find name=${service}]`,
+          `=.id=${serviceId}`,
           "=disabled=no",
           "=address=10.8.5.0/24,10.8.6.0/24",
         ]),
