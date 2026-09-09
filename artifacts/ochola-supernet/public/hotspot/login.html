@@ -577,15 +577,16 @@ function applyPortalTypography(data){
 }
 
 function loadPortalTypography(done){
-  fetch("typography.json",{cache:"no-store"})
+  var request=fetch("typography.json",{cache:"no-store"})
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
       if(data&&Number.isSafeInteger(Number(data.adminId)))PORTAL_ADMIN_ID=Number(data.adminId);
       applyPortalTypography(data);
       applyPortalConfig(EMBEDDED_CONFIG);
     })
-    .catch(function(){})
-    .then(done);
+    .catch(function(){return null;});
+  var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
+  Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
 }
 
 /* ── Load plans from API (fallback to hardcoded) ── */
@@ -791,6 +792,7 @@ function submitMpesa(){
 function checkWidth(){document.getElementById("alreadyPaidBtn").style.display=window.innerWidth>=640?"block":"none";}
 window.addEventListener("resize",checkWidth); checkWidth();
 applyPortalConfig(EMBEDDED_CONFIG);
+loadPlans();
 loadPortalTypography(loadPlans);
 </script>
 </body>
