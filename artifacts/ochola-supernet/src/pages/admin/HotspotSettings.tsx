@@ -623,7 +623,7 @@ export default function HotspotSettings() {
         const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ adminId, html, overwrite: true }),
+          body: JSON.stringify({ adminId, html, overwrite: true, destinationDirectory: "flash/hotspot" }),
         });
         let data: { error?: string; detail?: string; destinationPath?: string } = {};
         try {
@@ -726,7 +726,7 @@ export default function HotspotSettings() {
         const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ adminId, html, overwrite }),
+           body: JSON.stringify({ adminId, html, overwrite, destinationDirectory: "flash/hotspot" }),
         });
         let data: {
           error?: string;

@@ -226,7 +226,7 @@ test("deploy UI uses two confirmations and sends generated content through the d
   assert.match(deployActions, /deploy\(false\)/);
   assert.match(deployActions, /deploy\(true\)/);
   assert.match(deployActions, /status === 409/);
-  assert.match(deployActions, /JSON\.stringify\(\{ adminId, html, overwrite \}\)/);
+  assert.match(deployActions, /JSON\.stringify\(\{ adminId, html, overwrite, destinationDirectory: "flash\/hotspot" \}\)/);
   assert.doesNotMatch(deployActions, /routerSecret|routerPassword|paymentSecret|vpnPrivateKey/);
 });
 
