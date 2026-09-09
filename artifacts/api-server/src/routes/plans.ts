@@ -24,8 +24,12 @@ router.get("/plans", async (req, res): Promise<void> => {
     }
   }
 
+  const requestedType = typeof req.query.type === "string" ? req.query.type : "";
+  const typeFilter = requestedType === "hotspot" || requestedType === "pppoe"
+    ? `&type=eq.${requestedType}`
+    : "";
   const rows = adminId
-    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}&select=*&order=price.asc`)
+    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}&select=*&order=price.asc`)
     : [];
   res.json(rows);
 });
