@@ -579,16 +579,25 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
 
   try {
     const destinationPath = `${directory}/login.html`;
+    const roamingDestinationPath = `${directory}/rlogin.html`;
+    const sourceUrl = `${origin}/api/router-file-source/${token}`;
     const result = await deployRouterFile(found.creds, {
       destinationPath,
-      sourceUrl: `${origin}/api/router-file-source/${token}`,
+      sourceUrl,
       overwrite,
       uploadId: token.slice(0, 16),
+    });
+    const roamingResult = await deployRouterFile(found.creds, {
+      destinationPath: roamingDestinationPath,
+      sourceUrl,
+      overwrite,
+      uploadId: `${token.slice(0, 12)}-rlogin`,
     });
     logger.info({
       routerId: id,
       adminId,
       destinationPath,
+      roamingDestinationPath,
       replaced: result.replaced,
       size: result.size,
     }, "Generated hotspot portal deployed");
@@ -600,7 +609,11 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
       size: result.size,
       connectedHost: result.connectedHost,
       replaced: result.replaced,
-      source: { name: "generated login.html", type: "hotspot", generated: true },
+      deployedFiles: [
+        { destinationPath: result.destinationPath, size: result.size, replaced: result.replaced },
+        { destinationPath: roamingResult.destinationPath, size: roamingResult.size, replaced: roamingResult.replaced },
+      ],
+      source: { name: "generated login.html and rlogin.html", type: "hotspot", generated: true },
     });
   } catch (err) {
     if (err instanceof RouterFileExistsError) {

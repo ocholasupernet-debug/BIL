@@ -705,7 +705,10 @@ function buildCoexistenceHotspotRsc(
     portalFetch(`${portalBase}/hotspot/alogin.html`, "alogin.html", "alogin.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/logout.html`, "logout.html", "logout.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/status.html`, "status.html", "status.html", fetchOptions),
-    portalFetch(`${portalBase}/hotspot/rlogin.html`, "rlogin.html", "rlogin.html", fetchOptions),
+    /* RouterOS can select rlogin.html for captive/roaming redirects. Keep it
+       identical to the full branded login page instead of serving a separate
+       unbranded roaming form. */
+    portalFetch(`${portalBase}/hotspot/login.html`, "rlogin.html", "rlogin.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/redirect.html`, "redirect.html", "redirect.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/error.html`, "error.html", "error.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/md5.js`, "md5.js", "md5.js", fetchOptions),
@@ -4457,7 +4460,9 @@ router.get("/scripts/:name", async (req, res): Promise<void> => {
       portalFetch(`${portalBase}/hotspot/alogin.html`,   `alogin.html`,   `alogin.html`),
       portalFetch(`${portalBase}/hotspot/logout.html`,   `logout.html`,   `logout.html`),
       portalFetch(`${portalBase}/hotspot/status.html`,   `status.html`,   `status.html`),
-      portalFetch(`${portalBase}/hotspot/rlogin.html`,   `rlogin.html`,   `rlogin.html`),
+      /* RouterOS may select rlogin.html for captive/roaming redirects. Copy
+         the full branded login page into that slot as well. */
+      portalFetch(`${portalBase}/hotspot/login.html`,   `rlogin.html`,   `rlogin.html`),
       portalFetch(`${portalBase}/hotspot/radvert.html`,  `radvert.html`,  `radvert.html`),
       portalFetch(`${portalBase}/hotspot/redirect.html`, `redirect.html`, `redirect.html`),
       portalFetch(`${portalBase}/hotspot/error.html`,    `error.html`,    `error.html`),

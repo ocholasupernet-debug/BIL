@@ -595,7 +595,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-      "Deploy the current branded portal to this router? The server will transfer login.html, and an existing file will require a second replacement confirmation.",
+       "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html, and an existing file will require a second replacement confirmation.",
     )) return;
 
     setDeploying(true);

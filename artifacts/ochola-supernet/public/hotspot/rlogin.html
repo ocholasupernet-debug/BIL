@@ -1,21 +1,68 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Hotspot Roaming Login</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="/hotspot/css/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>$(login-title) — Hotspot Portal</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: #fff;
+      background: radial-gradient(circle at top, #35104e 0%, #0d0415 62%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .card {
+      width: min(100%, 380px);
+      padding: 32px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 22px;
+      background: rgba(26,15,46,.92);
+      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    }
+    .brand { margin: 0 0 8px; font-size: 1.5rem; font-weight: 800; }
+    .hint { margin: 0 0 24px; color: rgba(255,255,255,.62); }
+    label { display: block; margin: 16px 0 7px; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    input {
+      width: 100%;
+      padding: 13px 14px;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 10px;
+      color: #fff;
+      background: rgba(255,255,255,.06);
+      font: inherit;
+    }
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 13px 16px;
+      border: 0;
+      border-radius: 10px;
+      color: #fff;
+      background: linear-gradient(135deg, #d96835, #9e3f1f);
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+  </style>
 </head>
 <body>
-<div class="login-container">
-  <h2>Roaming Login</h2>
-  <form action="$(link-login-only)" method="post">
-    <input type="hidden" name="dst" value="$(link-orig)">
-    <input type="hidden" name="popup" value="true">
-    <input type="text" name="username" placeholder="Username" required>
-    <input type="password" name="password" placeholder="Password" required>
-    <button type="submit">Login</button>
-  </form>
-</div>
+  <main class="card">
+    <p class="brand">$(login-title)</p>
+    <p class="hint">Sign in to continue to the hotspot.</p>
+    <form action="$(link-login-only)" method="post">
+      <input type="hidden" name="dst" value="$(link-orig)">
+      <input type="hidden" name="popup" value="true">
+      <label for="username">Username</label>
+      <input id="username" type="text" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
 </body>
 </html>
