@@ -50,6 +50,7 @@ interface RouterFilesResponse {
 }
 
 type DeployableSourceType = "hotspot" | "script";
+type ManagementRepairPhase = "preflight" | "identity" | "api" | "firewall" | "verify";
 
 interface DeployableSource {
   id: string;
@@ -289,6 +290,10 @@ export default function Files() {
   const [bulkDeploying, setBulkDeploying] = useState(false);
   const [bulkDeployMessage, setBulkDeployMessage] = useState("");
   const [bulkDeployError, setBulkDeployError] = useState(false);
+  const [managementPhase, setManagementPhase] = useState<ManagementRepairPhase>("preflight");
+  const [managementImporting, setManagementImporting] = useState(false);
+  const [managementImportMessage, setManagementImportMessage] = useState("");
+  const [managementImportError, setManagementImportError] = useState(false);
 
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["router-files-routers", getSelectedTenantId()],
@@ -522,6 +527,54 @@ export default function Files() {
     }
   }
 
+  async function importManagementPhase(): Promise<void> {
+    if (!selectedRouter || managementImporting) return;
+    const confirmed = window.confirm(
+      `Import the ${managementPhase} management script into ${selectedRouter.name}? This will run the selected RouterOS phase.`,
+    );
+    if (!confirmed) return;
+
+    setManagementImporting(true);
+    setManagementImportMessage("");
+    setManagementImportError(false);
+    try {
+      const adminId = getSelectedTenantId();
+      if (!adminId) throw new Error("Sign in to an ISP account before importing RouterOS files.");
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const role = getAdminRole();
+      if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
+
+      const response = await fetch(`/api/router/${selectedRouter.id}/management-access/import`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ adminId, phase: managementPhase, confirm: true }),
+      });
+      let data: { error?: string; detail?: string; fileName?: string; connectedHost?: string } = {};
+      try {
+        data = await response.json();
+      } catch {
+        /* Keep the HTTP status as the fallback error below. */
+      }
+      if (!response.ok) {
+        const serverMessage = [data.error, data.detail]
+          .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+          .join(": ");
+        throw new Error(serverMessage || `RouterOS import failed (HTTP ${response.status})`);
+      }
+      setManagementImportMessage(
+        `${managementPhase} imported successfully as ${data.fileName ?? "RouterOS script"} via ${data.connectedHost ?? "management VPN"}.`,
+      );
+      void filesQuery.refetch();
+    } catch (error) {
+      setManagementImportError(true);
+      setManagementImportMessage(error instanceof Error ? error.message : "RouterOS import failed");
+    } finally {
+      setManagementImporting(false);
+    }
+  }
+
   const deploymentProgress = deployStatus === "preparing"
     ? 25
     : deployStatus === "uploading" || deployStatus === "conflict"
@@ -647,6 +700,103 @@ export default function Files() {
             </button>
           )}
         </div>
+
+        {selectedRouter && (
+          <div style={{
+            maxWidth: 980,
+            padding: "1.1rem 1.25rem 1.2rem",
+            borderRadius: 12,
+            background: "var(--isp-section)",
+            border: "1px solid rgba(167,139,250,0.3)",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", marginBottom: "1rem" }}>
+              <span style={{
+                width: 31,
+                height: 31,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                borderRadius: 8,
+                background: "rgba(167,139,250,0.12)",
+                color: "#c4b5fd",
+              }}>
+                <FileCode2 size={16} />
+              </span>
+              <div>
+                <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.9rem", fontWeight: 700 }}>
+                  Import management script into {selectedRouter.name}
+                </h2>
+                <p style={{ margin: "0.25rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.73rem", lineHeight: 1.5 }}>
+                  Generates the approved script on the server, uploads it through the verified API login, and runs <code>/import</code> one phase at a time.
+                </p>
+              </div>
+            </div>
+            <div className="router-files-deploy-grid" style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(180px, 1fr) auto",
+              gap: "0.7rem",
+              alignItems: "end",
+            }}>
+              <label style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 650 }}>
+                Phase
+                <select
+                  value={managementPhase}
+                  onChange={event => {
+                    setManagementPhase(event.target.value as ManagementRepairPhase);
+                    setManagementImportMessage("");
+                    setManagementImportError(false);
+                  }}
+                  disabled={managementImporting}
+                  style={{ ...inputStyle, marginTop: "0.35rem", cursor: "pointer" }}
+                >
+                  <option value="preflight">1 · Preflight (read-only)</option>
+                  <option value="identity">2 · Add API user</option>
+                  <option value="api">3 · Enable API services</option>
+                  <option value="firewall">4 · Allow management firewall</option>
+                  <option value="verify">5 · Verify configuration</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => void importManagementPhase()}
+                disabled={managementImporting}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.4rem",
+                  minHeight: 37,
+                  padding: "0.55rem 0.85rem",
+                  border: "1px solid rgba(167,139,250,0.4)",
+                  borderRadius: 8,
+                  background: "rgba(167,139,250,0.14)",
+                  color: "#c4b5fd",
+                  fontSize: "0.75rem",
+                  fontWeight: 750,
+                  cursor: managementImporting ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  opacity: managementImporting ? 0.65 : 1,
+                }}
+              >
+                {managementImporting
+                  ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
+                  : <FileCode2 size={13} />}
+                {managementImporting ? "Importing…" : "Import and run phase"}
+              </button>
+            </div>
+            {managementImportMessage && (
+              <p style={{
+                margin: "0.65rem 0 0",
+                color: managementImportError ? "#f87171" : "#a7f3d0",
+                fontSize: "0.74rem",
+                lineHeight: 1.45,
+              }}>
+                {managementImportMessage}
+              </p>
+            )}
+          </div>
+        )}
 
         {selectedRouter && (
           <div style={{

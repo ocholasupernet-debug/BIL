@@ -10,7 +10,12 @@ import {
   routerManagementClientInterfaceName,
   type RouterManagementVpnRole,
 } from "./router-management-vpn.js";
-import { ISRG_ROOT_X1_PEM, routerOsCertificateFileWriter } from "./router-https-trust.js";
+import {
+  ISRG_ROOT_X1_PEM,
+  ROUTER_HTTPS_CERTIFICATE_FILE,
+  ROUTER_HTTPS_CERTIFICATE_NAME,
+  routerOsCertificateFileWriter,
+} from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
@@ -512,9 +517,15 @@ export async function syncHotspotPortalHostname(
 export async function ensureRouterManagementAccess(
   creds: RouterCredentials,
   routerName: string,
-): Promise<{ connectedHost: string; users: string[]; apiPorts: number[]; firewallRulesAdded: number }> {
+): Promise<{
+  connectedHost: string;
+  verifiedLoginHost: string;
+  users: string[];
+  apiPorts: number[];
+  firewallRulesAdded: number;
+}> {
   if (!creds.password) throw new Error("The router has no stored management password.");
-  return withConn(creds, async (conn, connectedHost) => {
+  const result = await withConn(creds, async (conn, connectedHost) => {
     const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
     const managementComment = "DO NOT DELETE - OcholaSupernet management API";
     const routerComment = `DO NOT DELETE - ${routerOsString(routerName)} router management API`;
@@ -532,6 +543,7 @@ export async function ensureRouterManagementAccess(
         `=password=${creds.password}`,
         "=group=full",
         "=disabled=no",
+        "=address=",
         `=comment=${username === "ocholasupernet" ? managementComment : routerComment}`,
       );
       await withTimeout(conn.write(command), timeoutMs);
@@ -600,6 +612,20 @@ export async function ensureRouterManagementAccess(
     }
     return { connectedHost, users: desiredUsers, apiPorts: [8728, 8729], firewallRulesAdded };
   });
+
+  /* Reconnect with the named account. A successful mutation through the old
+     account is not proof that the new RouterOS API login works. */
+  const verifiedLoginHost = await withConn(
+    { ...creds, username: "ocholasupernet" },
+    async (conn, connectedHost) => {
+      await withTimeout(
+        conn.write(["/system/identity/print", "=.proplist=name"]),
+        Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000),
+      );
+      return connectedHost;
+    },
+  );
+  return { ...result, verifiedLoginHost };
 }
 
 /**
@@ -636,6 +662,8 @@ export interface RouterPingResult {
 export async function pingRouter(creds: RouterCredentials): Promise<RouterPingResult> {
   return withConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
+    const caFileName = `${caBase}.txt`;
 
     const [identRows, resRows] = await Promise.all([
       withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
@@ -714,6 +742,138 @@ function routerFileFromRow(row: Record<string, string>): RouterFile {
     size: parseBytes(row.size),
     creationTime: row["creation-time"] ?? "",
   };
+}
+
+/**
+ * Install the public Let's Encrypt trust anchor through the authenticated API.
+ * This avoids an insecure first HTTPS fetch when an older RouterOS trust store
+ * does not yet recognize the current certificate chain.
+ */
+export async function ensureRouterHttpsTrust(
+  creds: RouterCredentials,
+): Promise<{ connectedHost: string; alreadyTrusted: boolean }> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
+    const caFileName = `${caBase}.txt`;
+    const certificateRows = await withTimeout(
+      conn.write([
+        "/certificate/print",
+        "=.proplist=.id,name,trusted,flags",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const current = (Array.isArray(certificateRows) ? certificateRows : [])
+      .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+    const trusted = current && (
+      String(current.trusted ?? "").toLowerCase() === "true"
+      || String(current.flags ?? "").toUpperCase().includes("T")
+    );
+    if (trusted) return { connectedHost, alreadyTrusted: true };
+
+    if (current?.[".id"]) {
+      await withTimeout(conn.write(["/certificate/remove", `=.id=${current[".id"]}`]), ms);
+    }
+
+    const fileRows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const oldFiles = (Array.isArray(fileRows) ? fileRows : [])
+      .filter(row => [ROUTER_HTTPS_CERTIFICATE_FILE, `${ROUTER_HTTPS_CERTIFICATE_FILE}.txt`, caFileName].includes(row.name));
+    for (const oldFile of oldFiles) {
+      if (oldFile[".id"]) {
+        await withTimeout(conn.write(["/file/remove", `=.id=${oldFile[".id"]}`]), ms);
+      }
+    }
+
+    /* RouterOS 6 creates an empty file through /file/print file=...; unlike
+       /file/add, this is supported by the target RouterOS 6.49 device. */
+    await withTimeout(
+      conn.write(["/file/print", `=file=${caBase}`]),
+      ms,
+    );
+    const createdRows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const createdFile = (Array.isArray(createdRows) ? createdRows : [])
+      .find(row => row.name === caFileName);
+    if (!createdFile?.[".id"]) {
+      throw new Error("The router could not create the temporary HTTPS trust file");
+    }
+
+    try {
+      const lines = ISRG_ROOT_X1_PEM.replace(/\r\n?/g, "\n").split("\n");
+      let contents = "";
+      for (const [index, line] of lines.entries()) {
+        contents += line;
+        if (index < lines.length - 1) contents += "\n";
+        await withTimeout(
+          conn.write([
+            "/file/set",
+            `=.id=${createdFile[".id"]}`,
+            `=contents=${contents}`,
+          ]),
+          Math.max(ms, 30_000),
+        );
+      }
+
+      await withTimeout(
+        conn.write([
+          "/certificate/import",
+          `=file-name=${createdFile.name}`,
+          `=name=${ROUTER_HTTPS_CERTIFICATE_NAME}`,
+          "=passphrase=",
+        ]),
+        Math.max(ms, 30_000),
+      );
+      const importedRows = await withTimeout(
+        conn.write([
+          "/certificate/print",
+          "=.proplist=.id,name,trusted,flags",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      const imported = (Array.isArray(importedRows) ? importedRows : [])
+        .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+      if (!imported?.[".id"]) {
+        throw new Error("The router did not import the HTTPS trust certificate");
+      }
+      await withTimeout(
+        conn.write(["/certificate/set", `=.id=${imported[".id"]}`, "=trusted=yes"]),
+        ms,
+      );
+      const verifiedRows = await withTimeout(
+        conn.write([
+          "/certificate/print",
+          "=.proplist=.id,name,trusted,flags",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      const verified = (Array.isArray(verifiedRows) ? verifiedRows : [])
+        .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+      const verifiedTrusted = verified && (
+        String(verified.trusted ?? "").toLowerCase() === "true"
+        || String(verified.flags ?? "").toUpperCase().includes("T")
+      );
+      if (!verifiedTrusted) {
+        throw new Error("The router imported the HTTPS certificate but did not trust it");
+      }
+      return { connectedHost, alreadyTrusted: false };
+    } finally {
+      await withTimeout(
+        conn.write(["/file/remove", `=.id=${createdFile[".id"]}`]),
+        ms,
+      ).catch(() => undefined);
+    }
+  });
 }
 
 export async function deployRouterFile(

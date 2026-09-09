@@ -5,6 +5,7 @@ import {
   validateGeneratedRouterScript,
 } from "../src/routes/scripts-route.ts";
 import { buildMainIspConfigurationRsc } from "../src/routes/isp-configuration-route.ts";
+import { buildManagementApiRepairScript } from "../src/lib/router-management-repair.ts";
 
 test("rendered mainhotspot.rsc keeps RouterOS encoder escapes on one line", () => {
   const script = buildMainhotspotRsc(
@@ -32,6 +33,48 @@ test("rendered mainhotspot.rsc keeps RouterOS encoder escapes on one line", () =
 
   for (const [lineNumber, line] of script.split("\n").entries()) {
     assert.equal(line.includes("\r"), false, `line ${lineNumber + 1} contains CR`);
+  }
+});
+
+test("phased management repair script is clean and idempotent", () => {
+  const script = buildManagementApiRepairScript({
+    routerName: "come1",
+    routerPassword: 'secret$with"quotes',
+    phase: "all",
+  });
+
+  assert.equal(validateGeneratedRouterScript(script), script);
+  assert.match(script, /OCHOLASUPERNET_PHASE=preflight/);
+  assert.match(script, /OCHOLASUPERNET_PHASE=identity/);
+  assert.match(script, /OCHOLASUPERNET_PHASE=api/);
+  assert.match(script, /OCHOLASUPERNET_PHASE=firewall/);
+  assert.match(script, /OCHOLASUPERNET_PHASE=verify/);
+  assert.match(script, /name="ocholasupernet"/);
+  assert.match(script, /group=full/);
+  assert.match(script, /address=""/);
+  assert.match(script, /FAILED_COMPONENT=user-policy/);
+  assert.match(script, /FAILED_COMPONENT=user-address/);
+  assert.match(script, /10\.8\.5\.0\/24,10\.8\.6\.0\/24/);
+  assert.match(script, /DO NOT DELETE - OcholaSupernet management API/);
+  assert.match(script, /secret\\\$with\\"quotes/);
+  assert.doesNotMatch(script, /\/user remove|\/ip service remove|\/ip firewall filter remove/);
+  assert.doesNotMatch(script, /OCHOLASUPERNET_STATUS=SUCCESS.*OCHOLASUPERNET_STATUS=FAILED/s);
+});
+
+test("each management repair phase can be generated independently", () => {
+  for (const phase of ["preflight", "identity", "api", "firewall", "verify"]) {
+    const script = buildManagementApiRepairScript({
+      routerName: "come1",
+      routerPassword: "router-secret",
+      phase,
+    });
+    assert.equal(validateGeneratedRouterScript(script), script);
+    assert.match(script, new RegExp(`OCHOLASUPERNET_PHASE=${phase}`));
+    assert.equal(
+      ["preflight", "identity", "api", "firewall", "verify"]
+        .filter(other => script.includes(`OCHOLASUPERNET_PHASE=${other}`)).length,
+      1,
+    );
   }
 });
 

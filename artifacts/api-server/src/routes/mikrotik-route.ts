@@ -25,6 +25,8 @@ import {
   fetchRouterFiles,
   fetchRouterSecurityState,
   deployRouterFile,
+  runRouterScript,
+  ensureRouterHttpsTrust,
   syncHotspotPortalHostname,
   ensureRouterManagementAccess,
   RouterFileExistsError,
@@ -55,6 +57,10 @@ import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.j
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import {
+  buildManagementApiRepairScript,
+  type ManagementRepairPhase,
+} from "../lib/router-management-repair.js";
 
 const router: IRouter = Router();
 
@@ -123,6 +129,23 @@ function requestOrigin(req: import("express").Request): string {
     ? "https"
     : "http";
   return `${protocol}://${publicHost}`;
+}
+
+function managementScriptSourceOrigin(req: import("express").Request): string {
+  const configured = process.env.PUBLIC_APP_ORIGIN?.trim().replace(/\/+$/, "");
+  if (configured && /^https:\/\/[a-z0-9.-]+$/i.test(configured)) return configured;
+
+  const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
+    .split(",")[0]
+    .trim()
+    .split(":")[0]
+    .toLowerCase();
+  const requestHost = (forwardedHost || req.get("host") || "").split(":")[0].toLowerCase();
+  if (requestHost === "api.isplatty.org" || requestHost === "isplatty.org" || requestHost === "www.isplatty.org") {
+    /* The API is reached through /api on the root app hostname. */
+    return "https://isplatty.org";
+  }
+  return requestOrigin(req);
 }
 
 function vpnEndpointHost(value: unknown): string {
@@ -519,7 +542,7 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
   try {
     const result = await deployRouterFile(found.creds, {
       destinationPath,
-      sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
+      sourceUrl: `${managementScriptSourceOrigin(req)}/api/router-file-source/${token}`,
       overwrite,
       uploadId: token.slice(0, 16),
     });
@@ -929,6 +952,107 @@ router.post("/router/:id/management-access/repair", async (req, res): Promise<vo
     res.json({ ok: true, routerId: id, routerName: found.row.name, ...result });
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+/* ─── GET /api/router/:id/management-access/script ──────────────────────── */
+router.get("/router/:id/management-access/script", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  const requestedPhase = String(req.query.phase ?? "all") as ManagementRepairPhase;
+  const validPhases = new Set<ManagementRepairPhase>([
+    "preflight", "identity", "api", "firewall", "verify", "all",
+  ]);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!validPhases.has(requestedPhase)) {
+    res.status(400).json({ error: "Invalid phase", phases: [...validPhases] });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+  const script = buildManagementApiRepairScript({
+    routerName: found.row.name,
+    routerPassword: found.creds.password,
+    phase: requestedPhase,
+  });
+  res
+    .type("text/plain")
+    .set("Content-Disposition", `attachment; filename="ocholasupernet-management-${requestedPhase}.rsc"`)
+    .send(script);
+});
+
+/* ─── POST /api/router/:id/management-access/import ─────────────────────── */
+router.post("/router/:id/management-access/import", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const requestedPhase = String(req.body?.phase ?? "preflight") as ManagementRepairPhase;
+  const confirmed = req.body?.confirm === true;
+  const validPhases = new Set<ManagementRepairPhase>([
+    "preflight", "identity", "api", "firewall", "verify", "all",
+  ]);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!validPhases.has(requestedPhase)) {
+    res.status(400).json({ error: "Invalid phase", phases: [...validPhases] });
+    return;
+  }
+  if (!confirmed) {
+    res.status(400).json({ error: "Explicit confirmation is required before importing a RouterOS script." });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  const fileName = `ocholasupernet-management-${requestedPhase}.rsc`;
+  const script = buildManagementApiRepairScript({
+    routerName: found.row.name,
+    routerPassword: found.creds.password,
+    phase: requestedPhase,
+  });
+  cleanPendingRouterFileSources();
+  const token = randomBytes(24).toString("hex");
+  pendingRouterFileSources.set(token, {
+    content: Buffer.from(script, "utf8"),
+    contentType: "text/plain; charset=utf-8",
+    fileName,
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+
+  try {
+    const httpsTrust = await ensureRouterHttpsTrust(found.creds);
+    const deployed = await deployRouterFile(found.creds, {
+      destinationPath: fileName,
+      sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
+      overwrite: true,
+      uploadId: token.slice(0, 16),
+    });
+    await runRouterScript(found.creds, fileName);
+    logger.info({ routerId: id, adminId, phase: requestedPhase, fileName }, "RouterOS management phase imported");
+    res.status(201).json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      phase: requestedPhase,
+      fileName,
+      imported: true,
+      connectedHost: deployed.connectedHost,
+      size: deployed.size,
+      replaced: deployed.replaced,
+      httpsTrustInstalled: !httpsTrust.alreadyTrusted,
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  } finally {
+    pendingRouterFileSources.delete(token);
   }
 });
 
