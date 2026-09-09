@@ -58,10 +58,14 @@ app.use("/api", router);
    router above — this second mount is purely for the rootless path. */
 app.use(scriptsRouter);
 
-// ── Static file serving for VPS (no nginx needed) ─────────────────────────────
-// Set SERVE_STATIC=true when running on a VPS without nginx in front.
-// The frontend must be built first: pnpm run build:vps (in artifacts/ochola-supernet)
-if (process.env.SERVE_STATIC === "true") {
+// ── Static file serving for VPS ──────────────────────────────────────────────
+// Production always serves the built SPA because nginx proxies both the web
+// page and /api/* to this process. SERVE_STATIC remains available for local
+// single-port VPS runs; the frontend must be built first with
+// pnpm run build:vps in artifacts/ochola-supernet.
+const shouldServeStatic =
+  process.env.NODE_ENV === "production" || process.env.SERVE_STATIC === "true";
+if (shouldServeStatic) {
   const staticDir = path.resolve(
     process.cwd(),
     "artifacts/ochola-supernet/dist/public",
@@ -86,7 +90,7 @@ if (process.env.SERVE_STATIC === "true") {
   } else {
     logger.warn(
       { staticDir },
-      "SERVE_STATIC=true but dist/public not found — run build:vps first",
+      "Production static serving is enabled but dist/public was not found — run build:vps first",
     );
   }
 }
