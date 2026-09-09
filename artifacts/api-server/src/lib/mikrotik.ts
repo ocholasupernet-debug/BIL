@@ -503,6 +503,100 @@ export async function syncHotspotPortalHostname(
 }
 
 /**
+ * Repair the RouterOS management identities and API access in place. This is
+ * intentionally idempotent and never removes users, VPN interfaces, or
+ * firewall rules. The existing stored router password is reused for the
+ * named OcholaSupernet account so the backend can switch to it without
+ * exposing a new credential.
+ */
+export async function ensureRouterManagementAccess(
+  creds: RouterCredentials,
+  routerName: string,
+): Promise<{ connectedHost: string; users: string[]; apiPorts: number[]; firewallRulesAdded: number }> {
+  if (!creds.password) throw new Error("The router has no stored management password.");
+  return withConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const managementComment = "DO NOT DELETE - OcholaSupernet management API";
+    const routerComment = `DO NOT DELETE - ${routerOsString(routerName)} router management API`;
+    const users = await withTimeout(
+      conn.write(["/user/print", "=.proplist=.id,name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const desiredUsers = Array.from(new Set(["ocholasupernet", creds.username].filter(Boolean)));
+    for (const username of desiredUsers) {
+      const existing = users.find(row => row.name === username)?.[".id"];
+      const command = existing
+        ? ["/user/set", `=.id=${existing}`]
+        : ["/user/add", `=name=${username}`];
+      command.push(
+        `=password=${creds.password}`,
+        "=group=full",
+        "=disabled=no",
+        `=comment=${username === "ocholasupernet" ? managementComment : routerComment}`,
+      );
+      await withTimeout(conn.write(command), timeoutMs);
+    }
+
+    for (const service of ["api", "api-ssl"]) {
+      await withTimeout(
+        conn.write([
+          "/ip/service/set",
+          `[find name=${service}]`,
+          "=disabled=no",
+          "=address=10.8.5.0/24,10.8.6.0/24",
+        ]),
+        timeoutMs,
+      );
+    }
+
+    const desiredRules = [
+      { source: "10.8.5.0/24", comment: "DO NOT DELETE - OcholaSupernet management API" },
+      { source: "10.8.6.0/24", comment: "DO NOT DELETE - OcholaSupernet backup management API" },
+    ];
+    const existingRules = await withTimeout(
+      conn.write(["/ip/firewall/filter/print", "=.proplist=.id,comment"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    let firewallRulesAdded = 0;
+    for (const rule of desiredRules) {
+      if (existingRules.some(row => row.comment === rule.comment)) continue;
+      await withTimeout(
+        conn.write([
+          "/ip/firewall/filter/add",
+          "=chain=input",
+          "=action=accept",
+          "=protocol=tcp",
+          "=dst-port=8728,8729",
+          `=src-address=${rule.source}`,
+          `=comment=${rule.comment}`,
+          "=place-before=0",
+        ]),
+        timeoutMs,
+      );
+      firewallRulesAdded++;
+    }
+
+    const interfaces = await withTimeout(
+      conn.write(["/interface/ovpn-client/print", "=.proplist=.id,name,comment"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const iface of interfaces) {
+      if (iface[".id"] && /mainbillingvpn|ochola.*management|vps tunnel/i.test(iface.comment ?? "")) {
+        await withTimeout(
+          conn.write([
+            "/interface/ovpn-client/set",
+            `=.id=${iface[".id"]}`,
+            "=comment=DO NOT DELETE - OcholaSupernet management VPN",
+          ]),
+          timeoutMs,
+        );
+      }
+    }
+    return { connectedHost, users: desiredUsers, apiPorts: [8728, 8729], firewallRulesAdded };
+  });
+}
+
+/**
  * Probes all candidate hosts (primary + VPN) in parallel without attempting
  * a full RouterOS API connection. Useful for pre-flight diagnostics.
  */

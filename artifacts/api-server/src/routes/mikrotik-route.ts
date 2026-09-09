@@ -26,6 +26,7 @@ import {
   fetchRouterSecurityState,
   deployRouterFile,
   syncHotspotPortalHostname,
+  ensureRouterManagementAccess,
   RouterFileExistsError,
   getEnvCredentials,
   isPrivateIp,
@@ -905,6 +906,26 @@ router.post("/router/:id/hotspot-portal/sync-tenant-host", async (req, res): Pro
       `${subdomain}.isplatty.org`,
     );
     logger.info({ routerId: id, adminId, hostname: result.hostname }, "Tenant hotspot hostname synchronized");
+    res.json({ ok: true, routerId: id, routerName: found.row.name, ...result });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
+});
+
+/* ─── POST /api/router/:id/management-access/repair ─────────────────────── */
+router.post("/router/:id/management-access/repair", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+  try {
+    const result = await ensureRouterManagementAccess(found.creds, found.row.name);
     res.json({ ok: true, routerId: id, routerName: found.row.name, ...result });
   } catch (err) {
     routerErrorResponse(res, err);
