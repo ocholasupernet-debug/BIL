@@ -3636,9 +3636,39 @@ function buildSyncfullRsc(origin: string): string {
    hard-coded example company name. ── */
 type SubScriptEntry = string | ((origin: string) => string);
 
+const MANAGEMENT_FIREWALL_RSC = `# OcholaSuperNet management firewall rules
+# Idempotent and intentionally limited to the isolated management VPN networks.
+# This file adds only missing owned accept rules; it does not remove or replace
+# customer firewall, NAT, or forwarding rules.
+
+:local primaryComment "DO NOT DELETE - OcholaSupernet management API"
+:local backupComment "DO NOT DELETE - OcholaSupernet backup management API"
+
+:do {
+  :if ([:len [/ip firewall filter find where comment=$primaryComment]] = 0) do={
+    /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.5.0/24 comment=$primaryComment place-before=0
+    :put "Added primary management API firewall rule"
+  } else={
+    :put "Primary management API firewall rule already exists"
+  }
+} on-error={ :put "WARN: primary management API firewall rule could not be added" }
+
+:do {
+  :if ([:len [/ip firewall filter find where comment=$backupComment]] = 0) do={
+    /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=10.8.6.0/24 comment=$backupComment place-before=0
+    :put "Added backup management API firewall rule"
+  } else={
+    :put "Backup management API firewall rule already exists"
+  }
+} on-error={ :put "WARN: backup management API firewall rule could not be added" }
+
+:put "OcholaSuperNet management firewall file finished"
+`;
+
 const STATIC_SUBSCRIPTS: Record<string, SubScriptEntry> = {
   "vpn7.rsc":         buildVpn7Rsc,
   "vpn6.rsc":         buildVpn6Rsc,
+  "management-firewall.rsc": MANAGEMENT_FIREWALL_RSC,
   "hotspotsetup.rsc": HOTSPOTSETUP_RSC,
   "pppoesetup.rsc":   PPPOESETUP_RSC,
   "users.rsc":        USERS_RSC,

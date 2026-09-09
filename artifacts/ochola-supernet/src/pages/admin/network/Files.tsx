@@ -948,7 +948,7 @@ export default function Files() {
                   Deploy all approved files
                 </strong>
                 <span style={{ display: "block", marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
-                  Publishes {allDeployableSources.length} approved files: portal assets to flash/hotspot and RouterOS scripts, including PPPoE files, to the router root. Existing files are skipped and scripts are not executed.
+                  Publishes {allDeployableSources.length} approved files, including PPPoE and management-firewall configs. Portal assets go to flash/hotspot and RouterOS scripts go to the router root. Existing files are skipped; scripts are uploaded but not executed.
                 </span>
               </div>
               <button

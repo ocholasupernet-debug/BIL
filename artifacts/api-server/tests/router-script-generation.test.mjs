@@ -2,10 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildMainhotspotRsc,
+  getDeployableSource,
+  listDeployableSources,
   validateGeneratedRouterScript,
 } from "../src/routes/scripts-route.ts";
 import { buildMainIspConfigurationRsc } from "../src/routes/isp-configuration-route.ts";
 import { buildManagementApiRepairScript } from "../src/lib/router-management-repair.ts";
+
+test("approved deployment catalog includes the management firewall config", () => {
+  const sources = listDeployableSources();
+  const firewall = sources.find(source => source.type === "script" && source.name === "management-firewall.rsc");
+  assert.ok(firewall);
+
+  const content = getDeployableSource("script", "management-firewall.rsc")?.content.toString("utf8") ?? "";
+  assert.match(content, /10\.8\.5\.0\/24/);
+  assert.match(content, /10\.8\.6\.0\/24/);
+  assert.match(content, /dst-port=8728,8729/);
+  assert.match(content, /DO NOT DELETE - OcholaSupernet management API/);
+  assert.doesNotMatch(content, /\/ip firewall filter remove|\/ip firewall nat remove/);
+});
 
 test("rendered mainhotspot.rsc keeps RouterOS encoder escapes on one line", () => {
   const script = buildMainhotspotRsc(
