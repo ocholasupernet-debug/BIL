@@ -32,17 +32,6 @@
     :return [:tostr $1]
 }
 
-# Takeover is a separate, destructive path. Its safety boundary runs first.
-# TAKEOVER SAFETY BOUNDARY - no service resource is changed before both files exist.
-:local takeoverBackup "ochola-takeover-1788745953745"
-:do { /system backup save name=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the binary backup." }
-:delay 3s
-:if ([:len [/file find name="ochola-takeover-1788745953745.backup"]] = 0) do={ :error "Takeover stopped: the RouterOS binary backup could not be verified." }
-:do { /export file=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the text export." }
-:delay 2s
-:if ([:len [/file find name="ochola-takeover-1788745953745.rsc"]] = 0) do={ :error "Takeover stopped: the RouterOS text export could not be verified." }
-:put "TAKEOVER BACKUP VERIFIED - binary backup and text export are present."
-
 
 # Bootstrap the public CA before any HTTPS download is verified.
 # Install the public CA used by the VPS HTTPS certificate before verified fetches.

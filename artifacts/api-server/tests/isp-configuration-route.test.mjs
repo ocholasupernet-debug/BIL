@@ -89,7 +89,7 @@ test("the public Main ISP path is tenant-scoped and Self Install uses its separa
   assert.match(scriptsRoute, /scripts\/router-vpn(?:\.rsc|-bootstrap)/);
   assert.match(scriptsRoute, /buildMainIspConfigurationRsc\(subdomain, currentRouter\.name, routerVpnBaseUrl, currentRouter\.id\)/);
    assert.match(scriptsRoute, /router\.get\(\[\s*"\/scripts\/self-install-mainhotspot\.rsc"/);
-   assert.match(scriptsRoute, /self-install-mainhotspot\/:pathRouterId\/:pathAdminId\/:pathMode\/:pathGrant/);
+   assert.match(scriptsRoute, /self-install-mainhotspot\/:pathRouterId\/:pathAdminId\/:pathGrant/);
    assert.match(selfInstall, /api\/scripts\/self-install-mainhotspot\/\$\{encodeURIComponent/);
    assert.doesNotMatch(selfInstall, /api\/scripts\/self-install-mainhotspot\.rsc\?/);
    assert.match(selfInstall, /mode=https check-certificate=no/);
@@ -110,7 +110,6 @@ test("Direct installation exposes signed primary and backup OpenVPN details", as
   assert.match(scriptsRoute, /provisionRouterManagementOpenVpn\(\{/);
   assert.match(scriptsRoute, /provisionRouterManagementOpenVpnBackup\(\{/);
   assert.match(scriptsRoute, /provisionRouterManagementOpenVpnPair\(\{/);
-  assert.match(scriptsRoute, /provisionRouterManagementVpn\(\{/);
   assert.match(scriptsRoute, /VPS linkage verified for both primary and backup listeners/);
   assert.match(scriptsRoute, /<auth-user-pass>/);
   assert.match(scriptsRoute, /<ca>/);

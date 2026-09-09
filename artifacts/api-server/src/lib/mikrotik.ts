@@ -2161,8 +2161,6 @@ export interface RouterAsClientOptions {
   lanNetwork?: string;
   /** Router ID for comment labels */
   routerId?: number;
-  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
-  installationMode?: "coexist" | "takeover";
   /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
   routerOsMajor?: number;
   /** Select the isolated backup management OpenVPN instance. */
@@ -2184,8 +2182,6 @@ export interface RouterWireGuardClientOptions {
   tunnelVpsIp?: string;
   /** Router ID for comment labels. */
   routerId?: number;
-  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
-  installationMode?: "coexist" | "takeover";
 }
 
 export interface RouterIpsecClientOptions {
@@ -2199,8 +2195,6 @@ export interface RouterIpsecClientOptions {
   tunnelVpsIp?: string;
   /** Router ID for comment labels. */
   routerId?: number;
-  /** Coexistence refuses required-resource conflicts; takeover may replace tagged resources. */
-  installationMode?: "coexist" | "takeover";
   /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
   routerOsMajor?: number;
 }
@@ -2277,7 +2271,6 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     tunnelVpsIp     = "10.8.5.1",
     lanNetwork      = "192.168.88.0/24",
     routerId,
-    installationMode = "takeover",
     routerOsMajor = 6,
     vpnRole = "primary",
   } = opts;
@@ -2288,7 +2281,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
-  const coexistence = installationMode === "coexist";
+  const coexistence = true;
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
   /* RouterOS 6 calls the CBC cipher "aes128"; RouterOS 7 uses the
@@ -2303,6 +2296,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const tag = routerId
     ? `ochola-mgmt-vpn-${routerId}${roleSuffix}`
     : `ocholasupernet${roleSuffix}`;
+  const interfaceComment = routerId ? `${tag} VPS tunnel` : "mainbillingvpn";
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
@@ -2312,7 +2306,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     :local existingOvpnId [:pick $existingOvpnIds 0]
     :local existingOvpnComment [/interface ovpn-client get $existingOvpnId comment]
     :local existingOvpnRunning [/interface ovpn-client get $existingOvpnId running]
-    :if ($existingOvpnComment = "${tag} VPS tunnel") do={
+    :if ($existingOvpnComment = "${interfaceComment}") do={
         :if (!$existingOvpnRunning) do={
             :do { /interface ovpn-client remove $existingOvpnId } on-error={
                 :set ocholaVpnChildError "${tag}: could not remove the previous incomplete management interface; nothing was replaced."
@@ -2427,7 +2421,7 @@ ${caBootstrap}
 ${resourcePreparation}
 }
 :if (!$reuseExistingOvpn) do={
- :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${tag} VPS tunnel" } on-error={
+ :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
     :local routerError ""
     :do { :set routerError $error } on-error={}
     :set ovpnError "RouterOS rejected the OpenVPN client add command"
@@ -2535,9 +2529,8 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
     tunnelRouterIp = "10.8.5.2",
     tunnelVpsIp = "10.8.5.1",
     routerId,
-    installationMode = "takeover",
   } = opts;
-  const coexistence = installationMode === "coexist";
+  const coexistence = true;
   const tag = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "corebillingvpn";
   const interfaceName = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "ochola-wg";
   const preparation = coexistence
@@ -2581,12 +2574,11 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     tunnelRouterIp = "10.8.5.2",
     tunnelVpsIp = "10.8.5.1",
     routerId,
-    installationMode = "takeover",
     routerOsMajor = 6,
   } = opts;
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
-  const coexistence = installationMode === "coexist";
+  const coexistence = true;
   const tag = coexistence && routerId ? `ochola-mgmt-ipsec-${routerId}` : "corebillingvpn";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
   const identityIds = routerId

@@ -23,7 +23,7 @@ const CONFIG_CATEGORIES = [
 ] as const;
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
-type InstallationMode = "coexist" | "takeover";
+type InstallationMode = "coexist";
 
 interface RouterSummary {
   id: number;
@@ -126,15 +126,6 @@ interface CopyResult {
   targetRouter?: { id: number; name: string };
   categories?: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }>;
   logs?: string[];
-  error?: string;
-}
-
-interface TakeoverPreparation {
-  ok: boolean;
-  grantToken?: string;
-  confirmation?: string;
-  expiresInSeconds?: number;
-  removalPlan?: string[];
   error?: string;
 }
 
@@ -311,9 +302,7 @@ export default function SelfInstall() {
   const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
   const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
-  const [takeoverConfirmation, setTakeoverConfirmation] = useState("");
-  const [takeoverGrant, setTakeoverGrant] = useState("");
-  const [takeoverPlan, setTakeoverPlan] = useState<string[]>([]);
+  const [installerGrant, setInstallerGrant] = useState("");
   const [portsLoading, setPortsLoading] = useState(false);
   const [ports, setPorts] = useState<PortsPayload | null>(null);
   const [selectedBridge, setSelectedBridge] = useState("");
@@ -402,34 +391,17 @@ export default function SelfInstall() {
         }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
-      if (installationMode === "takeover") {
-        const prepared = await jsonRequest<TakeoverPreparation>("/api/admin/router/self-install/takeover/prepare", {
+      const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
+        "/api/admin/router/self-install/grant",
+        {
           method: "POST",
-          body: JSON.stringify({
-            routerId: result.router.id,
-            adminId,
-            confirmation: takeoverConfirmation,
-          }),
-        });
-        if (!prepared.ok || !prepared.grantToken) {
-          throw new Error(prepared.error || "Takeover authorization could not be prepared.");
-        }
-        setTakeoverGrant(prepared.grantToken);
-        setTakeoverPlan(prepared.removalPlan ?? []);
-      } else {
-        const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
-          "/api/admin/router/self-install/grant",
-          {
-            method: "POST",
-            body: JSON.stringify({ routerId: result.router.id, adminId }),
-          },
-        );
-        if (!prepared.ok || !prepared.grantToken) {
-          throw new Error(prepared.error || "Installer authorization could not be prepared.");
-        }
-        setTakeoverGrant(prepared.grantToken);
-        setTakeoverPlan([]);
+          body: JSON.stringify({ routerId: result.router.id, adminId }),
+        },
+      );
+      if (!prepared.ok || !prepared.grantToken) {
+        throw new Error(prepared.error || "Installer authorization could not be prepared.");
       }
+      setInstallerGrant(prepared.grantToken);
       let vpnWarning = "";
       try {
         await jsonRequest<{ ok: boolean; ready: boolean }>(
@@ -460,9 +432,7 @@ export default function SelfInstall() {
     setSelectedBridge("");
     setSelectedPorts(new Set());
     setPortState({});
-    setTakeoverGrant("");
-    setTakeoverPlan([]);
-    setTakeoverConfirmation("");
+    setInstallerGrant("");
     setPageError(null);
     setCopyResult(null);
     setCopySkipped(false);
@@ -474,13 +444,13 @@ export default function SelfInstall() {
   const publicApiOrigin = (
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
-  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${installationMode}/${encodeURIComponent(takeoverGrant || "missing-grant")}`;
+  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${encodeURIComponent(installerGrant || "missing-grant")}`;
   // The installer bootstraps the public CA inside mainhotspot.rsc. The first
   // fetch must therefore be unverified; every child download performed by the
   // imported script uses verified HTTPS after the CA is installed.
   const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
   const manualVpnUrl = (routerOsMajor: 6 | 7) =>
-    `${publicApiOrigin}/api/scripts/router-vpn-manual/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${routerOsMajor}/${encodeURIComponent(takeoverGrant || "missing-grant")}`;
+    `${publicApiOrigin}/api/scripts/router-vpn-manual/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${routerOsMajor}/${encodeURIComponent(installerGrant || "missing-grant")}`;
   const manualVpnFetchCommand = (routerOsMajor: 6 | 7) =>
     `/tool fetch url="${manualVpnUrl(routerOsMajor)}" dst-path=ochola-management-vpn-ros${routerOsMajor}.rsc keep-result=yes mode=https check-certificate=no`;
 
@@ -677,66 +647,16 @@ export default function SelfInstall() {
           <>
             <div style={{ ...panelStyle(), padding: "1.1rem 1.2rem" }}>
               <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".86rem", marginBottom: ".45rem" }}>
-                Choose how this router should join the ISP
+                Add this router to the ISP
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 9 }}>
-                {([
-                  {
-                    mode: "coexist" as const,
-                    title: "Coexistence · recommended",
-                    detail: "Preserves another billing system and customer access. Audits the router, adds only isolated management resources, and stops on required-resource conflicts.",
-                    color: "#5eead4",
-                  },
-                  {
-                    mode: "takeover" as const,
-                    title: "Takeover · destructive",
-                    detail: "Replaces the router's Ochola-tagged service configuration after a verified backup/export. Supabase customers and billing records are never deleted.",
-                    color: "#fbbf24",
-                  },
-                ]).map(option => {
-                  const selected = installationMode === option.mode;
-                  return (
-                    <button
-                      key={option.mode}
-                      onClick={() => {
-                        setInstallationMode(option.mode);
-                        if (option.mode === "coexist") {
-                          setTakeoverConfirmation("");
-                          setTakeoverGrant("");
-                          setTakeoverPlan([]);
-                        }
-                      }}
-                      style={{
-                        textAlign: "left", padding: ".75rem .8rem", borderRadius: 9,
-                        border: `1px solid ${selected ? option.color : "var(--isp-border)"}`,
-                        background: selected ? `${option.color}12` : "rgba(255,255,255,.02)",
-                        color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 800, fontSize: ".76rem", color: selected ? option.color : "var(--isp-text)" }}>
-                        <span style={{ width: 14, height: 14, borderRadius: "50%", border: `2px solid ${selected ? option.color : "rgba(255,255,255,.25)"}`, display: "inline-block", boxShadow: selected ? `inset 0 0 0 3px var(--isp-card), inset 0 0 0 7px ${option.color}` : "none" }} />
-                        {option.title}
-                      </div>
-                      <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>{option.detail}</div>
-                    </button>
-                  );
-                })}
-              </div>
-              {installationMode === "takeover" && (
-                <div style={{ marginTop: ".85rem", padding: ".75rem .8rem", borderRadius: 8, background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.25)" }}>
-                  <div style={{ color: "#fbbf24", fontSize: ".72rem", fontWeight: 800 }}>Destructive confirmation required</div>
-                  <p style={{ color: "#fcd34d", fontSize: ".68rem", lineHeight: 1.5, margin: ".3rem 0 .55rem" }}>
-                    The installer will create and verify a MikroTik backup/export before replacing router service resources. Type <strong>TAKE CONTROL</strong> to continue.
-                  </p>
-                  <input
-                    value={takeoverConfirmation}
-                    onChange={event => setTakeoverConfirmation(event.target.value)}
-                    placeholder="TAKE CONTROL"
-                    aria-label="Type TAKE CONTROL to authorize takeover"
-                    style={{ width: "100%", boxSizing: "border-box", background: "#0a0f1a", color: "#fde68a", border: "1px solid rgba(251,191,36,.35)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "monospace", fontSize: ".75rem" }}
-                  />
+              <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#5eead4", fontWeight: 800, fontSize: ".76rem" }}>
+                  <CheckCircle2 size={15} /> Coexistence installation
                 </div>
-              )}
+                <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
+                  Preserves existing billing, customer-access, and LAN services while adding isolated Ochola management resources.
+                </div>
+              </div>
             </div>
             <div style={{ ...panelStyle(), padding: "1.2rem 1.3rem", display: "flex", gap: 12, alignItems: "flex-start" }}>
               <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: 2 }} />
@@ -749,7 +669,7 @@ export default function SelfInstall() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
-              <button onClick={() => void handleGenerate()} disabled={generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")} style={{ ...primaryButton(generating || (installationMode === "takeover" && takeoverConfirmation !== "TAKE CONTROL")), alignSelf: "flex-start" }}>
+              <button onClick={() => void handleGenerate()} disabled={generating} style={{ ...primaryButton(generating), alignSelf: "flex-start" }}>
                 {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Shield size={15} />}
                 {generating ? "Creating secure profile…" : "Generate secure profile"}
               </button>
@@ -779,8 +699,8 @@ export default function SelfInstall() {
                 <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".9rem" }}>{routerName}</div>
                 <div style={{ color: "var(--isp-text-muted)", fontSize: ".73rem", marginTop: 2 }}>Persistent management address: <code style={{ color: "#5eead4" }}>{status?.vpnIp || activeRouter?.vpn_ip || "assigning…"}</code></div>
               </div>
-              <span style={{ color: installationMode === "takeover" ? "#fbbf24" : "#5eead4", border: `1px solid ${installationMode === "takeover" ? "rgba(251,191,36,.3)" : "rgba(94,234,212,.25)"}`, background: installationMode === "takeover" ? "rgba(251,191,36,.08)" : "rgba(94,234,212,.06)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
-                {installationMode === "takeover" ? "TAKEOVER" : "COEXISTENCE"}
+              <span style={{ color: "#5eead4", border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
+                COEXISTENCE
               </span>
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
@@ -792,14 +712,6 @@ export default function SelfInstall() {
             {showHelp && (
               <div style={{ background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)", borderRadius: 9, padding: ".8rem 1rem", color: "#fbbf24", fontSize: ".75rem", lineHeight: 1.65 }}>
                 Reset the MikroTik, give it internet, open Winbox → New Terminal, then run Download configuration followed by Run installer. Leave the terminal open until the final “Setup complete” message appears.
-              </div>
-            )}
-            {installationMode === "takeover" && takeoverPlan.length > 0 && (
-              <div style={{ ...panelStyle(), padding: "1rem 1.15rem", background: "rgba(251,191,36,.05)", borderColor: "rgba(251,191,36,.25)" }}>
-                <div style={{ color: "#fbbf24", fontWeight: 800, fontSize: ".82rem" }}>Takeover removal/replacement summary</div>
-                <ul style={{ color: "#fcd34d", fontSize: ".7rem", lineHeight: 1.6, margin: ".45rem 0 0", paddingLeft: "1.1rem" }}>
-                  {takeoverPlan.map(item => <li key={item}>{item}</li>)}
-                </ul>
               </div>
             )}
             <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>

@@ -68,8 +68,8 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   assert.match(script, /\/interface ovpn-client add name="ochola-mgmt-vpn-42"/);
   assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
   assert.match(script, /name="ochola-mgmt-vpn-42" && running=yes/);
-  assert.match(script, /remove \[find where name="coreispbilling"\]/);
-  assert.match(script, /name="ocholasupernet"/);
+  assert.doesNotMatch(script, /remove \[find where name="coreispbilling"\]/);
+  assert.match(script, /name="ochola-mgmt-vpn-42"/);
   assert.doesNotMatch(script, /comment="ISP-42 VPS tunnel"/);
   assert.match(script, /OVPN client creation failed/);
   assert.match(script, /did not establish a running session within 60 seconds/);
@@ -78,6 +78,19 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   assert.match(script, /ocholaVpnChildError/);
   assert.doesNotMatch(script, /on-error=\{ :set ovpnError \$error \}/);
   assert.doesNotMatch(script, /creation failed; check RouterOS/);
+});
+
+test("generic OpenVPN client keeps the main billing interface name and comment", () => {
+  const script = mikrotik.generateRouterAsClientScript({
+    vpsPublicIp: "vpn.example.test",
+    vpnPort: 1196,
+    vpnUsername: "mainbillingvpn",
+    vpnPassword: "one-time-token",
+    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
+    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
+  });
+  assert.match(script, /\/interface ovpn-client add name="ocholasupernet"/);
+  assert.match(script, /name="ocholasupernet"[^\r\n]*comment="mainbillingvpn"/);
 });
 
 test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
@@ -120,11 +133,11 @@ test("installer reads RouterOS version locally and never defaults an unknown rou
   assert.match(scriptsRoute, /RouterOS major version is required/);
 });
 
-test("RouterOS 7 makes the RouterOS 6 path unreachable and skips WireGuard on RouterOS 6", () => {
+test("RouterOS 7 keeps version dispatch explicit and the installer skips fallback children", () => {
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{ :set openVpnUrl/);
   assert.match(scriptsRoute, /minimumMajor >= 7/);
-  assert.match(scriptsRoute, /versionedUrlAssignment\("wireGuardUrl", safeRouterWireGuardUrl, 7\)/);
-  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{\\n\$\{vpnAttempt\("wireguard"/);
+  assert.match(scriptsRoute, /const wireGuardAttempt = ""/);
+  assert.match(scriptsRoute, /const ipsecAttempt = ""/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.doesNotMatch(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
@@ -219,13 +232,9 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   });
   assert.match(script, /\/interface wireguard add/);
   assert.match(script, /management resources verified/);
-  assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{/);
-  assert.doesNotMatch(scriptsRoute, /WIREGUARD skipped: RouterOS 7 or newer is required/);
-  assert.doesNotMatch(scriptsRoute, /WIREGUARD skipped: server-side WireGuard fallback is not configured/);
-  assert.doesNotMatch(scriptsRoute, /IPSEC skipped: server-side IPsec fallback is not configured/);
-  assert.match(scriptsRoute, /routerWireGuardUrl = fallbackUrl\("wireguard"\)/);
-  assert.match(scriptsRoute, /routerIpsecUrl = fallbackUrl\("ipsec"\)/);
-  assert.match(scriptsRoute, /server-side prerequisites/);
+  assert.doesNotMatch(scriptsRoute, /generatedRouterVpnChildScript/);
+  assert.doesNotMatch(scriptsRoute, /routerWireGuardUrl = fallbackUrl/);
+  assert.doesNotMatch(scriptsRoute, /routerIpsecUrl = fallbackUrl/);
 });
 
 test("coexistence fallback resources are router-specific", () => {
@@ -253,11 +262,10 @@ test("coexistence fallback resources are router-specific", () => {
 });
 
 test("coexistence installer is OpenVPN-only", () => {
-  assert.match(scriptsRoute, /const coexistenceFallbacksDisabled = installationMode === "coexist"/);
-  assert.match(scriptsRoute, /const wireGuardAttempt = !coexistenceFallbacksDisabled/);
-  assert.match(scriptsRoute, /const ipsecAttempt = !coexistenceFallbacksDisabled/);
-  assert.match(scriptsRoute, /if \(installationMode === "takeover"\) \{/);
-  assert.match(scriptsRoute, /WireGuard and IPsec fallbacks are disabled for coexistence installs/);
+  assert.match(scriptsRoute, /const wireGuardAttempt = ""/);
+  assert.match(scriptsRoute, /const ipsecAttempt = ""/);
+  assert.match(scriptsRoute, /Only the router-management OpenVPN child is available/);
+  assert.doesNotMatch(scriptsRoute, /takeover/i);
 });
 
 test("IPsec child verifies peer, identity, and policy resources without leaking secrets", () => {
@@ -275,15 +283,11 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.doesNotMatch(script, /address=ipsec\.example\.test\/32/);
   assert.match(script, /IPsec policy was not verified/);
   assert.match(script, /a-secret-with-\\"quotes\\"/);
-  assert.match(scriptsRoute, /server-side prerequisites/);
 });
 
-test("fallback child generation preserves coexistence mode", () => {
-  assert.match(provisioningRoute, /routerId,\s*installationMode,\s*\}\);/);
-  assert.match(
-    scriptsRoute,
-    /generatedRouterVpnChildScript\("ipsec", routerId, material, routerOsMajor, installationMode\)/,
-  );
+test("the installer no longer generates fallback children", () => {
+  assert.doesNotMatch(provisioningRoute, /installationMode/);
+  assert.doesNotMatch(scriptsRoute, /generatedRouterVpnChildScript/);
 });
 
 test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {

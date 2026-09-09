@@ -167,7 +167,6 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
 router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.query.adminId);
-  const installationMode = String(req.query.mode ?? "").trim().toLowerCase() === "coexist" ? "coexist" : "takeover";
   if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
     return;
@@ -186,7 +185,7 @@ router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res):
   const result = await probeInstallRouter(row);
   const heartbeatAgeMs = row.last_seen ? Date.now() - new Date(row.last_seen).getTime() : Number.POSITIVE_INFINITY;
   const heartbeatRecent = heartbeatAgeMs >= 0 && heartbeatAgeMs < 15 * 60 * 1000;
-  const scriptComplete = installationMode === "coexist" || !["setup", "awaiting_connection"].includes(row.status);
+  const scriptComplete = true;
   const ready = result.connected && !!result.probe?.identity && !!result.probe?.version
     && scriptComplete && (row.status !== "awaiting_ports" || heartbeatRecent);
   if (result.connected && result.probe) {
@@ -227,7 +226,6 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
   const routerId = Number(req.body?.routerId);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
   const bridgeName = typeof req.body?.bridge === "string" ? req.body.bridge.trim() : "";
-  const installationMode = req.body?.installationMode === "coexist" ? "coexist" : "takeover";
   const desiredPorts = Array.isArray(req.body?.ports)
     ? req.body.ports.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
     : [];
@@ -235,7 +233,7 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
     return;
   }
-  if (installationMode === "coexist" && desiredPorts.length === 0) {
+  if (desiredPorts.length === 0) {
     res.status(400).json({
       ok: false,
       error: "Coexistence requires at least one physical port assigned to the isolated Ochola bridge.",
@@ -277,25 +275,23 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
         res.status(409).json({ ok: false, error: `Bridge "${bridgeName}" could not be verified on the router.` });
         return;
       }
-      if (installationMode === "coexist") {
-        const expectedBridge = "co-hotspot-bridge";
-        if (bridgeName !== expectedBridge) {
-          res.status(400).json({
-            ok: false,
-            error: `Coexistence must finish against the isolated Ochola bridge "${expectedBridge}".`,
-          });
-          return;
-        }
-        const foreignAssignments = layout.bridgePorts
-          .filter(port => desiredPorts.includes(port.interface) && port.bridge !== expectedBridge)
-          .map(port => `${port.interface} (${port.bridge})`);
-        if (foreignAssignments.length) {
-          res.status(409).json({
-            ok: false,
-            error: `Coexistence will not claim ports already assigned to another billing bridge: ${foreignAssignments.join(", ")}.`,
-          });
-          return;
-        }
+      const expectedBridge = "co-hotspot-bridge";
+      if (bridgeName !== expectedBridge) {
+        res.status(400).json({
+          ok: false,
+          error: `Coexistence must finish against the isolated Ochola bridge "${expectedBridge}".`,
+        });
+        return;
+      }
+      const foreignAssignments = layout.bridgePorts
+        .filter(port => desiredPorts.includes(port.interface) && port.bridge !== expectedBridge)
+        .map(port => `${port.interface} (${port.bridge})`);
+      if (foreignAssignments.length) {
+        res.status(409).json({
+          ok: false,
+          error: `Coexistence will not claim ports already assigned to another billing bridge: ${foreignAssignments.join(", ")}.`,
+        });
+        return;
       }
       const members = new Set(
         layout.bridgePorts.filter(port => port.bridge === bridgeName).map(port => port.interface),

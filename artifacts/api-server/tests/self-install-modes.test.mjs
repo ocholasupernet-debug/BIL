@@ -36,7 +36,6 @@ test("coexistence OpenVPN removes only its exact stale client and preserves fire
     backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
     tunnelRouterIp: "10.8.5.42",
     tunnelVpsIp: "10.8.5.1",
-    installationMode: "coexist",
   });
   assert.match(script, /coexistence conflict/);
   assert.match(script, /interface ovpn-client add name="ocholasupernet"/);
@@ -45,19 +44,6 @@ test("coexistence OpenVPN removes only its exact stale client and preserves fire
   assert.match(script, /existingOvpnRunning/);
   assert.match(script, /interface ovpn-client remove/);
   assert.doesNotMatch(script, /ip firewall filter remove/);
-});
-
-test("takeover retains a separate replacement path", () => {
-  const script = mikrotik.generateRouterAsClientScript({
-    vpsPublicIp: "vpn.example.test",
-    vpnUsername: "router-42",
-    vpnPassword: "router-secret",
-    caCertificateUrl: "https://vpn.example.test/api/vpn/ca.crt",
-    backendRegistrationUrl: "https://vpn.example.test/api/isp/router/register/test-token",
-    installationMode: "takeover",
-  });
-  assert.match(script, /interface ovpn-client remove/);
-  assert.match(script, /ip firewall filter/);
 });
 
 test("WireGuard and IPsec coexistence paths do not delete prior resources", () => {
@@ -78,24 +64,10 @@ test("WireGuard and IPsec coexistence paths do not delete prior resources", () =
   assert.doesNotMatch(ipsec, /\/remove/);
 });
 
-test("takeover authorization is signed, scoped, and backup-first", () => {
-  assert.match(scriptsRoute, /TAKEOVER_CONFIRMATION = "TAKE CONTROL"/);
-  assert.match(scriptsRoute, /authenticatedAdminId\(req, req\.body\?\.adminId\)/);
-  assert.match(scriptsRoute, /verifyTakeoverGrant\(takeoverGrant, Number\(rid\)\)/);
-  const backup = scriptsRoute.indexOf("${takeoverBackup}");
-  const serviceDownload = scriptsRoute.indexOf('/tool fetch url="${scriptsBase}/hotspotsetup.rsc"');
-  assert.ok(backup >= 0 && serviceDownload > backup, "backup must be rendered before managed downloads");
-  assert.match(scriptsRoute, /\/system backup save name=\$takeoverBackup/);
-  assert.match(scriptsRoute, /\/export file=\$takeoverBackup/);
-  assert.match(scriptsRoute, /Supabase customers, billing records, payments, and service history are never deleted/);
-});
-
-test("dashboard Self Install defaults to coexistence and requires typed takeover confirmation", () => {
+test("dashboard Self Install exposes only coexistence installation", () => {
   assert.match(selfInstall, /useState<InstallationMode>\("coexist"\)/);
-  assert.match(selfInstall, /mode: "coexist"/);
-  assert.match(selfInstall, /mode: "takeover"/);
-  assert.match(selfInstall, /takeoverConfirmation !== "TAKE CONTROL"/);
-  assert.match(selfInstall, /self-install\/takeover\/prepare/);
+  assert.match(selfInstall, /Coexistence installation/);
+  assert.doesNotMatch(selfInstall, /takeover/i);
 });
 
 test("failed router setup never blocks creation of the next router", () => {
