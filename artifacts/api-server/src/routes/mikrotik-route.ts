@@ -570,17 +570,28 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
 
   cleanPendingRouterFileSources();
   const token = randomBytes(24).toString("hex");
+  const roamingToken = randomBytes(24).toString("hex");
+  const expiresAt = Date.now() + ROUTER_FILE_SOURCE_TTL_MS;
   pendingRouterFileSources.set(token, {
     content: portal.content,
     contentType: "text/html; charset=utf-8",
     fileName: "login.html",
-    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+    expiresAt,
+  });
+  /* The source endpoint is intentionally one-time. Give the second RouterOS
+     fetch its own token while keeping both uploads tied to this request. */
+  pendingRouterFileSources.set(roamingToken, {
+    content: portal.content,
+    contentType: "text/html; charset=utf-8",
+    fileName: "rlogin.html",
+    expiresAt,
   });
 
   try {
     const destinationPath = `${directory}/login.html`;
     const roamingDestinationPath = `${directory}/rlogin.html`;
     const sourceUrl = `${origin}/api/router-file-source/${token}`;
+    const roamingSourceUrl = `${origin}/api/router-file-source/${roamingToken}`;
     const result = await deployRouterFile(found.creds, {
       destinationPath,
       sourceUrl,
@@ -589,9 +600,9 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
     });
     const roamingResult = await deployRouterFile(found.creds, {
       destinationPath: roamingDestinationPath,
-      sourceUrl,
+      sourceUrl: roamingSourceUrl,
       overwrite,
-      uploadId: `${token.slice(0, 12)}-rlogin`,
+      uploadId: roamingToken.slice(0, 16),
     });
     logger.info({
       routerId: id,
@@ -632,6 +643,7 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
     routerErrorResponse(res, err);
   } finally {
     pendingRouterFileSources.delete(token);
+    pendingRouterFileSources.delete(roamingToken);
   }
 });
 
