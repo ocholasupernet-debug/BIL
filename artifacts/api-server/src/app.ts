@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
+import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import router from "./routes";
 import scriptsRouter from "./routes/scripts-route";
@@ -66,10 +67,21 @@ app.use(scriptsRouter);
 const shouldServeStatic =
   process.env.NODE_ENV === "production" || process.env.SERVE_STATIC === "true";
 if (shouldServeStatic) {
-  const staticDir = path.resolve(
+  const moduleStaticDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../ochola-supernet/dist/public",
+  );
+  const workingDirectoryStaticDir = path.resolve(
     process.cwd(),
     "artifacts/ochola-supernet/dist/public",
   );
+  const staticDirCandidates = [...new Set([
+    moduleStaticDir,
+    workingDirectoryStaticDir,
+  ])];
+  const staticDir =
+    staticDirCandidates.find((candidate) => existsSync(candidate)) ??
+    moduleStaticDir;
 
   if (existsSync(staticDir)) {
     app.use(express.static(staticDir));
@@ -89,7 +101,7 @@ if (shouldServeStatic) {
     logger.info({ staticDir }, "Serving frontend static files");
   } else {
     logger.warn(
-      { staticDir },
+      { staticDir, candidates: staticDirCandidates },
       "Production static serving is enabled but dist/public was not found — run build:vps first",
     );
   }
