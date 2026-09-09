@@ -25,6 +25,7 @@ import {
   fetchRouterFiles,
   fetchRouterSecurityState,
   deployRouterFile,
+  syncHotspotPortalHostname,
   RouterFileExistsError,
   getEnvCredentials,
   isPrivateIp,
@@ -873,6 +874,40 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
   } finally {
     pendingRouterFileSources.delete(token);
     pendingRouterFileSources.delete(roamingToken);
+  }
+});
+
+/* ─── POST /api/router/:id/hotspot-portal/sync-tenant-host ───────────────── */
+router.post("/router/:id/hotspot-portal/sync-tenant-host", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+  const admins = await sbSelect<{ subdomain: string | null }>(
+    "isp_admins",
+    `id=eq.${found.row.admin_id}&select=subdomain&limit=1`,
+  );
+  const subdomain = admins[0]?.subdomain?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain)) {
+    res.status(409).json({ error: "The ISP does not have a valid assigned subdomain." });
+    return;
+  }
+
+  try {
+    const result = await syncHotspotPortalHostname(
+      found.creds,
+      `${subdomain}.isplatty.org`,
+    );
+    logger.info({ routerId: id, adminId, hostname: result.hostname }, "Tenant hotspot hostname synchronized");
+    res.json({ ok: true, routerId: id, routerName: found.row.name, ...result });
+  } catch (err) {
+    routerErrorResponse(res, err);
   }
 });
 

@@ -407,6 +407,58 @@ export async function runRouterCommand(
 }
 
 /**
+ * Add or refresh one tenant portal hostname on the router's active hotspot
+ * gateway. The gateway is read from the active hotspot profile instead of
+ * reusing the management VPN address.
+ */
+export async function syncHotspotPortalHostname(
+  creds: RouterCredentials,
+  hostname: string,
+): Promise<{ hostname: string; hotspotAddress: string; connectedHost: string }> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const profiles = await withTimeout(
+      conn.write([
+        "/ip/hotspot/profile/print",
+        "=.proplist=name,hotspot-address",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const hotspotAddress = profiles.find(row => row["hotspot-address"])?.["hotspot-address"] ?? "";
+    if (!hotspotAddress || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hotspotAddress)) {
+      throw new Error("The router has no active hotspot gateway address.");
+    }
+
+    const existing = await withTimeout(
+      conn.write([
+        "/ip/dns/static/print",
+        "=.proplist=.id,name",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const row of Array.isArray(existing) ? existing : []) {
+      if (row.name?.toLowerCase() === hostname.toLowerCase() && row[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/dns/static/remove", `=.id=${row[".id"]}`]),
+          timeoutMs,
+        );
+      }
+    }
+    await withTimeout(
+      conn.write([
+        "/ip/dns/static/add",
+        `=name=${hostname}`,
+        `=address=${hotspotAddress}`,
+        "=ttl=10s",
+        `=comment=tenant portal ${hostname}`,
+      ]),
+      timeoutMs,
+    );
+    return { hostname, hotspotAddress, connectedHost };
+  });
+}
+
+/**
  * Probes all candidate hosts (primary + VPN) in parallel without attempting
  * a full RouterOS API connection. Useful for pre-flight diagnostics.
  */
