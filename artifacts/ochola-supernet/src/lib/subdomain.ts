@@ -13,6 +13,8 @@ export function getHostSubdomain(): string {
 
   if (
     hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
     hostname.includes("replit.dev") ||
     hostname.includes("repl.co") ||
     hostname.includes("worf.")

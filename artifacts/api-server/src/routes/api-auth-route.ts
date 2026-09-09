@@ -10,7 +10,7 @@ import {
   type ApiTokenPayload,
 } from "../lib/api-auth.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
-import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
+import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -29,8 +29,8 @@ function sendInvalidCredentials(res: Response): void {
 }
 
 router.post("/auth/admin/login", async (req: Request, res: Response): Promise<void> => {
-  const { username, password, api_key } = req.body as {
-    username?: string; password?: string; api_key?: string;
+  const { username, password, api_key, subdomain } = req.body as {
+    username?: string; password?: string; api_key?: string; subdomain?: string;
   };
 
   if (!username || !password) {
@@ -52,9 +52,14 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
     return;
   }
 
-  const tenantSubdomain = getIspSubdomain(req);
-  if (!tenantSubdomain && username.trim().toLowerCase() === "admin") {
-    sendInvalidCredentials(res);
+  const hostTenantSubdomain = getIspSubdomain(req);
+  const requestedSubdomain = typeof subdomain === "string" ? subdomain.trim().toLowerCase() : "";
+  const requestedSubdomainIsValid =
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(requestedSubdomain)
+    && !RESERVED_SUBDOMAINS.has(requestedSubdomain);
+  const tenantSubdomain = hostTenantSubdomain || (requestedSubdomainIsValid ? requestedSubdomain : "");
+  if (!hostTenantSubdomain && !tenantSubdomain) {
+    res.status(400).json({ ok: false, error: "Enter your company subdomain to sign in from isplatty.org." });
     return;
   }
 

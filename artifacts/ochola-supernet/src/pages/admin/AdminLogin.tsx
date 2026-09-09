@@ -15,12 +15,14 @@ export default function AdminLogin() {
   const [, setLocation] = useLocation();
   const [username, setUsername]         = useState("");
   const [password, setPassword]         = useState("");
+  const [companySubdomain, setCompanySubdomain] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const [error, setError]               = useState("");
 
   const [company, setCompany]               = useState<CompanyInfo | null>(null);
   const [companyLoading, setCompanyLoading] = useState(false);
+  const hostSubdomain = getHostSubdomain();
 
   useEffect(() => {
     const sub = getHostSubdomain();
@@ -54,7 +56,11 @@ export default function AdminLogin() {
       const apiLogin = await fetch("/api/auth/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+          ...(hostSubdomain ? {} : { subdomain: companySubdomain.trim().toLowerCase() }),
+        }),
       });
       const apiSession = await apiLogin.json() as {
         ok?: boolean;
@@ -227,7 +233,38 @@ export default function AdminLogin() {
             </div>
           )}
 
-          <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+             {!hostSubdomain && (
+               <div>
+                 <label style={{
+                   display: "block", fontSize: "0.88rem", fontWeight: 600,
+                   color: "var(--isp-text)", marginBottom: 7,
+                 }}>
+                   Company subdomain
+                 </label>
+                 <div style={{ position: "relative" }}>
+                   <span style={{
+                     position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
+                     color: "var(--isp-text-sub)", fontSize: "0.9rem", pointerEvents: "none",
+                   }}>https://</span>
+                   <input
+                     type="text"
+                     value={companySubdomain}
+                     onChange={e => setCompanySubdomain(e.target.value)}
+                     placeholder="your-company"
+                     autoComplete="organization"
+                     style={{ ...inputStyle, paddingLeft: 62, paddingRight: 104 }}
+                   />
+                   <span style={{
+                     position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+                     color: "var(--isp-text-sub)", fontSize: "0.82rem", pointerEvents: "none",
+                   }}>.isplatty.org</span>
+                 </div>
+                 <p style={{ margin: "6px 0 0", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
+                   Use the company name from your ISP address.
+                 </p>
+               </div>
+             )}
             <div>
               <label style={{
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
