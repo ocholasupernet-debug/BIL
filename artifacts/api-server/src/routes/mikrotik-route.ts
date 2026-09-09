@@ -80,11 +80,14 @@ interface BulkDeployJob {
   adminId: number;
   status: BulkDeployJobStatus;
   scope: "hotspot" | "all";
+  importScripts: boolean;
   total: number;
   processed: number;
   deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
   skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
+  imported: Array<{ sourceName: string; destinationPath: string }>;
+  importSkipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   sources: Array<{
     type: DeployableSourceType;
     sourceName: string;
@@ -97,6 +100,22 @@ interface BulkDeployJob {
 }
 const bulkDeployJobs = new Map<string, BulkDeployJob>();
 const BULK_DEPLOY_JOB_TTL_MS = 15 * 60 * 1000;
+const BULK_IMPORT_ORDER = [
+  "management-firewall.rsc",
+  "hotspotsetup.rsc",
+  "pppoesetup.rsc",
+  "users.rsc",
+  "syncusers.rsc",
+  "logpush.rsc",
+  "seclogpush.rsc",
+  "heartbeat.rsc",
+  "syncfull.rsc",
+];
+const BULK_IMPORT_EXCLUDED = new Map([
+  ["mainhotspot.rsc", "router-scoped orchestrator; use Direct installation"],
+  ["vpn6.rsc", "version placeholder; use the router-scoped VPN installer"],
+  ["vpn7.rsc", "version placeholder; use the router-scoped VPN installer"],
+]);
 
 function cleanPendingRouterFileSources(): void {
   const now = Date.now();
@@ -608,6 +627,9 @@ async function runBulkFileDeployment(
   job.status = "running";
   job.updatedAt = Date.now();
   try {
+    if (job.importScripts) {
+      await ensureRouterHttpsTrust(creds);
+    }
     const currentFiles = await fetchRouterFiles(creds);
     job.connectedHost = currentFiles.connectedHost;
     const normaliseName = (value: string): string => value
@@ -621,12 +643,14 @@ async function runBulkFileDeployment(
         .filter(file => file.type.toLowerCase().includes("directory"))
         .map(file => normaliseName(file.name)),
     );
+    const importableDestinations = new Set<string>();
 
     for (const source of job.sources) {
       const { sourceName, destinationPath } = source;
       const normalisedDestination = normaliseName(destinationPath);
       if (existingFiles.has(normalisedDestination)) {
         job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
+        importableDestinations.add(destinationPath);
         job.processed += 1;
         job.updatedAt = Date.now();
         continue;
@@ -667,9 +691,11 @@ async function runBulkFileDeployment(
         });
         job.deployed.push({ sourceName, destinationPath: result.destinationPath, size: result.size });
         existingFiles.add(normalisedDestination);
+        importableDestinations.add(destinationPath);
       } catch (error) {
         if (error instanceof RouterFileExistsError) {
           job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
+          importableDestinations.add(destinationPath);
         } else {
           job.failed.push({
             sourceName,
@@ -684,7 +710,51 @@ async function runBulkFileDeployment(
       }
     }
 
-    job.status = "complete";
+    if (job.importScripts) {
+      const order = new Map(BULK_IMPORT_ORDER.map((name, index) => [name, index]));
+      const scriptsToImport = job.sources
+        .filter(source => source.type === "script")
+        .slice()
+        .sort((a, b) => (order.get(a.sourceName) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.sourceName) ?? Number.MAX_SAFE_INTEGER));
+
+      for (const source of scriptsToImport) {
+        const excludedReason = BULK_IMPORT_EXCLUDED.get(source.sourceName);
+        if (excludedReason) {
+          job.importSkipped.push({
+            sourceName: source.sourceName,
+            destinationPath: source.destinationPath,
+            reason: excludedReason,
+          });
+          job.updatedAt = Date.now();
+          continue;
+        }
+        if (!importableDestinations.has(source.destinationPath)) {
+          job.importSkipped.push({
+            sourceName: source.sourceName,
+            destinationPath: source.destinationPath,
+            reason: "upload did not complete; existing or partial file was not imported",
+          });
+          job.updatedAt = Date.now();
+          continue;
+        }
+        try {
+          await runRouterScript(creds, source.destinationPath);
+          job.imported.push({
+            sourceName: source.sourceName,
+            destinationPath: source.destinationPath,
+          });
+        } catch (error) {
+          job.failed.push({
+            sourceName: source.sourceName,
+            destinationPath: source.destinationPath,
+            error: `Import failed: ${error instanceof Error ? error.message : "RouterOS import failed"}`,
+          });
+        }
+        job.updatedAt = Date.now();
+      }
+    }
+
+    job.status = job.failed.length > 0 ? "failed" : "complete";
     job.updatedAt = Date.now();
     logger.info({
       routerId: job.routerId,
@@ -694,6 +764,8 @@ async function runBulkFileDeployment(
       deployed: job.deployed.length,
       skipped: job.skipped.length,
       failed: job.failed.length,
+      imported: job.imported.length,
+      importSkipped: job.importSkipped.length,
     }, "Bulk files processed");
   } catch (error) {
     job.status = "failed";
@@ -714,6 +786,7 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
   const scope = String(req.body?.scope ?? "hotspot").trim().toLowerCase();
+  const importScripts = req.body?.importScripts === true;
   if (scope !== "hotspot" && scope !== "all") {
     res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
     return;
@@ -754,11 +827,14 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     adminId,
     status: "queued",
     scope,
+    importScripts,
     total: sources.length,
     processed: 0,
     deployed: [],
     skipped: [],
     failed: [],
+    imported: [],
+    importSkipped: [],
     sources,
     createdAt: now,
     updatedAt: now,
@@ -770,6 +846,7 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     status: job.status,
     total: job.total,
     scope,
+    importScripts,
     destinationDirectory: "flash/hotspot",
   });
   void runBulkFileDeployment(job, found.creds, requestOrigin(req));
@@ -803,6 +880,8 @@ router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<voi
     deployed: job.deployed,
     skipped: job.skipped,
     failed: job.failed,
+    imported: job.imported,
+    importSkipped: job.importSkipped,
     connectedHost: job.connectedHost,
     error: job.error,
   });

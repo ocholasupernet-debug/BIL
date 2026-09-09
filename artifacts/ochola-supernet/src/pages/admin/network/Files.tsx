@@ -422,7 +422,7 @@ export default function Files() {
   async function deployAllApprovedFiles(): Promise<void> {
     if (!selectedRouter || allDeployableSources.length === 0 || bulkDeploying) return;
     const confirmed = window.confirm(
-      `Deploy all ${allDeployableSources.length} approved files to ${selectedRouter.name}? Portal assets go to flash/hotspot and RouterOS scripts, including PPPoE files, go to the router root. Existing files will be skipped. Scripts will not be imported or executed.`,
+      `Push and import all ${allDeployableSources.length} approved files into ${selectedRouter.name}? Portal assets go to flash/hotspot. Runnable RouterOS scripts, including PPPoE and management-firewall configs, will be imported and may change router services and firewall rules. Existing files are reused. Router-scoped installer placeholders are not executed.`,
     );
     if (!confirmed) return;
 
@@ -441,7 +441,7 @@ export default function Files() {
       const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy-bulk`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ adminId, scope: "all", destinationDirectory: "flash/hotspot" }),
+        body: JSON.stringify({ adminId, scope: "all", importScripts: true, destinationDirectory: "flash/hotspot" }),
       });
       let data: {
         error?: string;
@@ -453,6 +453,8 @@ export default function Files() {
         deployed?: Array<{ sourceName: string }>;
         skipped?: Array<{ sourceName: string; reason: string }>;
         failed?: Array<{ sourceName: string; error: string }>;
+        imported?: Array<{ sourceName: string }>;
+        importSkipped?: Array<{ sourceName: string; reason: string }>;
       } = {};
       try {
         data = await response.json();
@@ -467,7 +469,7 @@ export default function Files() {
       }
 
       if (response.status === 202 && data.jobId) {
-        setBulkDeployMessage(`Bulk deployment started: 0 of ${data.total ?? allDeployableSources.length} files processed…`);
+        setBulkDeployMessage(`Push and import started: 0 of ${data.total ?? allDeployableSources.length} files pushed…`);
         const maxPolls = 180;
         for (let attempt = 0; attempt < maxPolls; attempt += 1) {
           await new Promise(resolve => window.setTimeout(resolve, 2000));
@@ -491,15 +493,17 @@ export default function Files() {
           const total = progress.total ?? data.total ?? allDeployableSources.length;
           const processed = progress.processed ?? 0;
           if (progress.status === "queued" || progress.status === "running") {
-            setBulkDeployMessage(`Deploying approved files… ${processed} of ${total} processed.`);
+            setBulkDeployMessage(`Pushing and importing approved files… ${processed} of ${total} pushed.`);
             continue;
           }
 
           const deployedCount = progress.deployed?.length ?? 0;
           const skippedCount = progress.skipped?.length ?? 0;
           const failedCount = progress.failed?.length ?? 0;
+          const importedCount = progress.imported?.length ?? 0;
+          const importSkippedCount = progress.importSkipped?.length ?? 0;
           setBulkDeployMessage(
-            `Processed ${total} assets: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
+            `Pushed ${total} files: ${deployedCount} uploaded, ${skippedCount} already present, ${importedCount} imported, ${importSkippedCount} held for router-scoped install, ${failedCount} failed.`,
           );
           setBulkDeployError(progress.status === "failed" || failedCount > 0);
           void filesQuery.refetch();
@@ -511,8 +515,10 @@ export default function Files() {
       const deployedCount = data.deployed?.length ?? 0;
       const skippedCount = data.skipped?.length ?? 0;
       const failedCount = data.failed?.length ?? 0;
+      const importedCount = data.imported?.length ?? 0;
+      const importSkippedCount = data.importSkipped?.length ?? 0;
       setBulkDeployMessage(
-        `Processed ${allDeployableSources.length} files: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
+        `Pushed ${allDeployableSources.length} files: ${deployedCount} uploaded, ${skippedCount} already present, ${importedCount} imported, ${importSkippedCount} held for router-scoped install, ${failedCount} failed.`,
       );
       setBulkDeployError(failedCount > 0);
       void filesQuery.refetch();
@@ -945,10 +951,10 @@ export default function Files() {
             }}>
               <div>
                 <strong style={{ display: "block", color: "var(--isp-text)", fontSize: "0.76rem" }}>
-                  Deploy all approved files
+                  Push and import all approved files
                 </strong>
                 <span style={{ display: "block", marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
-                  Publishes {allDeployableSources.length} approved files, including PPPoE and management-firewall configs. Portal assets go to flash/hotspot and RouterOS scripts go to the router root. Existing files are skipped; scripts are uploaded but not executed.
+                  Uploads all {allDeployableSources.length} approved files, then imports runnable RouterOS configs in order, including PPPoE and management-firewall configs. Existing files are reused; router-scoped installer placeholders are held back.
                 </span>
               </div>
               <button
@@ -976,7 +982,7 @@ export default function Files() {
                 {bulkDeploying
                   ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
                   : <FileUp size={13} />}
-                {bulkDeploying ? "Deploying all…" : "Deploy all files"}
+                {bulkDeploying ? "Pushing and importing…" : "Push & import all"}
               </button>
             </div>
             {bulkDeployMessage && (
