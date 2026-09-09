@@ -25,6 +25,7 @@ import {
   fetchRouterFiles,
   fetchRouterSecurityState,
   deployRouterFile,
+  promoteHotspotPortalToFlash,
   RouterFileExistsError,
   getEnvCredentials,
   isPrivateIp,
@@ -873,6 +874,39 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
   } finally {
     pendingRouterFileSources.delete(token);
     pendingRouterFileSources.delete(roamingToken);
+  }
+});
+
+/* ─── POST /api/router/:id/hotspot-portal/promote-current ────────────────── */
+/**
+ * Repairs routers that have a generated portal in hotspot/ while the active
+ * hotspot service serves flash/hotspot/. Only the two generated portal files
+ * are copied; shared assets in flash/hotspot remain untouched.
+ */
+router.post("/router/:id/hotspot-portal/promote-current", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  try {
+    const result = await promoteHotspotPortalToFlash(found.creds);
+    logger.info({ routerId: id, adminId }, "Generated hotspot portal promoted to active flash directory");
+    res.json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      connectedHost: result.connectedHost,
+      files: result.files.filter(file => /flash\/hotspot\/(?:login|rlogin)\.html$/i.test(file.name)),
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
   }
 });
 

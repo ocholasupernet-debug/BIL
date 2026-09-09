@@ -620,6 +620,60 @@ export async function fetchRouterFiles(creds: RouterCredentials): Promise<Router
   });
 }
 
+/**
+ * Promote the already-generated branded portal from the router's root
+ * hotspot directory into the active flash/hotspot directory. This is used
+ * when an older installer wrote the portal to the non-active directory.
+ */
+export async function promoteHotspotPortalToFlash(
+  creds: RouterCredentials,
+): Promise<{ files: RouterFile[]; connectedHost: string }> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const files = ["login.html", "rlogin.html"];
+    for (const file of files) {
+      const sourcePath = `hotspot/${file}`;
+      const destinationPath = `flash/hotspot/${file}`;
+      const existing = await withTimeout(
+        conn.write([
+          "/file/print",
+          "=.proplist=.id,name",
+          `?name=${destinationPath}`,
+        ]),
+        creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(existing) ? existing : []) {
+        if (row[".id"]) {
+          await withTimeout(
+            conn.write(["/file/remove", `=.id=${row[".id"]}`]),
+            creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS,
+          );
+        }
+      }
+      await withTimeout(
+        conn.write([
+          "/file/copy",
+          `=file-name=${sourcePath}`,
+          `=dst-path=${destinationPath}`,
+        ]),
+        Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 120_000),
+      );
+    }
+
+    const verified = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size,creation-time",
+        "?name=flash/hotspot/",
+      ]),
+      creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS,
+    ) as Record<string, string>[];
+    return {
+      files: (Array.isArray(verified) ? verified : []).map(routerFileFromRow),
+      connectedHost,
+    };
+  });
+}
+
 /* ─── Data types ─────────────────────────────────────────────────────────── */
 
 export interface ActiveHotspotUser {
