@@ -128,7 +128,7 @@ async function resolveRequestCredentials(body: {
 
 /* ─── POST /api/admin/router/ports ─────────────────────────────────────── */
 router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res): Promise<void> => {
-  const { host, username, password, bridgeIp, port, routerId, adminId } = req.body as {
+  const { host, username, password, bridgeIp, port, routerId, adminId, installationMode } = req.body as {
     host: string;
     username: string;
     password: string;
@@ -136,6 +136,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
     port?: number;
     routerId?: number;
     adminId?: number;
+    installationMode?: "coexist" | "takeover";
   };
 
   try {
@@ -145,7 +146,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
        adminId: authenticatedAdminId(req, adminId),
     });
     const layout = await fetchBridgePortLayout(creds);
-    const coexistenceBridge = routerId
+    const coexistenceBridge = installationMode === "coexist" && routerId
       ? coexistenceBridgeName(Number(routerId))
       : null;
     res.json({ ok: true, ...layout, coexistenceBridge });
@@ -163,7 +164,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
 
 /* ─── POST /api/admin/router/bridge-assign ──────────────────────────────── */
 router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (req, res): Promise<void> => {
-  const { host, username, password, bridge, addPorts, removePorts, desiredPorts, bridgeIp, port, routerId, adminId } = req.body as {
+  const { host, username, password, bridge, addPorts, removePorts, desiredPorts, bridgeIp, port, routerId, adminId, installationMode } = req.body as {
     host: string;
     username: string;
     password: string;
@@ -175,6 +176,7 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
     port?: number;
     routerId?: number;
     adminId?: number;
+    installationMode?: "coexist" | "takeover";
   };
 
   if (!bridge) {
@@ -196,7 +198,7 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
   const creds = resolved.creds;
   const add = Array.isArray(addPorts) ? addPorts : [];
   const remove = Array.isArray(removePorts) ? removePorts : [];
-  {
+  if (installationMode !== "takeover") {
     if (!routerId) {
       res.status(400).json({ ok: false, error: "Coexistence port changes require a router-scoped request.", logs: ["❌ Router-scoped coexistence request required"] });
       return;

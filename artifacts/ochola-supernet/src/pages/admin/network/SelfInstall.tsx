@@ -23,7 +23,8 @@ const CONFIG_CATEGORIES = [
 ] as const;
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
-type InstallationMode = "coexist";
+type InstallationMode = "coexist" | "takeover";
+const TAKEOVER_CONFIRMATION = "TAKE CONTROL";
 
 interface RouterSummary {
   id: number;
@@ -126,6 +127,15 @@ interface CopyResult {
   targetRouter?: { id: number; name: string };
   categories?: Record<string, { ok: boolean; count: number; logs: string[]; error?: string }>;
   logs?: string[];
+  error?: string;
+}
+
+interface TakeoverPreparation {
+  ok: boolean;
+  grantToken?: string;
+  expiresInSeconds?: number;
+  confirmation?: string;
+  removalPlan?: string[];
   error?: string;
 }
 
@@ -302,6 +312,7 @@ export default function SelfInstall() {
   const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
   const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
+  const [takeoverConfirmation, setTakeoverConfirmation] = useState("");
   const [installerGrant, setInstallerGrant] = useState("");
   const [portsLoading, setPortsLoading] = useState(false);
   const [ports, setPorts] = useState<PortsPayload | null>(null);
@@ -347,7 +358,7 @@ export default function SelfInstall() {
   }, [sourceRouters.length, sourceRouterId]);
 
   const statusQuery = useQuery<InstallStatus>({
-    queryKey: ["self-install-status", adminId, activeRouterId],
+     queryKey: ["self-install-status", adminId, activeRouterId, installationMode],
     queryFn: () => {
       if (!adminId) throw new Error("Sign in to an ISP account before checking router installation.");
        return jsonRequest<InstallStatus>(`/api/admin/router/install-status/${activeRouterId}?adminId=${adminId}&mode=${installationMode}`);
@@ -380,6 +391,10 @@ export default function SelfInstall() {
       setPageError("The router selected for reconfiguration is not available in this ISP account.");
       return;
     }
+    if (installationMode === "takeover" && takeoverConfirmation.trim() !== TAKEOVER_CONFIRMATION) {
+      setPageError(`Type ${TAKEOVER_CONFIRMATION} exactly to authorize Router Takeover.`);
+      return;
+    }
     setGenerating(true);
     setPageError(null);
     try {
@@ -391,11 +406,17 @@ export default function SelfInstall() {
         }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
-      const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>(
-        "/api/admin/router/self-install/grant",
+      const prepared = await jsonRequest<TakeoverPreparation>(
+        installationMode === "takeover"
+          ? "/api/admin/router/self-install/takeover/prepare"
+          : "/api/admin/router/self-install/grant",
         {
           method: "POST",
-          body: JSON.stringify({ routerId: result.router.id, adminId }),
+          body: JSON.stringify({
+            routerId: result.router.id,
+            adminId,
+            ...(installationMode === "takeover" ? { confirmation: takeoverConfirmation.trim() } : {}),
+          }),
         },
       );
       if (!prepared.ok || !prepared.grantToken) {
@@ -433,6 +454,7 @@ export default function SelfInstall() {
     setSelectedPorts(new Set());
     setPortState({});
     setInstallerGrant("");
+    setTakeoverConfirmation("");
     setPageError(null);
     setCopyResult(null);
     setCopySkipped(false);
@@ -444,13 +466,13 @@ export default function SelfInstall() {
   const publicApiOrigin = (
     getHostSubdomain() ? window.location.origin : (API || window.location.origin)
   ).replace(/\/$/, "");
-  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${encodeURIComponent(installerGrant || "missing-grant")}`;
+  const scriptUrl = `${publicApiOrigin}/api/scripts/self-install-mainhotspot/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${installationMode}/${encodeURIComponent(installerGrant || "missing-grant")}`;
   // The installer bootstraps the public CA inside mainhotspot.rsc. The first
   // fetch must therefore be unverified; every child download performed by the
   // imported script uses verified HTTPS after the CA is installed.
   const fetchCommand = `/tool fetch url="${scriptUrl}" dst-path=mainhotspot.rsc keep-result=yes mode=https check-certificate=no`;
   const manualVpnUrl = (routerOsMajor: 6 | 7) =>
-    `${publicApiOrigin}/api/scripts/router-vpn-manual/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${routerOsMajor}/${encodeURIComponent(installerGrant || "missing-grant")}`;
+    `${publicApiOrigin}/api/scripts/router-vpn-manual/${encodeURIComponent(String(activeRouterId ?? ""))}/${encodeURIComponent(String(adminId ?? ""))}/${routerOsMajor}/${encodeURIComponent(installerGrant || "missing-grant")}?mode=${installationMode}`;
   const manualVpnFetchCommand = (routerOsMajor: 6 | 7) =>
     `/tool fetch url="${manualVpnUrl(routerOsMajor)}" dst-path=ochola-management-vpn-ros${routerOsMajor}.rsc keep-result=yes mode=https check-certificate=no`;
 
@@ -649,13 +671,37 @@ export default function SelfInstall() {
               <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".86rem", marginBottom: ".45rem" }}>
                 Add this router to the ISP
               </div>
-              <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#5eead4", fontWeight: 800, fontSize: ".76rem" }}>
-                  <CheckCircle2 size={15} /> Coexistence installation
-                </div>
-                <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
-                  Preserves existing billing, customer-access, and LAN services while adding isolated Ochola management resources.
-                </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(170px,.45fr) 1fr", gap: 12, alignItems: "start" }}>
+                <label style={{ color: "var(--isp-text-muted)", fontSize: ".72rem", fontWeight: 700 }}>
+                  Installation mode
+                  <select value={installationMode} onChange={event => {
+                    setInstallationMode(event.target.value as InstallationMode);
+                    setTakeoverConfirmation("");
+                  }} style={{ display: "block", width: "100%", marginTop: ".35rem", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "inherit", fontSize: ".76rem" }}>
+                    <option value="coexist">Coexistence — preserve existing services</option>
+                    <option value="takeover">Router Takeover — replace router services</option>
+                  </select>
+                </label>
+                {installationMode === "coexist" ? (
+                  <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#5eead4", fontWeight: 800, fontSize: ".76rem" }}>
+                      <CheckCircle2 size={15} /> Coexistence installation
+                    </div>
+                    <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
+                      Preserves existing billing, customer-access, LAN, and foreign VPN services while adding isolated Ochola management resources.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(248,113,113,.3)", background: "rgba(248,113,113,.07)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#fca5a5", fontWeight: 800, fontSize: ".76rem" }}>
+                      <AlertTriangle size={15} /> Router Takeover is destructive
+                    </div>
+                    <div style={{ color: "#fecaca", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
+                      Creates a binary backup and text export first, then may replace router service resources. Supabase customers, billing, payments, and service history remain intact.
+                    </div>
+                    <input value={takeoverConfirmation} onChange={event => setTakeoverConfirmation(event.target.value)} placeholder={TAKEOVER_CONFIRMATION} aria-label="Takeover confirmation" style={{ width: "100%", boxSizing: "border-box", marginTop: ".6rem", background: "#0a0f1a", color: "#fecaca", border: "1px solid rgba(248,113,113,.35)", borderRadius: 6, padding: ".5rem .6rem", fontFamily: "monospace", fontSize: ".72rem" }} />
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ ...panelStyle(), padding: "1.2rem 1.3rem", display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -699,8 +745,8 @@ export default function SelfInstall() {
                 <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".9rem" }}>{routerName}</div>
                 <div style={{ color: "var(--isp-text-muted)", fontSize: ".73rem", marginTop: 2 }}>Persistent management address: <code style={{ color: "#5eead4" }}>{status?.vpnIp || activeRouter?.vpn_ip || "assigning…"}</code></div>
               </div>
-              <span style={{ color: "#5eead4", border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
-                COEXISTENCE
+              <span style={{ color: installationMode === "coexist" ? "#5eead4" : "#fca5a5", border: `1px solid ${installationMode === "coexist" ? "rgba(94,234,212,.25)" : "rgba(248,113,113,.3)"}`, background: installationMode === "coexist" ? "rgba(94,234,212,.06)" : "rgba(248,113,113,.07)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
+                {installationMode === "coexist" ? "COEXISTENCE" : "ROUTER TAKEOVER"}
               </span>
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
@@ -712,6 +758,11 @@ export default function SelfInstall() {
             {showHelp && (
               <div style={{ background: "rgba(251,191,36,.06)", border: "1px solid rgba(251,191,36,.22)", borderRadius: 9, padding: ".8rem 1rem", color: "#fbbf24", fontSize: ".75rem", lineHeight: 1.65 }}>
                 Reset the MikroTik, give it internet, open Winbox → New Terminal, then run Download configuration followed by Run installer. Leave the terminal open until the final “Setup complete” message appears.
+              </div>
+            )}
+            {installationMode === "takeover" && (
+              <div style={{ background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 9, padding: ".8rem 1rem", color: "#fecaca", fontSize: ".75rem", lineHeight: 1.6 }}>
+                Router Takeover is authorized for this router only and expires shortly. The installer creates and verifies both backup files before changing services; if that boundary fails, it stops.
               </div>
             )}
             <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>

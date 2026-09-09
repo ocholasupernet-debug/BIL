@@ -64,10 +64,47 @@ test("WireGuard and IPsec coexistence paths do not delete prior resources", () =
   assert.doesNotMatch(ipsec, /\/remove/);
 });
 
-test("dashboard Self Install exposes only coexistence installation", () => {
+test("dashboard Self Install exposes explicit coexistence and Router Takeover modes", () => {
   assert.match(selfInstall, /useState<InstallationMode>\("coexist"\)/);
   assert.match(selfInstall, /Coexistence installation/);
-  assert.doesNotMatch(selfInstall, /takeover/i);
+  assert.match(selfInstall, /Router Takeover/);
+  assert.match(selfInstall, /TAKE CONTROL/);
+  assert.match(selfInstall, /self-install\/takeover\/prepare/);
+  const confirmationGuard = selfInstall.indexOf('takeoverConfirmation.trim() !== TAKEOVER_CONFIRMATION');
+  const ensureProfile = selfInstall.indexOf('/api/admin/router/ensure');
+  assert.ok(confirmationGuard >= 0 && ensureProfile > confirmationGuard, "takeover confirmation must be checked before creating a router profile");
+});
+
+test("takeover authorization is exact, short-lived, and router-scoped", () => {
+  assert.match(scriptsRoute, /const TAKEOVER_GRANT_TTL_MS = 10 \* 60 \* 1000/);
+  assert.match(scriptsRoute, /parts\[0\] !== "tko" \|\| parts\[1\] !== "v1"/);
+  assert.match(scriptsRoute, /grantRouterId !== routerId/);
+  assert.match(scriptsRoute, /Type \$\{TAKEOVER_CONFIRMATION\} exactly/);
+});
+
+test("takeover scripts verify both backups before destructive imports", () => {
+  assert.match(scriptsRoute, /system backup save name=\$takeoverBackup/);
+  assert.match(scriptsRoute, /RouterOS binary backup could not be verified/);
+  assert.match(scriptsRoute, /RouterOS text export could not be verified/);
+  const backup = scriptsRoute.indexOf("const takeoverBackup =");
+  const firstDestructiveImport = scriptsRoute.indexOf('/import "hotspotsetup.rsc.download"');
+  assert.ok(backup >= 0 && firstDestructiveImport > backup, "backup boundary must precede staged service imports");
+});
+
+test("takeover VPN children explicitly use replacement behavior", () => {
+  const wireguard = mikrotik.generateRouterWireGuardClientScript({
+    endpoint: "wg.example.test",
+    serverPublicKey: "A".repeat(43),
+    clientPrivateKey: "B".repeat(43),
+    installationMode: "takeover",
+  });
+  const ipsec = mikrotik.generateRouterIpsecClientScript({
+    endpoint: "ipsec.example.test",
+    preSharedKey: "router-secret",
+    installationMode: "takeover",
+  });
+  assert.match(wireguard, /\/interface wireguard remove/);
+  assert.match(ipsec, /\/ip ipsec peer remove/);
 });
 
 test("failed router setup never blocks creation of the next router", () => {

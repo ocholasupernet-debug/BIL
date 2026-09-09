@@ -602,6 +602,7 @@ export function generatedRouterVpnChildScript(
   routerId: number,
   material: { endpoint: string; endpointPort?: number; assignedIp: string; serverPublicKey?: string; secret: string },
   routerOsMajor = 6,
+  installationMode: "coexist" | "takeover" = "coexist",
 ): string {
   if (technology === "wireguard") {
     if (!material.serverPublicKey) throw new Error("WireGuard server public key is missing.");
@@ -613,6 +614,7 @@ export function generatedRouterVpnChildScript(
       tunnelRouterIp: material.assignedIp,
       tunnelVpsIp: ROUTER_MANAGEMENT_VPN.gateway,
       routerId,
+      installationMode,
     });
   }
   return generateRouterIpsecClientScript({
@@ -622,5 +624,6 @@ export function generatedRouterVpnChildScript(
     tunnelVpsIp: ROUTER_MANAGEMENT_VPN.gateway,
     routerId,
     routerOsMajor,
+    installationMode,
   });
 }

@@ -2165,6 +2165,8 @@ export interface RouterAsClientOptions {
   routerOsMajor?: number;
   /** Select the isolated backup management OpenVPN instance. */
   vpnRole?: RouterManagementVpnRole;
+  /** Destructive takeover may replace matching router resources; coexistence never does. */
+  installationMode?: "coexist" | "takeover";
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2182,6 +2184,8 @@ export interface RouterWireGuardClientOptions {
   tunnelVpsIp?: string;
   /** Router ID for comment labels. */
   routerId?: number;
+  /** Destructive takeover may replace matching router resources; coexistence never does. */
+  installationMode?: "coexist" | "takeover";
 }
 
 export interface RouterIpsecClientOptions {
@@ -2197,6 +2201,8 @@ export interface RouterIpsecClientOptions {
   routerId?: number;
   /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
   routerOsMajor?: number;
+  /** Destructive takeover may replace matching router resources; coexistence never does. */
+  installationMode?: "coexist" | "takeover";
 }
 
 function routerOsString(value: string): string {
@@ -2273,6 +2279,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerId,
     routerOsMajor = 6,
     vpnRole = "primary",
+    installationMode = "coexist",
   } = opts;
 
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
@@ -2281,7 +2288,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
-  const coexistence = true;
+  const coexistence = installationMode === "coexist";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
   /* RouterOS 6 calls the CBC cipher "aes128"; RouterOS 7 uses the
@@ -2529,8 +2536,9 @@ export function generateRouterWireGuardClientScript(opts: RouterWireGuardClientO
     tunnelRouterIp = "10.8.5.2",
     tunnelVpsIp = "10.8.5.1",
     routerId,
+    installationMode = "coexist",
   } = opts;
-  const coexistence = true;
+  const coexistence = installationMode === "coexist";
   const tag = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "corebillingvpn";
   const interfaceName = coexistence && routerId ? `ochola-mgmt-wg-${routerId}` : "ochola-wg";
   const preparation = coexistence
@@ -2575,10 +2583,11 @@ export function generateRouterIpsecClientScript(opts: RouterIpsecClientOptions):
     tunnelVpsIp = "10.8.5.1",
     routerId,
     routerOsMajor = 6,
+    installationMode = "coexist",
   } = opts;
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
-  const coexistence = true;
+  const coexistence = installationMode === "coexist";
   const tag = coexistence && routerId ? `ochola-mgmt-ipsec-${routerId}` : "corebillingvpn";
   const peerName = `ochola-ipsec-${routerId ?? "management"}`;
   const identityIds = routerId

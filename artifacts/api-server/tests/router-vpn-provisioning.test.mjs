@@ -44,9 +44,10 @@ test("IPsec fallback uses per-router identities for unique server PSKs", () => {
   assert.match(mikrotik, /remote-id=fqdn:ochola-router-\$\{routerId\}-server/);
 });
 
-test("child import failures preserve the RouterOS error and phase", () => {
+test("child import failures preserve the RouterOS error and phase for both install modes", () => {
   assert.match(provisioning, /routerOsMajor = 6/);
-  assert.doesNotMatch(provisioning, /installationMode/);
+  assert.match(provisioning, /installationMode/);
+  assert.match(provisioning, /generatedRouterVpnChildScript/);
 });
 
 test("legacy and migration VPN networks remain explicitly separate", () => {

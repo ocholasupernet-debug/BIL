@@ -133,11 +133,11 @@ test("installer reads RouterOS version locally and never defaults an unknown rou
   assert.match(scriptsRoute, /RouterOS major version is required/);
 });
 
-test("RouterOS 7 keeps version dispatch explicit and the installer skips fallback children", () => {
+test("RouterOS 7 keeps version dispatch explicit and Router Takeover enables fallback children", () => {
   assert.match(scriptsRoute, /:if \(\$majorVersion >= 7\) do=\{ :set openVpnUrl/);
   assert.match(scriptsRoute, /minimumMajor >= 7/);
-  assert.match(scriptsRoute, /const wireGuardAttempt = ""/);
-  assert.match(scriptsRoute, /const ipsecAttempt = ""/);
+  assert.match(scriptsRoute, /const wireGuardAttempt = installationMode === "takeover" && routerWireGuardUrl/);
+  assert.match(scriptsRoute, /const ipsecAttempt = installationMode === "takeover" && routerIpsecUrl/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.doesNotMatch(scriptsRoute, /RouterOS 7 dry-run rejected the child script/);
   assert.match(scriptsRoute, /OCHOLA_ROUTER_VPN_ERROR/);
@@ -232,7 +232,7 @@ test("WireGuard child is isolated and contains no RouterOS 6 import path", () =>
   });
   assert.match(script, /\/interface wireguard add/);
   assert.match(script, /management resources verified/);
-  assert.doesNotMatch(scriptsRoute, /generatedRouterVpnChildScript/);
+  assert.match(scriptsRoute, /generatedRouterVpnChildScript/);
   assert.doesNotMatch(scriptsRoute, /routerWireGuardUrl = fallbackUrl/);
   assert.doesNotMatch(scriptsRoute, /routerIpsecUrl = fallbackUrl/);
 });
@@ -262,10 +262,10 @@ test("coexistence fallback resources are router-specific", () => {
 });
 
 test("coexistence installer is OpenVPN-only", () => {
-  assert.match(scriptsRoute, /const wireGuardAttempt = ""/);
-  assert.match(scriptsRoute, /const ipsecAttempt = ""/);
-  assert.match(scriptsRoute, /Only the router-management OpenVPN child is available/);
-  assert.doesNotMatch(scriptsRoute, /takeover/i);
+  assert.match(scriptsRoute, /const wireGuardAttempt = installationMode === "takeover"/);
+  assert.match(scriptsRoute, /const ipsecAttempt = installationMode === "takeover"/);
+  assert.match(scriptsRoute, /WireGuard and IPsec fallbacks are disabled for coexistence installs/);
+  assert.match(scriptsRoute, /if \(installationMode === "coexist"\)/);
 });
 
 test("IPsec child verifies peer, identity, and policy resources without leaking secrets", () => {
@@ -285,9 +285,10 @@ test("IPsec child verifies peer, identity, and policy resources without leaking 
   assert.match(script, /a-secret-with-\\"quotes\\"/);
 });
 
-test("the installer no longer generates fallback children", () => {
-  assert.doesNotMatch(provisioningRoute, /installationMode/);
-  assert.doesNotMatch(scriptsRoute, /generatedRouterVpnChildScript/);
+test("Router Takeover can generate fallback children while coexistence stays OpenVPN-only", () => {
+  assert.match(provisioningRoute, /installationMode/);
+  assert.match(scriptsRoute, /generatedRouterVpnChildScript/);
+  assert.match(scriptsRoute, /installationMode === "takeover"/);
 });
 
 test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {
@@ -310,7 +311,7 @@ test("IPsec renders explicit RouterOS 6 and 7 compatibility paths", () => {
 });
 
 test("fallback order is OpenVPN then WireGuard then IPsec and stops after success", () => {
-  const renderedBundle = scriptsRoute.slice(scriptsRoute.indexOf("const renderedScript = `# ${safeCompanyName} Main ISP Setup Script"));
+  const renderedBundle = scriptsRoute.slice(scriptsRoute.indexOf("const renderedScript = `# ${safeCompanyName} Takeover Setup Script"));
   const openVpn = renderedBundle.indexOf('${vpnAttempt("openvpn"');
   const wireGuard = renderedBundle.indexOf("${wireGuardAttempt}");
   const ipsec = renderedBundle.indexOf("${ipsecAttempt}");

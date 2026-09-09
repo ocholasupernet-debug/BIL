@@ -7,6 +7,8 @@ import { genPPPoEVlan, parsePPPoEVlanConfig, type DbRouter as PPPoEDbRouter } fr
 import { buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
 import {
   generateRouterAsClientScript,
+  generateRouterIpsecClientScript,
+  generateRouterWireGuardClientScript,
 } from "../lib/mikrotik.js";
 import { allocateRouterVpnIp, isRouterVpnIp, routerVpnPeerIp, ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
@@ -28,9 +30,12 @@ import {
 } from "../lib/router-https-trust.js";
 import { buildMainIspConfigurationRsc } from "./isp-configuration-route.js";
 import {
+  generatedRouterVpnChildScript,
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnBackup,
   provisionRouterManagementOpenVpnPair,
+  provisionRouterManagementVpn,
+  routerFallbackMaterial,
 } from "../lib/router-vpn-provisioning.js";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -38,6 +43,13 @@ import { validateGeneratedRouterScript } from "../lib/router-script-validation.j
 export { validateGeneratedRouterScript } from "../lib/router-script-validation.js";
 
 const router: IRouter = Router();
+const TAKEOVER_CONFIRMATION = "TAKE CONTROL";
+const TAKEOVER_GRANT_TTL_MS = 10 * 60 * 1000;
+const TAKEOVER_PLAN = [
+  "A verified RouterOS binary backup and text export are created before service changes.",
+  "Existing hotspot, PPPoE, DHCP, pool, RADIUS, firewall/NAT, VPN, user, and scheduler resources may be replaced.",
+  "Supabase customers, billing records, payments, and service history are never deleted.",
+];
 
 function installerGrantSecret(): string {
   return String(process.env.SESSION_SECRET ?? "").trim();
@@ -45,6 +57,13 @@ function installerGrantSecret(): string {
 
 function signInstallerGrant(payload: string): string {
   return createHmac("sha256", installerGrantSecret()).update(payload).digest("base64url");
+}
+
+function createTakeoverGrant(adminId: number, routerId: number): string {
+  const expiresAt = Date.now() + TAKEOVER_GRANT_TTL_MS;
+  const nonce = randomBytes(16).toString("hex");
+  const payload = `${adminId}.${routerId}.${expiresAt}.${nonce}`;
+  return `tko.v1.${payload}.${signInstallerGrant(payload)}`;
 }
 
 function createInstallerGrant(adminId: number, routerId: number): string {
@@ -58,6 +77,26 @@ function verifyInstallerGrant(grant: string, routerId: number): { adminId: numbe
   if (!installerGrantSecret()) return null;
   const parts = grant.split(".");
   if (parts.length !== 7 || parts[0] !== "inst" || parts[1] !== "v1") return null;
+  const [, , adminRaw, routerRaw, expiresRaw, nonce, signature] = parts;
+  const adminId = Number(adminRaw);
+  const grantRouterId = Number(routerRaw);
+  const expiresAt = Number(expiresRaw);
+  if (!Number.isSafeInteger(adminId) || adminId <= 0 ||
+      !Number.isSafeInteger(grantRouterId) || grantRouterId !== routerId ||
+      !Number.isFinite(expiresAt) || expiresAt < Date.now() ||
+      !/^[a-f0-9]{32}$/.test(nonce) || !signature) return null;
+  const payload = `${adminId}.${grantRouterId}.${expiresAt}.${nonce}`;
+  const expected = signInstallerGrant(payload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  return { adminId };
+}
+
+function verifyTakeoverGrant(grant: string, routerId: number): { adminId: number } | null {
+  if (!installerGrantSecret()) return null;
+  const parts = grant.split(".");
+  if (parts.length !== 7 || parts[0] !== "tko" || parts[1] !== "v1") return null;
   const [, , adminRaw, routerRaw, expiresRaw, nonce, signature] = parts;
   const adminId = Number(adminRaw);
   const grantRouterId = Number(routerRaw);
@@ -1000,6 +1039,7 @@ export function buildMainhotspotRsc(
   managementInterfaceName: string = "",
   routerVpnWarning: string = "",
   certificateMode: RouterCertificateMode = "verified",
+  installationMode: "coexist" | "takeover" = "coexist",
   coexistenceHotspotUrl: string = "",
 ): string {
   const normalizeUrl = (value: string): string =>
@@ -1247,10 +1287,16 @@ export function buildMainhotspotRsc(
     }
 }`;
   };
-  const wireGuardAttempt = "";
-  const ipsecAttempt = "";
+  const wireGuardAttempt = installationMode === "takeover" && routerWireGuardUrl
+    ? `:if ($majorVersion >= 7) do={
+${vpnAttempt("wireguard", "wireGuardUrl", "vpn-wireguard.rsc")}
+}`
+    : "";
+  const ipsecAttempt = installationMode === "takeover" && routerIpsecUrl
+    ? vpnAttempt("ipsec", "ipsecUrl", "vpn-ipsec.rsc")
+    : "";
 
-  {
+  if (installationMode === "coexist") {
     return finalizeRenderedScript(`# ${safeCompanyName} — Coexistence management installer
 # INSTALLER_REVISION=${installerRevision}
 # This path never replaces billing, customer-access, or LAN configuration.
@@ -1558,9 +1604,22 @@ ${progressCompletionDef}
 `);
   }
 
-  const renderedScript = `# ${safeCompanyName} Main ISP Setup Script (mainhotspot.rsc)
+  const takeoverBackupStem = `ochola-takeover-${Date.now()}`;
+  const takeoverBackup = `# TAKEOVER SAFETY BOUNDARY — no service resource is changed before both files exist.
+:local takeoverBackup "${takeoverBackupStem}"
+:do { /system backup save name=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the binary backup." }
+:delay 3s
+:if ([:len [/file find name="${takeoverBackupStem}.backup"]] = 0) do={ :error "Takeover stopped: the RouterOS binary backup could not be verified." }
+:do { /export file=$takeoverBackup } on-error={ :error "Takeover stopped: RouterOS could not create the text export." }
+:delay 2s
+:if ([:len [/file find name="${takeoverBackupStem}.rsc"]] = 0) do={ :error "Takeover stopped: the RouterOS text export could not be verified." }
+:put "TAKEOVER BACKUP VERIFIED — binary backup and text export are present."
+`;
+
+  const renderedScript = `# ${safeCompanyName} Takeover Setup Script (mainhotspot.rsc)
 # INSTALLER_REVISION=${installerRevision}
-# Checks version, downloads and imports VPN, hotspot, PPPoE, and users setups.
+# Destructive Main ISP takeover: backs up the router, then downloads and imports
+# VPN, hotspot, PPPoE, users, sync, heartbeat, and security configurations.
 # Router: ${safeRouterName || "new router"}
 #
 # INSTALL BUNDLE — downloaded in this order:
@@ -1577,6 +1636,9 @@ ${progressCompletionDef}
 
 ${pgDef}
 ${formEncodeDef}
+
+# Takeover is a separate, destructive path. Its safety boundary runs first.
+${takeoverBackup}
 
 # Bootstrap the public CA before any HTTPS download is verified.
 ${httpsTrustBootstrap}
@@ -1663,8 +1725,12 @@ ${openVpnBackupSelection}
 :local vpnConfigured false
 :local vpnProtocol ""
 :local vpnFailureSummary ""
-  :set wireGuardUrl ""
-  :set ipsecUrl ""
+  ${routerWireGuardUrl
+    ? versionedUrlAssignment("wireGuardUrl", safeRouterWireGuardUrl, 7)
+    : `:set wireGuardUrl ""`}
+  ${routerIpsecUrl
+    ? versionedUrlAssignment("ipsecUrl", safeRouterIpsecUrl)
+    : `:set ipsecUrl ""`}
 ${vpnAttempt("openvpn", "openVpnUrl", "vpn-openvpn.rsc")}
 ${vpnAttempt("openvpn-backup", "openVpnBackupUrl", "vpn-openvpn-backup.rsc")}
 ${wireGuardAttempt}
@@ -2171,6 +2237,47 @@ router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
     .send(ISRG_ROOT_X1_PEM);
 });
 
+router.post("/admin/router/self-install/takeover/prepare", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.body?.routerId);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const confirmation = String(req.body?.confirmation ?? "").trim();
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !adminId) {
+    res.status(400).json({ ok: false, error: "A signed-in ISP account and router are required." });
+    return;
+  }
+  if (confirmation !== TAKEOVER_CONFIRMATION) {
+    res.status(400).json({ ok: false, error: `Type ${TAKEOVER_CONFIRMATION} exactly to authorize takeover.` });
+    return;
+  }
+  if (!installerGrantSecret()) {
+    res.status(503).json({ ok: false, error: "Takeover authorization is not configured on this server." });
+    return;
+  }
+  try {
+    const routers = await sbGet<{ id: number; admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name&limit=1`,
+    );
+    const selectedRouter = routers[0];
+    if (!selectedRouter) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    res.json({
+      ok: true,
+      router: { id: selectedRouter.id, name: selectedRouter.name },
+      grantToken: createTakeoverGrant(adminId, routerId),
+      expiresInSeconds: TAKEOVER_GRANT_TTL_MS / 1000,
+      confirmation: TAKEOVER_CONFIRMATION,
+      removalPlan: TAKEOVER_PLAN,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: `Takeover preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+});
+
 router.post("/admin/router/self-install/grant", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.body?.routerId);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
@@ -2274,6 +2381,7 @@ router.get([
 
 router.get([
   "/scripts/self-install-mainhotspot.rsc",
+  "/scripts/self-install-mainhotspot/:pathRouterId/:pathAdminId/:pathMode/:pathGrant",
   "/scripts/self-install-mainhotspot/:pathRouterId/:pathAdminId/:pathGrant",
 ], async (req, res): Promise<void> => {
   const origin = requestOrigin(req);
@@ -2286,6 +2394,10 @@ router.get([
   const ridRaw   = String(req.params.pathRouterId ?? req.query.rid ?? "").trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
   const adminIdRaw = String(req.params.pathAdminId ?? req.query.adminId ?? "").trim();
+  const installationMode: "coexist" | "takeover" =
+    String(req.params.pathMode ?? req.query.mode ?? "").trim().toLowerCase() === "takeover"
+      ? "takeover"
+      : "coexist";
   const installerGrant = String(req.params.pathGrant ?? req.query.grant ?? "").trim();
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
@@ -2327,8 +2439,15 @@ router.get([
     return;
   }
 
-  if (adminId && !verifyInstallerGrant(installerGrant, Number(rid))) {
-    res.status(403).type("text/plain").send("# Installer authorization is missing, invalid, expired, or scoped to another ISP/router.");
+  const grantIdentity = installationMode === "takeover"
+    ? verifyTakeoverGrant(installerGrant, Number(rid))
+    : verifyInstallerGrant(installerGrant, Number(rid));
+  if (!grantIdentity || !adminId || grantIdentity.adminId !== Number(adminId)) {
+    res.status(403).type("text/plain").send(
+      installationMode === "takeover"
+        ? "# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router."
+        : "# Installer authorization is missing, invalid, expired, or scoped to another ISP/router.",
+    );
     return;
   }
 
@@ -2337,7 +2456,7 @@ router.get([
       /* A valid router secret binds the install script to a specific ISP.
          For the browser-safe path, adminId is checked against the router
          owner and the secret is read only on the server. */
-      const ownerFilter = token
+      const ownerFilter = token && installationMode !== "takeover"
         ? `or=(router_secret.eq.${encodeURIComponent(token)},token.eq.${encodeURIComponent(token)})`
         : `admin_id=eq.${encodeURIComponent(adminId)}`;
       const routers = await sbGet<InstallRouter>(
@@ -2366,15 +2485,24 @@ router.get([
            bake it into a daily auto-update scheduler; operators can request a
            fresh scoped grant when they start another install. */
         installerUrl = "";
-        /* Keep management child URLs query-free. Older RouterOS fetch
-           implementations can corrupt several query parameters after a URL
-           is assigned to a local variable. The child route carries the
-           router id, token, OS version, and backup protocol in its path. */
-        const routerVpnBootstrapBase = `${origin}/api/scripts/router-vpn-bootstrap/${encodeURIComponent(rid)}/${encodeURIComponent(resolvedToken)}`;
-        routerVpnUrl = routerVpnBootstrapBase;
-        routerVpnBackupUrl = `${routerVpnBootstrapBase}/openvpn-backup`;
-        const installerGrantQuery = `grant=${encodeURIComponent(installerGrant)}`;
-        coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?${installerGrantQuery}`;
+        if (installationMode === "takeover") {
+          const grantQuery = `grant=${encodeURIComponent(installerGrant)}`;
+          const routerVpnQuery = `rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=takeover&diagnostic=1&${grantQuery}`;
+          routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}`;
+          routerVpnBackupUrl = `${routerVpnUrl}&protocol=openvpn-backup`;
+          routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}&protocol=wireguard`;
+          routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}&protocol=ipsec`;
+          coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=takeover&${grantQuery}`;
+        } else {
+          /* Keep management child URLs query-free. Older RouterOS fetch
+             implementations can corrupt several query parameters after a URL
+             is assigned to a local variable. */
+          const routerVpnBootstrapBase = `${origin}/api/scripts/router-vpn-bootstrap/${encodeURIComponent(rid)}/${encodeURIComponent(resolvedToken)}`;
+          routerVpnUrl = routerVpnBootstrapBase;
+          routerVpnBackupUrl = `${routerVpnBootstrapBase}/openvpn-backup`;
+          const installerGrantQuery = `grant=${encodeURIComponent(installerGrant)}`;
+          coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?${installerGrantQuery}`;
+        }
         routerVpnIp = assignedIp;
 
         try {
@@ -2403,6 +2531,19 @@ router.get([
           vpnProvisioningError = vpnProvisioningError
             ? `${vpnProvisioningError}; backup: ${backupError}`
             : `backup: ${backupError}`;
+        }
+        if (installationMode === "takeover" && !vpnProvisioningError) {
+          try {
+            const fallbackProvisioning = await provisionRouterManagementVpn({
+              adminId: currentRouter.admin_id,
+              routerId: Number(rid),
+              routerName: currentRouter.name,
+              routerIp: assignedIp,
+            });
+            if (!fallbackProvisioning.ready) throw new Error("VPS fallback VPN reconciliation did not report ready.");
+          } catch (error) {
+            vpnProvisioningError = error instanceof Error ? error.message : String(error);
+          }
         }
         const admins = await sbGet<InstallAdmin>(
           `isp_admins?id=eq.${currentRouter.admin_id}&select=id,name&limit=1`,
@@ -2451,7 +2592,8 @@ router.get([
        vpnProvisioningError
          ? "The router-management VPN could not be reconciled yet. Local configuration will continue; retry VPN setup from the dashboard."
          : "",
-      certificateMode,
+       certificateMode,
+       installationMode,
        coexistenceHotspotUrl,
     ));
 });
@@ -2585,6 +2727,11 @@ router.get([
   const ridRaw = String(req.params.routerId ?? req.query.rid ?? "").trim();
   const token = String(req.params.token ?? req.query.token ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
+  const installationMode: "coexist" | "takeover" =
+    !pathBootstrap && String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+      ? "takeover"
+      : "coexist";
+  const takeoverGrant = String(req.query.grant ?? "").trim();
   /* RouterOS fetch may discard an HTTP error body. Path-based bootstrap
      requests are installer-specific and already carry the router token, so
      return their marked error body with HTTP 200 to preserve actionable
@@ -2620,6 +2767,16 @@ router.get([
       );
       return;
     }
+    if (installationMode === "takeover") {
+      const grant = verifyTakeoverGrant(takeoverGrant, routerId);
+      if (!grant || grant.adminId !== Number(rows[0].admin_id)) {
+        sendRouterVpnError(403,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          "# Takeover authorization is missing, invalid, expired, or scoped to another ISP/router.",
+        );
+        return;
+      }
+    }
     const tunnelRouterIp = await ensurePersistentRouterTunnelIp(routerId, rows[0].vpn_ip);
     const protocol = requestedRouterVpnProtocol(req.params.protocol ?? req.query.protocol);
     const routerOsMajor = requestedRouterOsMajor(req.params.rosVersion ?? req.query["ros-version"]);
@@ -2630,14 +2787,33 @@ router.get([
       );
       return;
     }
-    if (protocol !== "openvpn" && protocol !== "openvpn-backup") {
+    if (installationMode === "coexist" && protocol !== "openvpn" && protocol !== "openvpn-backup") {
       sendRouterVpnError(410,
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
-        "# Only the router-management OpenVPN child is available.",
+        "# WireGuard and IPsec fallbacks are disabled for coexistence installs. Use the OpenVPN management child or select takeover mode.",
       );
       return;
     }
     let script = "";
+
+    if (installationMode === "takeover") {
+      try {
+        const fallbackProvisioning = await provisionRouterManagementVpn({
+          adminId: Number(rows[0].admin_id),
+          routerId,
+          routerName: rows[0].name,
+          routerIp: tunnelRouterIp,
+        });
+        if (!fallbackProvisioning.ready) throw new Error("VPS fallback VPN reconciliation did not report ready.");
+      } catch (error) {
+        sendRouterVpnError(
+          503,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          `# VPS VPN details could not be reconciled before generating this configuration: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+    }
 
     if (protocol === "openvpn" || protocol === "openvpn-backup") {
       const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
@@ -2704,9 +2880,65 @@ router.get([
          tunnelVpsIp: isBackup ? ROUTER_MANAGEMENT_VPN_BACKUP.gateway : ROUTER_VPN_GATEWAY,
         routerId,
         routerOsMajor,
+          installationMode,
          vpnRole: isBackup ? "backup" : "primary",
       });
        script = (isBackup ? "" : readinessWarning) + script;
+    } else if (protocol === "wireguard") {
+      const material = await routerFallbackMaterial(routerId, "wireguard");
+      const endpoint = material?.endpoint || routerEnv("ROUTER_WIREGUARD_ENDPOINT", routerId);
+      const serverPublicKey = routerEnv("ROUTER_WIREGUARD_SERVER_PUBLIC_KEY", routerId);
+      const dbServerPublicKey = material?.serverPublicKey || serverPublicKey;
+      const clientPrivateKey = material?.secret || routerEnv("ROUTER_WIREGUARD_CLIENT_PRIVATE_KEY", routerId);
+      if ((!material && !routerWireGuardFallbackConfigured(routerId)) ||
+          !validVpnEndpoint(endpoint) ||
+          !/^[A-Za-z0-9+/=]{32,}$/.test(dbServerPublicKey) ||
+          !/^[A-Za-z0-9+/=]{32,}$/.test(clientPrivateKey)) {
+        sendRouterVpnError(503,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          "# Router WireGuard fallback is unavailable because server-side prerequisites are incomplete.",
+        );
+        return;
+      }
+      const endpointPort = material?.endpointPort ??
+        (Number.parseInt(String(process.env.ROUTER_WIREGUARD_PORT ?? "51820"), 10) || 51820);
+      if (endpointPort < 1 || endpointPort > 65535) {
+        sendRouterVpnError(503, "# OCHOLA_ROUTER_VPN_ERROR\n# Router WireGuard fallback has an invalid endpoint port.");
+        return;
+      }
+      script = generateRouterWireGuardClientScript({
+        endpoint,
+        endpointPort,
+        serverPublicKey: dbServerPublicKey,
+        clientPrivateKey,
+        tunnelRouterIp,
+        tunnelVpsIp: ROUTER_VPN_GATEWAY,
+        routerId,
+        installationMode,
+      });
+    } else if (protocol === "ipsec") {
+      const material = await routerFallbackMaterial(routerId, "ipsec");
+      const endpoint = material?.endpoint || routerEnv("ROUTER_IPSEC_ENDPOINT", routerId);
+      const preSharedKey = material?.secret || routerEnv("ROUTER_IPSEC_PSK", routerId);
+      if ((!material && !routerIpsecFallbackConfigured(routerId)) ||
+          !validVpnEndpoint(endpoint) || preSharedKey.length < 8) {
+        sendRouterVpnError(503,
+          "# OCHOLA_ROUTER_VPN_ERROR\n" +
+          "# Router IPsec fallback is unavailable because server-side prerequisites are incomplete.",
+        );
+        return;
+      }
+      script = material
+        ? generatedRouterVpnChildScript("ipsec", routerId, material, routerOsMajor, installationMode)
+        : generateRouterIpsecClientScript({
+            endpoint,
+            preSharedKey,
+            tunnelRouterIp,
+            tunnelVpsIp: ROUTER_VPN_GATEWAY,
+            routerId,
+            installationMode,
+            routerOsMajor,
+          });
     }
 
     res
@@ -3444,6 +3676,8 @@ router.get("/scripts/router-migration-collector.rsc", (req, res): void => {
 router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promise<void> => {
   const routerId = Number(req.params.routerId);
   const grant = String(req.query.grant ?? "").trim();
+  const installationMode: "coexist" | "takeover" =
+    String(req.query.mode ?? "").trim().toLowerCase() === "takeover" ? "takeover" : "coexist";
   const certificateMode: RouterCertificateMode = "verified";
   const sendCoexistenceError = (status: number, body: string): void => {
     /* RouterOS fetch may discard non-2xx response bodies. This URL is only
@@ -3460,9 +3694,16 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     return;
   }
 
-  const authorization = verifyInstallerGrant(grant, routerId);
+  const authorization = installationMode === "takeover"
+    ? verifyTakeoverGrant(grant, routerId)
+    : verifyInstallerGrant(grant, routerId);
   if (!authorization) {
-    sendCoexistenceError(403, "# Router installer authorization is invalid, expired, or scoped to another router.");
+    sendCoexistenceError(
+      403,
+      installationMode === "takeover"
+        ? "# Takeover authorization is invalid, expired, or scoped to another router."
+        : "# Router installer authorization is invalid, expired, or scoped to another router.",
+    );
     return;
   }
 
@@ -3706,6 +3947,8 @@ router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", a
   const adminId = Number(req.params.adminId);
   const routerOsMajor = Number(req.params.rosVersion);
   const grant = String(req.params.grant ?? "").trim();
+  const installationMode: "coexist" | "takeover" =
+    String(req.query.mode ?? "").trim().toLowerCase() === "takeover" ? "takeover" : "coexist";
   const sendManualVpnError = (status: number, message: string): void => {
     res
       .status(200)
@@ -3719,9 +3962,11 @@ router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", a
     sendManualVpnError(400, "Router ID, ISP account ID, and RouterOS major version 6 or 7 are required.");
     return;
   }
-  const authorization = verifyInstallerGrant(grant, routerId);
+  const authorization = installationMode === "takeover"
+    ? verifyTakeoverGrant(grant, routerId)
+    : verifyInstallerGrant(grant, routerId);
   if (!authorization || authorization.adminId !== adminId) {
-    sendManualVpnError(403, "Manual VPN authorization is invalid, expired, or scoped to another router.");
+    sendManualVpnError(403, `${installationMode === "takeover" ? "Takeover" : "Manual VPN"} authorization is invalid, expired, or scoped to another router.`);
     return;
   }
 
@@ -3789,6 +4034,7 @@ router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", a
         tunnelVpsIp: backup ? ROUTER_MANAGEMENT_VPN_BACKUP.gateway : ROUTER_VPN_GATEWAY,
         routerId,
         routerOsMajor,
+        installationMode,
         vpnRole,
       });
     };
