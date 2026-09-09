@@ -424,7 +424,12 @@ export async function syncHotspotPortalHostname(
       ]),
       timeoutMs,
     ) as Record<string, string>[];
-    const hotspotAddress = profiles.find(row => row["hotspot-address"])?.["hotspot-address"] ?? "";
+    const rawHotspotAddress = profiles.find((row) => {
+      const value = row["hotspot-address"]?.trim() ?? "";
+      return value !== "" && value !== "0.0.0.0";
+    })?.["hotspot-address"] ?? "";
+    const hotspotAddress = rawHotspotAddress.trim().split("/")[0] ?? "";
+    logger.info({ rawHotspotAddress, hotspotAddress, hostname }, "Preparing tenant hotspot DNS entry");
     if (!hotspotAddress || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hotspotAddress)) {
       throw new Error("The router has no active hotspot gateway address.");
     }
