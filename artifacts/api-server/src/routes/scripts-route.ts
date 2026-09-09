@@ -557,6 +557,7 @@ type CoexistenceHotspotPlan = {
 function buildCoexistenceHotspotRsc(
   origin: string,
   routerId: number,
+  adminId: number,
   routerName: string,
   companyName: string,
   plans: CoexistenceHotspotPlan[],
@@ -577,6 +578,13 @@ function buildCoexistenceHotspotRsc(
   const tag = `${companyName} coexistence router ${routerId}`;
   const safe = (value: string) => rosString(value);
   const portalBase = origin.replace(/\/$/, "");
+  let portalHost = "";
+  try {
+    portalHost = new URL(portalBase).hostname.toLowerCase();
+  } catch {
+    /* The request origin is validated before this builder is called. */
+  }
+  const safePortalHost = /^[a-z0-9.-]+$/.test(portalHost) ? portalHost : "";
   const lines: string[] = [
     `# ${safe(companyName)} — isolated Coexistence hotspot service`,
     `# Router: ${safe(routerName)} (id=${routerId})`,
@@ -690,6 +698,13 @@ function buildCoexistenceHotspotRsc(
     `:if ([:len [/ip firewall filter find comment=$dnsUdpComment]] = 0) do={ /ip firewall filter add chain=input protocol=udp dst-port=53 src-address=$subnet action=accept comment=$dnsUdpComment }`,
     `:if ([:len [/ip firewall filter find comment=$dnsTcpComment]] = 0) do={ /ip firewall filter add chain=input protocol=tcp dst-port=53 src-address=$subnet action=accept comment=$dnsTcpComment }`,
     ``,
+    `# Allow the tenant API before hotspot authentication so the portal can load plans and start checkout.`,
+    ...(safePortalHost ? [
+      `/ip hotspot walled-garden ip`,
+      `remove [find where server=$hotspotName and dst-host="${safePortalHost}"]`,
+      `add server=$hotspotName dst-host="${safePortalHost}" action=accept`,
+    ] : []),
+    ``,
     `# Keep the portal in its own directory so another billing system's files are not overwritten.`,
     `:set coexistenceStep "portal"`,
     `:put "COEXISTENCE STEP: portal"`,
@@ -713,6 +728,7 @@ function buildCoexistenceHotspotRsc(
     portalFetch(`${portalBase}/hotspot/error.html`, "error.html", "error.html", fetchOptions),
     portalFetch(`${portalBase}/hotspot/md5.js`, "md5.js", "md5.js", fetchOptions),
     portalFetch(`${portalBase}/hotspot/api.json`, "api.json", "api.json", fetchOptions),
+    portalFetch(`${portalBase}/api/public/typography?adminId=${adminId}`, "typography.json", "typography.json", fetchOptions),
     ``,
     `# Add plan profiles only when absent; never overwrite a profile owned by another system.`,
   ];
@@ -3729,6 +3745,7 @@ router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promi
     const content = buildCoexistenceHotspotRsc(
       origin,
       currentRouter.id,
+      currentRouter.admin_id,
       currentRouter.name,
       admins[0]?.name || "ISPlatty",
       plans,

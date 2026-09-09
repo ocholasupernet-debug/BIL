@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
+import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -10,8 +11,22 @@ const router: IRouter = Router();
  */
 
 router.get("/plans", async (req, res): Promise<void> => {
-  const adminId = req.query.adminId ?? req.query.ispId ?? "1";
-  const rows = await sbSelect("isp_plans", `admin_id=eq.${adminId}&select=*&order=price.asc`);
+  const requestedAdminId = req.query.adminId ?? req.query.ispId;
+  let adminId = typeof requestedAdminId === "string" ? requestedAdminId : undefined;
+  if (!adminId) {
+    const subdomain = getTenantSubdomainFromRequest(req);
+    if (subdomain) {
+      const admins = await sbSelect<{ id: number }>(
+        "isp_admins",
+        `subdomain=eq.${subdomain}&is_active=is.true&select=id&limit=1`,
+      );
+      if (admins[0]?.id) adminId = String(admins[0].id);
+    }
+  }
+
+  const rows = adminId
+    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}&select=*&order=price.asc`)
+    : [];
   res.json(rows);
 });
 
