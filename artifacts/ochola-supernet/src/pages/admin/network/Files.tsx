@@ -286,6 +286,9 @@ export default function Files() {
   >("idle");
   const [deployMessage, setDeployMessage] = useState("");
   const [conflictDetails, setConflictDetails] = useState<{ name: string; size: number; type: string } | null>(null);
+  const [bulkDeploying, setBulkDeploying] = useState(false);
+  const [bulkDeployMessage, setBulkDeployMessage] = useState("");
+  const [bulkDeployError, setBulkDeployError] = useState(false);
 
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["router-files-routers", getSelectedTenantId()],
@@ -327,6 +330,10 @@ export default function Files() {
   const availableSources = useMemo(
     () => (deployableSourcesQuery.data ?? []).filter(source => source.type === sourceType),
     [deployableSourcesQuery.data, sourceType],
+  );
+  const hotspotSources = useMemo(
+    () => (deployableSourcesQuery.data ?? []).filter(source => source.type === "hotspot"),
+    [deployableSourcesQuery.data],
   );
 
   useEffect(() => {
@@ -407,6 +414,65 @@ export default function Files() {
     } catch (error) {
       setDeployStatus("error");
       setDeployMessage(error instanceof Error ? error.message : "Deployment failed");
+    }
+  }
+
+  async function deployMissingHotspotAssets(): Promise<void> {
+    if (!selectedRouter || hotspotSources.length === 0 || bulkDeploying) return;
+    const confirmed = window.confirm(
+      `Deploy ${hotspotSources.length} approved hotspot assets to flash/hotspot on ${selectedRouter.name}? Existing files will be skipped and never replaced.`,
+    );
+    if (!confirmed) return;
+
+    setBulkDeploying(true);
+    setBulkDeployMessage("");
+    setBulkDeployError(false);
+    try {
+      const adminId = getSelectedTenantId();
+      if (!adminId) throw new Error("Sign in to an ISP account before deploying router files.");
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const role = getAdminRole();
+      if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
+
+      const response = await fetch(`/api/router/${selectedRouter.id}/files/deploy-bulk`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ adminId, destinationDirectory: "flash/hotspot" }),
+      });
+      let data: {
+        error?: string;
+        detail?: string;
+        deployed?: Array<{ sourceName: string }>;
+        skipped?: Array<{ sourceName: string; reason: string }>;
+        failed?: Array<{ sourceName: string; error: string }>;
+      } = {};
+      try {
+        data = await response.json();
+      } catch {
+        /* Keep the HTTP status as the fallback error below. */
+      }
+      if (!response.ok) {
+        const serverMessage = [data.error, data.detail]
+          .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+          .join(": ");
+        throw new Error(serverMessage || `Bulk deployment failed (HTTP ${response.status})`);
+      }
+
+      const deployedCount = data.deployed?.length ?? 0;
+      const skippedCount = data.skipped?.length ?? 0;
+      const failedCount = data.failed?.length ?? 0;
+      setBulkDeployMessage(
+        `Processed ${hotspotSources.length} assets: ${deployedCount} deployed, ${skippedCount} skipped, ${failedCount} failed.`,
+      );
+      setBulkDeployError(failedCount > 0);
+      void filesQuery.refetch();
+    } catch (error) {
+      setBulkDeployMessage(error instanceof Error ? error.message : "Bulk deployment failed");
+      setBulkDeployError(true);
+    } finally {
+      setBulkDeploying(false);
     }
   }
 
@@ -673,6 +739,63 @@ export default function Files() {
                 {deployStatus === "preparing" ? "Preparing…" : deployStatus === "uploading" ? "Deploying…" : "Deploy file"}
               </button>
             </div>
+
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+              flexWrap: "wrap",
+              marginTop: "1rem",
+              paddingTop: "0.9rem",
+              borderTop: "1px solid var(--isp-border-subtle)",
+            }}>
+              <div>
+                <strong style={{ display: "block", color: "var(--isp-text)", fontSize: "0.76rem" }}>
+                  Deploy missing hotspot assets to flash/hotspot
+                </strong>
+                <span style={{ display: "block", marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+                  Publishes all {hotspotSources.length} approved portal assets. Existing router files are skipped.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void deployMissingHotspotAssets()}
+                disabled={bulkDeploying || hotspotSources.length === 0 || deployStatus === "preparing" || deployStatus === "uploading"}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.4rem",
+                  minHeight: 37,
+                  padding: "0.55rem 0.85rem",
+                  border: "1px solid rgba(96,165,250,0.35)",
+                  borderRadius: 8,
+                  background: "rgba(96,165,250,0.12)",
+                  color: "#93c5fd",
+                  fontSize: "0.75rem",
+                  fontWeight: 750,
+                  cursor: bulkDeploying || hotspotSources.length === 0 ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  opacity: bulkDeploying || hotspotSources.length === 0 ? 0.55 : 1,
+                }}
+              >
+                {bulkDeploying
+                  ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
+                  : <FileUp size={13} />}
+                {bulkDeploying ? "Deploying all…" : "Deploy all missing"}
+              </button>
+            </div>
+            {bulkDeployMessage && (
+              <p style={{
+                margin: "0.65rem 0 0",
+                color: bulkDeployError ? "#f87171" : "#6ee7b7",
+                fontSize: "0.74rem",
+                lineHeight: 1.45,
+              }}>
+                {bulkDeployMessage}
+              </p>
+            )}
 
             {deployableSourcesQuery.error && (
               <p style={{ margin: "0.7rem 0 0", color: "#f87171", fontSize: "0.74rem" }}>

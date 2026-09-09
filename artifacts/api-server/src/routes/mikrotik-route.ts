@@ -30,7 +30,11 @@ import {
   isPrivateIp,
   type RouterCredentials,
 } from "../lib/mikrotik";
-import { getDeployableSource, type DeployableSourceType } from "./scripts-route.js";
+import {
+  getDeployableSource,
+  listDeployableSources,
+  type DeployableSourceType,
+} from "./scripts-route.js";
 import {
   generateVpsOvpnSetupScript,
   describeVpnArchitecture,
@@ -529,6 +533,137 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
     /* The source endpoint normally consumes this entry. Remove it here too
        when the router failed before making its fetch request. */
     pendingRouterFileSources.delete(token);
+  }
+});
+
+/* ─── POST /api/router/:id/files/deploy-bulk ─────────────────────────────── */
+/**
+ * Publishes every approved hotspot asset that is missing from flash/hotspot.
+ * Existing files and assets whose parent directory is not present are skipped;
+ * this endpoint never overwrites router files.
+ */
+router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const destinationDirectory = String(req.body?.destinationDirectory ?? "flash/hotspot")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (destinationDirectory.toLowerCase() !== "flash/hotspot") {
+    res.status(400).json({ error: "Bulk hotspot deployment is restricted to flash/hotspot" });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  const sources = listDeployableSources().filter(source => source.type === "hotspot");
+  if (sources.length === 0) {
+    res.status(400).json({ error: "No approved hotspot assets are available to deploy" });
+    return;
+  }
+
+  try {
+    const currentFiles = await fetchRouterFiles(found.creds);
+    const normaliseName = (value: string): string => value
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "")
+      .toLowerCase();
+    const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
+    const directories = new Set(
+      currentFiles.files
+        .filter(file => file.type.toLowerCase().includes("directory"))
+        .map(file => normaliseName(file.name)),
+    );
+    const deployed: Array<{ sourceName: string; destinationPath: string; size: number }> = [];
+    const skipped: Array<{ sourceName: string; destinationPath: string; reason: string }> = [];
+    const failed: Array<{ sourceName: string; destinationPath: string; error: string }> = [];
+
+    for (const source of sources) {
+      const relativeName = source.name.replaceAll("\\", "/").replace(/^\/+/, "");
+      const destinationPath = `${destinationDirectory}/${relativeName}`;
+      const normalisedDestination = normaliseName(destinationPath);
+      if (existingFiles.has(normalisedDestination)) {
+        skipped.push({ sourceName: source.name, destinationPath, reason: "already exists" });
+        continue;
+      }
+
+      const lastSlash = destinationPath.lastIndexOf("/");
+      const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
+      if (!directories.has(parentDirectory)) {
+        skipped.push({ sourceName: source.name, destinationPath, reason: "parent directory is missing" });
+        continue;
+      }
+
+      const sourceContent = getDeployableSource("hotspot", source.name, requestOrigin(req));
+      if (!sourceContent) {
+        failed.push({ sourceName: source.name, destinationPath, error: "Approved source could not be read" });
+        continue;
+      }
+
+      cleanPendingRouterFileSources();
+      const token = randomBytes(24).toString("hex");
+      pendingRouterFileSources.set(token, {
+        content: sourceContent.content,
+        contentType: contentTypeForFile(source.name),
+        fileName: source.name.split("/").pop() ?? source.name,
+        expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+      });
+
+      try {
+        const result = await deployRouterFile(found.creds, {
+          destinationPath,
+          sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
+          overwrite: false,
+          uploadId: token.slice(0, 16),
+        });
+        deployed.push({ sourceName: source.name, destinationPath: result.destinationPath, size: result.size });
+        existingFiles.add(normalisedDestination);
+      } catch (error) {
+        if (error instanceof RouterFileExistsError) {
+          skipped.push({ sourceName: source.name, destinationPath, reason: "already exists" });
+        } else {
+          failed.push({
+            sourceName: source.name,
+            destinationPath,
+            error: error instanceof Error ? error.message : "Deployment failed",
+          });
+        }
+      } finally {
+        pendingRouterFileSources.delete(token);
+      }
+    }
+
+    logger.info({
+      routerId: id,
+      adminId,
+      destinationDirectory,
+      total: sources.length,
+      deployed: deployed.length,
+      skipped: skipped.length,
+      failed: failed.length,
+    }, "Bulk hotspot assets processed");
+
+    res.json({
+      ok: failed.length === 0,
+      routerId: id,
+      routerName: found.row.name,
+      destinationDirectory,
+      connectedHost: currentFiles.connectedHost,
+      total: sources.length,
+      deployed,
+      skipped,
+      failed,
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
   }
 });
 
