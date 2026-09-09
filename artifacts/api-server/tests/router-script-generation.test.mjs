@@ -22,6 +22,24 @@ test("approved deployment catalog includes the management firewall config", () =
   assert.doesNotMatch(content, /\/ip firewall filter remove|\/ip firewall nat remove/);
 });
 
+test("approved hotspot access config includes customer NAT, forwarding, and portal sign-in rules", () => {
+  const sources = listDeployableSources();
+  assert.ok(sources.some(source => source.type === "script" && source.name === "hotspot-access.rsc"));
+
+  const content = getDeployableSource("script", "hotspot-access.rsc")?.content.toString("utf8") ?? "";
+  assert.match(content, /action=masquerade/);
+  assert.match(content, /192\.168\.88\.0\/24/);
+  assert.match(content, /192\.168\.99\.0\/24/);
+  assert.match(content, /ochola-hotspot-dhcp/);
+  assert.match(content, /dns-server="192\.168\.88\.1"/);
+  assert.match(content, /OcholaSuperNet - hotspot internet/);
+  assert.match(content, /OcholaSuperNet - PPPoE internet/);
+  assert.match(content, /dst-host=\$hostname/);
+  assert.match(content, /login-by=http-chap,http-pap,cookie/);
+  assert.match(content, /OcholaSuperNet - captive portal/);
+  assert.doesNotMatch(content, /\/ip firewall filter remove \[find\]|\/ip firewall nat remove \[find\]/);
+});
+
 test("rendered mainhotspot.rsc keeps RouterOS encoder escapes on one line", () => {
   const script = buildMainhotspotRsc(
     "https://come.isplatty.org/api/scripts",

@@ -1847,8 +1847,25 @@ ${ipsecAttempt}
     :do { /file remove [find name="hotspotsetup.rsc"] } on-error={}
     /file set [find name="hotspotsetup.rsc.download"] name="hotspotsetup.rsc"
      ${fileCompletionCheck("hotspotsetup.rsc")}
+
+    :do {
+      :put "      Applying customer NAT, firewall, and portal access policy..."
+      :do { /file remove [find name="hotspot-access.rsc.download"] } on-error={}
+      /tool fetch url="${scriptsBase}/hotspot-access.rsc" dst-path="hotspot-access.rsc.download" keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+      ${verifyFetchedFile(`"hotspot-access.rsc.download"`, "hotspot-access.rsc.download")}
+      :delay 2s
+      /import "hotspot-access.rsc.download"
+      :if ([:len [/ip firewall nat find where comment="OcholaSuperNet - hotspot masquerade"]] < 2) do={ :error "hotspot-access.rsc imported, but customer NAT was not verified." }
+      :if ([:len [/ip firewall filter find where comment="OcholaSuperNet - hotspot internet"]] = 0) do={ :error "hotspot-access.rsc imported, but hotspot forwarding was not verified." }
+      :if ([:len [/ip hotspot walled-garden find where comment~"OcholaSuperNet - captive portal"]] = 0) do={ :error "hotspot-access.rsc imported, but the portal walled garden was not verified." }
+      :do { /file remove [find name="hotspot-access.rsc"] } on-error={}
+      /file set [find name="hotspot-access.rsc.download"] name="hotspot-access.rsc"
+      ${fileCompletionCheck("hotspot-access.rsc")}
+      :put "      Customer access policy applied."
+    } on-error={ :error ("hotspot-access.rsc failed: " . $error) }
+
      :set hotspotStatus "OK"
-    :put "      Hotspot configuration applied; saved as hotspotsetup.rsc."
+    :put "      Hotspot, NAT, firewall, and portal configuration applied."
     $pg 2 "hotspot" "applied" ""
 } on-error={
     :set failures ($failures + 1)
@@ -3428,6 +3445,106 @@ const HOTSPOTSETUP_RSC = `# hotspotsetup.rsc – Hotspot service bootstrap
 :set ocholaHotspotInstallMarker "hotspotsetup-v1"
 `;
 
+/* ── Customer access policy ── */
+const HOTSPOT_ACCESS_RSC = `# hotspot-access.rsc – Customer hotspot access policy
+# Adds only OcholaSuperNet-owned NAT, forwarding, DNS, DHCP, and portal rules.
+# Existing customer, WAN, VPN, and foreign rules are never removed.
+
+:local hotspotSubnet "192.168.88.0/24"
+:local pppoeSubnet "192.168.99.0/24"
+:local hotspotServerIds [/ip hotspot find where name="hotspot1"]
+:local hotspotProfileIds [/ip hotspot profile find where name="default-hs"]
+
+:if ([:len $hotspotServerIds] = 0) do={ :error "hotspot-access.rsc: hotspot1 was not found; run hotspotsetup.rsc first." }
+:if ([:len $hotspotProfileIds] = 0) do={ :error "hotspot-access.rsc: default-hs was not found; run hotspotsetup.rsc first." }
+
+# Keep the local portal capable of accepting the RouterOS login form and cookies.
+/ip hotspot profile set [:pick $hotspotProfileIds 0] login-by=http-chap,http-pap,cookie
+/ip hotspot set [:pick $hotspotServerIds 0] disabled=no interface="hotspot-bridge" profile="default-hs" address-pool="hspool"
+
+# Give hotspot clients an address, gateway, and router DNS before authentication.
+/ip dhcp-server
+:local hotspotDhcpName "ochola-hotspot-dhcp"
+:local hotspotDhcpComment "OcholaSuperNet - hotspot DHCP server"
+:local existingHotspotDhcp [/ip dhcp-server find where name=$hotspotDhcpName]
+:if ([:len $existingHotspotDhcp] = 0) do={
+  add name=$hotspotDhcpName interface="hotspot-bridge" address-pool="hspool" lease-time=1h disabled=no comment=$hotspotDhcpComment
+} else={
+  :if ([/ip dhcp-server get [:pick $existingHotspotDhcp 0] comment] != $hotspotDhcpComment) do={ :error "hotspot-access.rsc: DHCP server name collision." }
+  set [:pick $existingHotspotDhcp 0] interface="hotspot-bridge" address-pool="hspool" lease-time=1h disabled=no comment=$hotspotDhcpComment
+}
+
+/ip dhcp-server network
+:local hotspotDhcpNetworkComment "OcholaSuperNet - hotspot DHCP network"
+:local existingHotspotDhcpNetwork [/ip dhcp-server network find where address="192.168.88.0/24"]
+:if ([:len $existingHotspotDhcpNetwork] = 0) do={
+  add address="192.168.88.0/24" gateway="192.168.88.1" dns-server="192.168.88.1" comment=$hotspotDhcpNetworkComment
+} else={
+  :if ([/ip dhcp-server network get [:pick $existingHotspotDhcpNetwork 0] comment] != $hotspotDhcpNetworkComment) do={ :error "hotspot-access.rsc: DHCP network collision." }
+  set [:pick $existingHotspotDhcpNetwork 0] gateway="192.168.88.1" dns-server="192.168.88.1" comment=$hotspotDhcpNetworkComment
+}
+
+# Masquerade customer networks. Prefer the standard WAN interface list when it
+# exists; the fallback keeps internet access working on routers without lists.
+/ip firewall nat
+:do { remove [find where comment="OcholaSuperNet - hotspot masquerade"] } on-error={}
+:local wanListIds [/interface list find where name="WAN"]
+:if ([:len $wanListIds] > 0) do={
+  add chain=srcnat action=masquerade src-address=$hotspotSubnet out-interface-list=WAN comment="OcholaSuperNet - hotspot masquerade"
+  add chain=srcnat action=masquerade src-address=$pppoeSubnet out-interface-list=WAN comment="OcholaSuperNet - hotspot masquerade"
+} else={
+  add chain=srcnat action=masquerade src-address=$hotspotSubnet comment="OcholaSuperNet - hotspot masquerade"
+  add chain=srcnat action=masquerade src-address=$pppoeSubnet comment="OcholaSuperNet - hotspot masquerade"
+}
+
+# Router input needed by local subscribers before hotspot authentication.
+/ip firewall filter
+:do { remove [find where comment="OcholaSuperNet - hotspot DNS UDP"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - hotspot DNS TCP"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - hotspot DHCP"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - hotspot ICMP"] } on-error={}
+add chain=input action=accept protocol=udp src-address=$hotspotSubnet dst-port=53 comment="OcholaSuperNet - hotspot DNS UDP" place-before=0
+add chain=input action=accept protocol=tcp src-address=$hotspotSubnet dst-port=53 comment="OcholaSuperNet - hotspot DNS TCP" place-before=0
+add chain=input action=accept protocol=udp src-address=$hotspotSubnet src-port=68 dst-port=67 comment="OcholaSuperNet - hotspot DHCP" place-before=0
+add chain=input action=accept protocol=icmp src-address=$hotspotSubnet comment="OcholaSuperNet - hotspot ICMP" place-before=0
+
+# Keep subscriber traffic stateful, isolate it from private router/LAN ranges,
+# then allow it out to the internet. The rules are all owned and idempotent.
+:do { remove [find where comment="OcholaSuperNet - customer established"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - customer invalid"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - customer private isolation"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - hotspot internet"] } on-error={}
+:do { remove [find where comment="OcholaSuperNet - PPPoE internet"] } on-error={}
+
+/ip firewall address-list
+:do { remove [find where list="ochola-private-networks" && comment="OcholaSuperNet - private network"] } on-error={}
+add list=ochola-private-networks address=10.0.0.0/8 comment="OcholaSuperNet - private network"
+add list=ochola-private-networks address=100.64.0.0/10 comment="OcholaSuperNet - private network"
+add list=ochola-private-networks address=172.16.0.0/12 comment="OcholaSuperNet - private network"
+add list=ochola-private-networks address=192.168.0.0/16 comment="OcholaSuperNet - private network"
+
+/ip firewall filter
+# Add in reverse order because place-before=0 is used.
+add chain=forward action=accept src-address=$pppoeSubnet comment="OcholaSuperNet - PPPoE internet" place-before=0
+add chain=forward action=accept src-address=$hotspotSubnet comment="OcholaSuperNet - hotspot internet" place-before=0
+add chain=forward action=drop src-address=$pppoeSubnet dst-address-list=ochola-private-networks comment="OcholaSuperNet - customer private isolation" place-before=0
+add chain=forward action=drop src-address=$hotspotSubnet dst-address-list=ochola-private-networks comment="OcholaSuperNet - customer private isolation" place-before=0
+add chain=forward action=drop connection-state=invalid comment="OcholaSuperNet - customer invalid" place-before=0
+add chain=forward action=accept connection-state=established,related comment="OcholaSuperNet - customer established" place-before=0
+
+# Walled garden: local RouterOS portal files plus the tenant/API HTTPS hosts
+# must be reachable before the customer has authenticated.
+/ip hotspot walled-garden
+:do { remove [find where comment~"OcholaSuperNet - captive portal"] } on-error={}
+:foreach hostname in={"isplatty.org";"*.isplatty.org";"come.isplatty.org";"api.isplatty.org";"connectivitycheck.gstatic.com";"clients3.google.com";"captive.apple.com";"www.apple.com";"www.msftconnecttest.com";"detectportal.firefox.com"} do={
+  :do {
+    add server="hotspot1" dst-host=$hostname action=accept comment=("OcholaSuperNet - captive portal " . $hostname)
+  } on-error={ :put ("WARN: captive portal walled-garden entry failed for " . $hostname) }
+}
+
+:put "hotspot-access.rsc: NAT, customer firewall, portal walled garden, and login policy applied."
+`;
+
 /* ── PPPoE setup ── */
 const PPPOESETUP_RSC = `# pppoesetup.rsc – PPPoE server configuration
 # Sets up a PPPoE server profile and service so ISP clients
@@ -3676,6 +3793,7 @@ const STATIC_SUBSCRIPTS: Record<string, SubScriptEntry> = {
   "vpn6.rsc":         buildVpn6Rsc,
   "management-firewall.rsc": MANAGEMENT_FIREWALL_RSC,
   "hotspotsetup.rsc": HOTSPOTSETUP_RSC,
+  "hotspot-access.rsc": HOTSPOT_ACCESS_RSC,
   "pppoesetup.rsc":   PPPOESETUP_RSC,
   "users.rsc":        USERS_RSC,
   "syncusers.rsc":    SYNCUSERS_RSC,

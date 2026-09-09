@@ -103,6 +103,7 @@ const BULK_DEPLOY_JOB_TTL_MS = 15 * 60 * 1000;
 const BULK_IMPORT_ORDER = [
   "management-firewall.rsc",
   "hotspotsetup.rsc",
+  "hotspot-access.rsc",
   "pppoesetup.rsc",
   "users.rsc",
   "syncusers.rsc",
