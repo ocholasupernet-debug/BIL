@@ -361,11 +361,18 @@ export default function BridgePorts() {
     fetchPortsForRouter(r);
   }, [selectedKey, routers.length]);
 
-  /* ── Auto-select first bridge ── */
+  /* ── Prefer the hotspot bridge for customer-port assignment ── */
   useEffect(() => {
-    if (payload?.bridges?.length && !selectedBridge) {
-      setSelectedBridge(payload.bridges[0].name);
-    }
+    if (!payload?.bridges?.length) return;
+    const bridgeNames = new Set(payload.bridges.map(bridge => bridge.name));
+    const hotspotBridge = payload.bridges.find(
+      bridge => bridgeType(bridge.name) === "hotspot",
+    )?.name;
+    const preferredBridge = hotspotBridge ?? payload.bridges[0].name;
+
+    setSelectedBridge(current =>
+      current && bridgeNames.has(current) ? current : preferredBridge,
+    );
   }, [payload]);
 
   /* ── Pre-tick ports already in bridge ── */
@@ -519,6 +526,9 @@ export default function BridgePorts() {
       const data = await res.json() as { ok: boolean; created: boolean; message: string; error?: string };
       if (data.ok) {
         setBridgeCreateMsg(data.message);
+        // The next live port read should immediately show customer ports
+        // against the bridge that was just created.
+        setSelectedBridge("hotspot-bridge");
         fetchPorts(selectedKey!);
       } else {
         setLoadError(data.error || "Failed to create hotspot-bridge.");
