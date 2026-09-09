@@ -168,6 +168,7 @@ function validateSettings(settings: HSettings): string | null {
 type ExportConfig = {
   adminId: number;
   apiBase: string;
+  plans: PortalPlan[];
   ispName: string;
   tagline: string;
   logoUrl: string;
@@ -192,10 +193,19 @@ type ExportConfig = {
   colors: ColorSettings;
 };
 
-function makeExportConfig(settings: HSettings, apiBase: string): ExportConfig {
+type PortalPlan = {
+  id: number;
+  name: string;
+  price: number;
+  validity: number;
+  validity_unit: string;
+};
+
+function makeExportConfig(settings: HSettings, apiBase: string, plans: PortalPlan[]): ExportConfig {
   return {
     adminId: ADMIN_ID,
     apiBase,
+    plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
     logoUrl: settings.logoUrl,
@@ -243,7 +253,30 @@ export async function buildPortalHtml(settings: HSettings, domain: string): Prom
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
   const apiBase = await resolvePortalApiBase(domain);
-  const config = makeExportConfig(settings, apiBase);
+  let plans: PortalPlan[] = [];
+  try {
+    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot`, {
+      cache: "no-store",
+    });
+    if (plansResponse.ok) {
+      const data = await plansResponse.json() as unknown;
+      if (Array.isArray(data)) {
+        plans = data
+          .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
+          .map((plan) => ({
+            id: Number(plan.id) || 0,
+            name: typeof plan.name === "string" ? plan.name : "",
+            price: Number(plan.price) || 0,
+            validity: Number(plan.validity) || 0,
+            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+          }))
+          .filter((plan) => plan.id > 0 && plan.name);
+      }
+    }
+  } catch {
+    /* The API fallback remains available when the admin panel is offline. */
+  }
+  const config = makeExportConfig(settings, apiBase, plans);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   return template

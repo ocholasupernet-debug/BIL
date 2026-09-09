@@ -412,6 +412,7 @@ var COLORS=[
 var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0;
 var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
+var EMBEDDED_PLANS=[];
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
 var PORTAL_ACCENT="#d96835";
@@ -450,6 +451,18 @@ function safePublicApiBase(value){
     return url.origin;
   }catch(e){return "";}
 }
+function normalisePlanList(value){
+  if(!Array.isArray(value))return [];
+  return value.map(function(p){
+    return {
+      id:Number(p&&p.id)||0,
+      name:typeof(p&&p.name)==="string"?p.name:"",
+      price:Number(p&&p.price)||0,
+      validity:Number(p&&p.validity)||0,
+      unit:typeof(p&&p.validity_unit)==="string"?p.validity_unit:"Days"
+    };
+  }).filter(function(p){return p.id>0&&p.name;});
+}
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
@@ -476,6 +489,8 @@ function applyPortalConfig(data){
     if(publicBase)PORTAL_API_BASE=publicBase;
   }
   if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
+  var configuredPlans=normalisePlanList(data.plans);
+  if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
   var name=typeof data.ispName==="string"&&data.ispName.trim()?data.ispName.trim():"$(login-title)";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
   setPortalText("portalHeroTitle","Connect with "+name);
@@ -576,17 +591,15 @@ function loadPortalTypography(done){
 /* ── Load plans from API (fallback to hardcoded) ── */
 function loadPlans(){
   var query=PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
+  var embeddedPlans=EMBEDDED_PLANS.slice();
   fetch(apiUrl("/api/plans?type=hotspot"+query))
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
-      if(data&&data.length){
-        PLANS=data.map(function(p){return{id:p.id,name:p.name,price:p.price||0,validity:p.validity,unit:p.validity_unit||"Days"};});
-      }else{
-        PLANS=FALLBACK_PLANS;
-      }
+      var remotePlans=normalisePlanList(data);
+      PLANS=remotePlans.length?remotePlans:(embeddedPlans.length?embeddedPlans:FALLBACK_PLANS);
       renderPlans();
     })
-    .catch(function(){PLANS=FALLBACK_PLANS;renderPlans();});
+    .catch(function(){PLANS=embeddedPlans.length?embeddedPlans:FALLBACK_PLANS;renderPlans();});
 }
 
 function renderPlans(){
