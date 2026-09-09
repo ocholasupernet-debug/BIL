@@ -7,4 +7,4 @@ The application health endpoint and a successful GitHub deployment do not prove 
 
 **Why:** The VPS can serve a healthy API while exposing TCP forwarding ports without a verified OpenVPN handshake or while PM2 serves Express 404s for frontend deep links; RouterOS verified fetches also cannot safely follow a redirect from an untrusted or differently certified host.
 
-**How to apply:** Test the exact generated hostnames with normal certificate validation, check `/`, a representative `/admin/...` route, and `/api/healthz`, distinguish the shared listener from per-router forwarded ports, and require a real RouterOS 6 and 7 import/reconnect before claiming production readiness.
+**How to apply:** Test the exact generated hostnames with normal certificate validation, check `/`, a representative `/admin/...` route, and `/api/healthz`, distinguish the shared listener from per-router forwarded ports, and require a real RouterOS 6 and 7 import/reconnect before claiming production readiness. When Nginx sends the apex and wildcard hosts to the API port, production API startup must serve the built SPA independently of a fragile PM2 flag.
