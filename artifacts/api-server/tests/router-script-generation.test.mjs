@@ -180,6 +180,10 @@ test("router-scoped Main ISP installer validates the actual public route output"
   assert.equal(/[^\x00-\x7F]/.test(script), false);
   assert.match(script, /:if \(\[\/ping address=\$internetTarget count=2\] > 0\)/);
   assert.doesNotMatch(script, /\[\/ping \$internetTarget count=2\]/);
+  assert.match(script, /router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890\/7\.rsc\?mode=direct/);
+  assert.match(script, /router-vpn-bootstrap\/90\/Abcdefghijklmno_1234567890\/7\/openvpn-backup\.rsc\?mode=direct/);
+  assert.doesNotMatch(script, /https:\/\/come\.isplatty\.org\/scripts\/vpn7-backup\.rsc/);
+  assert.match(script, /hotspotsetup\.rsc/);
   assert.equal(validateGeneratedRouterScript(script), script);
 });
 

@@ -2506,7 +2506,7 @@ export interface RouterAsClientOptions {
   /** Select the isolated backup management OpenVPN instance. */
   vpnRole?: RouterManagementVpnRole;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
-  installationMode?: "coexist" | "takeover";
+  installationMode?: "coexist" | "direct" | "takeover";
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2525,7 +2525,7 @@ export interface RouterWireGuardClientOptions {
   /** Router ID for comment labels. */
   routerId?: number;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
-  installationMode?: "coexist" | "takeover";
+  installationMode?: "coexist" | "direct" | "takeover";
 }
 
 export interface RouterIpsecClientOptions {
@@ -2542,7 +2542,7 @@ export interface RouterIpsecClientOptions {
   /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
   routerOsMajor?: number;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
-  installationMode?: "coexist" | "takeover";
+  installationMode?: "coexist" | "direct" | "takeover";
 }
 
 function routerOsString(value: string): string {
@@ -2628,7 +2628,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
-  const coexistence = installationMode === "coexist";
+  const coexistence = installationMode === "coexist" || installationMode === "direct";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
   /* RouterOS 6 calls the CBC cipher "aes128"; RouterOS 7 uses the
@@ -2639,6 +2639,8 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
   const interfaceName = vpnRole === "primary"
     ? ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME
+    : installationMode === "direct"
+      ? `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME}-backup`
     : routerId
       ? routerManagementClientInterfaceName(routerId, vpnRole)
       : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME}${roleSuffix}`;

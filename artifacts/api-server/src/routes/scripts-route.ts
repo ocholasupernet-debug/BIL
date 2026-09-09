@@ -2765,10 +2765,13 @@ router.get([
   const ridRaw = String(req.params.routerId ?? req.query.rid ?? "").trim();
   const token = String(req.params.token ?? req.query.token ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
-  const installationMode: "coexist" | "takeover" =
-    !pathBootstrap && String(req.query.mode ?? "").trim().toLowerCase() === "takeover"
+  const requestedMode = String(req.query.mode ?? "").trim().toLowerCase();
+  const installationMode: "coexist" | "direct" | "takeover" =
+    requestedMode === "takeover"
       ? "takeover"
-      : "coexist";
+      : requestedMode === "direct"
+        ? "direct"
+        : "coexist";
   const takeoverGrant = String(req.query.grant ?? "").trim();
   /* RouterOS fetch may discard an HTTP error body. Path-based bootstrap
      requests are installer-specific and already carry the router token, so
@@ -2825,10 +2828,10 @@ router.get([
       );
       return;
     }
-    if (installationMode === "coexist" && protocol !== "openvpn" && protocol !== "openvpn-backup") {
+    if ((installationMode === "coexist" || installationMode === "direct") && protocol !== "openvpn" && protocol !== "openvpn-backup") {
       sendRouterVpnError(410,
         "# OCHOLA_ROUTER_VPN_ERROR\n" +
-        "# WireGuard and IPsec fallbacks are disabled for coexistence installs. Use the OpenVPN management child or select takeover mode.",
+        "# WireGuard and IPsec fallbacks are disabled for direct/coexistence installs. Use the OpenVPN management child or select takeover mode.",
       );
       return;
     }

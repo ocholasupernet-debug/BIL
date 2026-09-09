@@ -602,7 +602,7 @@ export function generatedRouterVpnChildScript(
   routerId: number,
   material: { endpoint: string; endpointPort?: number; assignedIp: string; serverPublicKey?: string; secret: string },
   routerOsMajor = 6,
-  installationMode: "coexist" | "takeover" = "coexist",
+  installationMode: "coexist" | "direct" | "takeover" = "coexist",
 ): string {
   if (technology === "wireguard") {
     if (!material.serverPublicKey) throw new Error("WireGuard server public key is missing.");

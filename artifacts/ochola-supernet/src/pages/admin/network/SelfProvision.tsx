@@ -205,6 +205,7 @@ export default function AddRouterScript() {
   const [addMode, setAddMode] = useState<"script" | "manual">(
     () => new URLSearchParams(window.location.search).get("mode") === "manual" ? "manual" : "script",
   );
+  const [installTarget, setInstallTarget] = useState<"existing" | "new">("existing");
   const [adminId, setAdminId] = useState(ADMIN_ID);
   const [script, setScript] = useState("");
   const [installerGrant, setInstallerGrant] = useState("");
@@ -288,9 +289,10 @@ export default function AddRouterScript() {
   });
 
   useEffect(() => {
+    if (installTarget !== "existing") return;
     if (!selectedRouterId && routers.length > 0) setSelectedRouterId(routers[0].id);
     if (selectedRouterId && !routers.some(router => router.id === selectedRouterId)) setSelectedRouterId(routers[0]?.id ?? null);
-  }, [routers, selectedRouterId]);
+  }, [installTarget, routers, selectedRouterId]);
 
   const selectedRouter = createdRouter?.id === selectedRouterId
     ? createdRouter
@@ -337,30 +339,37 @@ export default function AddRouterScript() {
   const liveInterfaces = (ports?.interfaces ?? []).filter(iface => !["bridge", "loopback"].includes(iface.type.toLowerCase()));
 
   const generateConfiguration = async () => {
-    if (!canGenerate || !adminId) return;
+    if (!canGenerate || !adminId || (installTarget === "existing" && !selectedRouterId)) return;
     setCreatingRouter(true);
     setPageError("");
-    setSelectedRouterId(null);
-    setCreatedRouter(null);
     try {
-      const result = await jsonRequest<{ ok: boolean; router?: RouterRecord; error?: string }>("/api/admin/router/ensure", {
-        method: "POST",
-        body: JSON.stringify({ adminId }),
-      });
-      if (!result.ok || !result.router?.id || !result.router.name) {
-        throw new Error(result.error || "The router profile could not be created.");
+      let targetRouter: RouterRecord | null = null;
+      if (installTarget === "new") {
+        const result = await jsonRequest<{ ok: boolean; router?: RouterRecord; error?: string }>("/api/admin/router/ensure", {
+          method: "POST",
+          body: JSON.stringify({ adminId }),
+        });
+        if (!result.ok || !result.router?.id || !result.router.name) {
+          throw new Error(result.error || "The router profile could not be created.");
+        }
+        targetRouter = result.router;
+        setCreatedRouter(result.router);
+        setSelectedRouterId(result.router.id);
+      } else {
+        targetRouter = routers.find(router => router.id === selectedRouterId) ?? null;
+        if (!targetRouter) throw new Error("Select an existing router before generating its installer.");
+        setCreatedRouter(null);
       }
+      if (!targetRouter) throw new Error("No router was selected for installation.");
       const prepared = await jsonRequest<{ ok: boolean; grantToken?: string; error?: string }>("/api/admin/router/self-install/grant", {
         method: "POST",
-        body: JSON.stringify({ routerId: result.router.id, adminId }),
+        body: JSON.stringify({ routerId: targetRouter.id, adminId }),
       });
       if (!prepared.ok || !prepared.grantToken) {
         throw new Error(prepared.error || "Installer authorization could not be prepared.");
       }
-      setCreatedRouter(result.router);
-      setSelectedRouterId(result.router.id);
       setInstallerGrant(prepared.grantToken);
-      setScript(buildBootstrapCommand(result.router.id, prepared.grantToken));
+      setScript(buildBootstrapCommand(targetRouter.id, prepared.grantToken));
       setVpnDetails(null);
       setVpnDetailsError("");
       setVpnDetailsLoading(true);
@@ -368,7 +377,7 @@ export default function AddRouterScript() {
       setRecoveryCopy(null);
       try {
         const details = await jsonRequest<ManagementVpnDetailsPayload>(
-          `/api/scripts/router-vpn-details/${result.router.id}/${adminId}/${encodeURIComponent(prepared.grantToken)}`,
+          `/api/scripts/router-vpn-details/${targetRouter.id}/${adminId}/${encodeURIComponent(prepared.grantToken)}`,
         );
         setVpnDetails(details);
       } catch (error) {
@@ -376,9 +385,9 @@ export default function AddRouterScript() {
       } finally {
         setVpnDetailsLoading(false);
       }
-      await refetchRouters();
+      if (installTarget === "new") await refetchRouters();
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Could not create the router profile.");
+      setPageError(error instanceof Error ? error.message : "Could not prepare the router installer.");
     } finally {
       setCreatingRouter(false);
     }
@@ -624,7 +633,7 @@ export default function AddRouterScript() {
     setVpnDetailsLoading(false);
     setProfileDownloading(false);
     setCreatedRouter(null);
-    setSelectedRouterId(null);
+    setSelectedRouterId(installTarget === "existing" ? (routers[0]?.id ?? null) : null);
     setRecoveryCopy(null);
     setPorts(null);
     setSelectedPorts(new Set());
@@ -796,14 +805,56 @@ export default function AddRouterScript() {
               </div>
             )}
 
-            <div style={{ marginBottom: ".9rem", display: "flex", alignItems: "flex-start", gap: 8, color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
-              <Server size={15} color="var(--isp-accent)" style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>Generating the command automatically creates or resumes the next company router profile and reserves its management address. The returned router name will be shown below.</span>
+            <div style={{ marginBottom: ".9rem" }}>
+              <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", textTransform: "uppercase", letterSpacing: ".08em", fontWeight: 800, marginBottom: ".45rem" }}>Installation target</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: ".65rem" }}>
+                <button
+                  type="button"
+                  onClick={() => { setInstallTarget("existing"); setPageError(""); setScript(""); setInstallerGrant(""); }}
+                  style={{ textAlign: "left", padding: ".7rem .75rem", borderRadius: 8, border: `1px solid ${installTarget === "existing" ? "rgba(20,184,166,.55)" : "var(--isp-border)"}`, background: installTarget === "existing" ? "rgba(20,184,166,.1)" : "rgba(255,255,255,.025)", color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  <strong style={{ display: "block", fontSize: ".75rem" }}>Use an existing router</strong>
+                  <span style={{ display: "block", marginTop: ".25rem", color: "var(--isp-text-muted)", fontSize: ".67rem", lineHeight: 1.4 }}>Generate a fresh, router-scoped installer for a router already in this company account.</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setInstallTarget("new"); setSelectedRouterId(null); setCreatedRouter(null); setPageError(""); setScript(""); setInstallerGrant(""); }}
+                  style={{ textAlign: "left", padding: ".7rem .75rem", borderRadius: 8, border: `1px solid ${installTarget === "new" ? "rgba(20,184,166,.55)" : "var(--isp-border)"}`, background: installTarget === "new" ? "rgba(20,184,166,.1)" : "rgba(255,255,255,.025)", color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  <strong style={{ display: "block", fontSize: ".75rem" }}>Create a new router profile</strong>
+                  <span style={{ display: "block", marginTop: ".25rem", color: "var(--isp-text-muted)", fontSize: ".67rem", lineHeight: 1.4 }}>Reserve the next company router name and management address before installing.</span>
+                </button>
+              </div>
             </div>
 
-            <button onClick={() => void generateConfiguration()} disabled={loadingAccount || creatingRouter || !canGenerate} style={primaryButton(loadingAccount || creatingRouter || !canGenerate)}>
+            {installTarget === "existing" ? (
+              <label style={{ display: "block", marginBottom: ".9rem" }}>
+                <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".68rem", textTransform: "uppercase", letterSpacing: ".08em", fontWeight: 800, marginBottom: ".35rem" }}>Existing router</span>
+                <select
+                  value={selectedRouterId ?? ""}
+                  onChange={event => { setSelectedRouterId(Number(event.target.value) || null); setScript(""); setInstallerGrant(""); setPageError(""); }}
+                  disabled={routers.length === 0 || creatingRouter}
+                  style={{ width: "100%", boxSizing: "border-box", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: ".65rem .7rem", fontFamily: "inherit", fontSize: ".75rem" }}
+                >
+                  <option value="">Select a router…</option>
+                  {routers.map(router => <option key={router.id} value={router.id}>{router.name} · {router.model || "MikroTik"} · {router.status}</option>)}
+                </select>
+                {routers.length === 0 && <span style={{ display: "block", marginTop: ".35rem", color: "var(--isp-text-muted)", fontSize: ".67rem" }}>No router profiles exist yet. Choose “Create a new router profile”.</span>}
+              </label>
+            ) : (
+              <div style={{ marginBottom: ".9rem", padding: ".7rem .75rem", borderRadius: 8, background: "rgba(59,130,246,.07)", border: "1px solid rgba(96,165,250,.24)", color: "var(--isp-text-muted)", fontSize: ".69rem", lineHeight: 1.45 }}>
+                A new profile will be created only when you generate the installer. If generation fails, no installer grant is issued.
+              </div>
+            )}
+
+            <div style={{ marginBottom: ".9rem", display: "flex", alignItems: "flex-start", gap: 8, color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
+              <Server size={15} color="var(--isp-accent)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>The generated <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> is scoped to the selected router and contains the primary management VPN, backup management VPN, and <strong style={{ color: "var(--isp-text)" }}>hotspot-bridge</strong> setup.</span>
+            </div>
+
+            <button onClick={() => void generateConfiguration()} disabled={loadingAccount || creatingRouter || !canGenerate || (installTarget === "existing" && !selectedRouterId)} style={primaryButton(loadingAccount || creatingRouter || !canGenerate || (installTarget === "existing" && !selectedRouterId))}>
               {loadingAccount || creatingRouter ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <FileCode2 size={16} />}
-              {loadingAccount ? "Loading company…" : creatingRouter ? "Creating router profile…" : "Create profile & generate command"}
+              {loadingAccount ? "Loading company…" : creatingRouter ? (installTarget === "new" ? "Creating router profile…" : "Preparing installer…") : installTarget === "new" ? "Create profile & generate command" : "Generate installer for selected router"}
             </button>
 
             {script && (

@@ -145,6 +145,20 @@ const MAIN_ISP_CONFIGURATION_RSC = String.raw`# OcholaSuperNet Main ISP Configur
         :set failures ($failures + 1)
         :put ("  REQUIRED VPN step failed: " . $error)
     }
+    :local backupVpnUrl
+    :if ($majorVersion = 7) do={
+        :set backupVpnUrl "https://bil.isplatty.org/scripts/vpn7-backup.rsc"
+    } else={
+        :if ($majorVersion = 6) do={
+            :set backupVpnUrl "https://bil.isplatty.org/scripts/vpn6-backup.rsc"
+        } else={
+            :error ("Unsupported RouterOS major version: " . $majorVersion)
+        }
+    }
+    :do { $ocholaFetchImportMain "Backup VPN configuration" $backupVpnUrl "vpnsetup-backup.rsc" } on-error={
+        :set failures ($failures + 1)
+        :put ("  REQUIRED backup VPN step failed: " . $error)
+    }
     :for vpnAttempt from=1 to=12 do={
         :if ($vpnStatus != "CONNECTED") do={
             :foreach vpnClient in=[/interface ovpn-client find where name="__MANAGEMENT_INTERFACE_NAME__"] do={
@@ -414,11 +428,15 @@ export function buildMainIspConfigurationRsc(
     if (!queryBootstrap.test(vpnBase) && !pathBootstrap.test(vpnBase)) {
       throw new Error("The router VPN bootstrap URL is invalid.");
     }
-    const routerVpn6Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/6.rsc` : `${vpnBase}&ros-version=6`;
-    const routerVpn7Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/7.rsc` : `${vpnBase}&ros-version=7`;
+    const routerVpn6Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/6.rsc?mode=direct` : `${vpnBase}&ros-version=6&mode=direct`;
+    const routerVpn7Url = pathBootstrap.test(vpnBase) ? `${vpnBase}/7.rsc?mode=direct` : `${vpnBase}&ros-version=7&mode=direct`;
+    const routerVpn6BackupUrl = pathBootstrap.test(vpnBase) ? `${vpnBase}/6/openvpn-backup.rsc?mode=direct` : `${vpnBase}&ros-version=6&protocol=openvpn-backup&mode=direct`;
+    const routerVpn7BackupUrl = pathBootstrap.test(vpnBase) ? `${vpnBase}/7/openvpn-backup.rsc?mode=direct` : `${vpnBase}&ros-version=7&protocol=openvpn-backup&mode=direct`;
     script = script
       .replaceAll(`https://${companyHost}/scripts/vpn7.rsc`, routerVpn7Url)
-      .replaceAll(`https://${companyHost}/scripts/vpn6.rsc`, routerVpn6Url);
+      .replaceAll(`https://${companyHost}/scripts/vpn6.rsc`, routerVpn6Url)
+      .replaceAll(`https://${companyHost}/scripts/vpn7-backup.rsc`, routerVpn7BackupUrl)
+      .replaceAll(`https://${companyHost}/scripts/vpn6-backup.rsc`, routerVpn6BackupUrl);
   }
 
   return validateGeneratedRouterScript(script);
