@@ -39,6 +39,18 @@ jobs:
             -czf "$release_archive" .
           mv "$release_archive" ocholasupernet-release.tgz
 
+      - name: Encode runtime SSH material
+        id: encode_runtime_ssh
+        shell: bash
+        env:
+          DEPLOY_VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          DEPLOY_VPS_SSH_PASSPHRASE: ${{ secrets.VPS_SSH_PASSPHRASE }}
+        run: |
+          printf 'VPS_SSH_KEY_B64=%s\n' \
+            "$(printf '%s' "$DEPLOY_VPS_SSH_KEY" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          printf 'VPS_SSH_PASSPHRASE_B64=%s\n' \
+            "$(printf '%s' "$DEPLOY_VPS_SSH_PASSPHRASE" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
       - name: Copy release to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -63,7 +75,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY,VPS_SSH_PASSPHRASE
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -104,10 +116,14 @@ jobs:
             upsert_env "VPS_USER"                 "root"
             # Store multiline SSH material as base64: so .env remains valid.
             # The API decodes it only in memory when opening the SSH channel.
-            if [ -n "${VPS_SSH_KEY:-}" ]; then
+            if [ -n "${VPS_SSH_KEY_B64:-}" ]; then
+              upsert_env "VPS_SSH_KEY" "base64:${VPS_SSH_KEY_B64}"
+            elif [ -n "${VPS_SSH_KEY:-}" ]; then
               upsert_env "VPS_SSH_KEY" "base64:$(printf '%s' "$VPS_SSH_KEY" | base64 -w0)"
             fi
-            if [ -n "${VPS_SSH_PASSPHRASE:-}" ]; then
+            if [ -n "${VPS_SSH_PASSPHRASE_B64:-}" ]; then
+              upsert_env "VPS_SSH_PASSPHRASE_B64" "base64:${VPS_SSH_PASSPHRASE_B64}"
+            elif [ -n "${VPS_SSH_PASSPHRASE:-}" ]; then
               upsert_env "VPS_SSH_PASSPHRASE_B64" "base64:$(printf '%s' "$VPS_SSH_PASSPHRASE" | base64 -w0)"
             fi
 
@@ -150,5 +166,5 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SSH_PASSPHRASE: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          VPS_SSH_KEY_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_KEY_B64 }}
+          VPS_SSH_PASSPHRASE_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_PASSPHRASE_B64 }}
