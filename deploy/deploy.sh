@@ -97,9 +97,22 @@ else
   echo "      → Now on: $(git log -1 --format='%h %s')"
 fi
 
-# 2. Install dependencies (no frozen-lockfile so it never blocks)
-echo "[2/7] Installing dependencies..."
-pnpm install --no-frozen-lockfile
+# 2. Install dependencies, or reuse the already-installed workspace for an
+# archive release. Set DEPLOY_FORCE_INSTALL=1 when package manifests or the
+# lockfile changed and a fresh registry install is required.
+echo "[2/7] Preparing dependencies..."
+if [ "${DEPLOY_FORCE_INSTALL:-0}" != "1" ] &&
+   { [ "${DEPLOY_SKIP_INSTALL:-0}" = "1" ] || [ "${DEPLOY_FROM_ARCHIVE:-0}" = "1" ]; }; then
+  if [ ! -x "$PROJECT_DIR/artifacts/ochola-supernet/node_modules/.bin/vite" ] ||
+     [ ! -x "$PROJECT_DIR/artifacts/api-server/node_modules/.bin/esbuild" ]; then
+    echo "      ✗ DEPLOY_SKIP_INSTALL=1 but required workspace dependencies are missing." >&2
+    echo "        Run pnpm install on the VPS or deploy with DEPLOY_FORCE_INSTALL=1." >&2
+    exit 1
+  fi
+  echo "      ✓ Reusing existing workspace dependencies"
+else
+  pnpm install --no-frozen-lockfile
+fi
 
 # Load deployment values from the VPS environment before database checks and
 # builds. The workflow writes the values into .env before calling this script.
