@@ -134,7 +134,6 @@ export default function NetworkMigration() {
     retry: false,
   });
   const migrationOptions = migrationOptionsQuery.data;
-
   useEffect(() => {
     if (!migrationOptions) return;
     const sourceNames = migrationOptions.sourcePorts.length > 0
