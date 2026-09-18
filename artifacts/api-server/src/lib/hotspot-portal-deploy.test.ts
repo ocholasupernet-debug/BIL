@@ -7,7 +7,7 @@ function html(config: Record<string, unknown> = { apiBase: "https://tenant.ispla
     "<!doctype html><html><head>",
     `<script>window.__HOTSPOT_CONFIG__=${JSON.stringify(config)};</script>`,
     "</head><body>",
-    "$(link-login-only) $(link-orig) $(if error) $(endif error)",
+    "$(link-login-only) $(link-orig) $(if error) $(endif)",
     "</body></html>",
   ].join("");
 }
@@ -24,7 +24,7 @@ test("rejects a portal missing RouterOS markers or generated configuration", () 
     error: "Generated portal HTML is missing RouterOS marker $(link-orig).",
   });
   const missingConfig = validateGeneratedHotspotPortal(
-    "<!doctype html><html>$(link-login-only) $(link-orig) $(if error) $(endif error)</html>",
+    "<!doctype html><html>$(link-login-only) $(link-orig) $(if error) $(endif)</html>",
   );
   assert.deepEqual(missingConfig, {
     error: "Generated portal HTML is missing its portal configuration.",

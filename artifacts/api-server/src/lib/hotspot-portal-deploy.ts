@@ -37,7 +37,7 @@ export function validateGeneratedHotspotPortal(value: unknown): { content: Buffe
   if (!/^<!doctype html>/i.test(value.trim())) {
     return { error: "Generated portal HTML must be a complete HTML document." };
   }
-  for (const marker of ["$(link-login-only)", "$(link-orig)", "$(if error)", "$(endif error)"]) {
+  for (const marker of ["$(link-login-only)", "$(link-orig)", "$(if error)", "$(endif)"]) {
     if (!value.includes(marker)) return { error: `Generated portal HTML is missing RouterOS marker ${marker}.` };
   }
   const configMatch = value.match(/window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
