@@ -23,7 +23,7 @@ const CONFIG_CATEGORIES = [
 ] as const;
 type ConfigCategory = typeof CONFIG_CATEGORIES[number]["id"];
 type Phase = "idle" | "install" | "ports" | "success";
-type InstallationMode = "coexist" | "takeover";
+type InstallationMode = "greenfield" | "brownfield" | "ztp_takeover";
 const TAKEOVER_CONFIRMATION = "TAKE CONTROL";
 
 interface RouterSummary {
@@ -271,7 +271,7 @@ function RouterRecovery({
   installationMode?: InstallationMode;
   vpnConnected?: boolean;
 }) {
-  const interfaceName = installationMode === "coexist" && routerId
+  const interfaceName = installationMode === "brownfield" && routerId
     ? `ochola-mgmt-vpn-${routerId}`
     : "ocholasupernet";
   const title = vpnConnected ? "RouterOS API is not ready yet" : "Waiting for the router-management VPN";
@@ -311,7 +311,9 @@ export default function SelfInstall() {
   const [activeRouterId, setActiveRouterId] = useState<number | null>(reconfigureId);
   const [reconfiguringExisting, setReconfiguringExisting] = useState(Boolean(reconfigureId));
   const [generating, setGenerating] = useState(false);
-  const [installationMode, setInstallationMode] = useState<InstallationMode>("coexist");
+  const [installationMode, setInstallationMode] = useState<InstallationMode>("greenfield");
+  const [routerIdentifier, setRouterIdentifier] = useState("");
+  const [vpnServerIp, setVpnServerIp] = useState("10.8.0.1");
   const [takeoverConfirmation, setTakeoverConfirmation] = useState("");
   const [installerGrant, setInstallerGrant] = useState("");
   const [portsLoading, setPortsLoading] = useState(false);
@@ -391,8 +393,8 @@ export default function SelfInstall() {
       setPageError("The router selected for reconfiguration is not available in this ISP account.");
       return;
     }
-    if (installationMode === "takeover" && takeoverConfirmation.trim() !== TAKEOVER_CONFIRMATION) {
-      setPageError(`Type ${TAKEOVER_CONFIRMATION} exactly to authorize Router Takeover.`);
+    if (installationMode === "ztp_takeover" && takeoverConfirmation.trim() !== TAKEOVER_CONFIRMATION) {
+      setPageError(`Type ${TAKEOVER_CONFIRMATION} exactly to authorize Zero-Touch Provisioning.`);
       return;
     }
     setGenerating(true);
@@ -402,12 +404,15 @@ export default function SelfInstall() {
         method: "POST",
         body: JSON.stringify({
           adminId,
-          ...(reconfiguringExisting && activeRouter?.name ? { routerName: activeRouter.name } : {}),
+          ...((routerIdentifier.trim() || (reconfiguringExisting ? activeRouter?.name : "")) ? {
+            routerName: routerIdentifier.trim() || activeRouter?.name,
+          } : {}),
+          vpnServerIp,
         }),
       });
       if (!result.ok || !result.router?.id) throw new Error("The router profile could not be created.");
       const prepared = await jsonRequest<TakeoverPreparation>(
-        installationMode === "takeover"
+        installationMode === "ztp_takeover"
           ? "/api/admin/router/self-install/takeover/prepare"
           : "/api/admin/router/self-install/grant",
         {
@@ -415,7 +420,7 @@ export default function SelfInstall() {
           body: JSON.stringify({
             routerId: result.router.id,
             adminId,
-            ...(installationMode === "takeover" ? { confirmation: takeoverConfirmation.trim() } : {}),
+            ...(installationMode === "ztp_takeover" ? { confirmation: takeoverConfirmation.trim() } : {}),
           }),
         },
       );
@@ -455,12 +460,13 @@ export default function SelfInstall() {
     setPortState({});
     setInstallerGrant("");
     setTakeoverConfirmation("");
+    setRouterIdentifier("");
     setPageError(null);
     setCopyResult(null);
     setCopySkipped(false);
   };
 
-  const routerName = activeRouter?.name || status?.router.name || suggestedRouterName(routers);
+  const routerName = activeRouter?.name || status?.router.name || routerIdentifier || suggestedRouterName(routers);
   /* When an ISP admin is signed in on its own hostname, keep installer URLs
      on that hostname so RouterOS validates that company's certificate. */
   const publicApiOrigin = (
@@ -488,7 +494,7 @@ export default function SelfInstall() {
       });
       if (!data.ok) throw new Error(data.error || "Could not read the router interfaces.");
       setPorts(data);
-      const bridge = installationMode === "coexist"
+      const bridge = installationMode === "brownfield"
         ? data.bridges.find(item => item.name === coexistenceBridgeName(activeRouterId))
         : data.bridges.find(item => /hotspot/i.test(item.name)) ?? data.bridges[0];
       if (!bridge) throw new Error("The router has no bridge available. Create a bridge in RouterOS, then retry.");
@@ -506,8 +512,8 @@ export default function SelfInstall() {
   const togglePort = async (iface: Iface) => {
     if (!activeRouterId || !ports || !selectedBridge || ifaceKind(iface) === "protected" || portState[iface.name] === "pending") return;
     const currentBridge = bridgeForPort(iface.name, ports.bridgePorts);
-    if (installationMode === "coexist" && currentBridge && currentBridge !== selectedBridge) {
-      setPortError(`${iface.name} is assigned to ${currentBridge}, so Coexistence will not move it from the other billing system.`);
+    if (installationMode === "brownfield" && currentBridge && currentBridge !== selectedBridge) {
+      setPortError(`${iface.name} is assigned to ${currentBridge}, so Brownfield Integration will not move it from the other billing system.`);
       return;
     }
     const wasSelected = selectedPorts.has(iface.name);
@@ -554,7 +560,7 @@ export default function SelfInstall() {
 
   const finishInstallation = async () => {
     if (!activeRouterId || !routerApiReady || Object.values(portState).some(value => value === "pending")) return;
-    if (installationMode === "coexist" && selectedPorts.size === 0) {
+    if (installationMode === "brownfield" && selectedPorts.size === 0) {
       setPortError("Select at least one unassigned physical port for the isolated OcholaSuperNet bridge before finishing.");
       return;
     }
@@ -623,10 +629,10 @@ export default function SelfInstall() {
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: 900 }}>
         <div>
           <h1 style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--isp-text)", margin: "0 0 .2rem" }}>
-            {reconfiguringExisting ? "Reconfigure Router" : "Self Install"}
+            {reconfiguringExisting ? "Reconfigure Router" : "Router Deployment Orchestrator"}
           </h1>
           <p style={{ fontSize: ".8rem", color: "var(--isp-text-muted)", margin: 0 }}>
-            Connect a MikroTik through the management VPN, choose its live ports, and finish setup without leaving this flow.
+            Select your physical hardware installation methodology and compile a tenant-scoped RouterOS payload.
           </p>
         </div>
         <NetworkTabs active="self-install" />
@@ -669,40 +675,92 @@ export default function SelfInstall() {
           <>
             <div style={{ ...panelStyle(), padding: "1.1rem 1.2rem" }}>
               <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".86rem", marginBottom: ".45rem" }}>
-                Add this router to the ISP
+                Select physical hardware installation methodology
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(170px,.45fr) 1fr", gap: 12, alignItems: "start" }}>
-                <label style={{ color: "var(--isp-text-muted)", fontSize: ".72rem", fontWeight: 700 }}>
-                  Installation mode
-                  <select value={installationMode} onChange={event => {
-                    setInstallationMode(event.target.value as InstallationMode);
-                    setTakeoverConfirmation("");
-                  }} style={{ display: "block", width: "100%", marginTop: ".35rem", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "inherit", fontSize: ".76rem" }}>
-                    <option value="coexist">Coexistence — preserve existing services</option>
-                    <option value="takeover">Router Takeover — replace router services</option>
-                  </select>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
+                <label style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>
+                  Router Identifier / Name
+                  <input
+                    type="text"
+                    value={routerIdentifier}
+                    onChange={event => setRouterIdentifier(event.target.value)}
+                    placeholder="e.g., Core_Mikrotik_Edge"
+                    style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: ".35rem", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "monospace", fontSize: ".76rem" }}
+                  />
                 </label>
-                {installationMode === "coexist" ? (
-                  <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(94,234,212,.25)", background: "rgba(94,234,212,.06)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#5eead4", fontWeight: 800, fontSize: ".76rem" }}>
-                      <CheckCircle2 size={15} /> Coexistence installation
-                    </div>
-                    <div style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
-                      Preserves existing billing, customer-access, LAN, and foreign VPN services while adding isolated Ochola management resources.
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(248,113,113,.3)", background: "rgba(248,113,113,.07)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#fca5a5", fontWeight: 800, fontSize: ".76rem" }}>
-                      <AlertTriangle size={15} /> Router Takeover is destructive
-                    </div>
-                    <div style={{ color: "#fecaca", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
-                      Creates a binary backup and text export first, then may replace router service resources. Supabase customers, billing, payments, and service history remain intact.
-                    </div>
-                    <input value={takeoverConfirmation} onChange={event => setTakeoverConfirmation(event.target.value)} placeholder={TAKEOVER_CONFIRMATION} aria-label="Takeover confirmation" style={{ width: "100%", boxSizing: "border-box", marginTop: ".6rem", background: "#0a0f1a", color: "#fecaca", border: "1px solid rgba(248,113,113,.35)", borderRadius: 6, padding: ".5rem .6rem", fontFamily: "monospace", fontSize: ".72rem" }} />
-                  </div>
-                )}
+                <label style={{ color: "var(--isp-text-muted)", fontSize: ".68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>
+                  Platform VPN Endpoint
+                  <input
+                    type="text"
+                    value={vpnServerIp}
+                    onChange={event => setVpnServerIp(event.target.value)}
+                    aria-label="Platform VPN Endpoint"
+                    style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: ".35rem", background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".55rem .65rem", fontFamily: "monospace", fontSize: ".76rem" }}
+                  />
+                </label>
               </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+                {[
+                  {
+                    mode: "greenfield" as const,
+                    title: "Greenfield Provisioning",
+                    former: "Formerly Direct Installation",
+                    detail: "For a clean router. Installs the standard bridge, billing subnets, RADIUS, Hotspot, PPPoE, and service profiles.",
+                    color: "#60a5fa",
+                  },
+                  {
+                    mode: "brownfield" as const,
+                    title: "Brownfield Integration",
+                    former: "Formerly Coexistence",
+                    detail: "Adds isolated billing resources to a live router without removing existing Hotspot, PPPoE, RADIUS, or local users.",
+                    color: "#5eead4",
+                  },
+                  {
+                    mode: "ztp_takeover" as const,
+                    title: "Zero-Touch Provisioning / Full Reset",
+                    former: "Formerly Router Takeover",
+                    detail: "Creates a verified bootstrap file, wipes the router with no defaults, then restores the billing installer after reboot.",
+                    color: "#f87171",
+                  },
+                ].map(option => {
+                  const selected = installationMode === option.mode;
+                  return (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      onClick={() => {
+                        setInstallationMode(option.mode);
+                        setTakeoverConfirmation("");
+                      }}
+                      style={{
+                        textAlign: "left", padding: ".8rem", borderRadius: 9,
+                        border: `1px solid ${selected ? option.color : "var(--isp-border)"}`,
+                        background: selected ? `${option.color}12` : "rgba(255,255,255,.02)",
+                        color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit",
+                        boxShadow: selected ? `0 0 0 1px ${option.color}44` : "none",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
+                        {selected ? <CheckCircle2 size={15} color={option.color} /> : <Info size={15} color={option.color} />}
+                        <span style={{ fontSize: ".75rem", fontWeight: 800, lineHeight: 1.3 }}>{option.title}</span>
+                      </div>
+                      <div style={{ color: option.color, fontSize: ".6rem", fontWeight: 700, margin: ".35rem 0" }}>{option.former}</div>
+                      <div style={{ color: "var(--isp-text-muted)", fontSize: ".66rem", lineHeight: 1.5 }}>{option.detail}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {installationMode === "ztp_takeover" && (
+                <div style={{ marginTop: 10, padding: ".75rem .8rem", borderRadius: 9, border: "1px solid rgba(248,113,113,.3)", background: "rgba(248,113,113,.07)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#fca5a5", fontWeight: 800, fontSize: ".76rem" }}>
+                    <AlertTriangle size={15} /> Destructive reset authorization required
+                  </div>
+                  <div style={{ color: "#fecaca", fontSize: ".68rem", lineHeight: 1.55, marginTop: ".4rem" }}>
+                    A verified billing_init.rsc is staged before RouterOS runs <code>/system/reset-configuration keep-users=no no-defaults=yes run-after-reset=billing_init.rsc</code>.
+                  </div>
+                  <input value={takeoverConfirmation} onChange={event => setTakeoverConfirmation(event.target.value)} placeholder={TAKEOVER_CONFIRMATION} aria-label="Zero-Touch confirmation" style={{ width: "100%", boxSizing: "border-box", marginTop: ".6rem", background: "#0a0f1a", color: "#fecaca", border: "1px solid rgba(248,113,113,.35)", borderRadius: 6, padding: ".5rem .6rem", fontFamily: "monospace", fontSize: ".72rem" }} />
+                </div>
+              )}
             </div>
             <div style={{ ...panelStyle(), padding: "1.2rem 1.3rem", display: "flex", gap: 12, alignItems: "flex-start" }}>
               <Info size={18} style={{ color: "#60a5fa", flexShrink: 0, marginTop: 2 }} />
@@ -745,8 +803,8 @@ export default function SelfInstall() {
                 <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".9rem" }}>{routerName}</div>
                 <div style={{ color: "var(--isp-text-muted)", fontSize: ".73rem", marginTop: 2 }}>Persistent management address: <code style={{ color: "#5eead4" }}>{status?.vpnIp || activeRouter?.vpn_ip || "assigning…"}</code></div>
               </div>
-              <span style={{ color: installationMode === "coexist" ? "#5eead4" : "#fca5a5", border: `1px solid ${installationMode === "coexist" ? "rgba(94,234,212,.25)" : "rgba(248,113,113,.3)"}`, background: installationMode === "coexist" ? "rgba(94,234,212,.06)" : "rgba(248,113,113,.07)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
-                {installationMode === "coexist" ? "COEXISTENCE" : "ROUTER TAKEOVER"}
+              <span style={{ color: installationMode === "brownfield" ? "#5eead4" : installationMode === "greenfield" ? "#60a5fa" : "#fca5a5", border: `1px solid ${installationMode === "brownfield" ? "rgba(94,234,212,.25)" : installationMode === "greenfield" ? "rgba(96,165,250,.25)" : "rgba(248,113,113,.3)"}`, background: installationMode === "brownfield" ? "rgba(94,234,212,.06)" : installationMode === "greenfield" ? "rgba(96,165,250,.06)" : "rgba(248,113,113,.07)", borderRadius: 999, padding: ".25rem .55rem", fontSize: ".63rem", fontWeight: 800 }}>
+                {installationMode === "brownfield" ? "BROWNFIELD" : installationMode === "greenfield" ? "GREENFIELD" : "ZERO-TOUCH"}
               </span>
               <button onClick={() => setShowHelp(value => !value)} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--isp-text-muted)", background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 7, padding: ".38rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}>
                 <HelpCircle size={13} /> Help
@@ -760,9 +818,9 @@ export default function SelfInstall() {
                 Reset the MikroTik, give it internet, open Winbox → New Terminal, then run Download configuration followed by Run installer. Leave the terminal open until the final “Setup complete” message appears.
               </div>
             )}
-            {installationMode === "takeover" && (
+            {installationMode === "ztp_takeover" && (
               <div style={{ background: "rgba(248,113,113,.06)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 9, padding: ".8rem 1rem", color: "#fecaca", fontSize: ".75rem", lineHeight: 1.6 }}>
-                Router Takeover is authorized for this router only and expires shortly. The installer creates and verifies both backup files before changing services; if that boundary fails, it stops.
+                Zero-Touch authorization is scoped to this router and expires shortly. The installer stages and verifies billing_init.rsc before the reset; if that boundary fails, it stops.
               </div>
             )}
             <div style={{ ...panelStyle(), padding: "1rem 1.15rem" }}>
@@ -982,25 +1040,25 @@ export default function SelfInstall() {
             </div>
             <div style={{ background: "rgba(37,99,235,.06)", border: "1px solid rgba(37,99,235,.22)", borderRadius: 9, padding: ".75rem 1rem", color: "#93c5fd", fontSize: ".75rem", lineHeight: 1.55 }}>
               <Wifi size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              {installationMode === "coexist"
+              {installationMode === "brownfield"
                 ? "The OcholaSuperNet bridge is isolated from the existing billing bridge. Only unassigned ports can be added; ports already owned by the other billing system remain protected."
                 : "All live ethernet and WLAN interfaces are shown below. Click a port to apply it to the selected bridge. WAN and management interfaces remain protected."}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
               <span style={{ color: "var(--isp-text-muted)", fontSize: ".75rem", fontWeight: 700 }}>Bridge</span>
-              {installationMode === "coexist" && <span style={{ color: "#5eead4", fontSize: ".7rem", fontWeight: 800 }}>OcholaSuperNet · existing billing bridges protected</span>}
-              <select disabled={installationMode === "coexist"} value={selectedBridge} onChange={event => {
+              {installationMode === "brownfield" && <span style={{ color: "#5eead4", fontSize: ".7rem", fontWeight: 800 }}>OcholaSuperNet · existing billing bridges protected</span>}
+              <select disabled={installationMode === "brownfield"} value={selectedBridge} onChange={event => {
                 const bridge = event.target.value;
                 setSelectedBridge(bridge);
                 setSelectedPorts(new Set(ports.bridgePorts.filter(item => item.bridge === bridge).map(item => item.interface)));
                 setPortState({});
               }} style={{ background: "var(--isp-input-bg,rgba(255,255,255,.05))", color: "var(--isp-accent)", border: "1px solid var(--isp-accent-border)", borderRadius: 7, padding: ".42rem .7rem", fontFamily: "monospace", fontSize: ".76rem", fontWeight: 800 }}>
-                {(installationMode === "coexist"
+                {(installationMode === "brownfield"
                   ? ports.bridges.filter(bridge => bridge.name === coexistenceBridgeName(activeRouterId))
                   : ports.bridges
                 ).map(bridge => <option key={bridge.name} value={bridge.name}>{bridge.name}</option>)}
               </select>
-              {installationMode === "coexist" && <span style={{ color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+              {installationMode === "brownfield" && <span style={{ color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
                 {selectedPorts.size} Ochola port{selectedPorts.size === 1 ? "" : "s"} · other billing ports stay where they are
               </span>}
               <button onClick={loadPorts} disabled={portsLoading} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 7, padding: ".4rem .65rem", fontSize: ".7rem", cursor: "pointer", fontFamily: "inherit" }}><RefreshCw size={12} /> Refresh</button>
@@ -1014,7 +1072,7 @@ export default function SelfInstall() {
                 const currentBridge = bridgeForPort(iface.name, ports.bridgePorts);
                 const state = portState[iface.name];
                 const protectedPort = kind === "protected";
-                 const ownedByOtherBilling = installationMode === "coexist" && !!currentBridge && currentBridge !== selectedBridge;
+                 const ownedByOtherBilling = installationMode === "brownfield" && !!currentBridge && currentBridge !== selectedBridge;
                 return (
                    <div key={iface.name} onClick={() => {
                      if (!ownedByOtherBilling) void togglePort(iface);
@@ -1046,9 +1104,9 @@ export default function SelfInstall() {
             )}
             <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
               <button onClick={() => { setPhase("install"); setPorts(null); }} style={{ background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", borderRadius: 8, padding: ".62rem 1rem", fontFamily: "inherit", fontSize: ".76rem", fontWeight: 700, cursor: "pointer" }}>Back</button>
-                <button onClick={finishInstallation} disabled={!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0)} style={primaryButton(!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "coexist" && selectedPorts.size === 0))}>
+                <button onClick={finishInstallation} disabled={!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "brownfield" && selectedPorts.size === 0)} style={primaryButton(!routerApiReady || completeLoading || Object.values(portState).some(value => value === "pending") || (installationMode === "brownfield" && selectedPorts.size === 0))}>
                 {completeLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Check size={15} />}
-                 {completeLoading ? "Verifying installation…" : installationMode === "coexist" && selectedPorts.size === 0 ? "Select a port to continue" : "Next — finish installation"}
+                  {completeLoading ? "Verifying installation…" : installationMode === "brownfield" && selectedPorts.size === 0 ? "Select a port to continue" : "Next — finish installation"}
               </button>
             </div>
           </>
