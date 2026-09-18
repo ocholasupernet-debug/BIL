@@ -18,15 +18,10 @@ import {
   testConnection,
   probeAllHosts,
   probePort,
-  generateFirewallScript,
-  generateVpnSetupScript,
   generateOvpnClientConfig,
-  generateRouterAsClientScript,
   fetchRouterFiles,
   fetchRouterSecurityState,
   deployRouterFile,
-  runRouterScript,
-  ensureRouterHttpsTrust,
   syncHotspotPortalHostname,
   ensureRouterManagementAccess,
   RouterFileExistsError,
@@ -38,18 +33,14 @@ import {
   getDeployableSource,
   listDeployableSources,
   type DeployableSourceType,
-} from "./scripts-route.js";
-import {
-  generateVpsOvpnSetupScript,
-  describeVpnArchitecture,
-} from "../lib/vpn-utils";
+} from "../lib/portal-assets.js";
+import { generateVpsOvpnSetupScript, describeVpnArchitecture } from "../lib/vpn-utils";
 import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
-import { ROUTER_HTTPS_CERTIFICATE_FILE } from "../lib/router-https-trust.js";
 import {
   provisionRouterManagementOpenVpn,
 } from "../lib/router-vpn-provisioning.js";
@@ -57,10 +48,6 @@ import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.j
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
-import {
-  buildManagementApiRepairScript,
-  type ManagementRepairPhase,
-} from "../lib/router-management-repair.js";
 
 const router: IRouter = Router();
 
@@ -80,14 +67,11 @@ interface BulkDeployJob {
   adminId: number;
   status: BulkDeployJobStatus;
   scope: "hotspot" | "all";
-  importScripts: boolean;
   total: number;
   processed: number;
   deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
   skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
-  imported: Array<{ sourceName: string; destinationPath: string }>;
-  importSkipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   sources: Array<{
     type: DeployableSourceType;
     sourceName: string;
@@ -100,23 +84,6 @@ interface BulkDeployJob {
 }
 const bulkDeployJobs = new Map<string, BulkDeployJob>();
 const BULK_DEPLOY_JOB_TTL_MS = 15 * 60 * 1000;
-const BULK_IMPORT_ORDER = [
-  "management-firewall.rsc",
-  "hotspotsetup.rsc",
-  "hotspot-access.rsc",
-  "pppoesetup.rsc",
-  "users.rsc",
-  "syncusers.rsc",
-  "logpush.rsc",
-  "seclogpush.rsc",
-  "heartbeat.rsc",
-  "syncfull.rsc",
-];
-const BULK_IMPORT_EXCLUDED = new Map([
-  ["mainhotspot.rsc", "router-scoped orchestrator; use Direct installation"],
-  ["vpn6.rsc", "version placeholder; use the router-scoped VPN installer"],
-  ["vpn7.rsc", "version placeholder; use the router-scoped VPN installer"],
-]);
 
 function cleanPendingRouterFileSources(): void {
   const now = Date.now();
@@ -495,12 +462,12 @@ router.get("/router/:id/files", async (req, res): Promise<void> => {
 
 /* ─── POST /api/router/:id/files/deploy ──────────────────────────────────── */
 /**
- * Publishes one allowlisted local hotspot asset or RouterOS script to a
+ * Publishes one allowlisted local hotspot asset to a
  * selected router. The server owns both the local file read and router
  * credentials; the browser sends only an asset identifier and admin id.
  *
  * Body:
- *   { adminId, sourceType: "hotspot" | "script", sourceName,
+ *   { adminId, sourceType: "hotspot", sourceName,
  *     destinationDirectory? , destinationPath?, overwrite? }
  */
 router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
@@ -512,8 +479,8 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
-  if (sourceType !== "hotspot" && sourceType !== "script") {
-    res.status(400).json({ error: "sourceType must be hotspot or script" });
+  if (sourceType !== "hotspot") {
+    res.status(400).json({ error: "sourceType must be hotspot" });
     return;
   }
   if (!sourceName) { res.status(400).json({ error: "sourceName is required" }); return; }
@@ -524,36 +491,23 @@ router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
     return;
   }
 
-  const source = getDeployableSource(sourceType, sourceName, requestOrigin(req));
+  const source = getDeployableSource(sourceType, sourceName);
   if (!source) {
     res.status(400).json({ error: "That local file is not an approved deployable source" });
     return;
   }
 
-  let destinationPath: string;
-  if (sourceType === "hotspot") {
-    const directory = String(req.body?.destinationDirectory ?? "hotspot")
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/^\/+|\/+$/g, "");
-    if (!/^(?:(?:flash|disk1)\/)?hotspot$/i.test(directory)) {
-      res.status(400).json({
-        error: "Hotspot files must be deployed to hotspot, flash/hotspot, or disk1/hotspot",
-      });
-      return;
-    }
-    destinationPath = `${directory}/${source.source.name}`;
-  } else {
-    destinationPath = String(req.body?.destinationPath ?? source.source.name)
-      .trim()
-      .replaceAll("\\", "/");
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.rsc$/i.test(destinationPath)) {
-      res.status(400).json({
-        error: "RouterOS scripts must use a simple .rsc filename without folders",
-      });
-      return;
-    }
+  const directory = String(req.body?.destinationDirectory ?? "hotspot")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  if (!/^(?:(?:flash|disk1)\/)?hotspot$/i.test(directory)) {
+    res.status(400).json({
+      error: "Hotspot files must be deployed to hotspot, flash/hotspot, or disk1/hotspot",
+    });
+    return;
   }
+  const destinationPath = `${directory}/${source.source.name}`;
 
   cleanPendingRouterFileSources();
   const token = randomBytes(24).toString("hex");
@@ -628,9 +582,6 @@ async function runBulkFileDeployment(
   job.status = "running";
   job.updatedAt = Date.now();
   try {
-    if (job.importScripts) {
-      await ensureRouterHttpsTrust(creds);
-    }
     const currentFiles = await fetchRouterFiles(creds);
     job.connectedHost = currentFiles.connectedHost;
     const normaliseName = (value: string): string => value
@@ -666,7 +617,7 @@ async function runBulkFileDeployment(
         continue;
       }
 
-      const sourceContent = getDeployableSource(source.type, sourceName, origin);
+      const sourceContent = getDeployableSource(source.type, sourceName);
       if (!sourceContent) {
         job.failed.push({ sourceName, destinationPath, error: "Approved source could not be read" });
         job.processed += 1;
@@ -711,50 +662,6 @@ async function runBulkFileDeployment(
       }
     }
 
-    if (job.importScripts) {
-      const order = new Map(BULK_IMPORT_ORDER.map((name, index) => [name, index]));
-      const scriptsToImport = job.sources
-        .filter(source => source.type === "script")
-        .slice()
-        .sort((a, b) => (order.get(a.sourceName) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.sourceName) ?? Number.MAX_SAFE_INTEGER));
-
-      for (const source of scriptsToImport) {
-        const excludedReason = BULK_IMPORT_EXCLUDED.get(source.sourceName);
-        if (excludedReason) {
-          job.importSkipped.push({
-            sourceName: source.sourceName,
-            destinationPath: source.destinationPath,
-            reason: excludedReason,
-          });
-          job.updatedAt = Date.now();
-          continue;
-        }
-        if (!importableDestinations.has(source.destinationPath)) {
-          job.importSkipped.push({
-            sourceName: source.sourceName,
-            destinationPath: source.destinationPath,
-            reason: "upload did not complete; existing or partial file was not imported",
-          });
-          job.updatedAt = Date.now();
-          continue;
-        }
-        try {
-          await runRouterScript(creds, source.destinationPath);
-          job.imported.push({
-            sourceName: source.sourceName,
-            destinationPath: source.destinationPath,
-          });
-        } catch (error) {
-          job.failed.push({
-            sourceName: source.sourceName,
-            destinationPath: source.destinationPath,
-            error: `Import failed: ${error instanceof Error ? error.message : "RouterOS import failed"}`,
-          });
-        }
-        job.updatedAt = Date.now();
-      }
-    }
-
     job.status = job.failed.length > 0 ? "failed" : "complete";
     job.updatedAt = Date.now();
     logger.info({
@@ -765,8 +672,6 @@ async function runBulkFileDeployment(
       deployed: job.deployed.length,
       skipped: job.skipped.length,
       failed: job.failed.length,
-      imported: job.imported.length,
-      importSkipped: job.importSkipped.length,
     }, "Bulk files processed");
   } catch (error) {
     job.status = "failed";
@@ -787,7 +692,6 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
   const scope = String(req.body?.scope ?? "hotspot").trim().toLowerCase();
-  const importScripts = req.body?.importScripts === true;
   if (scope !== "hotspot" && scope !== "all") {
     res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
     return;
@@ -828,14 +732,11 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     adminId,
     status: "queued",
     scope,
-    importScripts,
     total: sources.length,
     processed: 0,
     deployed: [],
     skipped: [],
     failed: [],
-    imported: [],
-    importSkipped: [],
     sources,
     createdAt: now,
     updatedAt: now,
@@ -847,7 +748,6 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
     status: job.status,
     total: job.total,
     scope,
-    importScripts,
     destinationDirectory: "flash/hotspot",
   });
   void runBulkFileDeployment(job, found.creds, requestOrigin(req));
@@ -881,8 +781,6 @@ router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<voi
     deployed: job.deployed,
     skipped: job.skipped,
     failed: job.failed,
-    imported: job.imported,
-    importSkipped: job.importSkipped,
     connectedHost: job.connectedHost,
     error: job.error,
   });
@@ -1058,107 +956,6 @@ router.post("/router/:id/management-access/repair", async (req, res): Promise<vo
   }
 });
 
-/* ─── GET /api/router/:id/management-access/script ──────────────────────── */
-router.get("/router/:id/management-access/script", requireAdmin(), async (req, res): Promise<void> => {
-  const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
-  const requestedPhase = String(req.query.phase ?? "all") as ManagementRepairPhase;
-  const validPhases = new Set<ManagementRepairPhase>([
-    "preflight", "identity", "api", "firewall", "verify", "all",
-  ]);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
-  if (!validPhases.has(requestedPhase)) {
-    res.status(400).json({ error: "Invalid phase", phases: [...validPhases] });
-    return;
-  }
-
-  const found = await getRouterCreds(id, adminId);
-  if (!found) {
-    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
-    return;
-  }
-  const script = buildManagementApiRepairScript({
-    routerName: found.row.name,
-    routerPassword: found.creds.password,
-    phase: requestedPhase,
-  });
-  res
-    .type("text/plain")
-    .set("Content-Disposition", `attachment; filename="ocholasupernet-management-${requestedPhase}.rsc"`)
-    .send(script);
-});
-
-/* ─── POST /api/router/:id/management-access/import ─────────────────────── */
-router.post("/router/:id/management-access/import", requireAdmin(), async (req, res): Promise<void> => {
-  const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
-  const requestedPhase = String(req.body?.phase ?? "preflight") as ManagementRepairPhase;
-  const confirmed = req.body?.confirm === true;
-  const validPhases = new Set<ManagementRepairPhase>([
-    "preflight", "identity", "api", "firewall", "verify", "all",
-  ]);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
-  if (!validPhases.has(requestedPhase)) {
-    res.status(400).json({ error: "Invalid phase", phases: [...validPhases] });
-    return;
-  }
-  if (!confirmed) {
-    res.status(400).json({ error: "Explicit confirmation is required before importing a RouterOS script." });
-    return;
-  }
-
-  const found = await getRouterCreds(id, adminId);
-  if (!found) {
-    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
-    return;
-  }
-
-  const fileName = `ocholasupernet-management-${requestedPhase}.rsc`;
-  const script = buildManagementApiRepairScript({
-    routerName: found.row.name,
-    routerPassword: found.creds.password,
-    phase: requestedPhase,
-  });
-  cleanPendingRouterFileSources();
-  const token = randomBytes(24).toString("hex");
-  pendingRouterFileSources.set(token, {
-    content: Buffer.from(script, "utf8"),
-    contentType: "text/plain; charset=utf-8",
-    fileName,
-    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
-  });
-
-  try {
-    const httpsTrust = await ensureRouterHttpsTrust(found.creds);
-    const deployed = await deployRouterFile(found.creds, {
-      destinationPath: fileName,
-      sourceUrl: `${requestOrigin(req)}/api/router-file-source/${token}`,
-      overwrite: true,
-      uploadId: token.slice(0, 16),
-    });
-    await runRouterScript(found.creds, fileName);
-    logger.info({ routerId: id, adminId, phase: requestedPhase, fileName }, "RouterOS management phase imported");
-    res.status(201).json({
-      ok: true,
-      routerId: id,
-      routerName: found.row.name,
-      phase: requestedPhase,
-      fileName,
-      imported: true,
-      connectedHost: deployed.connectedHost,
-      size: deployed.size,
-      replaced: deployed.replaced,
-      httpsTrustInstalled: !httpsTrust.alreadyTrusted,
-    });
-  } catch (err) {
-    routerErrorResponse(res, err);
-  } finally {
-    pendingRouterFileSources.delete(token);
-  }
-});
-
 /* ─── GET /api/router/:id/probe ─────────────────────────────────────────── */
 /**
  * Runs a TCP port probe ONLY — no RouterOS API login attempt.
@@ -1281,89 +1078,6 @@ router.get("/probe", async (req, res): Promise<void> => {
   });
 });
 
-/* ─── GET /api/router/:id/router-as-client ──────────────────────────────── */
-/**
- * CORRECT ARCHITECTURE for this setup:
- *   VPS = OpenVPN SERVER (dedicated router instance, tun-router 10.8.5.1)
- *   MikroTik = OpenVPN CLIENT (connects TO the VPS)
- *
- * Downloads a RouterOS script (.rsc) that configures the router as an OVPN client.
- * Import on the router: /import router-as-client<id>.rsc
- *
- * Query params:
- *   vpsIp           — VPS public IP (defaults to VPS_HOST)
- *   vpnPort         — OVPN server port (default 1196; legacy end-user VPN remains on 1194)
- *   VPN credentials are derived from the configured router name.
- *   tunnelRouterIp  — IP the VPS assigns to the router in the tunnel
- *   tunnelVpsIp     — VPS tunnel IP (default "10.8.5.1")
- */
-router.get("/router/:id/router-as-client", requireAdmin(), async (req, res): Promise<void> => {
-  const id = parseInt(String(req.params.id), 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-
-  const found = await getRouterCreds(id);
-  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
-
-  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
-  if (!vpsIp) {
-    res.status(400).json({
-      error:   "VPS OpenVPN endpoint is not configured",
-      detail:  "Set VPS_HOST or pass the public IP of the VPS with ?vpsIp=102.212.246.73",
-      example: `/api/router/${id}/router-as-client?vpsIp=102.212.246.73`,
-    });
-    return;
-  }
-
-  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
-    routerId: id,
-    adminId: found.row.admin_id,
-    routerName: found.row.name,
-  });
-  const registrationToken = found.row.token || found.row.router_secret;
-  if (!registrationToken) {
-    res.status(409).json({ error: "Router registration token is not available; regenerate the router installer first." });
-    return;
-  }
-  const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
-  try {
-    const provisioning = await provisionRouterManagementOpenVpn({
-      adminId: found.row.admin_id,
-      routerId: id,
-      routerName: found.row.name,
-      routerIp: tunnelRouterIp,
-    });
-    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
-      res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
-      return;
-    }
-  } catch (error) {
-    res.status(503).json({
-      error: "VPS router-management OpenVPN provisioning failed",
-      detail: error instanceof Error ? error.message : String(error),
-    });
-    return;
-  }
-
-  const script = generateRouterAsClientScript({
-    vpsPublicIp:    vpsIp,
-    routerId:       id,
-    vpnPort:        routerManagementVpnPortForRouter(id),
-    vpnUsername: openVpnCredentials.username,
-    vpnPassword: openVpnCredentials.password,
-    caCertificateUrl: `${requestOrigin(req)}/api/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`,
-    backendRegistrationUrl: `${requestOrigin(req)}/api/isp/router/register/${encodeURIComponent(registrationToken)}`,
-    tunnelRouterIp,
-    tunnelVpsIp:    String(req.query.tunnelVpsIp    ?? ROUTER_VPN_GATEWAY),
-  });
-
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="router-as-client${id}.rsc"`
-  );
-  res.send(script);
-});
-
 /* ─── GET /api/router/:id/vps-ovpn-setup ───────────────────────────────── */
 /**
  * Downloads a bash script to run on the VPS as root.
@@ -1481,71 +1195,8 @@ router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
       routerTunnelIp: tunnelRouterIp,
       routerApiPort: 8728,
     },
-    scripts: {
-      vpsSetup:       `/api/router/${id}/vps-ovpn-setup${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
-      routerAsClient: `/api/router/${id}/router-as-client${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
-      firewallScript: `/api/router/${id}/firewall-script${vpsIp ? `?vpsIp=${encodeURIComponent(vpsIp)}` : ""}`,
-    },
     ...info,
   });
-});
-
-/* ─── GET /api/router/:id/vpn-setup-script ──────────────────────────────── */
-/**
- * Generates a MikroTik RouterOS script (.rsc) that sets up an OpenVPN
- * server and creates the default VPN/API admin user on the router.
- *
- * Download and run on the router:
- *   /import ovpn-setup-router<id>.rsc
- *
- * Query params (all optional):
- *   vpsIp         — VPS IP to restrict OVPN access (recommended)
- *   vpnPort       — OVPN port on router (default 1194)
- *   vpnUsername   — VPN user to create (default "router-<id>")
- *   VPN credentials are derived from the router's stored install secret.
- *   tunnelNetwork — first 3 octets of VPN tunnel subnet (default "192.168.89")
- *   lanNetwork    — router LAN CIDR VPN clients can access (default "192.168.88.0/24")
- */
-router.get("/router/:id/vpn-setup-script", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-
-  const found = await getRouterCreds(id);
-  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
-
-  const { row } = found;
-  /* Prefer the stored public host; a LAN gateway is not a router-management
-     VPN endpoint and must not be emitted as one. */
-  const routerPublicIp = (row.host?.trim() && !isPrivateIp(row.host))
-    ? row.host.trim()
-    : (row.host?.trim() || "YOUR_ROUTER_PUBLIC_IP");
-  const vpnUsername = String(req.query.vpnUsername ?? `router-${id}`).trim();
-  const vpnPassword = managedVpnPassword(row);
-  if (!vpnPassword) {
-    res.status(409).json({
-      error: "Router install secret is not available",
-      detail: "Run the router registration/setup flow first or pass an explicit VPN credential.",
-    });
-    return;
-  }
-
-  const script = generateVpnSetupScript({
-    routerPublicIp,
-    routerId:      id,
-    vpsIp:         String(req.query.vpsIp       ?? "").trim()   || undefined,
-    vpnPort:       req.query.vpnPort       ? parseInt(String(req.query.vpnPort),       10) : 1194,
-    vpnUsername,
-    vpnPassword,
-    tunnelNetwork: String(req.query.tunnelNetwork ?? "192.168.89"),
-    lanNetwork:    String(req.query.lanNetwork    ?? "192.168.88.0/24"),
-  });
-
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="ovpn-setup-router${id}.rsc"`
-  );
-  res.send(script);
 });
 
 /* ─── GET /api/router/:id/ovpn-client ──────────────────────────────────── */
@@ -1599,45 +1250,6 @@ router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
     `attachment; filename="router${id}-admin.ovpn"`
   );
   res.send(config);
-});
-
-/* ─── GET /api/router/:id/firewall-script?vpsIp=x.x.x.x ────────────────── */
-/**
- * Generates a MikroTik RouterOS firewall script that restricts API access
- * to the VPS IP only. Download and paste into the router terminal.
- *
- * Query params:
- *   vpsIp  — IP of the VPS/server that runs this backend (required)
- *   ssl    — "true" to include port 8729 (API-SSL) rules (default: true)
- */
-router.get("/router/:id/firewall-script", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-
-  const vpsIp = String(req.query.vpsIp ?? "").trim();
-  if (!vpsIp) {
-    res.status(400).json({
-      error:  "vpsIp query parameter is required",
-      detail: "Pass the public IP of your VPS server, e.g. ?vpsIp=203.0.113.42",
-    });
-    return;
-  }
-
-  const found = await getRouterCreds(id);
-  if (!found) { res.status(404).json({ error: "Router not found" }); return; }
-
-  const enableApiSsl = req.query.ssl !== "false";
-  const script = generateFirewallScript(vpsIp, {
-    enableApiSsl,
-    comment: `ISP-${id}`,
-  });
-
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="mikrotik-firewall-router${id}.rsc"`
-  );
-  res.send(script);
 });
 
 /* ─── GET /api/router/:id/hotspot ──────────────────────────────────────── */

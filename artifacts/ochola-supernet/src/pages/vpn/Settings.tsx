@@ -712,9 +712,6 @@ if grep -qx "\${USERNAME}:\${PASSWORD}" "$DB" 2>/dev/null; then
 fi
 exit 1`;
 
-const MIKROTIK_CONF = `/ppp import file-name=router-nairobi.ovpn
-# Then: Interfaces > [the imported interface] > Dial Out > User + Password`;
-
 function SetupGuideTab() {
   return (
     <div className="space-y-6">
@@ -769,23 +766,6 @@ iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE`} />
               <CopyBlock code={`# In your API server .env or environment variables:
 VPN_HOST=your.vps.ip.address
 # e.g. VPN_HOST=154.12.34.56`} />
-            </Step>
-          </div>
-          <div className="pt-5">
-            <Step n={6} title="Import .ovpn on MikroTik routers">
-              <p className="text-xs text-gray-500 mb-2">
-                Download the .ovpn file from VPN Users, upload it to MikroTik via Winbox Files, then import it.
-              </p>
-              <CopyBlock code={MIKROTIK_CONF} label="RouterOS CLI (or via Files → PPP → Import)" />
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2 text-xs text-blue-700">
-                <p className="font-semibold mb-1">After import on MikroTik:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Go to PPP → Interfaces → find the imported VPN interface</li>
-                  <li>Set <span className="font-mono">Dial Out → User</span> and <span className="font-mono">Password</span> (from VPN Users page)</li>
-                  <li>Enable the interface — the router gets a <span className="font-mono">10.8.0.x</span> IP</li>
-                  <li>Use that IP for Winbox / WebFig / SSH from your admin panel</li>
-                </ul>
-              </div>
             </Step>
           </div>
         </div>

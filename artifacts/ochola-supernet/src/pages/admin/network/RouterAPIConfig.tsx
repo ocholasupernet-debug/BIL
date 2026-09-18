@@ -204,58 +204,6 @@ const EMPTY_FORM: RouterForm = {
   router_username: "admin", router_secret: "", api_port: 8728, description: "",
 };
 
-/* ── FirewallScriptLink: collects VPS IP then generates a download link ──── */
-function FirewallScriptLink({ routerId }: { routerId: number }) {
-  const [vpsIp, setVpsIp] = React.useState("");
-  const [editing, setEditing] = React.useState(false);
-  const trimmed = vpsIp.trim();
-  const valid = /^\d{1,3}(\.\d{1,3}){3}$/.test(trimmed);
-
-  if (!editing) {
-    return (
-      <span style={{ display: "block", marginTop: 6 }}>
-        <button
-          onClick={() => setEditing(true)}
-          style={{ background: "none", border: "none", cursor: "pointer", color: "#38bdf8", fontWeight: 700, fontSize: 11, padding: 0, textDecoration: "underline", fontFamily: "inherit" }}
-        >
-          ↓ Download auto-generated firewall script for this router
-        </button>
-        <span style={{ color: "#94a3b8", marginLeft: 6, fontSize: 10 }}>
-          (restricts port 8728 to your VPS IP only)
-        </span>
-      </span>
-    );
-  }
-
-  return (
-    <span style={{ display: "block", marginTop: 8, background: "rgba(0,0,0,0.25)", border: "1px solid rgba(56,189,248,0.2)", borderRadius: 6, padding: "8px 10px" }}>
-      <span style={{ display: "block", fontSize: 10, color: "#94a3b8", marginBottom: 4 }}>
-        Enter your VPS public IP — the script will restrict port 8728 access to that IP only:
-      </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <input
-          value={vpsIp}
-          onChange={e => setVpsIp(e.target.value)}
-          placeholder="e.g. 102.212.246.73"
-          style={{ flex: 1, fontFamily: "monospace", fontSize: 11, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4, padding: "4px 8px", color: "#e2e8f0", outline: "none" }}
-        />
-        {valid ? (
-          <a
-            href={`/api/router/${routerId}/firewall-script?vpsIp=${encodeURIComponent(trimmed)}`}
-            download
-            style={{ flexShrink: 0, background: "rgba(56,189,248,0.12)", border: "1px solid rgba(56,189,248,0.3)", borderRadius: 4, color: "#38bdf8", fontWeight: 700, fontSize: 10, padding: "4px 10px", textDecoration: "none", whiteSpace: "nowrap" }}
-          >
-            ↓ Download .rsc
-          </a>
-        ) : (
-          <span style={{ flexShrink: 0, fontSize: 10, color: "#475569" }}>enter a valid IP</span>
-        )}
-        <button onClick={() => setEditing(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#475569", fontSize: 12, padding: 0, fontFamily: "inherit" }}>✕</button>
-      </span>
-    </span>
-  );
-}
-
 function RouterForm({
   initial, routerId, onSaved, onCancel,
 }: {
@@ -596,9 +544,6 @@ function RouterForm({
             <strong>Firewall note:</strong> The VPS ({window.location.hostname || "your VPS"}) must be able to reach the MikroTik API port (8728/8729).
             On the router, allow: <code style={{ fontFamily: "monospace" }}>/ip firewall filter add chain=input src-address=VPS_IP protocol=tcp dst-port=8728 action=accept</code>.
             If using the router-management OpenVPN, ensure the tunnel is up and use the management VPN IP (10.8.5.x).
-            {routerId && (
-              <FirewallScriptLink routerId={routerId} />
-            )}
           </div>
         </div>
       </div>

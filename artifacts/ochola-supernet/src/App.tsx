@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { BrandProvider } from "@/context/BrandContext";
 import { TypographyProvider } from "@/context/TypographyContext";
-import { AdminPageVisibilityProvider, useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
+import { AdminPageVisibilityProvider } from "@/context/AdminPageVisibilityContext";
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
 
@@ -14,21 +14,14 @@ import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/Dashboard";
 import AdminCustomers from "./pages/admin/Customers";
-import AdminNetwork from "./pages/admin/Network";
 import NetworkRouters from "./pages/admin/network/Routers";
-import NetworkPPPoE from "./pages/admin/network/PPPoE";
 import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
-import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
-import NetworkAddRouterScript from "./pages/admin/network/SelfProvision";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
-import NetworkMigration from "./pages/admin/network/migration/NetworkMigration";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
 import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
-import NetworkFiles from "./pages/admin/network/Files";
-import NetworkLoadBalancing from "./pages/admin/network/LoadBalancing";
 import Webhooks from "./pages/admin/Webhooks";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
@@ -106,22 +99,6 @@ function StubPage({ title }: { title: string }) {
   return <div className="p-8 text-white"><h1 className="text-2xl font-bold">{title}</h1><p>Module wired and loading...</p></div>;
 }
 
-function LegacySelfInstallRedirect() {
-  const [, setLocation] = useLocation();
-  const { isVisible } = useAdminPageVisibility();
-
-  useEffect(() => {
-    if (!isVisible("network.self-install")) {
-      setLocation("/admin/dashboard?disabled=network.self-install");
-      return;
-    }
-    const query = window.location.search;
-    setLocation(`/admin/network/self-install${query}`);
-  }, [isVisible, setLocation]);
-
-  return null;
-}
-
 function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#080c10]">
@@ -147,20 +124,13 @@ function Router() {
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
       <Route path="/admin/network/routers"        component={NetworkRouters}       />
-      <Route path="/admin/network/pppoe"          component={NetworkPPPoE}         />
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
-      <Route path="/admin/network/self-install"   component={NetworkSelfInstall}   />
-      <Route path="/admin/network/add-router-script" component={NetworkAddRouterScript} />
-      <Route path="/admin/network/add-router"     component={LegacySelfInstallRedirect} />
-      <Route path="/admin/network/migration"      component={NetworkMigration}     />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
       <Route path="/admin/network/ppp"            component={NetworkPPP}           />
       <Route path="/admin/network/router-api-config" component={RouterAPIConfig}  />
       <Route path="/admin/network/api-config"      component={RouterAPIConfig}  />
-      <Route path="/admin/network/files"          component={NetworkFiles}       />
-      <Route path="/admin/network/load-balancing" component={NetworkLoadBalancing} />
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />

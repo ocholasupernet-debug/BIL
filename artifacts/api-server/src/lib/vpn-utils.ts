@@ -391,10 +391,7 @@ echo " Setup complete. Verify:"
 echo "   systemctl status openvpn-server@${serviceStem}"
 echo "   ip addr show ${contract.interfaceName}    # should show ${serverGw}"
 echo ""
-echo " Now import the RouterOS client script on the router:"
-echo "   /import router-as-client${routerId ?? ""}.rsc"
-echo ""
-echo " After router connects, verify from this VPS:"
+echo " After the router has been configured through the supported management flow, verify from this VPS:"
 echo "   ping ${selectedRouterTunnelIp}                    # router tunnel IP"
 echo "   nc -vz -w 3 ${selectedRouterTunnelIp} 8728          # API port reachability"
 echo "   journalctl -u openvpn-server@${serviceStem} -n 60 --no-pager"
@@ -426,7 +423,7 @@ export function describeVpnArchitecture(
   const selectedRouterTunnelIp = routerTunnelIp ?? `${contract.tunnelBase}.2`;
 
   return {
-    architecture: "router-as-client",
+    architecture: "router-management-vpn",
     description:
       "VPS runs the OpenVPN SERVER. The MikroTik router connects as a CLIENT. " +
       "The backend API server uses the router's tunnel IP to reach the RouterOS API.",
@@ -450,10 +447,8 @@ export function describeVpnArchitecture(
     },
     steps: [
       `1. Run vps-ovpn-setup.sh on the VPS (${vpsPublicIp}) as root`,
-      `2. Download router-as-client${routerId ?? ""}.rsc from the API`,
-      `3. Import the script on the router: /import router-as-client${routerId ?? ""}.rsc`,
-      `4. Verify: ping ${selectedRouterTunnelIp} from the VPS`,
-      `5. Set MIKROTIK_BRIDGE_IP=${selectedRouterTunnelIp} in OcholaSupernet`,
+      `2. Verify: ping ${selectedRouterTunnelIp} from the VPS`,
+      `3. Set MIKROTIK_BRIDGE_IP=${selectedRouterTunnelIp} in OcholaSupernet`,
     ],
   };
 }
