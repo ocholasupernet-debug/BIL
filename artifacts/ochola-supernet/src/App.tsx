@@ -74,6 +74,7 @@ import AdminMessageTemplates from "./pages/admin/MessageTemplates";
 import PlatformNotifications from "./pages/admin/PlatformNotifications";
 import AdminRegister from "./pages/admin/AdminRegister";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
+import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
@@ -141,6 +142,8 @@ function Router() {
       <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/dashboard" component={AdminDashboard} />
+      <Route path="/admin/reseller" component={ResellerWorkspace} />
+      <Route path="/admin/resellers" component={ResellerWorkspace} />
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
       <Route path="/admin/network/routers"        component={NetworkRouters}       />
