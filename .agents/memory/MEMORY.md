@@ -1,0 +1,54 @@
+- [VPS deployment verification](vps-deployment-verification.md) — Verify production through one GitHub Actions run plus live HTTPS checks; avoid overlapping deploy triggers.
+- [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
+- [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
+- [GitHub connector commit flow](github-connector-commit.md) — Read files individually and use one non-forced tree/commit/ref update when pushing through the connector.
+- [GitHub push path limitations](github-push-paths.md) — Connector writes can be endpoint/path limited; verify the remote tree instead of assuming blob success means a push completed.
+- [GitHub connector workflow writes](github-connector-workflow-writes.md) — Stage contents writes on a temporary branch; workflow files require Actions write permission and may be rejected with 403.
+- [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
+- [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
+- [Tenant-scoped admin APIs](tenant-scoped-admin-apis.md) — Most APIs remain tenant-scoped; migration is an intentional authenticated-global exception.
+- [Migration UI safety flow](migration-ui-safety-flow.md) — Keep tenant scope, two-script order, distinct export review, and the explicit write boundary visible.
+- [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
+- [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
+- [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
+- [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
+- [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
+- [RouterOS version dispatch](routeros-version-dispatch.md) — Read the installed major version locally; never let RouterOS 7 receive or parse the RouterOS 6 child path.
+- [Router VPN fallback contract](router-management-vpn-fallback.md) — Keep fallback protocol material server-side, isolate child scripts, and treat intermediate protocol failures as recoverable.
+- [Captive portal API origins](captive-portal-api-origins.md) — Portal assets must carry a public tenant API origin; never expose an internal localhost address to router-served clients.
+- [RouterOS HTTPS trust](routeros-https-trust.md) — Bootstrap the public CA into the router store before requiring validated managed downloads.
+- [RouterOS multi-WAN routing](routeros-multiwan.md) — Weighted PCC needs policy routes, recursive health checks, and fallback routes; it balances connections, not packets.
+- [Script generation recovery](script-generation-recovery.md) — Return a personalized bundle with a visible VPN warning when remote reconciliation is unavailable.
+- [VPS nested shell quoting](vps-nested-shell-quoting.md) — Nested sudo shells require explicit escaping for inner variables and portable environment assignment.
+- [VPS forwarded port probes](vps-forward-port-probe.md) — A local SSH forward can look open while the remote RouterOS API port still times out; verify from the VPS itself.
+- [Brand logo asset](brand-logo-asset.md) — Remove only the connected white background from the source logo so internal highlights remain intact.
+- [Coexistence service isolation](coexistence-service-isolation.md) — Use uniquely named local services and never move foreign bridge ports or rewrite router-global RADIUS.
+- [Shared public IP VPN diagnostics](shared-public-ip-vpn-diagnostics.md) — Identify peers by OpenVPN common name and tunnel address, not source IP alone.
+- [Production tenant DNS](production-tenant-dns.md) — isplatty.org is not Cloudflare-managed; tenant HTTPS may require host-specific certificates unless DNS-01 is handled by the actual provider.
+- [Service credential process safety](service-credential-process-safety.md) — Never pass deployment credentials as CLI arguments; process listings and service status can expose them.
+- [Tenant self-install HTTPS](tenant-self-install-https.md) — Verified router profiles must download from the signed-in company hostname, not a shared API origin.
+- [Tenant router naming](tenant-router-naming.md) — New routers use the company subdomain plus the next available number, such as come1 and come2.
+- [Router installation visibility](router-installation-visibility.md) — Keep setup records for recovery, but expose them to ISP account features only after final VPN and bridge verification.
+- [Self provision boundary](self-provision-boundary.md) — Use Self Install for new-device onboarding and Self Provision for authorized bundles on installed tenant routers.
+- [Legacy script isolation](legacy-script-isolation.md) — Keep externally supplied Main ISP Ledger scripts separate from the Self Install bundle and lifecycle.
+- [Router install readiness](router-install-readiness.md) — Let live RouterOS API connectivity unlock router/ports loading; keep heartbeat checks for final promotion.
+- [Router install retries](router-install-retries.md) — Reuse unfinished setup records on generation retry before allocating a new company router number.
+- [Registration payment gate](registration-payment-gate.md) — Create the tenant/admin only after registration payment succeeds; failed payments leave no company record.
+- [PPPoE payment renewal](pppoe-payment-renewal.md) — Restore RouterOS access before local settlement; keep failed router renewals pending for deferred retry.
+- [Generated portal deployment safety](generated-portal-deployment.md) — Validate portal HTML and deploy the branded experience to both RouterOS login paths with separate one-time sources.
+- [Storage capacity alerts](storage-capacity-alerts.md) — Evaluate capacity warnings from the current authoritative measurement, independently of snapshot persistence success.
+- [OpenVPN setup-script compatibility](openvpn-setup-script-compatibility.md) — Preserve literal `dh none` and escape Bash indirect expansion when generating scripts inside TypeScript templates.
+- [Router installer stale files](router-installer-stale-files.md) — Verify the dynamic installer revision and no-store response before treating repeated RouterOS output as current.
+- [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
+- [Router hotspot walled garden](router-hotspot-walled-garden.md) — Allow the tenant portal hostname before login and ignore default hotspot profiles with a 0.0.0.0 gateway.
+- [Legacy proxy VPN provisioning](legacy-proxy-vpn-provisioning.md) — The legacy proxy VPN is separate from the 1196/1197 management instances and must be provisioned explicitly.
+- [Router script URL normalization](router-script-url-normalization.md) — Normalize complete URLs before replacement; host/path suffix replacement can otherwise emit `https://https://`.
+- [Production readiness audit](production-readiness-audit.md) — Healthy API/deploy status does not prove tenant TLS, OpenVPN, or RouterOS connectivity.
+- [Installer result contract](installer-result-contract.md) — Derive aggregate status from verification gates and persist the final callback fields as one validated result.
+- [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
+- [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
+- [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
+- [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
+- [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
+- [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
+- [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
