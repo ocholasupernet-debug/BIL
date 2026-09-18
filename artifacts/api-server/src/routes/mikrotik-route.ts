@@ -965,7 +965,7 @@ router.post("/router/:id/management-access/repair", async (req, res): Promise<vo
  * before wasting time on a full connection attempt.
  */
 router.get("/router/:id/probe", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
 
   const found = await getRouterCreds(id);
@@ -1159,11 +1159,16 @@ router.get("/router/:id/vps-ovpn-setup", requireAdmin(), async (req, res): Promi
  * Returns a JSON summary of the VPN architecture and setup steps.
  * Use this to understand the setup before downloading the scripts.
  */
-router.get("/router/:id/vpn-info", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid signed-in ISP account is required" });
+    return;
+  }
 
-  const found = await getRouterCreds(id);
+  const found = await getRouterCreds(id, adminId);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
