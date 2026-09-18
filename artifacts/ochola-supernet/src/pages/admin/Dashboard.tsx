@@ -43,6 +43,40 @@ import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 
 type LiveCounts = { hotspot: number; pppoe: number };
 
+const inputStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  background: "var(--isp-inner-card)",
+  border: "1px solid var(--isp-border)",
+  borderRadius: 8,
+  padding: "0.58rem 0.7rem",
+  color: "var(--isp-text)",
+  fontSize: "0.75rem",
+  fontFamily: "inherit",
+};
+
+type TelemetryRow = {
+  portId: number;
+  routerId: number;
+  interfaceName: string;
+  resellerId: number | null;
+  hotspotActive: number;
+  pppoeActive: number;
+  onlineUsers: number;
+  routerAvailable: boolean;
+};
+
+type TelemetryResponse = {
+  totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+  rows: TelemetryRow[];
+  filters: {
+    routers: { id: number; name: string; status: string }[];
+    ports: { id: number; routerId: number; interfaceName: string }[];
+    resellers: { id: number; name: string }[];
+  };
+  fetchedAt: string;
+};
+
 async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
   const res = await fetch(`/api/router/${routerId}/live`);
   if (!res.ok) return { hotspot: 0, pppoe: 0 };
@@ -51,6 +85,17 @@ async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
     hotspot: data.hotspotUsers?.length ?? 0,
     pppoe: data.pppoeUsers?.length ?? 0,
   };
+}
+
+async function fetchNetworkTelemetry(routerId: number | "all", portId: number | "all", resellerId: number | "all"): Promise<TelemetryResponse> {
+  const params = new URLSearchParams();
+  if (routerId !== "all") params.set("routerId", String(routerId));
+  if (portId !== "all") params.set("portId", String(portId));
+  if (resellerId !== "all") params.set("resellerId", String(resellerId));
+  const response = await fetch(`/api/admin/dashboard/telemetry?${params.toString()}`);
+  const data = await response.json() as Partial<TelemetryResponse> & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load network telemetry.");
+  return data as TelemetryResponse;
 }
 
 function routerOnline(router: DbRouter): boolean {
@@ -250,6 +295,8 @@ export default function Dashboard() {
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartMinimized, setChartMinimized] = useState(false);
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
+  const [selectedTelemetryPort, setSelectedTelemetryPort] = useState<number | "all">("all");
+  const [selectedTelemetryReseller, setSelectedTelemetryReseller] = useState<number | "all">("all");
 
   const now = new Date();
 
@@ -354,6 +401,14 @@ export default function Dashboard() {
   ];
   const selectedRouterObj = selectedRouter === "all" ? null : routers.find((router) => router.id === selectedRouter);
   const visibleRouters = selectedRouter === "all" ? routers : routers.filter((router) => router.id === selectedRouter);
+  const telemetryQuery = useQuery({
+    queryKey: ["network-telemetry", selectedRouter, selectedTelemetryPort, selectedTelemetryReseller],
+    queryFn: () => fetchNetworkTelemetry(selectedRouter, selectedTelemetryPort, selectedTelemetryReseller),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const telemetry = telemetryQuery.data;
+  const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const recentTxs = transactions.slice(0, 5);
   const completedRevenue = transactions
     .filter((transaction) => transaction.status === "completed")
@@ -526,6 +581,80 @@ export default function Dashboard() {
               <button type="button" onClick={() => setSelectedRouter("all")} title="Clear router filter" aria-label="Clear router filter"><X size={13} /></button>
             </div>
           )}
+        </section>
+
+        <section className="section-card" aria-label="Network telemetry overview" style={{ marginTop: "1rem" }}>
+          <div className="panel-heading">
+            <div className="panel-title">
+              <span className="panel-title-icon panel-title-icon--soft"><Activity size={16} /></span>
+              <div>
+                <h2>Network telemetry overview</h2>
+                <p>Live Hotspot leases and PPPoE sessions, filtered on the server</p>
+              </div>
+            </div>
+            {telemetry?.fetchedAt && <span className="panel-heading-meta">Updated {new Date(telemetry.fetchedAt).toLocaleTimeString()}</span>}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.65rem", marginBottom: "0.8rem" }}>
+            <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+              Filter by router
+              <select value={selectedRouter} onChange={(event) => { setSelectedRouter(event.target.value === "all" ? "all" : Number(event.target.value)); setSelectedTelemetryPort("all"); }} style={{ ...inputStyle, marginTop: "0.3rem" }}>
+                <option value="all">All routers</option>
+                {routers.map((router) => <option key={router.id} value={router.id}>{router.name}</option>)}
+              </select>
+            </label>
+            <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+              Filter by port
+              <select value={selectedTelemetryPort} onChange={(event) => setSelectedTelemetryPort(event.target.value === "all" ? "all" : Number(event.target.value))} style={{ ...inputStyle, marginTop: "0.3rem" }}>
+                <option value="all">All physical ports</option>
+                {telemetryPorts.map((port) => <option key={port.id} value={port.id}>{port.interfaceName}</option>)}
+              </select>
+            </label>
+            <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+              Filter by reseller
+              <select value={selectedTelemetryReseller} onChange={(event) => setSelectedTelemetryReseller(event.target.value === "all" ? "all" : Number(event.target.value))} style={{ ...inputStyle, marginTop: "0.3rem" }}>
+                <option value="all">All resellers</option>
+                {(telemetry?.filters.resellers ?? []).map((reseller) => <option key={reseller.id} value={reseller.id}>{reseller.name}</option>)}
+              </select>
+            </label>
+          </div>
+          {telemetryQuery.isLoading ? (
+            <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Reading active sessions…</div>
+          ) : telemetryQuery.error ? (
+            <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
+          ) : telemetry ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.55rem", marginBottom: "0.75rem" }}>
+                {[
+                  ["System-wide online users", telemetry.totals.onlineUsers, "#34d399"],
+                  ["Active PPPoE sessions", telemetry.totals.pppoeActive, "#60a5fa"],
+                  ["Active Hotspot leases", telemetry.totals.hotspotActive, "#c084fc"],
+                ].map(([label, value, color]) => (
+                  <div key={String(label)} style={{ padding: "0.7rem 0.8rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
+                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: "0.67rem" }}>{label}</span>
+                    <strong style={{ display: "block", marginTop: "0.2rem", color: String(color), fontSize: "1.15rem", fontFamily: "monospace" }}>{String(value)}</strong>
+                  </div>
+                ))}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table className="isp-table">
+                  <thead><tr><th>Physical port</th><th>Online</th><th>PPPoE</th><th>Hotspot</th><th>Router state</th></tr></thead>
+                  <tbody>
+                    {telemetry.rows.length === 0 ? (
+                      <tr><td colSpan={5}>No assigned port telemetry matches the selected filters.</td></tr>
+                    ) : telemetry.rows.map((row) => (
+                      <tr key={row.portId}>
+                        <td className="table-mono">{row.interfaceName}</td>
+                        <td>{row.onlineUsers}</td>
+                        <td>{row.pppoeActive}</td>
+                        <td>{row.hotspotActive}</td>
+                        <td><span className={`isp-badge ${row.routerAvailable ? "isp-badge-green" : "isp-badge-amber"}`}>{row.routerAvailable ? "Available" : "Unavailable"}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
         </section>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
