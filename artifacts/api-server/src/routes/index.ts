@@ -33,6 +33,8 @@ import storageGovernanceRouter from "./storage-governance-route.js";
 import routerLoadBalancingRouter from "./router-load-balancing-route.js";
 import adminSettingsRouter from "./admin-settings-route.js";
 import ispConfigurationRouter from "./isp-configuration-route.js";
+import resellerRouter from "./reseller-route.js";
+import portServicesRouter from "./port-services-route.js";
 
 const router: IRouter = Router();
 
@@ -70,5 +72,7 @@ router.use(dashboardPreferencesRouter);
   router.use(routerLoadBalancingRouter);
   router.use(adminSettingsRouter);
   router.use(ispConfigurationRouter);
+  router.use(resellerRouter);
+  router.use(portServicesRouter);
 
 export default router;
