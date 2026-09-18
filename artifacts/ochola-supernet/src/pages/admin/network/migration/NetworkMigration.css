@@ -259,6 +259,78 @@
   color: var(--isp-text-muted);
   font-size: 0.68rem;
 }
+.migration-asset-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.migration-asset-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--isp-border);
+  border-radius: 9px;
+  color: var(--isp-text-muted);
+  background: var(--isp-inner-card);
+  cursor: pointer;
+}
+.migration-asset-option.selected {
+  border-color: var(--isp-accent-border);
+  color: var(--isp-text);
+  background: var(--isp-accent-glow);
+}
+.migration-asset-option input {
+  flex: 0 0 auto;
+  accent-color: var(--isp-accent);
+}
+.migration-asset-option span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+.migration-asset-option strong { font-size: .72rem; }
+.migration-asset-option small { color: var(--isp-text-muted); font-size: .64rem; line-height: 1.4; }
+.migration-asset-option > svg { color: var(--isp-accent); opacity: 0; }
+.migration-asset-option.selected > svg { opacity: 1; }
+.migration-mapping-panel {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--isp-border);
+  border-radius: 9px;
+  background: var(--isp-inner-card);
+}
+.migration-mapping-panel .migration-help { margin-top: 0; }
+.migration-mapping-grid {
+  overflow-x: auto;
+  margin-top: 10px;
+  border: 1px solid var(--isp-border);
+  border-radius: 8px;
+}
+.migration-mapping-header,
+.migration-mapping-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) 90px;
+  align-items: center;
+  gap: 10px;
+  min-width: 470px;
+  padding: 9px 10px;
+}
+.migration-mapping-header {
+  color: var(--isp-text-muted);
+  background: var(--isp-card);
+  font-size: .6rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.migration-mapping-row {
+  border-top: 1px solid var(--isp-border);
+  font-size: .68rem;
+}
+.migration-mapping-row strong,
+.migration-mapping-row small { display: block; }
+.migration-mapping-row small { margin-top: 2px; color: var(--isp-text-muted); font-size: .6rem; }
 .migration-loading {
   display: inline-flex;
   align-items: center;
