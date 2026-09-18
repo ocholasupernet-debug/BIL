@@ -67,7 +67,6 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_manual_vpn_config.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_manual_api_config.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_settings_persistence.sql", import.meta.url)),
-  fileURLToPath(new URL("../migrations/2026_reseller_port_provisioning.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 
