@@ -385,3 +385,12 @@ test("dual-service port compilation isolates assets and prioritizes PPPoE", () =
   assert.match(text, /parent=RESELLER_ROOT_ether2.*priority=8\/8/);
   assert.match(text, /pppoe_billing_redirect/);
 });
+
+test("every published RouterOS source passes final compilation validation", () => {
+  for (const source of listDeployableSources().filter(item => item.type === "script")) {
+    const result = getDeployableSource("script", source.name, "https://come.isplatty.org");
+    assert.ok(result, `missing generated source ${source.name}`);
+    assert.equal(validateGeneratedRouterScript(result.content.toString("utf8")), result.content.toString("utf8"), source.name);
+    assert.equal(result.content.toString("utf8").endsWith("\n"), true, `${source.name} must end with a newline`);
+  }
+});

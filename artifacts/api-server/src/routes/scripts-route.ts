@@ -253,9 +253,10 @@ export function getDeployableSource(
         return typeof entry === "function" ? entry(origin) : entry;
       })();
   if (typeof content !== "string") return null;
+  const compiledContent = validateGeneratedRouterScript(content);
   return {
-    source: { ...source, size: Buffer.byteLength(content, "utf8") },
-    content: Buffer.from(content, "utf8"),
+    source: { ...source, size: Buffer.byteLength(compiledContent, "utf8") },
+    content: Buffer.from(compiledContent, "utf8"),
   };
 }
 

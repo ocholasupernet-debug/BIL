@@ -135,6 +135,8 @@ export function prepareMigrationPackage(
         return type === "pppoe" || type === "hotspot";
       }) : []),
     ] as Record<string, unknown>[];
+    const rootQueues = new Map<string, Record<string, unknown>>();
+    const childNames = new Set<string>();
     for (const user of users) {
       const sourcePortId = Number(user.port_id);
       const targetPortId = sourceToTarget.get(sourcePortId);
@@ -148,17 +150,33 @@ export function prepareMigrationPackage(
       const cap = Number(targetPort.reseller_bandwidth_cap ?? targetPort.bandwidth_cap_mbps ?? 0);
       if (!Number.isFinite(cap) || cap <= 0) continue;
       const targetInterface = String(targetPort?.interface_name ?? mappedInterface ?? "").trim();
-      const username = safeSegment(String(user.username ?? user.name ?? "client"), "client");
-      queues.push({
-        name: `CLIENT_${username}`,
-        target: ip,
-        parent: `RESELLER_ROOT_${safeSegment(targetInterface, `PORT_${targetPort.id}`)}`,
+      const rootName = `RESELLER_ROOT_${safeSegment(targetInterface, `PORT_${targetPort.id}`)}`;
+      rootQueues.set(rootName, {
+        name: rootName,
+        target: targetInterface,
         "max-limit": `${cap}M/${cap}M`,
-        comment: `OcholaSupernet migrated client ${username}`,
+        comment: `OcholaSupernet reseller root ${targetInterface}`,
+      });
+      const service = String(user.type ?? (user.pppoe_username ? "pppoe" : "hotspot")).toLowerCase() === "pppoe"
+        ? "PPPOE"
+        : "HOTSPOT";
+      const username = safeSegment(String(user.username ?? user.name ?? "client"), "client");
+      const baseName = `CLIENT_${service}_${username}`;
+      let queueName = baseName;
+      let suffix = 2;
+      while (childNames.has(queueName) || rootQueues.has(queueName)) queueName = `${baseName}_${suffix++}`;
+      childNames.add(queueName);
+      queues.push({
+        name: queueName,
+        target: ip,
+        parent: rootName,
+        "max-limit": `${cap}M/${cap}M`,
+        comment: `OcholaSupernet migrated ${service.toLowerCase()} client ${username}`,
       });
     }
+    prepared.migration_queues = [...rootQueues.values(), ...queues];
   }
-  prepared.migration_queues = queues;
+  if (!prepared.migration_queues) prepared.migration_queues = [];
   return prepared;
 }
 

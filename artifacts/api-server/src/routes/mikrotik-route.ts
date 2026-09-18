@@ -1762,13 +1762,22 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
     const liveResults = await Promise.all(scopedRouters.map(async (router) => {
       const found = await getRouterCreds(router.id, tenantId);
       if (!found) {
-        return { router, live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null };
+        return {
+          router,
+          live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null,
+          error: "Router credentials or a management address are unavailable.",
+        };
       }
       try {
-        return { router, live: await fetchRouterLiveData(found.creds) };
+        return { router, live: await fetchRouterLiveData(found.creds), error: null as string | null };
       } catch (error) {
-        logger.warn({ routerId: router.id, error: error instanceof Error ? error.message : String(error) }, "dashboard telemetry router unavailable");
-        return { router, live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null };
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn({ routerId: router.id, error: message }, "dashboard telemetry router unavailable");
+        return {
+          router,
+          live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null,
+          error: message,
+        };
       }
     }));
 
@@ -1794,6 +1803,7 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
           pppoeActive: pppoe,
           onlineUsers: hotspot + pppoe,
           routerAvailable: Boolean(result?.live),
+          routerError: result?.error ?? null,
         };
       });
 

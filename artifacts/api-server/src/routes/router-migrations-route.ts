@@ -128,7 +128,7 @@ function migrationMapping(value: unknown): MigrationPortMapping[] {
 async function targetPortRows(adminId: number, routerId: number): Promise<MigrationTargetPort[]> {
   return sbSelectStrict<MigrationTargetPort>(
     "isp_reseller_ports",
-    `admin_id=eq.${adminId}&router_id=eq.${routerId}&status=neq.disabled&select=id,interface_name,reseller_id,bandwidth_cap_mbps&order=interface_name.asc`,
+    `admin_id=eq.${adminId}&router_id=eq.${routerId}&status=neq.disabled&select=id,interface_name,reseller_id,assigned_reseller_id,bandwidth_cap_mbps,reseller_bandwidth_cap&order=interface_name.asc`,
   );
 }
 
@@ -156,9 +156,10 @@ function collectorToken(req: Request): string {
   if (!/^[A-Za-z0-9_-]{40,100}$/.test(token)) throw new Error("Invalid or expired collector session.");
   return token;
 }
-async function ownedRouter(id: number, _adminId?: number) {
+async function ownedRouter(id: number, adminId?: number) {
   positive(id);
-  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
+  const ownerFilter = adminId && Number.isSafeInteger(adminId) && adminId > 0 ? `&admin_id=eq.${adminId}` : "";
+  const rows = await sbSelectStrict<RouterRow>("isp_routers", `id=eq.${id}${ownerFilter}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
   const row = rows[0];
   if (!row) throw new Error("Router not found.");
   const clients = readVpnClients();
@@ -332,7 +333,13 @@ async function requireApiConnection(row: RouterRow, adminId: number) {
     throw new Error(`Router "${row.name}" is not connected through the RouterOS API. Open Routers, run Re-check, and resolve the VPN/API error before migration or export. ${detail}`);
   }
 }
-async function jobFor(id: number, _adminId?: number) { positive(id); const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}&select=*&limit=1`); if (!rows[0]) throw new Error("Migration not found."); return rows[0]; }
+async function jobFor(id: number, adminId?: number) {
+  positive(id);
+  const ownerFilter = adminId && Number.isSafeInteger(adminId) && adminId > 0 ? `&admin_id=eq.${adminId}` : "";
+  const rows = await sbSelectStrict<Job>("router_migration_jobs", `id=eq.${id}${ownerFilter}&select=*&limit=1`);
+  if (!rows[0]) throw new Error("Migration not found.");
+  return rows[0];
+}
 async function sourceForJob(job: Job, adminId: number): Promise<{ row: RouterRow; tunnel: TunnelLease } | null> {
   if (!job.source_router_id) return null;
   const row = await ownedRouter(job.source_router_id, adminId);

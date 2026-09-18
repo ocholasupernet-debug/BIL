@@ -64,6 +64,7 @@ type TelemetryRow = {
   pppoeActive: number;
   onlineUsers: number;
   routerAvailable: boolean;
+  routerError: string | null;
 };
 
 type TelemetryResponse = {
@@ -647,7 +648,19 @@ export default function Dashboard() {
                         <td>{row.onlineUsers}</td>
                         <td>{row.pppoeActive}</td>
                         <td>{row.hotspotActive}</td>
-                        <td><span className={`isp-badge ${row.routerAvailable ? "isp-badge-green" : "isp-badge-amber"}`}>{row.routerAvailable ? "Available" : "Unavailable"}</span></td>
+                        <td>
+                          <span
+                            className={`isp-badge ${row.routerAvailable ? "isp-badge-green" : "isp-badge-amber"}`}
+                            title={row.routerAvailable ? undefined : (row.routerError ?? "Live RouterOS data is unavailable.")}
+                          >
+                            {row.routerAvailable ? "Available" : "Unavailable"}
+                          </span>
+                          {!row.routerAvailable && row.routerError && (
+                            <small style={{ display: "block", marginTop: "0.2rem", color: "var(--isp-text-muted)", maxWidth: 260 }}>
+                              {row.routerError}
+                            </small>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

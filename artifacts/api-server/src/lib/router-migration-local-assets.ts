@@ -32,7 +32,7 @@ export async function loadLocalMigrationAssets(adminId: number, sourceRouterId: 
     sbSelectStrict<JsonRow>("isp_customers", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`),
     sbSelectStrict<JsonRow>("isp_ppp_secrets", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`),
     sbSelectStrict<JsonRow>("isp_hotspot_users", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`),
-    sbSelectStrict<JsonRow>("isp_reseller_ports", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=id,router_id,interface_name,bridge_name,reseller_id,bandwidth_cap_mbps,status&order=interface_name.asc`),
+    sbSelectStrict<JsonRow>("isp_reseller_ports", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,bandwidth_cap_mbps,reseller_bandwidth_cap,status&order=interface_name.asc`),
     sbSelectStrict<JsonRow>("isp_ip_pools", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`),
   ]);
   return { plans, customers, ppp_secrets: pppSecrets, hotspot_users: hotspotUsers, ports, ip_pools: ipPools };

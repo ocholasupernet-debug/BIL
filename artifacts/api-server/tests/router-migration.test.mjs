@@ -145,8 +145,12 @@ test("local billing assets compile credentials and mapped reseller queues", () =
     targetPorts: [{ id: 9, interface_name: "ether4", reseller_id: 22, bandwidth_cap_mbps: 30 }],
   });
   const secret = plan.items.find(item => item.category === "local_ppp_secrets");
-  const queue = plan.items.find(item => item.category === "migration_queues");
+  const rootQueue = plan.items.find(item => item.category === "migration_queues" && item.command.includes("=name=RESELLER_ROOT_ether4"));
+  const queue = plan.items.find(item => item.category === "migration_queues" && item.command.includes("=parent=RESELLER_ROOT_ether4"));
   assert.ok(secret);
+  assert.ok(rootQueue);
+  assert.ok(rootQueue.command.includes("=target=ether4"));
+  assert.ok(rootQueue.command.includes("=max-limit=30M/30M"));
   assert.ok(secret.command.includes("=password=secret"));
   assert.ok(queue);
   assert.ok(queue.command.includes("=parent=RESELLER_ROOT_ether4"));
@@ -174,12 +178,13 @@ test("database schema enforces one expiring lease per target router", async () =
   assert.match(sql, /renew_router_migration_target_lease/);
   assert.match(sql, /tunnel_lease_id bigint references router_migration_tunnel_leases/);
 });
-test("authenticated migration access is not tenant-scoped", async () => {
+test("authenticated migration access is tenant-scoped", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
   assert.match(route, /router\.use\("\/router-migrations", requireAuth\(\)\)/);
   assert.doesNotMatch(route, /router\.use\("\/router-migrations", requireAdmin\(\)\)/);
-  assert.match(route, /isp_routers", `id=eq\.\$\{id\}&select=/);
-  assert.match(route, /router_migration_jobs", `id=eq\.\$\{id\}&select=/);
+  assert.match(route, /isp_routers", `id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
+  assert.match(route, /router_migration_jobs", `id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
+  assert.match(route, /admin_id=eq\.\$\{adminId\}/);
 });
 test("migration browser API uses the signed-in session without tenant headers", async () => {
   const api = await readFile("../ochola-supernet/src/pages/admin/network/migration/api.ts", "utf8");
