@@ -152,24 +152,6 @@ export default function NetworkMigration() {
     });
   }, [migrationOptions]);
 
-  useEffect(() => {
-    if (!migrationOptions) return;
-    const sourceNames = migrationOptions.sourcePorts.length > 0
-      ? migrationOptions.sourcePorts.map(port => port.interfaceName)
-      : migrationOptions.sourceInterfaces;
-    const targetNames = new Set([
-      ...migrationOptions.targetPorts.map(port => port.interface_name),
-      ...migrationOptions.targetInterfaces.map(port => port.name),
-    ]);
-    setInterfaceMapping(current => {
-      const next = { ...current };
-      sourceNames.forEach(sourceName => {
-        if (!next[sourceName] && targetNames.has(sourceName)) next[sourceName] = sourceName;
-      });
-      return next;
-    });
-  }, [migrationOptions]);
-
   const tunnelStatusQuery = useQuery({
     queryKey: ["migration-tunnel-status", tunnel?.leaseId],
     queryFn: () => getMigrationTunnelStatus(tunnel!.leaseId),
