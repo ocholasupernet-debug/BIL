@@ -252,10 +252,18 @@ export function requireAdmin() {
     const tenantSubdomain = getTenantSubdomainFromRequest(req);
     req.tenantSubdomain = tenantSubdomain;
     if (tenantSubdomain && req.authUser.uid !== "superadmin") {
-      const tenantRows = await sbSelect<{ id: number }>(
+      const sessionRows = await sbSelect<{ id: number; parent_id: number | null }>(
         "isp_admins",
-        `id=eq.${encodeURIComponent(req.authUser.uid)}&subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id&limit=1`,
+        `id=eq.${encodeURIComponent(req.authUser.uid)}&is_active=is.true&select=id,parent_id&limit=1`,
       );
+      const session = sessionRows[0];
+      const tenantId = session?.parent_id ?? session?.id;
+      const tenantRows = tenantId
+        ? await sbSelect<{ id: number }>(
+            "isp_admins",
+            `id=eq.${encodeURIComponent(tenantId)}&subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id&limit=1`,
+          )
+        : [];
       if (!tenantRows[0]) {
         res.status(403).json({ ok: false, error: "This session does not belong to the requested ISP subdomain." });
         return;
@@ -280,6 +288,37 @@ export function authenticatedAdminId(req: Request, requested?: unknown): number 
   }
 
   return sessionId;
+}
+
+/** Resolve the owning ISP tenant for either an ISP admin or a reseller account. */
+export async function authenticatedTenantAdminId(req: Request): Promise<number> {
+  const sessionId = Number(req.authUser?.uid);
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0) return 0;
+  const rows = await sbSelect<{ id: number; parent_id: number | null }>(
+    "isp_admins",
+    `id=eq.${encodeURIComponent(sessionId)}&is_active=is.true&select=id,parent_id&limit=1`,
+  );
+  return rows[0]?.parent_id ?? rows[0]?.id ?? 0;
+}
+
+export async function authenticatedAccount(req: Request): Promise<{
+  id: number;
+  parent_id: number | null;
+  role: string;
+  account_tier: "system_admin" | "isp_admin" | "reseller" | null;
+} | null> {
+  const sessionId = Number(req.authUser?.uid);
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0) return null;
+  const rows = await sbSelect<{
+    id: number;
+    parent_id: number | null;
+    role: string;
+    account_tier: "system_admin" | "isp_admin" | "reseller" | null;
+  }>(
+    "isp_admins",
+    `id=eq.${encodeURIComponent(sessionId)}&is_active=is.true&select=id,parent_id,role,account_tier&limit=1`,
+  );
+  return rows[0] ?? null;
 }
 
 export function requireCustomer() {

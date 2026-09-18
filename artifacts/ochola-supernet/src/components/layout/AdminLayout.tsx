@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
-import { clearAdminAuth, getAdminName } from "@/lib/supabase";
+import { clearAdminAuth, getAdminName, getAdminRole } from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
@@ -113,6 +113,7 @@ const navSections: NavSection[] = [
         name: "Network", icon: Network,
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
+          { name: "Reseller Ports", href: "/admin/resellers" },
           { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Direct installation", href: "/admin/network/add-router-script" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
@@ -198,7 +199,8 @@ const navSections: NavSection[] = [
   },
 ];
 
-const SIDEBAR_W = 248;
+const SIDEBAR_W = 240;
+const SIDEBAR_COLLAPSED_W = 64;
 
 export function AdminLayout({
   children,
@@ -214,13 +216,14 @@ export function AdminLayout({
   const { toggle, isDark }            = useTheme();
   const brand                         = useBrand();
   const adminName                     = getAdminName();
+  const isResellerAccount             = getAdminRole() === "reseller";
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
 
   const visibleNavSections = navSections
-    .filter(section => isVisible(section.visibilityKey))
+    .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || section.label === "Overview"))
     .map(section => ({
       ...section,
       items: section.items
@@ -268,6 +271,12 @@ export function AdminLayout({
     }
   }, [currentFeatureKey, pageIsVisible, setLocation]);
 
+  useEffect(() => {
+    if (isResellerAccount && location !== "/admin/reseller") {
+      setLocation("/admin/reseller");
+    }
+  }, [isResellerAccount, location, setLocation]);
+
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
 
@@ -292,12 +301,20 @@ export function AdminLayout({
     );
   }
 
+  if (isResellerAccount && location !== "/admin/reseller") {
+    return (
+      <div className="admin-shell" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 32 }}>
+        <div style={{ color: "var(--isp-text-muted)" }}>Opening your reseller workspace…</div>
+      </div>
+    );
+  }
+
   return (
     <div className="admin-shell">
       <style>{adminLayoutStyles}</style>
 
       {/* ── SIDEBAR ──────────────────────────────────────────────── */}
-      <aside className={`admin-sidebar ${sidebarOpen ? "admin-sidebar--open" : "admin-sidebar--closed"}`} style={{ width: sidebarOpen ? SIDEBAR_W : 0 }}>
+      <aside className={`admin-sidebar ${sidebarOpen ? "admin-sidebar--open" : "admin-sidebar--closed"}`} style={{ width: sidebarOpen ? SIDEBAR_W : SIDEBAR_COLLAPSED_W }}>
 
         {/* Logo strip */}
         <div className="sidebar-logo">
@@ -480,7 +497,7 @@ const adminLayoutStyles = `
   min-height: 100vh;
   display: flex;
   background: var(--isp-bg);
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: var(--isp-font-family, 'Inter', system-ui, sans-serif);
 }
 
 /* ── SIDEBAR ─────────────────────────────────────────── */
@@ -491,7 +508,7 @@ const adminLayoutStyles = `
   min-height: 100vh;
   background: var(--isp-sidebar);
   overflow: hidden;
-  transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
+  transition: width 0.18s cubic-bezier(0.4,0,0.2,1);
   position: relative;
   z-index: 20;
   box-shadow: 1px 0 0 rgba(185,210,201,0.08);
@@ -501,7 +518,8 @@ const adminLayoutStyles = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 16px 16px 18px;
+  min-height: 56px;
+  padding: 12px 14px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
 }
@@ -509,7 +527,7 @@ const adminLayoutStyles = `
 .sidebar-logo-inner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sidebar-logo-icon {
@@ -562,7 +580,7 @@ const adminLayoutStyles = `
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 0 12px;
+  padding: 6px 0 10px;
 }
 .sidebar-nav::-webkit-scrollbar { width: 3px; }
 .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 99px; }
@@ -577,7 +595,7 @@ const adminLayoutStyles = `
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: #334155;
-  padding: 10px 20px 4px;
+  padding: 11px 16px 4px;
   white-space: nowrap;
 }
 
@@ -585,11 +603,11 @@ const adminLayoutStyles = `
 .nav-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 12px 7px 14px;
-  margin: 1px 8px;
-  border-radius: 7px;
-  font-size: 0.8125rem;
+  gap: 8px;
+  padding: 7px 10px;
+  margin: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.75rem;
   font-weight: 400;
   color: #a8bdb6;
   background: transparent;
@@ -605,22 +623,22 @@ const adminLayoutStyles = `
   color: #CBD5E1;
 }
 .nav-row--active {
-  background: rgba(217,105,53,0.16);
-  color: #f0a176 !important;
+  background: var(--isp-accent-glow);
+  color: var(--isp-accent) !important;
   font-weight: 600;
   border-left-color: var(--isp-accent);
 }
 
 .nav-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   background: rgba(255,255,255,0.04);
-  color: #475569;
+  color: #64748B;
   transition: background 0.13s, color 0.13s;
 }
 .nav-row:hover .nav-icon {
@@ -628,8 +646,8 @@ const adminLayoutStyles = `
   color: #94A3B8;
 }
 .nav-icon--active {
-  background: rgba(217,105,53,0.22) !important;
-  color: #f0a176 !important;
+  background: var(--isp-accent-glow) !important;
+  color: var(--isp-accent) !important;
 }
 
 .nav-label {
@@ -657,21 +675,21 @@ const adminLayoutStyles = `
 
 /* Sub-items */
 .nav-children {
-  margin: 1px 8px 2px 28px;
-  padding-left: 14px;
-  border-left: 1px solid rgba(255,255,255,0.06);
+  margin: 1px 6px 2px 28px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(148,163,184,0.18);
 }
 
 .nav-child-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5.5px 10px;
+  padding: 5px 8px;
   margin: 1px 0;
   border-radius: 6px;
-  font-size: 0.775rem;
+  font-size: 0.7rem;
   font-weight: 400;
-  color: #4E637D;
+  color: #94A3B8;
   cursor: pointer;
   transition: color 0.12s, background 0.12s;
   white-space: nowrap;
@@ -683,9 +701,9 @@ const adminLayoutStyles = `
   background: rgba(255,255,255,0.04);
 }
 .nav-child-row--active {
-  color: #f0a176 !important;
+  color: var(--isp-accent) !important;
   font-weight: 600;
-  background: rgba(217,105,53,0.13);
+  background: var(--isp-accent-glow);
 }
 
 .nav-child-dot {
@@ -697,14 +715,14 @@ const adminLayoutStyles = `
   transition: background 0.12s;
 }
 .nav-child-row:hover .nav-child-dot { background: #64748B; }
-.nav-child-row--active .nav-child-dot { background: #f0a176 !important; }
+.nav-child-row--active .nav-child-dot { background: var(--isp-accent) !important; }
 
 /* ── SIDEBAR USER STRIP ──────────────────────────────── */
 .sidebar-user {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-top: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
 }
@@ -787,8 +805,8 @@ const adminLayoutStyles = `
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 20px;
-  height: 56px;
+  padding: 0 18px;
+  height: 52px;
   flex-shrink: 0;
   position: sticky;
   top: 0;
@@ -809,9 +827,9 @@ const adminLayoutStyles = `
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
   background: transparent;
   border: 1px solid var(--isp-border);
   color: var(--isp-text-muted);
@@ -848,7 +866,7 @@ const adminLayoutStyles = `
   background: var(--isp-accent-glow);
   color: var(--isp-accent);
   cursor: pointer;
-  font: 600 0.72rem/1 'DM Sans', system-ui, sans-serif;
+  font: 600 0.72rem/1 var(--isp-font-family, 'Inter'), system-ui, sans-serif;
   white-space: nowrap;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -1044,12 +1062,44 @@ const adminLayoutStyles = `
 /* ── PAGE CONTENT ────────────────────────────────────── */
 .admin-content {
   flex: 1;
-  padding: 24px 28px;
+  padding: 18px 24px;
   overflow-y: auto;
 }
 
+.admin-sidebar--closed .sidebar-logo {
+  justify-content: center;
+  padding-inline: 8px;
+}
+.admin-sidebar--closed .sidebar-logo-inner {
+  justify-content: center;
+}
+.admin-sidebar--closed .sidebar-brand-sub,
+.admin-sidebar--closed .sidebar-close-btn,
+.admin-sidebar--closed .nav-section-label,
+.admin-sidebar--closed .nav-label,
+.admin-sidebar--closed .nav-badge,
+.admin-sidebar--closed .nav-chevron,
+.admin-sidebar--closed .nav-children,
+.admin-sidebar--closed .sidebar-user-info,
+.admin-sidebar--closed .sidebar-logout-btn {
+  display: none;
+}
+.admin-sidebar--closed .nav-row {
+  justify-content: center;
+  padding: 6px;
+  margin-inline: 8px;
+}
+.admin-sidebar--closed .nav-icon {
+  width: 30px;
+  height: 30px;
+}
+.admin-sidebar--closed .sidebar-user {
+  justify-content: center;
+  padding-inline: 8px;
+}
+
 @media (max-width: 768px) {
-  .admin-content { padding: 16px; }
+  .admin-content { padding: 14px; }
   .header-search { max-width: 180px; }
   .header-live-pill { display: none; }
   .header-logout-btn span { display: none; }

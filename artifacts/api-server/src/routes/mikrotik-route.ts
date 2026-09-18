@@ -56,7 +56,7 @@ import {
 import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
-import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import {
   buildManagementApiRepairScript,
   type ManagementRepairPhase,
@@ -298,7 +298,7 @@ function isLanOnlyIp(ip: string): boolean {
 }
 
 /* ─── Load credentials by Supabase isp_routers.id ───────────────────────── */
-async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: RouterCredentials; row: SbRouter } | null> {
+export async function getRouterCreds(id: number, adminId?: number): Promise<{ creds: RouterCredentials; row: SbRouter } | null> {
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
@@ -1698,6 +1698,137 @@ router.get("/router/:id/traffic", async (req, res): Promise<void> => {
 });
 
 /* ─── GET /api/router/:id/live ─────────────────────────────────────────── */
+router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const tenantId = await authenticatedTenantAdminId(req);
+  if (!account || !tenantId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP account is required." });
+    return;
+  }
+
+  const requestedRouterId = String(req.query.routerId ?? "").trim();
+  const requestedPortId = String(req.query.portId ?? "").trim();
+  const requestedResellerId = String(req.query.resellerId ?? "").trim();
+  const parseOptionalId = (value: string): number | null => {
+    if (!value || value === "all") return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : -1;
+  };
+  const routerId = parseOptionalId(requestedRouterId);
+  const portId = parseOptionalId(requestedPortId);
+  const resellerId = parseOptionalId(requestedResellerId);
+  if (routerId === -1 || portId === -1 || resellerId === -1) {
+    res.status(400).json({ ok: false, error: "Telemetry filters must be valid numeric ids or all." });
+    return;
+  }
+
+  try {
+    const [routerRows, portRows, resellerRows] = await Promise.all([
+      sbSelect<{
+        id: number;
+        name: string;
+        status: string;
+      }>(
+        "isp_routers",
+        `admin_id=eq.${tenantId}${routerId ? `&id=eq.${routerId}` : ""}&select=id,name,status&order=name.asc`,
+      ),
+      sbSelect<{
+        id: number;
+        router_id: number;
+        interface_name: string;
+        reseller_id: number | null;
+        assigned_reseller_id: number | null;
+        status: string;
+      }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}${portId ? `&id=eq.${portId}` : ""}&select=id,router_id,interface_name,reseller_id,assigned_reseller_id,status&order=interface_name.asc`,
+      ),
+      sbSelect<{ id: number; name: string; company_name: string | null }>(
+        "isp_admins",
+        `parent_id=eq.${tenantId}&role=eq.reseller&is_active=is.true&select=id,name,company_name&order=name.asc`,
+      ),
+    ]);
+
+    const scopedPorts = portRows.filter((port) => {
+      const assignedId = port.assigned_reseller_id ?? port.reseller_id;
+      if (account.role === "reseller" && assignedId !== account.id) return false;
+      if (resellerId !== null && assignedId !== resellerId) return false;
+      return port.status !== "disabled";
+    });
+    const scopedRouterIds = new Set(scopedPorts.map((port) => port.router_id));
+    const scopedRouters = routerRows.filter((router) => !routerId || router.id === routerId)
+      .filter((router) => routerId || scopedRouterIds.size === 0 || scopedRouterIds.has(router.id) || account.role !== "reseller");
+
+    const liveResults = await Promise.all(scopedRouters.map(async (router) => {
+      const found = await getRouterCreds(router.id, tenantId);
+      if (!found) {
+        return { router, live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null };
+      }
+      try {
+        return { router, live: await fetchRouterLiveData(found.creds) };
+      } catch (error) {
+        logger.warn({ routerId: router.id, error: error instanceof Error ? error.message : String(error) }, "dashboard telemetry router unavailable");
+        return { router, live: null as Awaited<ReturnType<typeof fetchRouterLiveData>> | null };
+      }
+    }));
+
+    const rows = scopedPorts
+      .filter((port) => !routerId || port.router_id === routerId)
+      .map((port) => {
+        const result = liveResults.find((entry) => entry.router.id === port.router_id);
+        const aliases = new Set([
+          port.interface_name.toLowerCase(),
+           `hs_${port.interface_name}`.toLowerCase(),
+           `pppoe_${port.interface_name}`.toLowerCase(),
+          `reseller_${port.reseller_id ?? port.assigned_reseller_id ?? ""}`.toLowerCase(),
+          `reseller_${port.reseller_id ?? port.assigned_reseller_id ?? ""}_${port.interface_name}`.toLowerCase(),
+        ]);
+        const hotspot = result?.live?.hotspotUsers.filter((user) => aliases.has(user.server.toLowerCase())).length ?? 0;
+        const pppoe = result?.live?.pppoeUsers.filter((user) => aliases.has(user.service.toLowerCase())).length ?? 0;
+        return {
+          portId: port.id,
+          routerId: port.router_id,
+          interfaceName: port.interface_name,
+          resellerId: port.assigned_reseller_id ?? port.reseller_id,
+          hotspotActive: hotspot,
+          pppoeActive: pppoe,
+          onlineUsers: hotspot + pppoe,
+          routerAvailable: Boolean(result?.live),
+        };
+      });
+
+    const filteredTotals = rows.reduce((total, row) => ({
+      hotspot: total.hotspot + row.hotspotActive,
+      pppoe: total.pppoe + row.pppoeActive,
+    }), { hotspot: 0, pppoe: 0 });
+    const globalTotals = liveResults.reduce((total, entry) => ({
+      hotspot: total.hotspot + (entry.live?.hotspotUsers.length ?? 0),
+      pppoe: total.pppoe + (entry.live?.pppoeUsers.length ?? 0),
+    }), { hotspot: 0, pppoe: 0 });
+    const totals = portId !== null || resellerId !== null ? filteredTotals : globalTotals;
+
+    res.json({
+      ok: true,
+      fetchedAt: new Date().toISOString(),
+      totals: {
+        hotspotActive: totals.hotspot,
+        pppoeActive: totals.pppoe,
+        onlineUsers: totals.hotspot + totals.pppoe,
+      },
+      rows,
+      filters: {
+        routers: routerRows.map((router) => ({ id: router.id, name: router.name, status: router.status })),
+        ports: scopedPorts.map((port) => ({ id: port.id, routerId: port.router_id, interfaceName: port.interface_name })),
+        resellers: resellerRows
+          .filter((reseller) => account.role !== "reseller" || reseller.id === account.id)
+          .map((reseller) => ({ id: reseller.id, name: reseller.company_name || reseller.name })),
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load network telemetry." });
+  }
+});
+
 router.get("/router/:id/live", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }

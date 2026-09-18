@@ -53,6 +53,32 @@ const TAKEOVER_PLAN = [
   "Supabase customers, billing records, payments, and service history are never deleted.",
 ];
 
+type RouterInstallationMode = "direct" | "coexist" | "takeover";
+type RouterInstallationModeInput =
+  | RouterInstallationMode
+  | "greenfield"
+  | "brownfield"
+  | "zero-touch"
+  | "zero_touch"
+  | "ztp_takeover"
+  | "direct-installation"
+  | "coexistence"
+  | "router-takeover";
+
+function normalizeInstallationMode(value: unknown): RouterInstallationMode {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "greenfield" || mode === "direct-installation" || mode === "direct") return "direct";
+  if (mode === "brownfield" || mode === "coexistence" || mode === "coexist") return "coexist";
+  if (
+    mode === "zero-touch"
+    || mode === "zero_touch"
+    || mode === "ztp_takeover"
+    || mode === "router-takeover"
+    || mode === "takeover"
+  ) return "takeover";
+  return "coexist";
+}
+
 function installerGrantSecret(): string {
   return String(process.env.SESSION_SECRET ?? "").trim();
 }
@@ -318,8 +344,54 @@ function nextAvailableRouterName(
 
 /* ── Rate-limit string ── */
 function toRateLimit(down: number, up: number, unit = "Mbps"): string {
-  const s = unit === "Kbps" ? "k" : unit === "Gbps" ? "G" : "M";
-  return `${up}${s}/${down}${s}`;
+  const normalize = (value: number, label: string): string => {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`${label} bandwidth must be a positive finite number`);
+    }
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(3)));
+  };
+  const normalizedUnit = String(unit || "Mbps").trim().toLowerCase();
+  const suffix = normalizedUnit === "kbps" || normalizedUnit === "k" ? "k"
+    : normalizedUnit === "gbps" || normalizedUnit === "g" ? "G"
+      : normalizedUnit === "mbps" || normalizedUnit === "m" ? "M"
+        : (() => { throw new Error(`Unsupported bandwidth unit "${unit}". Use Kbps, Mbps, or Gbps.`); })();
+  return `${normalize(up, "upload")}${suffix}/${normalize(down, "download")}${suffix}`;
+}
+
+function assertIpv4Cidr(value: string, label: string): void {
+  const match = /^(\d{1,3})(?:\.(\d{1,3})){3}\/(\d{1,2})$/.exec(String(value ?? "").trim());
+  if (!match) throw new Error(`${label} must be a valid IPv4 CIDR, for example 192.168.88.0/24`);
+  const octets = value.split("/")[0].split(".").map(Number);
+  const prefix = Number(value.split("/")[1]);
+  if (octets.some(octet => octet < 0 || octet > 255) || prefix < 0 || prefix > 32) {
+    throw new Error(`${label} must use valid IPv4 octets and a CIDR prefix from /0 to /32`);
+  }
+}
+
+function assertRouterOsName(value: string, label: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(String(value ?? "").trim())) {
+    throw new Error(`${label} must use 1-63 letters, numbers, dots, underscores, or hyphens`);
+  }
+}
+
+export function validateOnboardingInputs(input: {
+  cidrs?: string[];
+  serviceNames?: string[];
+  bandwidths?: Array<{ down: number; up: number; unit?: string }>;
+}): void {
+  for (const [index, cidr] of (input.cidrs ?? []).entries()) {
+    assertIpv4Cidr(cidr, `CIDR input ${index + 1}`);
+  }
+  const seen = new Set<string>();
+  for (const [index, name] of (input.serviceNames ?? []).entries()) {
+    assertRouterOsName(name, `service name ${index + 1}`);
+    const key = name.trim().toLowerCase();
+    if (seen.has(key)) throw new Error(`Duplicate RouterOS service name "${name}" is not allowed`);
+    seen.add(key);
+  }
+  for (const bandwidth of input.bandwidths ?? []) {
+    toRateLimit(bandwidth.down, bandwidth.up, bandwidth.unit);
+  }
 }
 
 /* ── Session timeout string ── */
@@ -556,7 +628,7 @@ type CoexistenceHotspotPlan = {
    firewall rule, or NAT rule. Every resource is uniquely named and checked
    before it is reused, so a name collision stops the import instead of
    silently sharing another billing system's service. */
-function buildCoexistenceHotspotRsc(
+export function buildCoexistenceHotspotRsc(
   origin: string,
   routerId: number,
   adminId: number,
@@ -564,6 +636,12 @@ function buildCoexistenceHotspotRsc(
   companyName: string,
   plans: CoexistenceHotspotPlan[],
   certificateMode: RouterCertificateMode,
+  radiusAddress = process.env.ROUTER_RADIUS_IP?.trim()
+    || process.env.RADIUS_SERVER_IP?.trim()
+    || ROUTER_VPN_GATEWAY,
+  radiusSecret = process.env.ROUTER_RADIUS_SECRET?.trim()
+    || process.env.RADIUS_SHARED_SECRET?.trim()
+    || "",
 ): string {
   void certificateMode;
   const fetchOptions = ROUTER_HTTPS_FETCH_OPTIONS;
@@ -574,10 +652,31 @@ function buildCoexistenceHotspotRsc(
   const dhcpName = `ochola-hs-dhcp-${routerId}`;
   const profileName = `ochola-hs-profile-${routerId}`;
   const hotspotName = `ochola-hs-server-${routerId}`;
-  const portalDir = `ochola-hotspot-${routerId}`;
+  const portalDir = `hs_ochola_${routerId}`;
+  const pppProfileName = `ochola-ppp-profile-${routerId}`;
+  const pppoeName = `ochola-pppoe-${routerId}`;
+  const pppoePoolName = `ochola-pppoe-pool-${routerId}`;
+  const pppoeGateway = `10.255.${Math.abs(routerId) % 250 || 1}.1`;
+  const pppoeSubnet = pppoeGateway.replace(/\.1$/, ".0/24");
+  const pppoePoolStart = pppoeGateway.replace(/\.1$/, ".2");
+  const pppoePoolEnd = pppoeGateway.replace(/\.1$/, ".254");
   const poolStart = gateway.replace(/\.1$/, ".2");
   const poolEnd = gateway.replace(/\.1$/, ".254");
   const tag = `${companyName} coexistence router ${routerId}`;
+  const planNames = plans.map(plan => slugify(plan.name).slice(0, 40) || "default");
+  validateOnboardingInputs({
+    serviceNames: [
+      bridgeName, poolName, dhcpName, profileName, hotspotName, portalDir,
+      pppProfileName, pppoeName, pppoePoolName,
+      ...planNames,
+    ],
+    cidrs: [subnet, pppoeSubnet],
+    bandwidths: plans.map(plan => ({
+      down: plan.speed_down,
+      up: plan.speed_up,
+      unit: "Mbps",
+    })),
+  });
   const safe = (value: string) => rosString(value);
   const portalBase = origin.replace(/\/$/, "");
   let portalHost = "";
@@ -605,6 +704,13 @@ function buildCoexistenceHotspotRsc(
     `:local dhcpName "${safe(dhcpName)}"`,
     `:local profileName "${safe(profileName)}"`,
     `:local hotspotName "${safe(hotspotName)}"`,
+    `:local pppProfileName "${safe(pppProfileName)}"`,
+    `:local pppoeName "${safe(pppoeName)}"`,
+    `:local pppoePoolName "${safe(pppoePoolName)}"`,
+    `:local pppoeGateway "${safe(pppoeGateway)}"`,
+    `:local radiusAddress "${safe(radiusAddress)}"`,
+    `:local radiusSecret "${safe(radiusSecret)}"`,
+    `:local radiusComment "${safe(tag)} RADIUS"`,
     `:local coexistenceStep "start"`,
     `:global ocholaCoexistenceError`,
     `:set ocholaCoexistenceError ""`,
@@ -686,6 +792,29 @@ function buildCoexistenceHotspotRsc(
     `  /ip hotspot enable $existingHotspot`,
     `}`,
     ``,
+    `# Add an owned PPPoE listener on the same isolated service bridge; existing listeners remain untouched.`,
+    `:set coexistenceStep "pppoe"`,
+    `:put "COEXISTENCE STEP: pppoe"`,
+    `:if ([:len [/ip pool find name=$pppoePoolName]] = 0) do={ /ip pool add name=$pppoePoolName ranges="${safe(pppoePoolStart)}-${safe(pppoePoolEnd)}" comment=$bridgeTag }`,
+    `:local existingPppProfile [/ppp profile find name=$pppProfileName]`,
+    `:if ([:len $existingPppProfile] = 0) do={ /ppp profile add name=$pppProfileName local-address=$pppoeGateway remote-address=$pppoePoolName rate-limit="10M/30M" comment=$bridgeTag } else={`,
+    `  :local pppProfileComment [/ppp profile get $existingPppProfile comment]`,
+    `  :if ([:find $pppProfileComment "coexistence router ${routerId}"] = nil) do={ :set ocholaCoexistenceError "Coexistence PPP profile collision: $pppProfileName."; :error $ocholaCoexistenceError }`,
+    `}`,
+    `:local existingPppoe [/interface pppoe-server server find name=$pppoeName]`,
+    `:if ([:len $existingPppoe] = 0) do={ /interface pppoe-server server add name=$pppoeName interface=$bridgeName service-name=$pppoeName default-profile=$pppProfileName disabled=no comment=$bridgeTag } else={`,
+    `  :if ([/interface pppoe-server server get $existingPppoe interface] != $bridgeName) do={ :set ocholaCoexistenceError "Coexistence PPPoE listener collision: $pppoeName."; :error $ocholaCoexistenceError }`,
+    `  /interface pppoe-server server enable $existingPppoe`,
+    `}`,
+    ``,
+    `# Append the Ochola RADIUS client only when a shared secret is configured; never remove local users or foreign RADIUS entries.`,
+    `:set coexistenceStep "radius"`,
+    `:put "COEXISTENCE STEP: radius"`,
+    `:if ([:len $radiusSecret] > 0) do={`,
+    `  :if ([:len [/radius find where comment=$radiusComment]] = 0) do={ /radius add service=hotspot,ppp address=$radiusAddress secret=$radiusSecret authentication-port=1812 accounting-port=1813 comment=$radiusComment }`,
+    `} else={ :put "WARN: RADIUS shared secret is not configured; existing RADIUS and local users were left untouched." }`,
+    `:do { /radius incoming set accept=yes port=3799 } on-error={ :put "WARN: RADIUS CoA listener could not be enabled." }`,
+    ``,
     `# Only this subnet is masqueraded; no global HTTP/HTTPS redirects are added.`,
     `:set coexistenceStep "nat-and-dns"`,
     `:put "COEXISTENCE STEP: nat-and-dns"`,
@@ -715,6 +844,11 @@ function buildCoexistenceHotspotRsc(
     `:if ($storage = "") do={ :if ([:len [/file find name="flash" type=directory]] > 0) do={ :set storage "flash" } }`,
     `:local hsdir "${portalDir}"`,
     `:if ([:len $storage] > 0) do={ :set hsdir ($storage . "/${portalDir}") }`,
+    `:local perPortPortalRoot ($storage . "/hotspot/hs_")`,
+    `:foreach bridgePortId in=[/interface bridge port find where bridge=$bridgeName] do={`,
+    `  :local bridgePortName [/interface bridge port get $bridgePortId interface]`,
+    `  :do { /file make-dir ($perPortPortalRoot . $bridgePortName) } on-error={}`,
+    `}`,
     `:do { /file add name=$hsdir type=directory } on-error={}`,
     `:do { /file make-dir $hsdir } on-error={}`,
     `:put ("Portal directory: " . $hsdir)`,
@@ -1060,9 +1194,11 @@ export function buildMainhotspotRsc(
   managementInterfaceName: string = "",
   routerVpnWarning: string = "",
   certificateMode: RouterCertificateMode = "verified",
-  installationMode: "coexist" | "takeover" = "coexist",
+  installationMode: RouterInstallationModeInput = "coexist",
   coexistenceHotspotUrl: string = "",
+  zeroTouchBootstrapUrl: string = "",
 ): string {
+  installationMode = normalizeInstallationMode(installationMode);
   const normalizeUrl = (value: string): string =>
     value.trim().replace(/^(?:https?:\/\/)+/i, "https://").replace(/\/+$/, "");
   scriptsBase = normalizeUrl(scriptsBase);
@@ -1075,6 +1211,7 @@ export function buildMainhotspotRsc(
   routerWireGuardUrl = normalizeUrl(routerWireGuardUrl);
   routerIpsecUrl = normalizeUrl(routerIpsecUrl);
   coexistenceHotspotUrl = normalizeUrl(coexistenceHotspotUrl);
+  zeroTouchBootstrapUrl = normalizeUrl(zeroTouchBootstrapUrl);
   const ROUTER_HTTPS_FETCH_OPTIONS = `mode=https check-certificate=yes`;
   const installerRevision = `r${Date.now().toString(36)}`;
   const httpsTrustBootstrap = routerHttpsTrustBootstrap(scriptsBase);
@@ -1637,10 +1774,11 @@ ${progressCompletionDef}
 :put "TAKEOVER BACKUP VERIFIED — binary backup and text export are present."
 `;
 
-  const renderedScript = `# ${safeCompanyName} Takeover Setup Script (mainhotspot.rsc)
+  const renderedScript = `# ${safeCompanyName} ${installationMode === "takeover" ? "Zero-Touch Provisioning" : "Greenfield Provisioning"} Setup Script (mainhotspot.rsc)
 # INSTALLER_REVISION=${installerRevision}
-# Destructive Main ISP takeover: backs up the router, then downloads and imports
-# VPN, hotspot, PPPoE, users, sync, heartbeat, and security configurations.
+# ${installationMode === "takeover"
+    ? "Zero-Touch takeover: stages a verified post-reset bootstrap before reset."
+    : "Clean-router provisioning: installs the standard billing service bundle."}
 # Router: ${safeRouterName || "new router"}
 #
 # INSTALL BUNDLE — downloaded in this order:
@@ -1654,6 +1792,9 @@ ${progressCompletionDef}
 #   8. logpush.rsc and seclogpush.rsc are optional diagnostics.
 # Hotspot portal files are downloaded by the per-router configuration script
 # into the selected root/hotspot, flash/hotspot, or disk1/hotspot directory.
+
+:log info "Initializing Billing Script Injection Layer..."
+:delay 3s
 
 ${pgDef}
 ${formEncodeDef}
@@ -2264,7 +2405,116 @@ ${safeRegistrationUrl ? `:put "Reporting router to ${safeCompanyName}..."
 
 ${progressCompletionDef}
 `;
-  return finalizeRenderedScript(renderedScript);
+  if (installationMode === "direct") {
+    /* Greenfield is the non-reset path. It uses the complete installer
+       payload, but deliberately omits the takeover backup boundary and all
+       takeover wording. A blank router can therefore receive the standard
+       bridge, billing subnets, RADIUS, Hotspot, PPPoE, and profile imports
+       without being sent through the destructive workflow. */
+    const radiusAddress = process.env.ROUTER_RADIUS_IP?.trim()
+      || process.env.RADIUS_SERVER_IP?.trim()
+      || ROUTER_VPN_GATEWAY;
+    const radiusSecret = process.env.ROUTER_RADIUS_SECRET?.trim()
+      || process.env.RADIUS_SHARED_SECRET?.trim()
+      || "";
+    const greenfieldRadiusAppendix = `
+
+# Greenfield standard RADIUS client — no foreign entries are removed.
+:local greenfieldRadiusAddress "${rosString(radiusAddress)}"
+:local greenfieldRadiusSecret "${rosString(radiusSecret)}"
+:if ([:len $greenfieldRadiusSecret] > 0) do={
+    :if ([:len [/radius find where comment="OcholaSupernet Greenfield RADIUS"]] = 0) do={
+        /radius add service=hotspot,ppp address=$greenfieldRadiusAddress secret=$greenfieldRadiusSecret authentication-port=1812 accounting-port=1813 comment="OcholaSupernet Greenfield RADIUS"
+    }
+} else={
+    :put "WARN: RADIUS shared secret is not configured; configure the tenant RADIUS client before serving customers."
+}
+:do { /radius incoming set accept=yes port=3799 } on-error={ :put "WARN: RADIUS CoA listener could not be enabled." }
+`;
+    const greenfieldScript = renderedScript
+      .replace(takeoverBackup, "")
+      .replace(/Takeover/gi, "Greenfield")
+      .replace(/destructive Main ISP takeover/gi, "greenfield provisioning");
+    return finalizeRenderedScript(greenfieldScript + greenfieldRadiusAppendix);
+  }
+
+  /* Zero-touch deliberately stops after staging the run-after-reset file.
+     The reset command must be the last executable action in this payload:
+     anything after it is discarded by RouterOS when the device reboots. */
+  const bootstrapUrl = rscEscape(
+    zeroTouchBootstrapUrl || `${scriptsBase}/billing-init.rsc`,
+  );
+  const zeroTouchScript = `# ${safeCompanyName} — Zero-Touch Provisioning / Hard Reset
+# INSTALLER_REVISION=${installerRevision}
+# The router is backed up by the dashboard authorization boundary before this
+# script is served. The post-reset bootstrap restores management connectivity.
+
+${httpsTrustBootstrap}
+:global ocholaHttpsTrustError
+:if ([:len $ocholaHttpsTrustError] > 0) do={ :error $ocholaHttpsTrustError }
+:local bootstrapFile "billing_init.rsc"
+:do {
+    :do { /file remove [find name=$bootstrapFile] } on-error={}
+    /tool fetch url="${bootstrapUrl}" dst-path=$bootstrapFile keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}
+    ${verifyFetchedFile("$bootstrapFile", "billing_init.rsc")}
+} on-error={
+    :error ("Zero-Touch stopped before reset: billing_init.rsc could not be staged. " . $error)
+}
+:put "billing_init.rsc staged and verified."
+:put "The router will reset without defaults and run billing_init.rsc after reboot."
+/system/reset-configuration keep-users=no no-defaults=yes run-after-reset=billing_init.rsc
+`;
+  return finalizeRenderedScript(zeroTouchScript);
+}
+
+/**
+ * Minimal post-reset handoff. RouterOS executes this file after
+ * `no-defaults=yes`, so it must first create a usable WAN/LAN layout, then
+ * fetch the normal Greenfield installer over verified HTTPS. It is generated
+ * per router so the short-lived takeover grant and tenant origin never become
+ * a shared public endpoint.
+ */
+export function buildBillingInitRsc(
+  scriptsBase: string,
+  greenfieldInstallerUrl: string,
+  routerName = "",
+): string {
+  const normalizeUrl = (value: string): string =>
+    value.trim().replace(/^(?:https?:\/\/)+/i, "https://").replace(/\/+$/, "");
+  const base = normalizeUrl(scriptsBase);
+  const installerUrl = normalizeUrl(greenfieldInstallerUrl);
+  const safeName = rosString(routerName || "OcholaSupernet router");
+  const safeInstallerUrl = rosString(installerUrl);
+  const lines = [
+    `# OcholaSupernet billing_init.rsc — post-reset bootstrap`,
+    `# Router: ${safeName}`,
+    `# RouterOS 6/7-compatible sequential commands; no foreign configuration exists after reset.`,
+    ``,
+    routerHttpsTrustBootstrap(base),
+    `:global ocholaHttpsTrustError`,
+    `:if ([:len $ocholaHttpsTrustError] > 0) do={ :error $ocholaHttpsTrustError }`,
+    `:local wan [/interface ethernet find name="ether1"]`,
+    `:if ([:len $wan] > 0) do={ :do { /ip dhcp-client add interface=$wan disabled=no comment="OcholaSupernet WAN" } on-error={} }`,
+    `:local billingBridge [/interface bridge find name="billing-bridge"]`,
+    `:if ([:len $billingBridge] = 0) do={ /interface bridge add name="billing-bridge" protocol-mode=none fast-forward=no comment="OcholaSupernet billing bridge" }`,
+    `:set billingBridge [/interface bridge find name="billing-bridge"]`,
+    `:foreach ethernetId in=[/interface ethernet find] do={`,
+    `    :local ethernetName [/interface ethernet get $ethernetId name]`,
+    `    :if ($ethernetName != "ether1") do={ :if ([:len [/interface bridge port find where bridge="billing-bridge" interface=$ethernetName]] = 0) do={ :do { /interface bridge port add bridge="billing-bridge" interface=$ethernetName } on-error={} } }`,
+    `}`,
+    `:if ([:len [/ip address find where interface="billing-bridge" address="192.168.88.1/24"]] = 0) do={ /ip address add address="192.168.88.1/24" interface="billing-bridge" comment="OcholaSupernet billing LAN" }`,
+    `:if ([:len [/ip pool find where name="billing-pool"]] = 0) do={ /ip pool add name="billing-pool" ranges="192.168.88.10-192.168.88.254" comment="OcholaSupernet billing pool" }`,
+    `:if ([:len [/ip dhcp-server find where name="billing-dhcp"]] = 0) do={ /ip dhcp-server add name="billing-dhcp" interface="billing-bridge" address-pool="billing-pool" disabled=no }`,
+    `:if ([:len [/ip dhcp-server network find where address="192.168.88.0/24"]] = 0) do={ /ip dhcp-server network add address="192.168.88.0/24" gateway="192.168.88.1" dns-server="192.168.88.1" comment="OcholaSupernet billing LAN" }`,
+    `:do { /ip dns set allow-remote-requests=yes } on-error={}`,
+    `:local installerFile "greenfield-installer.rsc"`,
+    `:do { /file remove [find name=$installerFile] } on-error={}`,
+    `/tool fetch url="${safeInstallerUrl}" dst-path=$installerFile keep-result=yes ${ROUTER_HTTPS_FETCH_OPTIONS}`,
+    `${verifyFetchedFile("$installerFile", "greenfield installer")}`,
+    `/import $installerFile`,
+    `:put "OcholaSupernet post-reset bootstrap completed."`,
+  ];
+  return validateGeneratedRouterScript(lines.join("\n") + "\n");
 }
 
 router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
@@ -2273,6 +2523,56 @@ router.get(`/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`, (_req, res): void => {
     .type("application/x-pem-file")
     .set("Cache-Control", "public, max-age=31536000, immutable")
     .send(ISRG_ROOT_X1_PEM);
+});
+
+/* One-time file staged immediately before a Zero-Touch reset. The file itself
+   contains only the post-reset network handoff; the full Greenfield payload is
+   fetched after the router has rebuilt its basic WAN/LAN layout. */
+router.get("/scripts/billing-init/:routerId/:adminId/:grant.rsc", async (req, res): Promise<void> => {
+  const routerId = Number(req.params.routerId);
+  const adminId = Number(req.params.adminId);
+  const grant = String(req.params.grant ?? "").trim();
+  const authorization = verifyTakeoverGrant(grant, routerId);
+  if (
+    !Number.isSafeInteger(routerId)
+    || routerId <= 0
+    || !Number.isSafeInteger(adminId)
+    || adminId <= 0
+    || !authorization
+    || authorization.adminId !== adminId
+  ) {
+    res.status(403).type("text/plain").send("# Zero-Touch billing_init authorization is invalid or expired.\n");
+    return;
+  }
+
+  try {
+    const routers = await sbGet<{ id: number; admin_id: number; name: string }>(
+      `isp_routers?id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name&limit=1`,
+    );
+    if (!routers[0]) {
+      res.status(404).type("text/plain").send("# Router was not found for this ISP account.\n");
+      return;
+    }
+    const origin = requestOrigin(req);
+    const greenfieldUrl =
+      `${origin}/api/scripts/self-install-mainhotspot/`
+      + `${encodeURIComponent(routerId)}/${encodeURIComponent(adminId)}/takeover/`
+      + `${encodeURIComponent(grant)}?bootstrap=greenfield`;
+    const content = buildBillingInitRsc(
+      `${origin}/api/scripts`,
+      greenfieldUrl,
+      routers[0].name,
+    );
+    res
+      .set("Content-Type", "text/plain; charset=utf-8")
+      .set("Content-Disposition", 'attachment; filename="billing_init.rsc"')
+      .set("Cache-Control", "no-store")
+      .send(content);
+  } catch (error) {
+    res.status(503).type("text/plain").send(
+      `# Could not generate billing_init.rsc: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+  }
 });
 
 router.post("/admin/router/self-install/takeover/prepare", requireAdmin(), async (req, res): Promise<void> => {
@@ -2432,10 +2732,17 @@ router.get([
   const ridRaw   = String(req.params.pathRouterId ?? req.query.rid ?? "").trim();
   const tokenRaw = ((req.query.token ?? "") as string).trim();
   const adminIdRaw = String(req.params.pathAdminId ?? req.query.adminId ?? "").trim();
-  const installationMode: "coexist" | "takeover" =
-    String(req.params.pathMode ?? req.query.mode ?? "").trim().toLowerCase() === "takeover"
-      ? "takeover"
-      : "coexist";
+  const requestedInstallationMode = normalizeInstallationMode(
+    req.params.pathMode ?? req.query.mode,
+  );
+  /* A takeover grant is also allowed to fetch the one-time Greenfield
+     payload used by billing_init.rsc after a reset. It must never recurse
+     into another reset. */
+  const resetBootstrap = requestedInstallationMode === "takeover"
+    && String(req.query.bootstrap ?? "").trim().toLowerCase() === "greenfield";
+  const installationMode: RouterInstallationMode = resetBootstrap
+    ? "direct"
+    : requestedInstallationMode;
   const installerGrant = String(req.params.pathGrant ?? req.query.grant ?? "").trim();
   const rid    = /^\d+$/.test(ridRaw) ? ridRaw : "";
   const token  = /^[A-Za-z0-9_\-]{8,128}$/.test(tokenRaw) ? tokenRaw : "";
@@ -2452,6 +2759,7 @@ router.get([
   let routerWireGuardUrl = "";
   let routerIpsecUrl = "";
   let coexistenceHotspotUrl = "";
+  let zeroTouchBootstrapUrl = "";
   let vpnProvisioningError = "";
 
   interface InstallRouter {
@@ -2477,7 +2785,7 @@ router.get([
     return;
   }
 
-  const grantIdentity = installationMode === "takeover"
+  const grantIdentity = requestedInstallationMode === "takeover"
     ? verifyTakeoverGrant(installerGrant, Number(rid))
     : verifyInstallerGrant(installerGrant, Number(rid));
   if (!grantIdentity || !adminId || grantIdentity.adminId !== Number(adminId)) {
@@ -2523,7 +2831,7 @@ router.get([
            bake it into a daily auto-update scheduler; operators can request a
            fresh scoped grant when they start another install. */
         installerUrl = "";
-        if (installationMode === "takeover") {
+        if (requestedInstallationMode === "takeover" && !resetBootstrap) {
           const grantQuery = `grant=${encodeURIComponent(installerGrant)}`;
           const routerVpnQuery = `rid=${encodeURIComponent(rid)}&token=${encodeURIComponent(resolvedToken)}&mode=takeover&diagnostic=1&${grantQuery}`;
           routerVpnUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}`;
@@ -2531,6 +2839,7 @@ router.get([
           routerWireGuardUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}&protocol=wireguard`;
           routerIpsecUrl = `${origin}/api/scripts/router-vpn.rsc?${routerVpnQuery}&protocol=ipsec`;
           coexistenceHotspotUrl = `${origin}/api/scripts/coexistence-hotspot/${encodeURIComponent(rid)}.rsc?mode=takeover&${grantQuery}`;
+          zeroTouchBootstrapUrl = `${origin}/api/scripts/billing-init/${encodeURIComponent(rid)}/${encodeURIComponent(adminId)}/${encodeURIComponent(installerGrant)}.rsc`;
         } else {
           /* Keep management child URLs query-free. Older RouterOS fetch
              implementations can corrupt several query parameters after a URL
@@ -2633,6 +2942,7 @@ router.get([
        certificateMode,
        installationMode,
        coexistenceHotspotUrl,
+       zeroTouchBootstrapUrl,
     ));
 });
 
@@ -2765,13 +3075,7 @@ router.get([
   const ridRaw = String(req.params.routerId ?? req.query.rid ?? "").trim();
   const token = String(req.params.token ?? req.query.token ?? "").trim();
   const routerId = /^\d+$/.test(ridRaw) ? Number(ridRaw) : 0;
-  const requestedMode = String(req.query.mode ?? "").trim().toLowerCase();
-  const installationMode: "coexist" | "direct" | "takeover" =
-    requestedMode === "takeover"
-      ? "takeover"
-      : requestedMode === "direct"
-        ? "direct"
-        : "coexist";
+  const installationMode = normalizeInstallationMode(req.query.mode);
   const takeoverGrant = String(req.query.grant ?? "").trim();
   /* RouterOS fetch may discard an HTTP error body. Path-based bootstrap
      requests are installer-specific and already carry the router token, so
@@ -3854,8 +4158,7 @@ router.get("/scripts/router-migration-collector.rsc", (req, res): void => {
 router.get("/scripts/coexistence-hotspot/:routerId.rsc", async (req, res): Promise<void> => {
   const routerId = Number(req.params.routerId);
   const grant = String(req.query.grant ?? "").trim();
-  const installationMode: "coexist" | "takeover" =
-    String(req.query.mode ?? "").trim().toLowerCase() === "takeover" ? "takeover" : "coexist";
+  const installationMode = normalizeInstallationMode(req.query.mode);
   const certificateMode: RouterCertificateMode = "verified";
   const sendCoexistenceError = (status: number, body: string): void => {
     /* RouterOS fetch may discard non-2xx response bodies. This URL is only
@@ -4126,8 +4429,7 @@ router.get("/scripts/router-vpn-manual/:routerId/:adminId/:rosVersion/:grant", a
   const adminId = Number(req.params.adminId);
   const routerOsMajor = Number(req.params.rosVersion);
   const grant = String(req.params.grant ?? "").trim();
-  const installationMode: "coexist" | "takeover" =
-    String(req.query.mode ?? "").trim().toLowerCase() === "takeover" ? "takeover" : "coexist";
+  const installationMode = normalizeInstallationMode(req.query.mode);
   const sendManualVpnError = (status: number, message: string): void => {
     res
       .status(200)

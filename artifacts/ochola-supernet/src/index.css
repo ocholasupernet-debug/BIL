@@ -1,13 +1,13 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════════════
    DESIGN TOKENS — Tailwind v4 theme mapping
 ═══════════════════════════════════════════════════════════════════ */
 @theme inline {
-  --font-sans:    'DM Sans', system-ui, sans-serif;
-  --font-display: 'DM Sans', system-ui, sans-serif;
-  --font-mono:    'Space Mono', 'Fira Code', monospace;
+  --font-sans:    'Inter', system-ui, sans-serif;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
 
   --color-background:          hsl(var(--background));
   --color-foreground:          hsl(var(--foreground));
@@ -58,7 +58,7 @@
   --ring:                  17 70% 51%;
 
   /* ── ISP design tokens — Signal room ─────────────────────────────── */
-  --isp-bg:            #f3f6f2;
+   --isp-bg:            #f1f5f9;
   --isp-header:        #fbfcf8;
   --isp-sidebar:       #172b2d;
    --isp-section:       #102426;
@@ -94,7 +94,7 @@
   --shadow-card: 0 1px 2px rgba(25,48,51,0.04), 0 4px 14px rgba(25,48,51,0.035);
 
   /* Super-admin control room aliases */
-  --sa-bg: #f3f6f2;
+   --sa-bg: #f1f5f9;
   --sa-panel: #fbfcf8;
   --sa-panel-strong: #ffffff;
   --sa-line: rgba(25,48,51,0.12);
@@ -191,13 +191,13 @@
     background: var(--isp-bg);
     color: var(--isp-text);
     font-size: 1rem;
-    font-family: var(--isp-font-family, 'DM Sans', system-ui, sans-serif);
+    font-family: var(--isp-font-family, 'Inter', system-ui, sans-serif);
     font-style: var(--isp-font-style, normal);
     font-weight: var(--isp-font-weight, 500);
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-family: 'DM Sans', system-ui, sans-serif;
+    font-family: 'Inter', system-ui, sans-serif;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--isp-text);
@@ -208,7 +208,7 @@
 /* ISP admins can choose typography once and have it apply consistently to
    the control panel, including components that use inline styles. */
 body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
-  font-family: var(--isp-font-family, 'DM Sans', system-ui, sans-serif) !important;
+  font-family: var(--isp-font-family, 'Inter', system-ui, sans-serif) !important;
   font-style: var(--isp-font-style, normal);
 }
 
@@ -287,7 +287,7 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   border-radius: 8px;
   font-size: 0.875rem;
   font-weight: 600;
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
@@ -342,7 +342,7 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   padding: 9px 12px;
   color: var(--isp-text);
   font-size: 0.875rem;
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
   outline: none;
   width: 100%;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -2708,5 +2708,939 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   .router-card {
     animation: none;
     transition: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ENTERPRISE ADMIN VISUAL SYSTEM
+   Kept at the end so older page-level tokens converge on the same
+   light/dark slate treatment without requiring a page-by-page rewrite.
+═══════════════════════════════════════════════════════════════════ */
+:root {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+   --isp-bg: #f1f5f9;
+  --isp-header: #ffffff;
+  --isp-sidebar: #0f172a;
+  --isp-section: #ffffff;
+  --isp-card: #ffffff;
+  --isp-inner-card: #f8fafc;
+  --isp-border: #e2e8f0;
+  --isp-border-subtle: #eef2f7;
+  --isp-text: #0f172a;
+  --isp-text-muted: #64748b;
+  --isp-text-sub: #94a3b8;
+  --isp-nav-text: #cbd5e1;
+  --isp-input-bg: #ffffff;
+  --isp-input-border: #cbd5e1;
+  --isp-hover: #f1f5f9;
+  --isp-table-bg: #ffffff;
+  --isp-table-border: #e2e8f0;
+  --isp-accent: #d96835;
+  --isp-accent-strong: #b95024;
+  --isp-accent-glow: rgba(217,105,53,0.10);
+  --isp-accent-border: rgba(217,105,53,0.28);
+  --isp-green: #059669;
+  --isp-green-glow: rgba(5,150,105,0.10);
+  --isp-sidebar-strip: linear-gradient(180deg, #f97316 0%, #c2410c 100%);
+  --shadow-sm: 0 1px 2px rgba(15,23,42,0.04);
+  --shadow-md: 0 6px 18px rgba(15,23,42,0.08);
+  --shadow-lg: 0 14px 32px rgba(15,23,42,0.12);
+  --shadow-card: 0 1px 2px rgba(15,23,42,0.03), 0 4px 14px rgba(15,23,42,0.04);
+   --sa-bg: #f1f5f9;
+  --sa-panel: #ffffff;
+  --sa-panel-strong: #ffffff;
+  --sa-line: #e2e8f0;
+  --sa-line-soft: #eef2f7;
+  --sa-ink: #0f172a;
+  --sa-muted: #64748b;
+  --sa-dim: #94a3b8;
+}
+
+[data-theme="dark"] {
+  --background: 222 47% 11%;
+  --foreground: 210 40% 98%;
+  --card: 217 33% 17%;
+  --card-foreground: 210 40% 98%;
+  --popover: 217 33% 17%;
+  --popover-foreground: 210 40% 98%;
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 33% 17%;
+  --muted-foreground: 215 20% 65%;
+  --border: 215 25% 27%;
+  --input: 215 25% 27%;
+  --isp-bg: #0f172a;
+  --isp-header: #111827;
+  --isp-sidebar: #020617;
+  --isp-section: #1e293b;
+  --isp-card: #1e293b;
+  --isp-inner-card: #172033;
+  --isp-border: #334155;
+  --isp-border-subtle: rgba(148,163,184,0.16);
+  --isp-text: #f8fafc;
+  --isp-text-muted: #94a3b8;
+  --isp-text-sub: #64748b;
+  --isp-nav-text: #cbd5e1;
+  --isp-input-bg: #111827;
+  --isp-input-border: #475569;
+  --isp-hover: rgba(148,163,184,0.10);
+  --isp-table-bg: #1e293b;
+  --isp-table-border: rgba(148,163,184,0.18);
+  --isp-accent: #f08a4b;
+  --isp-accent-strong: #fb923c;
+  --isp-accent-glow: rgba(240,138,75,0.14);
+  --isp-accent-border: rgba(240,138,75,0.35);
+  --isp-green: #34d399;
+  --isp-green-glow: rgba(52,211,153,0.12);
+  --isp-sidebar-strip: linear-gradient(180deg, #f97316 0%, #c2410c 100%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.24);
+  --shadow-md: 0 8px 24px rgba(0,0,0,0.24);
+  --shadow-lg: 0 18px 40px rgba(0,0,0,0.32);
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.22), 0 6px 16px rgba(0,0,0,0.16);
+  --sa-bg: #0f172a;
+  --sa-panel: #111827;
+  --sa-panel-strong: #1e293b;
+  --sa-line: #334155;
+  --sa-line-soft: rgba(148,163,184,0.16);
+  --sa-ink: #f8fafc;
+  --sa-muted: #94a3b8;
+  --sa-dim: #64748b;
+}
+
+/* Existing card skins inherit the current theme instead of forcing a
+   permanently dark card in light mode. */
+:is(
+  .section-card,
+  .inner-card,
+  .dashboard-kpi,
+  .dashboard-stat,
+  .gateway-strip,
+  .router-filter-bar,
+  .router-card,
+  .dashboard-builder-preview-wrap,
+  .dashboard-builder-preview,
+  [style*="var(--isp-card)"],
+  [style*="var(--isp-section)"],
+  [style*="var(--isp-inner-card)"]
+) {
+  --isp-text: #0f172a;
+  --isp-text-muted: #64748b;
+  --isp-text-sub: #94a3b8;
+  --isp-border: #e2e8f0;
+  --isp-border-subtle: #eef2f7;
+  --isp-input-bg: #f8fafc;
+  --isp-input-border: #cbd5e1;
+  --isp-hover: #f1f5f9;
+  --isp-table-bg: #ffffff;
+  --isp-table-border: #e2e8f0;
+}
+
+[data-theme="dark"] :is(
+  .section-card,
+  .inner-card,
+  .dashboard-kpi,
+  .dashboard-stat,
+  .gateway-strip,
+  .router-filter-bar,
+  .router-card,
+  .dashboard-builder-preview-wrap,
+  .dashboard-builder-preview,
+  [style*="var(--isp-card)"],
+  [style*="var(--isp-section)"],
+  [style*="var(--isp-inner-card)"]
+) {
+  --isp-text: #f8fafc;
+  --isp-text-muted: #94a3b8;
+  --isp-text-sub: #64748b;
+  --isp-border: #334155;
+  --isp-border-subtle: rgba(148,163,184,0.16);
+  --isp-input-bg: #111827;
+  --isp-input-border: #475569;
+  --isp-hover: rgba(148,163,184,0.10);
+  --isp-table-bg: #1e293b;
+  --isp-table-border: rgba(148,163,184,0.18);
+}
+
+/* Reseller workspace reference implementation for dense forms and tables. */
+.reseller-workspace {
+  display: grid;
+  gap: 16px;
+  color: var(--isp-text);
+}
+.reseller-page-header {
+  display: grid;
+  gap: 4px;
+}
+.reseller-eyebrow {
+  color: var(--isp-accent);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.reseller-page-header h1 {
+  margin: 0;
+  color: var(--isp-text);
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+.reseller-page-header p {
+  margin: 0;
+  color: var(--isp-text-muted);
+  font-size: 0.8rem;
+}
+.reseller-metric-value {
+  margin-top: 10px;
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.reseller-metric-label {
+  margin-top: 4px;
+  color: var(--isp-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.reseller-field input:not([type="checkbox"]),
+.reseller-field select,
+.reseller-field textarea {
+  min-height: 38px;
+  border-radius: 6px !important;
+  border-color: var(--isp-input-border) !important;
+  background: var(--isp-input-bg) !important;
+  color: var(--isp-text) !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.reseller-field input:not([type="checkbox"]):focus,
+.reseller-field select:focus,
+.reseller-field textarea:focus {
+  border-color: var(--isp-accent) !important;
+  box-shadow: 0 0 0 3px var(--isp-accent-glow);
+}
+.reseller-field input::placeholder {
+  color: var(--isp-text-sub);
+}
+.reseller-table thead th {
+  background: var(--isp-inner-card);
+  border-bottom-color: var(--isp-border) !important;
+  font-size: 0.64rem;
+  letter-spacing: 0.09em;
+}
+.reseller-table tbody tr {
+  border-bottom: 1px solid var(--isp-border-subtle);
+}
+.reseller-table tbody tr:hover {
+  background: var(--isp-hover);
+}
+.reseller-table tbody td {
+  border-bottom: 1px solid var(--isp-border-subtle);
+}
+.reseller-mono,
+.reseller-technical-chip {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+.reseller-technical-chip {
+  border: 1px solid var(--isp-border);
+}
+.reseller-workspace button:focus-visible,
+.reseller-workspace input:focus-visible,
+.reseller-workspace select:focus-visible {
+  outline: 2px solid var(--isp-accent);
+  outline-offset: 2px;
+}
+
+/* Existing admin pages that still render native tables and controls get the
+   same compact rhythm even when they have not migrated to isp-table/isp-input. */
+.admin-content table {
+  border-collapse: collapse;
+}
+.admin-content table thead th {
+  color: var(--isp-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.admin-content table tbody tr {
+  border-bottom: 1px solid var(--isp-border-subtle);
+  transition: background 0.12s ease;
+}
+.admin-content table tbody tr:hover {
+  background: var(--isp-hover);
+}
+.admin-content :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) {
+  min-height: 38px;
+  border-radius: 6px;
+  font-family: inherit;
+}
+.admin-content :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]):focus {
+  border-color: var(--isp-accent);
+  box-shadow: 0 0 0 3px var(--isp-accent-glow);
+  outline: none;
+}
+
+@media (max-width: 900px) {
+  .reseller-admin-grid,
+  .reseller-forms-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 640px) {
+  .reseller-stat-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .reseller-workspace form > div[style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+  .reseller-page-header h1 {
+    font-size: 1.25rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TELEMETRY ANALYTICS — restrained chart surfaces
+   Charts use the same layered slate system as the rest of the admin shell:
+   white primary cards on a slate canvas, off-white nested surfaces, and
+   deliberately quiet chart chrome so the data carries the emphasis.
+═══════════════════════════════════════════════════════════════════ */
+:root {
+  --chart-grid: rgba(148, 163, 184, 0.28);
+  --chart-axis: #64748b;
+  --chart-line: #4f46e5;
+  --chart-cyan: #0891b2;
+  --chart-slate: #64748b;
+  --chart-amber: #d97706;
+}
+[data-theme="dark"] {
+  --chart-grid: rgba(148, 163, 184, 0.2);
+  --chart-axis: #94a3b8;
+  --chart-line: #818cf8;
+  --chart-cyan: #22d3ee;
+  --chart-slate: #94a3b8;
+  --chart-amber: #fbbf24;
+}
+
+.telemetry-page {
+  width: min(100%, 1280px);
+  margin: 0 auto;
+  padding: 4px 0 18px;
+  color: var(--isp-text);
+}
+.telemetry-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--isp-border);
+}
+.telemetry-header h1 {
+  margin: 0;
+  color: var(--isp-text);
+  font-size: clamp(1.25rem, 2vw, 1.6rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+.telemetry-header p {
+  margin: 5px 0 0;
+  color: var(--isp-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+.telemetry-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--isp-accent-border);
+  border-radius: 8px;
+  color: var(--isp-accent-strong);
+  background: var(--isp-accent-glow);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.telemetry-refresh:hover {
+  background: color-mix(in srgb, var(--isp-accent) 16%, transparent);
+  border-color: var(--isp-accent);
+  transform: translateY(-1px);
+}
+.telemetry-refresh:focus-visible {
+  outline: 2px solid var(--isp-accent);
+  outline-offset: 2px;
+}
+.telemetry-card {
+  min-width: 0;
+  border: 1px solid var(--isp-border);
+  border-radius: 11px;
+  background: var(--isp-card);
+  box-shadow: var(--shadow-sm);
+}
+.telemetry-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.telemetry-comparison-card {
+  display: flex;
+  min-height: 160px;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 15px 16px;
+}
+.telemetry-card-label {
+  margin: 0 0 13px;
+  color: var(--isp-text-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.telemetry-card-reading {
+  margin: 0;
+  color: var(--isp-text-muted);
+  font-size: 0.78rem;
+}
+.telemetry-card-reading strong {
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+.telemetry-card-reading--change {
+  margin-top: 5px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.telemetry-change {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.telemetry-change--up {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.2);
+}
+.telemetry-change--down {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.18);
+}
+.telemetry-change--flat {
+  color: var(--isp-text-muted);
+  background: var(--isp-inner-card);
+  border-color: var(--isp-border);
+}
+[data-theme="dark"] .telemetry-change--up { color: #6ee7b7; }
+[data-theme="dark"] .telemetry-change--down { color: #fca5a5; }
+
+.telemetry-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 14px;
+}
+.telemetry-chart-card {
+  display: flex;
+  min-height: 316px;
+  flex-direction: column;
+  padding: 14px 15px 10px;
+  overflow: hidden;
+}
+.telemetry-chart-title {
+  margin: 0 0 8px;
+  color: var(--isp-text);
+  font-size: 0.84rem;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+.telemetry-chart-card .recharts-responsive-container {
+  flex: 1;
+  min-height: 260px;
+}
+.telemetry-tooltip {
+  min-width: 92px;
+  padding: 6px 8px;
+  border: 1px solid var(--isp-border);
+  border-radius: 7px;
+  color: var(--isp-text);
+  background: var(--isp-card);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  font-size: 0.68rem;
+  animation: telemetryTooltipIn 0.14s ease-out;
+}
+.telemetry-tooltip-label {
+  margin: 0 0 3px;
+  color: var(--isp-text-muted);
+  font-weight: 700;
+}
+.telemetry-tooltip-value {
+  margin: 0;
+  color: var(--chart-line);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.telemetry-loading,
+.telemetry-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--isp-text-muted);
+  font-size: 0.78rem;
+}
+@keyframes telemetryTooltipIn {
+  from { opacity: 0; transform: translateY(3px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Unified height and width rules for the primary dashboard and dense forms. */
+.dashboard-kpi-grid,
+.dashboard-stat-grid,
+.reseller-stat-grid,
+.reseller-admin-grid,
+.reseller-forms-grid {
+  align-items: stretch;
+}
+.dashboard-kpi-grid,
+.dashboard-stat-grid {
+  grid-auto-rows: minmax(0, 1fr);
+}
+.dashboard-kpi,
+.dashboard-stat {
+  height: 100%;
+}
+.dashboard-main-grid {
+  align-items: stretch;
+}
+.dashboard-side-stack {
+  height: 100%;
+}
+.reseller-workspace {
+  width: min(100%, 1440px);
+  max-width: 1440px;
+  margin-inline: auto;
+}
+.reseller-workspace > form,
+.reseller-workspace > div,
+.reseller-workspace .reseller-admin-grid > form,
+.reseller-workspace .reseller-forms-grid > form {
+  min-width: 0;
+}
+.reseller-workspace .reseller-admin-grid,
+.reseller-workspace .reseller-forms-grid {
+  grid-template-rows: 1fr;
+}
+
+@media (max-width: 860px) {
+  .telemetry-comparison-grid,
+  .telemetry-charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .telemetry-chart-card {
+    min-height: 300px;
+  }
+}
+@media (max-width: 640px) {
+  .telemetry-page {
+    padding-bottom: 8px;
+  }
+  .telemetry-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .telemetry-refresh {
+    width: fit-content;
+  }
+  .telemetry-comparison-card {
+    min-height: 145px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TINTED CORPORATE DASHBOARD LANGUAGE
+═══════════════════════════════════════════════════════════════════ */
+:root {
+  --isp-bg: #f0f4f8;
+  --isp-header: #ffffff;
+  --isp-section: #ffffff;
+  --isp-card: #ffffff;
+  --isp-inner-card: #f8fafc;
+  --isp-border: #d9e2ec;
+  --isp-border-subtle: #e7edf3;
+  --isp-hover: #eef3f8;
+  --sa-bg: #f0f4f8;
+}
+[data-theme="dark"] {
+  --isp-bg: #0b1329;
+  --isp-header: #111a33;
+  --isp-sidebar: #081025;
+  --isp-section: #1c2541;
+  --isp-card: #1c2541;
+  --isp-inner-card: #162039;
+  --isp-border: #3a506b;
+  --isp-border-subtle: rgba(58, 80, 107, 0.62);
+  --isp-input-bg: #121c36;
+  --isp-input-border: #3a506b;
+  --isp-hover: rgba(58, 80, 107, 0.28);
+  --isp-table-bg: #1c2541;
+  --isp-table-border: rgba(58, 80, 107, 0.72);
+  --sa-bg: #0b1329;
+  --sa-panel: #111a33;
+  --sa-panel-strong: #1c2541;
+  --sa-line: #3a506b;
+}
+[data-theme="dark"] :is(
+  .section-card,
+  .inner-card,
+  .dashboard-kpi,
+  .dashboard-stat,
+  .gateway-strip,
+  .router-filter-bar,
+  .router-card,
+  .dashboard-builder-preview-wrap,
+  .dashboard-builder-preview,
+  .telemetry-card,
+  [style*="var(--isp-card)"],
+  [style*="var(--isp-section)"],
+  [style*="var(--isp-inner-card)"]
+) {
+  --isp-border: #3a506b;
+  --isp-border-subtle: rgba(58, 80, 107, 0.62);
+  --isp-input-bg: #121c36;
+  --isp-input-border: #3a506b;
+  --isp-hover: rgba(58, 80, 107, 0.28);
+  --isp-table-bg: #1c2541;
+  --isp-table-border: rgba(58, 80, 107, 0.72);
+}
+
+/* Operational meaning is carried by a quiet wash and a thin left rail. */
+.dashboard-stat--accent {
+  border-left: 3px solid #06b6d4;
+  background: color-mix(in srgb, #06b6d4 5%, var(--isp-card));
+}
+.dashboard-stat--teal {
+  border-left: 3px solid #10b981;
+  background: color-mix(in srgb, #10b981 5%, var(--isp-card));
+}
+.dashboard-kpi--amber {
+  border-left: 3px solid #f59e0b;
+  background: color-mix(in srgb, #f59e0b 4%, var(--isp-card));
+}
+.dashboard-error {
+  border-left: 3px solid #f59e0b;
+  background: color-mix(in srgb, #f59e0b 6%, var(--isp-card));
+}
+.reseller-workspace [style*="var(--isp-card)"] {
+  border-left: 3px solid #8b5cf6 !important;
+  background: color-mix(in srgb, #8b5cf6 4%, var(--isp-card)) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DENSE INTERNET PLANS LIST
+═══════════════════════════════════════════════════════════════════ */
+.plans-page {
+  color: var(--isp-text);
+}
+.plans-page > .plans-toolbar {
+  position: sticky;
+  top: 72px;
+  z-index: 10;
+}
+.plans-page :is(input, select):not([type="radio"]):not([type="checkbox"]) {
+  background: var(--isp-inner-card) !important;
+  border-color: var(--isp-border) !important;
+  color: var(--isp-text) !important;
+}
+.plans-page :is(input, select):focus {
+  border-color: var(--isp-accent) !important;
+  box-shadow: 0 0 0 3px var(--isp-accent-glow);
+  outline: none;
+}
+.plans-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--isp-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--isp-bg) 92%, transparent);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+  backdrop-filter: blur(10px);
+}
+.plans-search {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--isp-border);
+  border-radius: 7px;
+  color: var(--isp-text-muted);
+  background: var(--isp-inner-card);
+}
+.plans-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 0.75rem;
+}
+.plans-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--isp-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.plans-filter select {
+  min-height: 34px;
+  padding: 0 28px 0 9px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 0.73rem;
+}
+.plans-sort-button,
+.plans-direction-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--isp-border);
+  border-radius: 7px;
+  color: var(--isp-text-muted);
+  background: var(--isp-inner-card);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.plans-sort-button:hover,
+.plans-direction-button:hover {
+  color: var(--isp-accent-strong);
+  border-color: var(--isp-accent-border);
+  background: var(--isp-accent-glow);
+}
+.plans-result-count {
+  padding: 0 5px;
+  color: var(--isp-text-sub);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+.plans-list {
+  overflow-x: auto;
+  border: 1px solid var(--isp-border);
+  border-radius: 10px;
+  background: var(--isp-card);
+  box-shadow: var(--shadow-sm);
+}
+.plans-list-header,
+.plans-row {
+  display: grid;
+  grid-template-columns: 98px minmax(180px, 1.7fr) minmax(110px, 0.85fr) minmax(100px, 0.8fr) minmax(92px, 0.8fr) 78px 70px;
+  align-items: center;
+  column-gap: 10px;
+  min-width: 760px;
+  padding: 0 12px;
+}
+.plans-list-header {
+  min-height: 31px;
+  color: var(--isp-text-muted);
+  background: var(--isp-inner-card);
+  border-bottom: 1px solid var(--isp-border);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.plans-row {
+  min-height: 47px;
+  border-bottom: 1px solid var(--isp-border-subtle);
+  border-left: 3px solid transparent;
+  color: var(--isp-text-muted);
+  font-size: 0.75rem;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.plans-row:last-child {
+  border-bottom: 0;
+}
+.plans-row:nth-child(even) {
+  background: var(--isp-inner-card);
+}
+.plans-row:hover {
+  background: var(--isp-hover);
+}
+.plans-row--pppoe {
+  border-left-color: #06b6d4;
+}
+.plans-row--hotspot {
+  border-left-color: #10b981;
+}
+.plans-row--other {
+  border-left-color: #f59e0b;
+}
+.plans-service-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 0.61rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.plans-service-badge--pppoe {
+  color: #0e7490;
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.24);
+}
+.plans-service-badge--hotspot {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.24);
+}
+.plans-service-badge--other {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.22);
+}
+[data-theme="dark"] .plans-service-badge--pppoe { color: #67e8f9; }
+[data-theme="dark"] .plans-service-badge--hotspot { color: #6ee7b7; }
+[data-theme="dark"] .plans-service-badge--other { color: #fcd34d; }
+.plans-row-name {
+  overflow: hidden;
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plans-row-speed {
+  color: var(--isp-accent-strong);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.plans-row-price {
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.plans-row-validity {
+  color: var(--isp-text-muted);
+  white-space: nowrap;
+}
+.plans-actions-heading {
+  text-align: right;
+}
+.plans-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.plans-row:hover .plans-row-actions,
+.plans-row:focus-within .plans-row-actions {
+  opacity: 1;
+}
+.plans-row-actions button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--isp-border);
+  border-radius: 6px;
+  color: var(--isp-text-muted);
+  background: var(--isp-card);
+  cursor: pointer;
+}
+.plans-row-actions button:first-child:hover {
+  color: var(--isp-accent-strong);
+  border-color: var(--isp-accent-border);
+  background: var(--isp-accent-glow);
+}
+.plans-row-actions button:last-child:hover {
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.08);
+}
+.plans-row-actions button:focus-visible,
+.plans-sort-button:focus-visible,
+.plans-direction-button:focus-visible {
+  outline: 2px solid var(--isp-accent);
+  outline-offset: 2px;
+}
+.plans-empty {
+  min-width: 760px;
+  padding: 24px 14px;
+  color: var(--isp-text-muted);
+  text-align: center;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 760px) {
+  .plans-page > .plans-toolbar {
+    top: 62px;
+  }
+  .plans-toolbar {
+    grid-template-columns: 1fr auto;
+  }
+  .plans-search {
+    grid-column: 1 / -1;
+  }
+  .plans-result-count {
+    text-align: right;
   }
 }

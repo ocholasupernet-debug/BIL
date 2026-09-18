@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database } from "lucide-react";
+import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database, Search } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
 
@@ -17,7 +17,7 @@ function useTypeParam() {
 /* ─── Supabase query helpers ─── */
 async function fetchPlans(type?: string): Promise<DbPlan[]> {
   let q = supabase.from("isp_plans").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: true });
-  if (type && type !== "bandwidth") q = q.eq("type", type);
+  if (type && !["bandwidth", "all"].includes(type)) q = q.eq("type", type);
   const { data, error } = await q;
   if (error) throw error;
   return data ?? [];
@@ -772,7 +772,7 @@ function BandwidthPlansTab() {
    MAIN PLANS PAGE
 ═══════════════════════════════════════════════════════════ */
 const TAB_LABELS: Record<string, string> = {
-  hotspot: "Hotspot Plans", pppoe: "PPPoE Plans", static: "Static IP Plans",
+  all: "All Plans", hotspot: "Hotspot Plans", pppoe: "PPPoE Plans", static: "Static IP Plans",
   bandwidth: "Bandwidth Plans", trials: "Hotspot Trials", fup: "FUP",
 };
 
@@ -783,6 +783,10 @@ export default function Plans() {
   const [editingPlan,  setEditingPlan]  = useState<DbPlan | null>(null);
   const [deletingPlan, setDeletingPlan] = useState<DbPlan | null>(null);
   const [showAddForm,  setShowAddForm]  = useState(false);
+  const [planSearch, setPlanSearch] = useState("");
+  const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot">("all");
+  const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
+  const [sortAscending, setSortAscending] = useState(true);
 
   const isBandwidth   = activeTab === "bandwidth";
   const isServicePlan = !isBandwidth;
@@ -810,6 +814,24 @@ export default function Plans() {
     staleTime: 30_000,
   });
 
+  const visiblePlans = useMemo(() => {
+    const query = planSearch.trim().toLowerCase();
+    const filtered = plans.filter((plan) => {
+      const normalizedType = plan.type === "pppoe" ? "pppoe" : plan.type === "hotspot" || plan.type === "trials" ? "hotspot" : "other";
+      const matchesService = serviceFilter === "all" || normalizedType === serviceFilter;
+      const matchesSearch = !query || [plan.name, plan.type, String(plan.speed_down), String(plan.speed_up), String(plan.price)]
+        .some((value) => value.toLowerCase().includes(query));
+      return matchesService && matchesSearch;
+    });
+
+    return [...filtered].sort((a, b) => {
+      const direction = sortAscending ? 1 : -1;
+      if (sortBy === "price") return (Number(a.price ?? 0) - Number(b.price ?? 0)) * direction;
+      if (sortBy === "speed") return (Number(a.speed_down ?? 0) - Number(b.speed_down ?? 0)) * direction;
+      return a.name.localeCompare(b.name) * direction;
+    });
+  }, [planSearch, plans, serviceFilter, sortAscending, sortBy]);
+
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
       const { error } = await supabase.from("isp_plans").delete().eq("id", id);
@@ -835,7 +857,7 @@ export default function Plans() {
           onCancel={() => setDeletingPlan(null)} />
       )}
 
-      <div className="space-y-6">
+      <div className="plans-page space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <h1 className="text-2xl font-bold text-foreground">{TAB_LABELS[activeTab] ?? "Plans"}</h1>
@@ -850,6 +872,7 @@ export default function Plans() {
         {/* Tabs */}
         <div className="flex overflow-x-auto pb-2 gap-2 hide-scrollbar">
           {[
+            { id: "all",       label: "All Plans" },
             { id: "hotspot",   label: "Hotspot Plans" },
             { id: "pppoe",     label: "PPPoE Plans" },
             { id: "static",    label: "Static IP Plans" },
@@ -894,6 +917,53 @@ export default function Plans() {
           />
         )}
 
+        {isServicePlan && !showingForm && (
+          <div className="plans-toolbar" role="region" aria-label="Plan list filters">
+            <label className="plans-search">
+              <Search size={15} aria-hidden="true" />
+              <span className="sr-only">Search plans</span>
+              <input
+                value={planSearch}
+                onChange={(event) => setPlanSearch(event.target.value)}
+                placeholder="Search plans, speed, or price"
+                type="search"
+              />
+            </label>
+            <label className="plans-filter">
+              <span>Service</span>
+              <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot")}>
+                <option value="all">All services</option>
+                <option value="pppoe">PPPoE</option>
+                <option value="hotspot">Hotspot</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="plans-sort-button"
+              onClick={() => {
+                if (sortBy === "name") setSortBy("price");
+                else if (sortBy === "price") setSortBy("speed");
+                else setSortBy("name");
+                setSortAscending(true);
+              }}
+              title="Cycle plan sort order"
+            >
+              {sortAscending ? <ArrowDown size={14} aria-hidden="true" /> : <ArrowUp size={14} aria-hidden="true" />}
+              Sort: {sortBy === "name" ? "Name" : sortBy === "price" ? "Price" : "Speed"}
+            </button>
+            <button
+              type="button"
+              className="plans-direction-button"
+              onClick={() => setSortAscending((ascending) => !ascending)}
+              aria-label={`Sort ${sortAscending ? "descending" : "ascending"}`}
+              title={`Sort ${sortAscending ? "descending" : "ascending"}`}
+            >
+              {sortAscending ? "A–Z" : "Z–A"}
+            </button>
+            <span className="plans-result-count">{visiblePlans.length} of {plans.length}</span>
+          </div>
+        )}
+
         {/* Add / Edit form */}
         {isServicePlan && showingForm && (
           <AddServicePlanForm
@@ -918,72 +988,32 @@ export default function Plans() {
                 <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> Loading plans…
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {plans.map((p) => (
-                  <div key={p.id} className="bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/50 transition-colors group">
-                    <div className="h-1 bg-gradient-to-r from-primary to-blue-500" />
-                    <div className="p-5 border-b border-border flex justify-between items-center bg-background/50">
-                      <h3 className="font-bold text-foreground text-lg">{p.name}</h3>
-                      <Badge variant={p.is_active ? "success" : "default"}>{p.is_active ? "Active" : "Inactive"}</Badge>
+              <div className="plans-list" role="table" aria-label={`${TAB_LABELS[activeTab] ?? "Plans"} list`}>
+                <div className="plans-list-header" role="row">
+                  <span>Service</span><span>Plan</span><span>Speed</span><span>Price</span><span>Validity</span><span>Status</span><span className="plans-actions-heading">Actions</span>
+                </div>
+                {visiblePlans.map((p) => {
+                  const serviceType = p.type === "pppoe" ? "pppoe" : p.type === "hotspot" || p.type === "trials" ? "hotspot" : "other";
+                  const serviceLabel = serviceType === "pppoe" ? "PPPoE" : serviceType === "hotspot" ? "Hotspot" : p.type;
+                  const speed = p.speed_down === p.speed_up ? `${p.speed_down} Mbps` : `${p.speed_down}/${p.speed_up} Mbps`;
+                  return (
+                    <div className={`plans-row plans-row--${serviceType}`} key={p.id} role="row">
+                      <span className={`plans-service-badge plans-service-badge--${serviceType}`}>{serviceLabel}</span>
+                      <span className="plans-row-name" title={p.name}>{p.name}</span>
+                      <span className="plans-row-speed">{speed}</span>
+                      <span className="plans-row-price">{getCurrencySymbol()} {Number(p.price ?? 0).toLocaleString()}</span>
+                      <span className="plans-row-validity">{planValidity(p)}</span>
+                      <span><Badge variant={p.is_active ? "success" : "default"}>{p.is_active ? "Active" : "Inactive"}</Badge></span>
+                      <span className="plans-row-actions">
+                        <button type="button" onClick={() => { setEditingPlan(p); setShowAddForm(false); }} aria-label={`Edit ${p.name}`} title={`Edit ${p.name}`}><Edit size={13} /></button>
+                        <button type="button" onClick={() => setDeletingPlan(p)} aria-label={`Delete ${p.name}`} title={`Delete ${p.name}`}><Trash size={13} /></button>
+                      </span>
                     </div>
-                    <div className="p-6">
-                      <div className="flex items-end gap-2 mb-6">
-                        <span className="text-3xl font-black text-foreground">{getCurrencySymbol()} {p.price}</span>
-                        <span className="text-sm font-medium text-muted-foreground mb-1">/ {planValidity(p)}</span>
-                      </div>
-                      <div className="space-y-3 mb-8">
-                        <div className="flex items-center gap-3 text-sm text-slate-300">
-                          <Wifi className="w-4 h-4 text-primary" />
-                          {planSpeed(p)}
-                          {p.burst_limit && <Badge variant="violet" className="ml-auto">Burst</Badge>}
-                        </div>
-                        <div className="flex items-center gap-3 text-sm text-slate-300">
-                          <Activity className="w-4 h-4 text-primary" />
-                          Data: {p.data_limit_mb
-                            ? p.data_limit_mb >= 1_000_000
-                              ? `${(p.data_limit_mb / 1_000_000).toLocaleString()} TB`
-                              : p.data_limit_mb >= 1_000
-                              ? `${(p.data_limit_mb / 1_000).toLocaleString()} GB`
-                              : `${p.data_limit_mb.toLocaleString()} MB`
-                            : "Unlimited"}
-                        </div>
-                        <div className="pt-4 border-t border-white/5 flex flex-col gap-1.5">
-                          <div className="flex items-center gap-1.5 text-xs" style={{ color: (p.shared_users ?? 1) > 1 ? "#4ade80" : "var(--isp-text-muted)" }}>
-                            <Share2 size={11} />
-                            {(p.shared_users ?? 1) > 1
-                              ? `Sharing allowed — up to ${p.shared_users} devices`
-                              : "No sharing — 1 device only"}
-                          </div>
-                          {p.router_id && (
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Wifi size={11} />
-                              {routers.find(r => r.id === p.router_id)?.name ?? `Router #${p.router_id}`}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex gap-3">
-                        <button onClick={() => { setEditingPlan(p); setShowAddForm(false); }}
-                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-1.5"
-                          style={{ background: "rgba(37,99,235,0.08)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)" }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(37,99,235,0.16)"; }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(37,99,235,0.08)"; }}>
-                          <Edit size={13} /> Edit
-                        </button>
-                        <button onClick={() => setDeletingPlan(p)}
-                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-1.5"
-                          style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171" }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.16)"; }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.08)"; }}>
-                          <Trash size={13} /> Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {plans.length === 0 && (
-                  <div className="col-span-full text-center py-16 text-muted-foreground text-sm">
-                    No {TAB_LABELS[activeTab]?.toLowerCase()} yet. Click <strong>Add Plan</strong> to create one.
+                  );
+                })}
+                {visiblePlans.length === 0 && (
+                  <div className="plans-empty">
+                    No matching plans. Adjust the search or service filter, or click <strong>Add Plan</strong> to create one.
                   </div>
                 )}
               </div>

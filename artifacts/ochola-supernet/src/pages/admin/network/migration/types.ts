@@ -70,6 +70,23 @@ export interface DryRunResponse {
   approvedItemIds?: string[];
 }
 
+export interface MigrationPortOption {
+  id: number;
+  interface_name: string;
+  assigned_reseller_id?: number | null;
+  reseller_id?: number | null;
+  reseller_bandwidth_cap?: number | null;
+  bandwidth_cap_mbps?: number | null;
+}
+
+export interface MigrationOptions {
+  sourcePorts: { id: number; interfaceName: string; resellerId?: number | null; bandwidthCapMbps?: number | null }[];
+  sourceInterfaces: string[];
+  targetPorts: MigrationPortOption[];
+  targetInterfaces: { name: string; type: string; running: boolean; disabled: boolean }[];
+  assetCounts: { plans: number; pppoe: number; hotspot: number };
+}
+
 export interface ReportResponse {
   success: boolean;
   importedItems: number;

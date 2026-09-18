@@ -28,6 +28,14 @@ import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
+type InstallMode = "direct" | "coexist" | "takeover";
+function normalizeInstallMode(value: unknown): InstallMode {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "greenfield" || mode === "direct" || mode === "direct-installation") return "direct";
+  if (mode === "zero-touch" || mode === "zero_touch" || mode === "ztp_takeover" || mode === "takeover" || mode === "router-takeover") return "takeover";
+  return "coexist";
+}
+
 function buildCreds(body: {
   host: string;
   username: string;
@@ -136,7 +144,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
     port?: number;
     routerId?: number;
     adminId?: number;
-    installationMode?: "coexist" | "takeover";
+    installationMode?: "direct" | "coexist" | "takeover" | "greenfield" | "brownfield" | "zero-touch";
   };
 
   try {
@@ -146,7 +154,7 @@ router.post("/admin/router/self-install/ports", requireAdmin(), async (req, res)
        adminId: authenticatedAdminId(req, adminId),
     });
     const layout = await fetchBridgePortLayout(creds);
-    const coexistenceBridge = installationMode === "coexist" && routerId
+    const coexistenceBridge = normalizeInstallMode(installationMode) === "coexist" && routerId
       ? coexistenceBridgeName(Number(routerId))
       : null;
     res.json({ ok: true, ...layout, coexistenceBridge });
@@ -176,7 +184,7 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
     port?: number;
     routerId?: number;
     adminId?: number;
-    installationMode?: "coexist" | "takeover";
+    installationMode?: "direct" | "coexist" | "takeover" | "greenfield" | "brownfield" | "zero-touch";
   };
 
   if (!bridge) {
@@ -198,7 +206,8 @@ router.post("/admin/router/self-install/bridge-assign", requireAdmin(), async (r
   const creds = resolved.creds;
   const add = Array.isArray(addPorts) ? addPorts : [];
   const remove = Array.isArray(removePorts) ? removePorts : [];
-  if (installationMode !== "takeover") {
+  const normalizedMode = normalizeInstallMode(installationMode);
+  if (normalizedMode === "coexist") {
     if (!routerId) {
       res.status(400).json({ ok: false, error: "Coexistence port changes require a router-scoped request.", logs: ["❌ Router-scoped coexistence request required"] });
       return;

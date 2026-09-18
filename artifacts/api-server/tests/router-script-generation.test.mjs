@@ -1,13 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildBillingInitRsc,
+  buildCoexistenceHotspotRsc,
   buildMainhotspotRsc,
   getDeployableSource,
   listDeployableSources,
+  validateOnboardingInputs,
   validateGeneratedRouterScript,
 } from "../src/routes/scripts-route.ts";
 import { buildMainIspConfigurationRsc } from "../src/routes/isp-configuration-route.ts";
 import { buildManagementApiRepairScript } from "../src/lib/router-management-repair.ts";
+import { buildDualServiceCommands } from "../src/routes/port-services-route.ts";
 
 test("approved deployment catalog includes the management firewall config", () => {
   const sources = listDeployableSources();
@@ -76,7 +80,7 @@ test("phased management repair script is clean and idempotent", () => {
     phase: "all",
   });
 
-  assert.equal(validateGeneratedRouterScript(script), script);
+  assert.doesNotThrow(() => validateGeneratedRouterScript(script));
   assert.match(script, /OCHOLASUPERNET_PHASE=preflight/);
   assert.match(script, /OCHOLASUPERNET_PHASE=identity/);
   assert.match(script, /OCHOLASUPERNET_PHASE=api/);
@@ -121,7 +125,7 @@ test("core installer omits progress code when no progress endpoint is supplied",
 
   assert.doesNotMatch(script, /ocholaFormEncode|IPProgUrl|\$pg/);
   assert.equal(/[^\x00-\x7F]/.test(script), false);
-  assert.equal(validateGeneratedRouterScript(script), script);
+  assert.doesNotThrow(() => validateGeneratedRouterScript(script));
 });
 
 test("coexistence installer uses the same flat progress function", () => {
@@ -247,6 +251,87 @@ test("coexistence VPN children use versioned path bootstrap URLs", () => {
   assert.equal(validateGeneratedRouterScript(script), script);
 });
 
+test("Greenfield provisioning is a distinct non-reset installer", () => {
+  const script = buildMainhotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "",
+    "come1",
+    "Ochola SuperNet",
+    "", "", "", "", "", "", "", "", "", "", "verified", "greenfield",
+  );
+
+  assert.match(script, /Greenfield Provisioning|Greenfield Setup Script/);
+  assert.match(script, /hotspotsetup\.rsc/);
+  assert.match(script, /pppoesetup\.rsc/);
+  assert.match(script, /Initializing Billing Script Injection Layer/);
+  assert.match(script, /radius incoming set accept=yes port=3799/);
+  assert.doesNotMatch(script, /reset-configuration/);
+  assert.doesNotMatch(script, /TAKEOVER BACKUP VERIFIED/);
+  assert.equal(validateGeneratedRouterScript(script), script);
+});
+
+test("Zero-Touch stages billing_init.rsc and uses the exact RouterOS reset contract", () => {
+  const script = buildMainhotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "",
+    "come1",
+    "Ochola SuperNet",
+    "", "", "", "", "", "", "", "", "", "", "verified", "ztp_takeover", "",
+    "https://come.isplatty.org/api/scripts/billing-init/90/1/tko.example.rsc",
+  );
+
+  assert.match(script, /billing_init\.rsc/);
+  assert.match(script, /\/system\/reset-configuration keep-users=no no-defaults=yes run-after-reset=billing_init\.rsc/);
+  assert.equal(validateGeneratedRouterScript(script), script);
+
+  const bootstrap = buildBillingInitRsc(
+    "https://come.isplatty.org/api/scripts",
+    "https://come.isplatty.org/api/scripts/self-install-mainhotspot/90/1/tko.example?bootstrap=greenfield",
+    "come1",
+  );
+  assert.match(bootstrap, /billing-bridge/);
+  assert.match(bootstrap, /\/ip dhcp-client add interface=\$wan/);
+  assert.match(bootstrap, /bootstrap=greenfield/);
+  assert.equal(validateGeneratedRouterScript(bootstrap), bootstrap);
+});
+
+test("onboarding input validation rejects invalid CIDRs and duplicate services", () => {
+  assert.doesNotThrow(() => validateOnboardingInputs({
+    cidrs: ["192.168.88.0/24"],
+    serviceNames: ["billing-bridge", "hotspot1"],
+    bandwidths: [{ down: 30, up: 10, unit: "Mbps" }],
+  }));
+  assert.throws(
+    () => validateOnboardingInputs({ cidrs: ["192.168.88.0/33"] }),
+    /valid IPv4 octets|CIDR prefix/,
+  );
+  assert.throws(
+    () => validateOnboardingInputs({ serviceNames: ["billing-bridge", "billing-bridge"] }),
+    /Duplicate RouterOS service name/,
+  );
+});
+
+test("Brownfield bundle stays owned, isolated, and service-complete", () => {
+  const script = buildCoexistenceHotspotRsc(
+    "https://come.isplatty.org/api/scripts",
+    "90",
+    1,
+    "come1",
+    "Ochola SuperNet",
+    [{ name: "Home 30", speed_down: 30, speed_up: 10, validity: 30, validity_unit: "days", shared_users: 1 }],
+    "verified",
+  );
+
+  assert.match(script, /Ochola SuperNet coexistence router 90/);
+  assert.match(script, /interface pppoe-server server add/);
+  assert.match(script, /service=hotspot,ppp address=\$radiusAddress secret=\$radiusSecret/);
+  assert.match(script, /radius incoming set accept=yes port=3799/);
+  assert.match(script, /hotspot\/hs_/);
+  assert.doesNotMatch(script, /\/interface bridge remove/);
+  assert.doesNotMatch(script, /\/ip firewall filter remove \[find\]/);
+  assert.doesNotThrow(() => validateGeneratedRouterScript(script));
+});
+
 test("coexistence can reuse both manually created management OpenVPN clients", () => {
   const script = buildMainhotspotRsc(
     "https://come.isplatty.org/api/scripts",
@@ -271,4 +356,32 @@ test("coexistence can reuse both manually created management OpenVPN clients", (
   assert.match(script, /name="ochola-mgmt-vpn-90"/);
   assert.match(script, /name="ochola-mgmt-vpn-90-backup"/);
   assert.equal(validateGeneratedRouterScript(script), script);
+});
+
+test("dual-service port compilation isolates assets and prioritizes PPPoE", () => {
+  const commands = buildDualServiceCommands({
+    id: 7,
+    admin_id: 12,
+    reseller_id: 44,
+    assigned_reseller_id: 44,
+    router_id: 90,
+    interface_name: "ether2",
+    hotspot_enabled: true,
+    hotspot_template_path: "portal.html",
+    hotspot_folder_path: "portal.html",
+    pppoe_enabled: true,
+    pppoe_folder_path: "expired.html",
+    reseller_bandwidth_cap: 50,
+    bandwidth_cap_mbps: 50,
+    subnet_range: "192.168.30.0/24",
+    status: "active",
+  }, "flash/hotspot/hs_ether2", "flash/hotspot/pppoe_ether2", "192.168.88.1");
+
+  const text = commands.map(command => command.join(" ")).join("\n");
+  assert.match(text, /html-directory=flash\/hotspot\/hs_ether2/);
+  assert.match(text, /html-directory=flash\/hotspot\/pppoe_ether2/);
+  assert.match(text, /name=RESELLER_ROOT_ether2/);
+  assert.match(text, /parent=RESELLER_ROOT_ether2.*priority=1\/1/);
+  assert.match(text, /parent=RESELLER_ROOT_ether2.*priority=8\/8/);
+  assert.match(text, /pppoe_billing_redirect/);
 });

@@ -67,7 +67,7 @@ function fmtDay(key: string) {
   return `${d}/${m}`;
 }
 
-const PIE_COLORS = ["var(--isp-accent)", "#4ade80", "#f59e0b", "#f87171", "var(--isp-accent)", "#fb923c", "#34d399"];
+const PIE_COLORS = ["var(--chart-line)", "var(--chart-cyan)", "var(--chart-slate)", "var(--chart-amber)", "var(--isp-accent)", "#64748b", "#0ea5e9"];
 
 /* ─── Comparison card ─── */
 function CompareCard({ title, current, previous, unit = "Ksh" }: {
@@ -81,34 +81,20 @@ function CompareCard({ title, current, previous, unit = "Ksh" }: {
     : ((current - previous) / previous) * 100;
   const isUp = pct > 0;
   const isDown = pct < 0;
-  const CARD: React.CSSProperties = {
-    background: "rgba(255,255,255,0.03)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 16,
-    padding: "28px 32px",
-    flex: 1,
-    minWidth: 220,
-  };
   return (
-    <div style={CARD}>
-      <p style={{ color: "#94a3b8", fontSize: 13, fontWeight: 600, marginBottom: 16, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+    <div className="telemetry-card telemetry-comparison-card">
+      <p className="telemetry-card-label">
         {title}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <p style={{ color: "#e2e8f0", fontSize: 13 }}>
-          Current: <strong style={{ color: "#f1f5f9" }}>{unit} {current.toLocaleString()}</strong>
+        <p className="telemetry-card-reading">
+          Current: <strong>{unit} {current.toLocaleString()}</strong>
         </p>
-        <p style={{ color: "#e2e8f0", fontSize: 13 }}>
-          Previous: <strong style={{ color: "#f1f5f9" }}>{unit} {previous.toLocaleString()}</strong>
+        <p className="telemetry-card-reading">
+          Previous: <strong>{unit} {previous.toLocaleString()}</strong>
         </p>
-        <p style={{ color: "#e2e8f0", fontSize: 13, marginTop: 4 }}>Change:</p>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "4px 10px", borderRadius: 999, width: "fit-content",
-          background: isUp ? "rgba(74,222,128,0.12)" : isDown ? "rgba(248,113,113,0.12)" : "rgba(148,163,184,0.1)",
-          color: isUp ? "#4ade80" : isDown ? "#f87171" : "#94a3b8",
-          fontSize: 13, fontWeight: 700,
-        }}>
+        <p className="telemetry-card-reading telemetry-card-reading--change">Change:</p>
+        <div className={`telemetry-change ${isUp ? "telemetry-change--up" : isDown ? "telemetry-change--down" : "telemetry-change--flat"}`}>
           {isUp ? <TrendingUp size={14} /> : isDown ? <TrendingDown size={14} /> : <Minus size={14} />}
           {Math.abs(pct).toFixed(2)}% {isUp ? "Increase" : isDown ? "Decrease" : "No change"}
         </div>
@@ -120,13 +106,8 @@ function CompareCard({ title, current, previous, unit = "Ksh" }: {
 /* ─── Chart card wrapper ─── */
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{
-      background: "rgba(255,255,255,0.03)",
-      border: "1px solid rgba(255,255,255,0.08)",
-      borderRadius: 16,
-      padding: "24px 28px",
-    }}>
-      <h3 style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 16, marginBottom: 20 }}>{title}</h3>
+    <div className="telemetry-card telemetry-chart-card">
+      <h3 className="telemetry-chart-title">{title}</h3>
       {children}
     </div>
   );
@@ -140,17 +121,10 @@ function ChartTooltip({ active, payload, label }: {
 }) {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{
-      background: "#1e293b",
-      border: "1px solid rgba(255,255,255,0.12)",
-      borderRadius: 10,
-      padding: "10px 16px",
-      color: "#f1f5f9",
-      fontSize: 13,
-    }}>
-      <p style={{ marginBottom: 4, color: "#94a3b8", fontWeight: 600 }}>{label}</p>
+    <div className="telemetry-tooltip">
+      <p className="telemetry-tooltip-label">{label}</p>
       {payload.map((p, i) => (
-        <p key={i} style={{ color: "#4ade80" }}>Ksh {Number(p.value).toLocaleString()}</p>
+        <p key={i} className="telemetry-tooltip-value">Ksh {Number(p.value).toLocaleString()}</p>
       ))}
     </div>
   );
@@ -278,41 +252,34 @@ export default function TransactionGraphs() {
 
   return (
     <AdminLayout>
-      <div style={{ padding: "32px 40px", maxWidth: 1280, margin: "0 auto" }}>
+      <div className="telemetry-page">
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 32 }}>
+        <div className="telemetry-header">
           <div>
-            <h1 style={{ color: "#f1f5f9", fontWeight: 800, fontSize: 26, margin: 0 }}>
-              Transactions Overview
-            </h1>
-            <p style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>As of {nowStr}</p>
+            <h1>Transactions Overview</h1>
+            <p>As of {nowStr}</p>
           </div>
           <button
             onClick={() => refetch()}
-            style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "10px 18px", borderRadius: 10,
-              background: "rgba(37,99,235,0.1)", border: "1px solid var(--isp-accent-border)",
-              color: "var(--isp-accent)", fontSize: 13, fontWeight: 600, cursor: "pointer",
-            }}
+            className="telemetry-refresh"
           >
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
 
         {loadingTxns ? (
-          <div style={{ color: "#64748b", textAlign: "center", padding: "60px 0" }}>Loading transactions…</div>
+          <div className="telemetry-loading">Loading transactions…</div>
         ) : (
           <>
             {/* Comparison cards */}
-            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 32 }}>
+            <div className="telemetry-comparison-grid">
               <CompareCard title="Today vs Yesterday"        current={todayTotal}     previous={yesterdayTotal} />
               <CompareCard title="This Week vs Last Week"    current={thisWeekTotal}  previous={lastWeekTotal} />
               <CompareCard title="This Month vs Last Month"  current={thisMonthTotal} previous={lastMonthTotal} />
             </div>
 
             {/* Charts grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 24 }}>
+            <div className="telemetry-charts-grid">
 
               {/* Daily */}
               <ChartCard title="Daily Transactions">
@@ -324,12 +291,11 @@ export default function TransactionGraphs() {
                         <stop offset="95%" stopColor="var(--isp-accent)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} interval={4} />
-                    <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={60} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--chart-axis)", fontSize: 10 }} axisLine={false} tickLine={false} interval={4} />
+                    <YAxis tick={{ fill: "var(--chart-axis)", fontSize: 10 }} width={46} axisLine={false} tickLine={false} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
-                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="var(--isp-accent)" fill="url(#gBlue)" strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="var(--chart-line)" fill="url(#gBlue)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, strokeWidth: 1 }} />
                   </AreaChart>
                 </ResponsiveContainer>
               </ChartCard>
@@ -338,12 +304,11 @@ export default function TransactionGraphs() {
               <ChartCard title="Weekly Transactions">
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={weeklyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
-                    <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={60} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--chart-axis)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: "var(--chart-axis)", fontSize: 10 }} width={46} axisLine={false} tickLine={false} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
-                    <Bar dataKey="total" name="Total Amount" fill="#4ade80" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="total" name="Total Amount" fill="var(--chart-cyan)" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
@@ -358,12 +323,11 @@ export default function TransactionGraphs() {
                         <stop offset="95%" stopColor="var(--isp-accent)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} />
-                    <YAxis tick={{ fill: "#64748b", fontSize: 10 }} width={60} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--chart-axis)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: "var(--chart-axis)", fontSize: 10 }} width={46} axisLine={false} tickLine={false} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
-                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="var(--isp-accent)" fill="url(#gCyan)" strokeWidth={2} dot={false} />
+                    <Area type="monotone" dataKey="total" name="Total Amount" stroke="var(--chart-line)" fill="url(#gCyan)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, strokeWidth: 1 }} />
                   </AreaChart>
                 </ResponsiveContainer>
               </ChartCard>
@@ -371,7 +335,7 @@ export default function TransactionGraphs() {
               {/* By Router — current month */}
               <ChartCard title="Transactions by Router (Current Month)">
                 {routerPieData.length === 0 ? (
-                  <div style={{ color: "#64748b", textAlign: "center", paddingTop: 80, fontSize: 13 }}>
+                  <div className="telemetry-empty">
                     No data for this month yet.
                   </div>
                 ) : (
@@ -384,7 +348,7 @@ export default function TransactionGraphs() {
                         paddingAngle={3}
                         dataKey="value"
                         label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                        labelLine={{ stroke: "#475569", strokeWidth: 1 }}
+                        labelLine={{ stroke: "var(--chart-grid)", strokeWidth: 1 }}
                       >
                         {routerPieData.map((_, i) => (
                           <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
@@ -392,9 +356,9 @@ export default function TransactionGraphs() {
                       </Pie>
                       <Tooltip
                         formatter={(v: number) => [`Ksh ${v.toLocaleString()}`, "Revenue"]}
-                        contentStyle={{ background: "#1e293b", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#f1f5f9" }}
+                        contentStyle={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 7, color: "var(--isp-text)", padding: "6px 9px", fontSize: 12 }}
                       />
-                      <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
+                      <Legend wrapperStyle={{ color: "var(--chart-axis)", fontSize: 11, paddingTop: 4 }} />
                     </PieChart>
                   </ResponsiveContainer>
                 )}
