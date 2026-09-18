@@ -35,6 +35,7 @@ import adminSettingsRouter from "./admin-settings-route.js";
 import ispConfigurationRouter from "./isp-configuration-route.js";
 import resellerRouter from "./reseller-route.js";
 import portServicesRouter from "./port-services-route.js";
+import routerScriptsCompilerRouter from "./router-scripts-route.js";
 
 const router: IRouter = Router();
 
@@ -74,5 +75,6 @@ router.use(dashboardPreferencesRouter);
   router.use(ispConfigurationRouter);
   router.use(resellerRouter);
   router.use(portServicesRouter);
+  router.use(routerScriptsCompilerRouter);
 
 export default router;
