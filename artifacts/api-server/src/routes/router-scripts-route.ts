@@ -1,5 +1,11 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { compileRouterScript, type RouterScriptCompilerOptions, type ScriptProfile } from "../lib/script-compiler.js";
+import {
+  compileCoreBootstrap,
+  compileRouterScript,
+  type CoreBootstrapOptions,
+  type RouterScriptCompilerOptions,
+  type ScriptProfile,
+} from "../lib/script-compiler.js";
 import { requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
@@ -49,6 +55,27 @@ router.post("/router-scripts/compile", requireAdmin(), (req: Request, res: Respo
     res.status(400).json({
       ok: false,
       error: error instanceof Error ? error.message : "Could not compile RouterOS script.",
+    });
+  }
+});
+
+router.post("/router-scripts/core-bootstrap", requireAdmin(), (req: Request, res: Response): void => {
+  try {
+    const options = req.body?.options;
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      res.status(400).json({ ok: false, error: "Core bootstrap options are required." });
+      return;
+    }
+    const script = compileCoreBootstrap(options as CoreBootstrapOptions);
+    res
+      .setHeader("Content-Type", "text/plain; charset=utf-8")
+      .setHeader("Content-Disposition", 'attachment; filename="ocholasupernet-core-bootstrap.rsc"')
+      .setHeader("Cache-Control", "no-store")
+      .send(script);
+  } catch (error) {
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not compile the core bootstrap script.",
     });
   }
 });

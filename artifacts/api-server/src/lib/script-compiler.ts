@@ -1,6 +1,26 @@
 import { validateGeneratedRouterScript } from "./router-script-validation.js";
+import {
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME,
+  ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+} from "./router-management-vpn.js";
 
 export type ScriptProfile = "greenfield" | "brownfield";
+
+export interface CoreBootstrapOptions {
+  vpsVpnEndpoint: string;
+  routerUniqueUser: string;
+  routerUniquePassword: string;
+  secureGeneratedApiPassword: string;
+  routerUniqueName: string;
+  websiteDomain: string;
+  routerOsMajor?: 6 | 7;
+  vpnPort?: number;
+  apiUserName?: string;
+  hotspotBridgeName?: string;
+  allowedApiSubnets?: string[];
+}
 
 export interface DualServiceOptions {
   /** Physical interface that carries both the hotspot and PPPoE services. */
@@ -80,6 +100,36 @@ function assertPort(value: number, label: string): number {
     throw new Error(`${label} must be an integer between 1 and 65535.`);
   }
   return value;
+}
+
+function assertHost(value: string, label: string): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized || normalized.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(normalized)) {
+    throw new Error(`${label} must be a hostname or IP address.`);
+  }
+  return normalized;
+}
+
+function assertCredential(value: string, label: string): string {
+  const normalized = String(value ?? "");
+  if (!normalized || /[\u0000-\u001F\u007F]/.test(normalized)) {
+    throw new Error(`${label} must be non-empty and must not contain control characters.`);
+  }
+  return normalized;
+}
+
+function assertHttpsOrigin(value: string, label: string): string {
+  const raw = String(value ?? "").trim();
+  let url: URL;
+  try {
+    url = new URL(raw.includes("://") ? raw : `https://${raw}`);
+  } catch {
+    throw new Error(`${label} must be a valid HTTPS origin.`);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" && url.pathname !== "") {
+    throw new Error(`${label} must use HTTPS without credentials or a path.`);
+  }
+  return url.origin;
 }
 
 function assertSpeed(value: number, label: string): number {
@@ -220,6 +270,96 @@ export class RouterScriptCompiler {
     const validated = validateGeneratedRouterScript(script);
     return `${validated.replace(/\n/g, "\r\n").replace(/\r\r\n/g, "\r\n")}`;
   }
+}
+
+function coreCipher(routerOsMajor: 6 | 7): string {
+  /* RouterOS parses unsupported properties before on-error can recover.
+     Keep the requested AES-256 strength while using each major version's
+     accepted spelling. */
+  return routerOsMajor >= 7 ? "aes256-cbc" : "aes256";
+}
+
+export function compileCoreBootstrap(options: CoreBootstrapOptions): string {
+  const routerOsMajor = options.routerOsMajor ?? 6;
+  const vpnPort = assertPort(
+    options.vpnPort ?? ROUTER_MANAGEMENT_VPN.port,
+    "Management VPN port",
+  );
+  const endpoint = assertHost(options.vpsVpnEndpoint, "VPS VPN endpoint");
+  const routerUser = assertCredential(options.routerUniqueUser, "Router VPN username");
+  const routerPassword = assertCredential(options.routerUniquePassword, "Router VPN password");
+  const apiPassword = assertCredential(options.secureGeneratedApiPassword, "API password");
+  const routerName = assertRouterName(options.routerUniqueName, "Router name");
+  const apiUserName = assertRouterName(options.apiUserName ?? "ocholasupernet_api", "API username");
+  const bridgeName = assertRouterName(options.hotspotBridgeName ?? "br-hotspot", "Hotspot bridge name");
+  const websiteOrigin = assertHttpsOrigin(options.websiteDomain, "Website domain");
+  const heartbeatUrl = `${websiteOrigin}/api/isp/router/heartbeat?rname=${encodeURIComponent(routerName)}`;
+  const allowedSubnets = (options.allowedApiSubnets ?? [
+    ROUTER_MANAGEMENT_VPN.network,
+    ROUTER_MANAGEMENT_VPN_BACKUP.network,
+    "127.0.0.1/32",
+  ]).map((value, index) => {
+    const normalized = value.trim();
+    if (normalized === "127.0.0.1") return "127.0.0.1/32";
+    return assertCidr(normalized, `Allowed API subnet ${index + 1}`);
+  });
+  if (!allowedSubnets.length) throw new Error("At least one allowed API subnet is required.");
+  const allowedSources = allowedSubnets.join(",");
+  const cipher = coreCipher(routerOsMajor);
+  const lines: string[] = [
+    "# OcholaSuperNet Script 1 — Core Bootstrap",
+    `# RouterOS major-version path: ${routerOsMajor}`,
+    "# The complete document is buffered and validated before delivery.",
+    `:log info ${rosString("Initializing OcholaSupernet Core Bootstrap Engine...")}`,
+    ":delay 3s",
+    ":do {",
+    `  :local ovpnIds [/interface ovpn-client find where name=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME)}]`,
+    "  :if ([:len $ovpnIds] = 0) do={",
+    `    /interface ovpn-client add name=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME)} connect-to=${rosString(endpoint)} port=${vpnPort} protocol=tcp user=${rosString(routerUser)} password=${rosString(routerPassword)} profile=default cipher=${cipher} mode=ip comment=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT)} disabled=no`,
+    "  } else={",
+    `    /interface ovpn-client set [:pick $ovpnIds 0] connect-to=${rosString(endpoint)} port=${vpnPort} protocol=tcp user=${rosString(routerUser)} password=${rosString(routerPassword)} profile=default cipher=${cipher} mode=ip comment=${rosString(ROUTER_MANAGEMENT_CLIENT_COMMENT)} disabled=no`,
+    "  }",
+    "} on-error={ :log warning \"OcholaSuperNet management OpenVPN client could not be created or updated.\" }",
+    ":delay 3s",
+    `:if ([:len [/interface bridge find where name=${rosString(bridgeName)}]] = 0) do={`,
+    `  /interface bridge add name=${rosString(bridgeName)} comment=${rosString("Core Billing Hotspot Bridge Routing Plane")}`,
+    "}",
+    ":delay 3s",
+    `:local apiAllowed ${rosString(allowedSources)}`,
+    `:if ([:len [/user find where name=${rosString(apiUserName)}]] = 0) do={`,
+    `  /user add name=${rosString(apiUserName)} password=${rosString(apiPassword)} group=full allowed-address=$apiAllowed comment=${rosString("do not delete")} disabled=no`,
+    "} else={",
+    `  /user set [find where name=${rosString(apiUserName)}] password=${rosString(apiPassword)} group=full allowed-address=$apiAllowed comment=${rosString("do not delete")} disabled=no`,
+    "}",
+    ":delay 3s",
+    `:if ([:len [/ip firewall filter find where comment=${rosString("OcholaSupernet: Allow API Access over Secure Management VPN Tunnel")}]] = 0) do={`,
+    `  /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=$apiAllowed comment=${rosString("OcholaSupernet: Allow API Access over Secure Management VPN Tunnel")} place-before=0`,
+    "}",
+    `:if ([:len [/ip firewall filter find where comment=${rosString("OcholaSupernet: Allow HTTP/S Core Webhooks from Server Platform")}]] = 0) do={`,
+    `  /ip firewall filter add chain=input action=accept protocol=tcp dst-port=80,443 src-address=$apiAllowed comment=${rosString("OcholaSupernet: Allow HTTP/S Core Webhooks from Server Platform")} place-before=0`,
+    "}",
+    `:if ([:len [/ip firewall filter find where comment=${rosString("OcholaSupernet: Allow Inbound RADIUS CoA Disconnect Messages")}]] = 0) do={`,
+    `  /ip firewall filter add chain=input action=accept protocol=udp dst-port=3799 src-address=$apiAllowed comment=${rosString("OcholaSupernet: Allow Inbound RADIUS CoA Disconnect Messages")} place-before=0`,
+    "}",
+    ":delay 3s",
+    `:local heartbeatEvent ${rosString(`/tool fetch url="${heartbeatUrl}" keep-result=no mode=https`)}`,
+    `:if ([:len [/system script find where name=${rosString("ochola_heartbeat_daemon")}]] = 0) do={`,
+    `  /system script add name=${rosString("ochola_heartbeat_daemon")} policy=read,test source=$heartbeatEvent comment=${rosString("Core Platform Keepalive Link Monitor")}`,
+    "} else={",
+    `  /system script set [find where name=${rosString("ochola_heartbeat_daemon")}] policy=read,test source=$heartbeatEvent comment=${rosString("Core Platform Keepalive Link Monitor")}`,
+    "}",
+    `:if ([:len [/system scheduler find where name=${rosString("ochola_heartbeat_daemon")}]] = 0) do={`,
+    `  /system scheduler add name=${rosString("ochola_heartbeat_daemon")} interval=1m start-time=startup on-event=${rosString("/system script run ochola_heartbeat_daemon")} comment=${rosString("Core Platform Keepalive Link Monitor")}`,
+    "} else={",
+    `  /system scheduler set [find where name=${rosString("ochola_heartbeat_daemon")}] interval=1m start-time=startup on-event=${rosString("/system script run ochola_heartbeat_daemon")} comment=${rosString("Core Platform Keepalive Link Monitor")} disabled=no`,
+    "}",
+    ":delay 3s",
+    `:log info ${rosString("OcholaSupernet Core Bootstrap completed successfully. Router is now linking to website portal.")}`,
+  ];
+  const script = `${lines.map(command).join("\r\n")}\r\n`;
+  if (script.length > MAX_SCRIPT_LENGTH) throw new Error("Generated RouterOS script exceeds the 512 KiB safety limit.");
+  const validated = validateGeneratedRouterScript(script);
+  return `${validated.replace(/\n/g, "\r\n").replace(/\r\r\n/g, "\r\n")}`;
 }
 
 export function compileRouterScript(profile: ScriptProfile, options: RouterScriptCompilerOptions): string {

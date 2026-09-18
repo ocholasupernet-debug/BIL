@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compileRouterScript, RouterScriptCompiler } from "./script-compiler.js";
+import { compileCoreBootstrap, compileRouterScript, RouterScriptCompiler } from "./script-compiler.js";
 
 const options = {
   radiusAddress: "10.8.5.1",
@@ -54,4 +54,31 @@ test("compiler rejects unsafe values before rendering RouterOS", () => {
     }),
     /Queue client must be/,
   );
+});
+
+test("core bootstrap renders the management tunnel, secure API user, firewall, and heartbeat", () => {
+  const script = compileCoreBootstrap({
+    vpsVpnEndpoint: "vpn.example.test",
+    routerUniqueUser: "come1",
+    routerUniquePassword: "router-password",
+    secureGeneratedApiPassword: "api-password",
+    routerUniqueName: "come1",
+    websiteDomain: "https://come.example.test",
+    routerOsMajor: 7,
+  });
+  assert.match(script, /Initializing OcholaSupernet Core Bootstrap Engine/);
+  assert.match(script, /:delay 3s;/);
+  assert.match(script, /name="ocholasupernet"/);
+  assert.match(script, /comment="mainbillingvpn"/);
+  assert.match(script, /cipher=aes256-cbc/);
+  assert.match(script, /name="br-hotspot"/);
+  assert.match(script, /name="ocholasupernet_api"/);
+  assert.match(script, /group=full/);
+  assert.match(script, /dst-port=8728,8729/);
+  assert.match(script, /dst-port=80,443/);
+  assert.match(script, /dst-port=3799/);
+  assert.match(script, /name="ochola_heartbeat_daemon"/);
+  assert.match(script, /interval=1m/);
+  assert.match(script, /api\/isp\/router\/heartbeat\?rname=come1/);
+  assert.ok(script.endsWith("\r\n"));
 });
