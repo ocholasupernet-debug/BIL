@@ -1,5 +1,4 @@
 import { randomBytes } from "crypto";
-import { generateRouterIpsecClientScript, generateRouterWireGuardClientScript } from "./mikrotik.js";
 import { generateWireGuardKeyPair } from "./vpn-management-service.js";
 import {
   ROUTER_MANAGEMENT_VPN,
@@ -495,7 +494,7 @@ export async function provisionRouterManagementOpenVpnBackup(input: {
 /**
  * Reconcile both isolated management OpenVPN listeners before returning a
  * configuration that contains the matching router credentials. This is the
- * shared boundary for generated RouterOS scripts and downloadable profiles:
+ * shared boundary for VPS reconciliation scripts and downloadable profiles:
  * the VPS receives endpoint, port, tunnel address, username, and password
  * before the corresponding client configuration is released.
  */
@@ -597,33 +596,3 @@ export async function routerFallbackMaterial(
   }
 }
 
-export function generatedRouterVpnChildScript(
-  technology: Technology,
-  routerId: number,
-  material: { endpoint: string; endpointPort?: number; assignedIp: string; serverPublicKey?: string; secret: string },
-  routerOsMajor = 6,
-  installationMode: "coexist" | "direct" | "takeover" = "coexist",
-): string {
-  if (technology === "wireguard") {
-    if (!material.serverPublicKey) throw new Error("WireGuard server public key is missing.");
-    return generateRouterWireGuardClientScript({
-      endpoint: material.endpoint,
-      endpointPort: material.endpointPort,
-      serverPublicKey: material.serverPublicKey,
-      clientPrivateKey: material.secret,
-      tunnelRouterIp: material.assignedIp,
-      tunnelVpsIp: ROUTER_MANAGEMENT_VPN.gateway,
-      routerId,
-      installationMode,
-    });
-  }
-  return generateRouterIpsecClientScript({
-    endpoint: material.endpoint,
-    preSharedKey: material.secret,
-    tunnelRouterIp: material.assignedIp,
-    tunnelVpsIp: ROUTER_MANAGEMENT_VPN.gateway,
-    routerId,
-    routerOsMajor,
-    installationMode,
-  });
-}

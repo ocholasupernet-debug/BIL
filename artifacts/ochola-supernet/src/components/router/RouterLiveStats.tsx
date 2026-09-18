@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Users, Wifi, Activity, ArrowDown, ArrowUp, WifiOff, Copy, Download } from "lucide-react";
+import { Loader2, Users, Wifi, Activity, ArrowDown, ArrowUp, WifiOff, Copy } from "lucide-react";
 
 /* ─── Types matching backend response ────────────────────────────────────── */
 interface HotspotUser {
@@ -198,7 +198,7 @@ export function RouterLiveStats({
                 "/ip service enable api",
                 "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept comment=\"ISP-API\" place-before=0",
               ],
-              note: "The router-management VPN uses 10.8.5.0/24. Download the auto-generated script below for a complete, ready-to-paste ruleset.",
+              note: "The router-management VPN uses 10.8.5.0/24. Enable the API service and allow the management subnet in the router firewall, then retry.",
             }
           : null;
 
@@ -225,24 +225,6 @@ export function RouterLiveStats({
             {fix.cmds.map(cmd => (
               <CopyCmd key={cmd} cmd={cmd} />
             ))}
-            {routerId && offline && (
-              <div style={{ marginTop: "0.6rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                <div style={{ fontSize: "0.68rem", color: "#94a3b8", marginBottom: "0.35rem" }}>
-                  Or download the auto-generated firewall script (paste into MikroTik terminal):
-                </div>
-                <a
-                  href={`/api/router/${routerId}/firewall-script?vpsIp=YOUR_VPS_IP`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.7rem", fontWeight: 600, color: "var(--isp-accent, #38bdf8)", textDecoration: "none", background: "rgba(56,189,248,0.08)", border: "1px solid rgba(56,189,248,0.2)", borderRadius: 6, padding: "0.3rem 0.65rem" }}
-                >
-                  <Download size={11} /> Download firewall-script.rsc
-                </a>
-                <span style={{ fontSize: "0.65rem", color: "#475569", marginLeft: "0.5rem" }}>
-                  Replace YOUR_VPS_IP with your server's public IP
-                </span>
-              </div>
-            )}
           </div>
         )}
       </div>

@@ -991,7 +991,7 @@ export default function Routers() {
             <Plus size={13} /> Self Install
           </button>
            <button
-             onClick={() => navigate("/admin/network/add-router-script?mode=manual")}
+             onClick={() => navigate("/admin/network/routers")}
              style={{
                display: "flex", alignItems: "center", gap: "0.35rem",
                padding: "0.45rem 1rem", background: "rgba(20,184,166,.08)",

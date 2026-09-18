@@ -114,18 +114,12 @@ const navSections: NavSection[] = [
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Reseller Ports", href: "/admin/resellers" },
-          { name: "Self Install",   href: "/admin/network/self-install" },
-          { name: "Direct installation", href: "/admin/network/add-router-script" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
-          { name: "Migration & Recovery", href: "/admin/network/migration" },
-          { name: "PPPoE",          href: "/admin/network/pppoe" },
           { name: "PPP",            href: "/admin/network/ppp" },
           { name: "Wireless",       href: "/admin/network/wireless" },
           { name: "Queues",         href: "/admin/network/queues" },
-          { name: "Load Balancing", href: "/admin/network/load-balancing" },
           { name: "IP Pools",       href: "/admin/network/ip-pools" },
           { name: "API Config",     href: "/admin/network/router-api-config" },
-          { name: "Files",          href: "/admin/network/files" },
         ],
       },
       {

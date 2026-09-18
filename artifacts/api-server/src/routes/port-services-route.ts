@@ -4,7 +4,7 @@ import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
-import { getDeployableSource } from "./scripts-route.js";
+import { getDeployableSource } from "../lib/portal-assets.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
@@ -68,7 +68,7 @@ async function deployApprovedSource(
   sourcePath: string,
   destinationPath: string,
 ): Promise<void> {
-  const source = getDeployableSource("hotspot", sourcePath, requestOrigin(req));
+  const source = getDeployableSource("hotspot", sourcePath);
   if (!source) throw new Error(`Approved asset "${sourcePath}" could not be found.`);
   const token = randomBytes(24).toString("hex");
   sourceEntries.set(token, {

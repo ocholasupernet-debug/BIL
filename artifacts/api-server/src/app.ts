@@ -5,7 +5,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import router from "./routes";
-import scriptsRouter from "./routes/scripts-route";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -50,14 +49,6 @@ app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
-
-/* Also serve /scripts/* at the root path (no /api prefix) so MikroTik
-   routers can fetch mainhotspot.rsc and the sub-scripts exactly as the
-   URLs written inside those scripts:
-     /tool fetch url="https://<isp-subdomain>.isplatty.org/scripts/vpn7.rsc"
-   The same handlers are already mounted under /api/scripts/* via the main
-   router above — this second mount is purely for the rootless path. */
-app.use(scriptsRouter);
 
 // ── Static file serving for VPS ──────────────────────────────────────────────
 // Production always serves the built SPA because nginx proxies both the web
