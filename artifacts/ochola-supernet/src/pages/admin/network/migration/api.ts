@@ -121,11 +121,34 @@ export async function setTargetRouter(id: string, targetRouterId: number) {
   return data;
 }
 
-export async function runDryRun({ id, approvedItemIds }: { id: string, approvedItemIds?: string[] }) {
+export async function fetchMigrationOptions(id: string, targetRouterId: number) {
+  const res = await fetch(`/api/router-migrations/${encodeURIComponent(id)}/options?targetRouterId=${targetRouterId}`, { headers: getHeaders() });
+  const data = await res.json();
+  if (res.status === 401) throw new Error("Unauthorized");
+  if (!res.ok) throw new Error(data.error || "Failed to load migration interfaces");
+  return data;
+}
+
+export async function runDryRun({
+  id,
+  approvedItemIds,
+  assetSelection,
+  interfaceMapping,
+}: {
+  id: string;
+  approvedItemIds?: string[];
+  assetSelection?: { plans: boolean; pppoe: boolean; hotspot: boolean };
+  interfaceMapping?: {
+    sourcePortId?: number;
+    targetPortId?: number;
+    sourceInterface?: string;
+    targetInterface: string;
+  }[];
+}) {
   const res = await fetch(`/api/router-migrations/${id}/dry-run`, {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify(approvedItemIds ? { approvedItemIds } : {}),
+    body: JSON.stringify({ approvedItemIds, assetSelection, interfaceMapping }),
   });
   const data = await res.json();
   if (res.status === 401) throw new Error("Unauthorized");
