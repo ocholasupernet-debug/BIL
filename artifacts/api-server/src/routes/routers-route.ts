@@ -39,6 +39,14 @@ async function tcpProbe(host: string): Promise<number | null> {
 
 const router: IRouter = Router();
 
+type InstallMode = "direct" | "coexist" | "takeover";
+function normalizeInstallMode(value: unknown): InstallMode {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "greenfield" || mode === "direct" || mode === "direct-installation") return "direct";
+  if (mode === "zero-touch" || mode === "zero_touch" || mode === "ztp_takeover" || mode === "takeover" || mode === "router-takeover") return "takeover";
+  return "coexist";
+}
+
 function isPendingSetup(status: string | null | undefined): boolean {
   return status === "setup"
     || status === "awaiting_ports"
@@ -167,8 +175,7 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
 router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.query.adminId);
-  const installationMode: "coexist" | "takeover" =
-    String(req.query.mode ?? "").trim().toLowerCase() === "takeover" ? "takeover" : "coexist";
+  const installationMode = normalizeInstallMode(req.query.mode);
   if (!Number.isInteger(routerId) || routerId <= 0 || !Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid router id and admin id are required" });
     return;
@@ -227,7 +234,7 @@ router.get("/admin/router/install-status/:id", requireAdmin(), async (req, res):
 router.post("/admin/router/install-complete", requireAdmin(), async (req, res): Promise<void> => {
   const routerId = Number(req.body?.routerId);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
-  const installationMode: "coexist" | "takeover" = req.body?.installationMode === "takeover" ? "takeover" : "coexist";
+  const installationMode = normalizeInstallMode(req.body?.installationMode);
   const bridgeName = typeof req.body?.bridge === "string" ? req.body.bridge.trim() : "";
   const desiredPorts = Array.isArray(req.body?.ports)
     ? req.body.ports.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
