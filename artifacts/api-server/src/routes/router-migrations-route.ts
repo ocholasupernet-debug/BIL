@@ -4,7 +4,21 @@ import { requireAuth } from "../lib/api-auth.js";
 import { pingRouter, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { assertSourceCommand, exportRouterMigration, parseRouterOsExport, SOURCE_PRINT_COMMANDS } from "../lib/router-migration-exporter.js";
-import { assertDistinctTargets, buildMigrationPlan, executeMigrationPlan } from "../lib/router-migration-importer.js";
+import {
+  assertDistinctTargets,
+  buildMigrationPlan,
+  executeMigrationPlan,
+  redactMigrationPlan,
+  type MigrationAssetSelection,
+  type MigrationPortMapping,
+  type MigrationTargetPort,
+} from "../lib/router-migration-importer.js";
+import {
+  cloneLocalMigrationAssets,
+  loadLocalMigrationAssets,
+  rollbackClonedMigrationAssets,
+  type LocalMigrationAssets,
+} from "../lib/router-migration-local-assets.js";
 import { buildDomainRouterExportScript, READ_ONLY_ROUTER_EXPORT_SCRIPT } from "../lib/router-migration-export-script.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import {
@@ -86,6 +100,56 @@ function findingsFor(pkg: Record<string, unknown>, plan: ReturnType<typeof build
   const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   return { warnings, manual, unsupported };
+}
+
+function migrationSelection(value: unknown): MigrationAssetSelection {
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    plans: input.plans !== false,
+    pppoe: input.pppoe !== false,
+    hotspot: input.hotspot !== false,
+  };
+}
+
+function migrationMapping(value: unknown): MigrationPortMapping[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(item => item && typeof item === "object")
+    .map(item => item as Record<string, unknown>)
+    .map(item => ({
+      ...(Number.isSafeInteger(Number(item.sourcePortId)) && Number(item.sourcePortId) > 0 ? { sourcePortId: Number(item.sourcePortId) } : {}),
+      ...(Number.isSafeInteger(Number(item.targetPortId)) && Number(item.targetPortId) > 0 ? { targetPortId: Number(item.targetPortId) } : {}),
+      ...(typeof item.sourceInterface === "string" && item.sourceInterface.trim() ? { sourceInterface: item.sourceInterface.trim() } : {}),
+      ...(typeof item.targetInterface === "string" && item.targetInterface.trim() ? { targetInterface: item.targetInterface.trim() } : {}),
+    }))
+    .filter(item => (item.sourcePortId && (item.targetPortId || item.targetInterface)) || (item.sourceInterface && item.targetInterface));
+}
+
+async function targetPortRows(adminId: number, routerId: number): Promise<MigrationTargetPort[]> {
+  return sbSelectStrict<MigrationTargetPort>(
+    "isp_reseller_ports",
+    `admin_id=eq.${adminId}&router_id=eq.${routerId}&status=neq.disabled&select=id,interface_name,reseller_id,bandwidth_cap_mbps&order=interface_name.asc`,
+  );
+}
+
+async function attachLocalAssets(pkg: Record<string, unknown>, adminId: number, sourceRouterId?: number): Promise<Record<string, unknown>> {
+  if (!sourceRouterId) return pkg;
+  const localAssets = await loadLocalMigrationAssets(adminId, sourceRouterId);
+  return { ...pkg, local_assets: localAssets };
+}
+
+function localAssetsFromPackage(pkg: Record<string, unknown>): LocalMigrationAssets | null {
+  const value = pkg.local_assets;
+  if (!value || typeof value !== "object") return null;
+  const assets = value as Partial<LocalMigrationAssets>;
+  return {
+    plans: Array.isArray(assets.plans) ? assets.plans : [],
+    customers: Array.isArray(assets.customers) ? assets.customers : [],
+    ppp_secrets: Array.isArray(assets.ppp_secrets) ? assets.ppp_secrets : [],
+    hotspot_users: Array.isArray(assets.hotspot_users) ? assets.hotspot_users : [],
+    ports: Array.isArray(assets.ports) ? assets.ports : [],
+    ip_pools: Array.isArray(assets.ip_pools) ? assets.ip_pools : [],
+  };
 }
 function collectorToken(req: Request): string {
   const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
@@ -359,7 +423,8 @@ router.post("/router-migrations/collector-upload", express.raw({ type: "*/*", li
       throw new Error("Collector chunks are incomplete or out of order.");
     }
     const rawExport = chunks.map(decryptText).join("");
-    const pkg = parseRouterOsExport(rawExport);
+    const parsed = parseRouterOsExport(rawExport);
+    const pkg = await attachLocalAssets(parsed, session.admin_id, tunnel?.source_router_id);
     const plan = buildMigrationPlan(pkg);
     const findings = findingsFor(pkg, plan);
     const summary = summaryFor(pkg);
@@ -757,6 +822,48 @@ router.get("/router-migrations/routers", async (req, res) => guarded(req, async 
   const rows = await sbSelectStrict<RouterRow>("isp_routers", "select=id,name,host,status,ros_version,vpn_ip&order=name.asc");
   res.json({ routers: rows });
 }, res));
+router.get("/router-migrations/:id/options", async (req, res) => guarded(req, async a => {
+  const job = await jobFor(positive(req.params.id), a);
+  const targetRouterId = positive(req.query.targetRouterId);
+  const target = await ownedRouter(targetRouterId, a);
+  const pkg = decrypt(job);
+  const interfaces = await runRouterCommand(creds(target), [
+    "/interface/print",
+    "=.proplist=name,type,running,disabled,comment",
+  ]);
+  const targetPorts = await targetPortRows(a, targetRouterId);
+  const local = localAssetsFromPackage(pkg);
+  const sourcePorts = local?.ports ?? [];
+  const sourceInterfaces = Array.isArray(pkg.interfaces)
+    ? (pkg.interfaces as Record<string, unknown>[])
+      .map(row => String(row.name ?? "").trim())
+      .filter(name => /^(ether|sfp|combo|wlan|lte|bridge|vlan)/i.test(name))
+    : [];
+  res.json({
+    ok: true,
+    sourcePorts: sourcePorts.map(port => ({
+      id: Number(port.id),
+      interfaceName: String(port.interface_name ?? ""),
+      resellerId: Number(port.assigned_reseller_id ?? port.reseller_id) || null,
+      bandwidthCapMbps: Number(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps) || null,
+    })).filter(port => port.id > 0 && port.interfaceName),
+    sourceInterfaces: Array.from(new Set(sourceInterfaces)),
+    targetPorts,
+    targetInterfaces: interfaces
+      .map(row => ({
+        name: String(row.name ?? ""),
+        type: String(row.type ?? ""),
+        running: String(row.running ?? "false") === "true",
+        disabled: String(row.disabled ?? "false") === "true",
+      }))
+      .filter(row => row.name && !row.disabled),
+    assetCounts: {
+      plans: local?.plans.length ?? 0,
+      pppoe: local?.ppp_secrets.length ?? 0,
+      hotspot: local?.hotspot_users.length || local?.customers.filter(row => String(row.type ?? "").toLowerCase() === "hotspot").length || 0,
+    },
+  });
+}, res));
 router.post("/router-migrations/analyze", async (req, res) => guarded(req, async a => {
   const sourceRouterId = positive(req.body.sourceRouterId);
   const source = await ownedRouter(sourceRouterId, a);
@@ -778,7 +885,9 @@ router.post("/router-migrations/export", async (req, res) => guarded(req, async 
   const source = await ownedRouter(sourceRouterId, a);
   const tunnel = await tunnelFor(sourceRouterId, a, req.body.tunnelId ? positive(req.body.tunnelId) : undefined);
   await requireLeasedApiConnection(source, a, tunnel);
-  const pkg = await exportRouterMigration(await leaseCredentials(source, tunnel)); const secure = encrypt(pkg); const plan = buildMigrationPlan(pkg);
+  const exported = await exportRouterMigration(await leaseCredentials(source, tunnel));
+  const pkg = await attachLocalAssets(exported, source.admin_id, source.id);
+  const secure = encrypt(pkg); const plan = buildMigrationPlan(pkg);
   const manual = plan.unsupported.filter(x => x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const unsupported = plan.unsupported.filter(x => !x.reason?.includes("Credential")).map(x => `${x.category}: ${x.reason}`);
   const rows = await sbInsertStrict<Job>("router_migration_jobs", {
@@ -845,7 +954,16 @@ router.post("/router-migrations/:id/target", async (req, res) => guarded(req, as
   await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}`, { target_router_id: target.id, status: "target_selected", audit_json: audit });
   res.json({ ok: true, targetRouterId: target.id });
 }, res));
-async function planJob(job: Job) { return buildMigrationPlan(decrypt(job)); }
+async function planJob(
+  job: Job,
+  options: {
+    assetSelection?: MigrationAssetSelection;
+    portMapping?: MigrationPortMapping[];
+    targetPorts?: MigrationTargetPort[];
+  } = {},
+) {
+  return buildMigrationPlan(decrypt(job), options);
+}
 async function reconcileBilling(pkg: Record<string, unknown>) {
   const customers = await sbSelectStrict<{ username?: string; pppoe_username?: string }>("isp_customers", "select=username,pppoe_username");
   const known = new Set(customers.flatMap(x => [x.username, x.pppoe_username]).filter(Boolean));
@@ -856,14 +974,35 @@ async function reconcileBilling(pkg: Record<string, unknown>) {
 }
 router.post("/router-migrations/:id/dry-run", async (req, res) => guarded(req, async a => {
   const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (!["target_selected", "dry_run"].includes(job.status)) throw new Error("Migration is not eligible for dry run.");
-  const pkg = decrypt(job), plan = buildMigrationPlan(pkg), approved = Array.isArray(req.body.approvedItemIds) ? req.body.approvedItemIds.filter((x: unknown) => typeof x === "string") : [];
+  const pkg = decrypt(job);
+  const selection = migrationSelection(req.body.assetSelection);
+  const portMapping = migrationMapping(req.body.interfaceMapping);
+  const targetPorts = await targetPortRows(a, job.target_router_id);
+  const plan = buildMigrationPlan(pkg, { assetSelection: selection, portMapping, targetPorts });
+  const approved = Array.isArray(req.body.approvedItemIds) ? req.body.approvedItemIds.filter((x: unknown) => typeof x === "string") : [];
   const reconciliation = await reconcileBilling(pkg);
-  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}`, { plan_json: plan, stages_json: { dry_run: true, approved, reconciliation }, status: "dry_run" });
+  await sbUpdateStrict("router_migration_jobs", `id=eq.${job.id}`, {
+    plan_json: redactMigrationPlan(plan),
+    stages_json: {
+      dry_run: true,
+      approved,
+      reconciliation,
+      migration_options: { assetSelection: selection, interfaceMapping: portMapping },
+    },
+    status: "dry_run",
+  });
   res.json({ success: true, warnings: plan.warnings, conflicts: [], plannedChanges: plan.items.map(x => ({ id: x.id, category: x.category, label: `${x.category}: ${String(x.source.name ?? x.id)}` })), skipped: [...plan.unsupported.map(x => `${x.category}: ${x.reason}`), `Billing reconciliation: ${reconciliation.matched} matched, ${reconciliation.missing} missing; no billing writes.`], approvedItemIds: approved });
 }, res));
 router.post("/router-migrations/:id/import", async (req, res) => guarded(req, async a => {
   if (req.body.confirmation !== "MODIFY TARGET ROUTER") throw new Error("Exact confirmation text MODIFY TARGET ROUTER is required.");
-   const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (job.status !== "dry_run") throw new Error("A verified dry run is required before import."); const target = await ownedRouter(job.target_router_id, a); const sourceInfo = await sourceForJob(job, a); const source = sourceInfo?.row ?? null; const plan = await planJob(job);
+   const job = await jobFor(positive(req.params.id), a); if (!job.target_router_id) throw new Error("Select a target router first."); if (job.status !== "dry_run") throw new Error("A verified dry run is required before import."); const target = await ownedRouter(job.target_router_id, a); const sourceInfo = await sourceForJob(job, a); const source = sourceInfo?.row ?? null;
+   const pkg = decrypt(job);
+   const savedOptions = (job.stages_json as Record<string, unknown> | undefined)?.migration_options;
+   const optionRecord = savedOptions && typeof savedOptions === "object" ? savedOptions as Record<string, unknown> : {};
+   const selection = migrationSelection(optionRecord.assetSelection);
+   const portMapping = migrationMapping(optionRecord.interfaceMapping);
+   const targetPorts = await targetPortRows(a, target.id);
+   const plan = buildMigrationPlan(pkg, { assetSelection: selection, portMapping, targetPorts });
   const approved: string[] = Array.isArray(req.body.approvedItemIds) ? req.body.approvedItemIds.filter((x: unknown): x is string => typeof x === "string") : [];
   const dryRunApproved: string[] = Array.isArray((job.stages_json as Record<string, unknown> | undefined)?.approved) ? (job.stages_json as { approved: unknown[] }).approved.filter((x: unknown): x is string => typeof x === "string") : [];
   if (!approved.length || approved.length !== dryRunApproved.length || approved.some(id => !dryRunApproved.includes(id))) throw new Error("Approved items changed after dry run; run the dry run again.");
@@ -879,11 +1018,17 @@ router.post("/router-migrations/:id/import", async (req, res) => guarded(req, as
   const leaseToken = randomBytes(32).toString("hex");
    const lease = await sbRpc<{ acquired: boolean }>("acquire_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken });
   if (!lease[0]?.acquired) throw new Error("Another migration is already importing to this target router.");
-  let finalized = false;
+   let finalized = false;
+   let cloned: Record<string, number[]> | undefined;
   try {
     const claimed = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&status=eq.dry_run`, { status: "importing", audit_json: { ...locked, pre_state_capture: "configuration state capture begins before writes" } });
     if (claimed.length !== 1) throw new Error("Migration was already claimed or is no longer eligible for import.");
     const snapshotCapturedAt = new Date().toISOString();
+     const localAssets = localAssetsFromPackage(pkg);
+     if (localAssets && (selection.plans || selection.pppoe || selection.hotspot)) {
+       const cloneResult = await cloneLocalMigrationAssets(localAssets, job.admin_id, target.id, selection, portMapping, targetPorts);
+       cloned = cloneResult.inserted;
+     }
     const leasedTargetRunner = async (command: string[]) => {
       const renewed = await sbRpc<{ renewed: boolean }>("renew_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken });
       if (!renewed[0]?.renewed) throw new Error("Target migration lease expired; no further router commands were issued.");
@@ -903,12 +1048,28 @@ router.post("/router-migrations/:id/import", async (req, res) => guarded(req, as
         if (persisted.length !== 1) throw new Error("Recovery capture persistence failed.");
       },
     );
-    const recovery = report.stopped ? "Stop target writes and restore the reviewed configuration state manually." : "No recovery required.";
-    const finished = await sbUpdateStrict<Job>("router_migration_jobs", `id=eq.${job.id}&status=eq.importing`, { plan_json: plan, stages_json: { ...report, snapshotCapturedAt }, verification_json: report.verification ?? {}, audit_json: { ...locked, applied: report.applied, failures: report.failures, recovery }, status: report.stopped ? "failed" : "completed", completed_at: new Date().toISOString() });
+     if (report.stopped && cloned) {
+       await rollbackClonedMigrationAssets(cloned);
+       cloned = undefined;
+     }
+     const recovery = report.stopped ? "Stop target writes and restore the reviewed configuration state manually." : "No recovery required.";
+     const finished = await sbUpdateStrict<Job>(
+       "router_migration_jobs",
+       `id=eq.${job.id}&status=eq.importing`,
+       {
+         plan_json: redactMigrationPlan(plan),
+         stages_json: { ...report, snapshotCapturedAt, database_clone: cloned ? { inserted: cloned } : { rolledBack: true } },
+         verification_json: report.verification ?? {},
+         audit_json: { ...locked, applied: report.applied, failures: report.failures, recovery, database_clone: cloned ? { inserted: cloned } : { rolledBack: true } },
+         status: report.stopped ? "failed" : "completed",
+         completed_at: new Date().toISOString(),
+       },
+     );
     if (finished.length !== 1) throw new Error("Migration result could not be persisted; the target lease remains active.");
     finalized = true;
     res.json({ success: !report.stopped, importedItems: report.applied.length, failedItems: report.failures.length, recovery, status: report.stopped ? "failed" : "completed" });
   } finally {
+     if (!finalized && cloned) await rollbackClonedMigrationAssets(cloned).catch(() => undefined);
      if (finalized) {
       await sbRpc("release_router_migration_target_lease", { p_job_id: job.id, p_admin_id: job.admin_id, p_target_router_id: target.id, p_lease_token: leaseToken }).catch(() => undefined);
        if (sourceInfo) await revokeTunnel(sourceInfo.tunnel).catch(() => undefined);
