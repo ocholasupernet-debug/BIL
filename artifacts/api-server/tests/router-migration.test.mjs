@@ -132,6 +132,40 @@ test("target state is redacted and persisted before the first write", async () =
   );
   assert.deepEqual(events.slice(0, 3), ["read", "persist", "write"]);
 });
+test("local billing assets compile credentials and mapped reseller queues", () => {
+  const plan = importer.buildMigrationPlan({
+    local_assets: {
+      plans: [{ id: 11, name: "Home 20", type: "pppoe", speed_down: 20, speed_up: 10 }],
+      ppp_secrets: [{ username: "alice", password: "secret", profile: "home-20", ip_address: "10.0.0.10", port_id: 4 }],
+      customers: [{ username: "alice", type: "pppoe", ip_address: "10.0.0.10", port_id: 4 }],
+      hotspot_users: [],
+    },
+  }, {
+    portMapping: [{ sourcePortId: 4, targetPortId: 9 }],
+    targetPorts: [{ id: 9, interface_name: "ether4", reseller_id: 22, bandwidth_cap_mbps: 30 }],
+  });
+  const secret = plan.items.find(item => item.category === "local_ppp_secrets");
+  const queue = plan.items.find(item => item.category === "migration_queues");
+  assert.ok(secret);
+  assert.ok(secret.command.includes("=password=secret"));
+  assert.ok(queue);
+  assert.ok(queue.command.includes("=parent=RESELLER_ROOT_ether4"));
+  assert.ok(queue.command.includes("=max-limit=30M/30M"));
+  const stored = importer.redactMigrationPlan(plan);
+  assert.ok(stored.items.every(item => !item.command.some(word => word === "=password=secret")));
+  assert.ok(stored.items.some(item => item.command.includes("=password=REQUIRES_MANUAL_CONFIGURATION")));
+});
+test("approved named resources update instead of duplicating target rows", async () => {
+  const plan = importer.buildMigrationPlan({ ip_pools: [{ name: "pool-a", ranges: "10.0.0.2-10.0.0.3" }] });
+  const writes = [];
+  await importer.executeMigrationPlan(plan, async command => {
+    if (command[0] === "/ip/pool/print") return [{ ".id": "*1", name: "pool-a" }];
+    writes.push(command);
+    return [];
+  }, ["ip_pools:0"], false);
+  assert.equal(writes[0][0], "/ip/pool/set");
+  assert.equal(writes[0][1], "=.id=*1");
+});
 test("database schema enforces one expiring lease per target router", async () => {
   const sql = await readFile("migrations/2026_router_migration_jobs.sql", "utf8");
   assert.match(sql, /target_router_id bigint primary key/);
