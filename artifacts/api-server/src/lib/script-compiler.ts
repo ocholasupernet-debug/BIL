@@ -317,7 +317,7 @@ export function compileCoreBootstrap(options: CoreBootstrapOptions): string {
     "  :if ([:len $ovpnIds] = 0) do={",
     `    /interface ovpn-client add name=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME)} connect-to=${rosString(endpoint)} port=${vpnPort} protocol=tcp user=${rosString(routerUser)} password=${rosString(routerPassword)} profile=default cipher=${cipher} mode=ip comment=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT)} disabled=no`,
     "  } else={",
-    `    /interface ovpn-client set [:pick $ovpnIds 0] connect-to=${rosString(endpoint)} port=${vpnPort} protocol=tcp user=${rosString(routerUser)} password=${rosString(routerPassword)} profile=default cipher=${cipher} mode=ip comment=${rosString(ROUTER_MANAGEMENT_CLIENT_COMMENT)} disabled=no`,
+    `    /interface ovpn-client set [:pick $ovpnIds 0] connect-to=${rosString(endpoint)} port=${vpnPort} protocol=tcp user=${rosString(routerUser)} password=${rosString(routerPassword)} profile=default cipher=${cipher} mode=ip comment=${rosString(ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT)} disabled=no`,
     "  }",
     "} on-error={ :log warning \"OcholaSuperNet management OpenVPN client could not be created or updated.\" }",
     ":delay 3s",
