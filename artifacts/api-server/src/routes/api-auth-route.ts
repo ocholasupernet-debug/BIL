@@ -63,14 +63,20 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
     return;
   }
 
-  const subdomainFilter = tenantSubdomain
-    ? `subdomain=eq.${encodeURIComponent(tenantSubdomain)}&`
-    : "";
+  const tenantRows = tenantSubdomain
+    ? await sbSelect<{ id: number }>(
+        "isp_admins",
+        `subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id&limit=1`,
+      )
+    : [];
+  const tenantId = tenantRows[0]?.id;
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_admins",
-    `${subdomainFilter}username=eq.${encodeURIComponent(username.trim())}&select=id,name,username,password,fullname,role,is_active,subdomain,area,currency,must_change_password&limit=1`,
+    `username=eq.${encodeURIComponent(username.trim())}&select=id,name,username,password,fullname,role,is_active,subdomain,parent_id,company_name,earnings_balance,area,currency,must_change_password&limit=100`,
   );
-  const admin = rows[0];
+  const admin = tenantId
+    ? rows.find((row) => Number(row.id) === tenantId || Number(row.parent_id) === tenantId)
+    : rows.find((row) => String(row.subdomain ?? "").toLowerCase() === tenantSubdomain);
   if (!admin || !await verifyIspAdminPassword(admin.password, password) || admin.is_active !== true) {
     sendInvalidCredentials(res);
     return;
