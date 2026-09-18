@@ -30,6 +30,7 @@ import {
   analyzeSource,
   createCollectorSession,
   createMigrationTunnel,
+  fetchMigrationOptions,
   fetchRouters,
   getCollectorSessionStatus,
   getMigrationTunnelStatus,
@@ -43,6 +44,7 @@ import type {
   DryRunResponse,
   ExportResponse,
   MigrationTunnelSession,
+  MigrationOptions,
   ReportResponse,
   RouterSummary,
 } from "./types";
@@ -109,6 +111,8 @@ export default function NetworkMigration() {
   const [confirmationText, setConfirmationText] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastDryRunIds, setLastDryRunIds] = useState<Set<string> | null>(null);
+  const [assetSelection, setAssetSelection] = useState({ plans: true, pppoe: true, hotspot: true });
+  const [interfaceMapping, setInterfaceMapping] = useState<Record<string, string>>({});
   const [clock, setClock] = useState(() => Date.now());
   const [copied, setCopied] = useState("");
   const [sourceVerification, setSourceVerification] = useState<{ identity?: { name?: string; version?: string; boardName?: string }; details?: string } | null>(null);
@@ -123,6 +127,31 @@ export default function NetworkMigration() {
   const routersError = routersQuery.error;
   const sourceRouter = routers?.find(router => router.id === sourceRouterId);
   const targetRouter = routers?.find(router => router.id === targetRouterId);
+  const migrationOptionsQuery = useQuery<MigrationOptions>({
+    queryKey: ["migration-options", migrationId, targetRouterId],
+    queryFn: () => fetchMigrationOptions(migrationId!, targetRouterId!),
+    enabled: Boolean(migrationId && targetRouterId && currentStep >= 4),
+    retry: false,
+  });
+  const migrationOptions = migrationOptionsQuery.data;
+
+  useEffect(() => {
+    if (!migrationOptions) return;
+    const sourceNames = migrationOptions.sourcePorts.length > 0
+      ? migrationOptions.sourcePorts.map(port => port.interfaceName)
+      : migrationOptions.sourceInterfaces;
+    const targetNames = new Set([
+      ...migrationOptions.targetPorts.map(port => port.interface_name),
+      ...migrationOptions.targetInterfaces.map(port => port.name),
+    ]);
+    setInterfaceMapping(current => {
+      const next = { ...current };
+      sourceNames.forEach(sourceName => {
+        if (!next[sourceName] && targetNames.has(sourceName)) next[sourceName] = sourceName;
+      });
+      return next;
+    });
+  }, [migrationOptions]);
 
   const tunnelStatusQuery = useQuery({
     queryKey: ["migration-tunnel-status", tunnel?.leaseId],
@@ -269,7 +298,19 @@ export default function NetworkMigration() {
     mutationFn: ({ id, targetId }: { id: string; targetId: number }) => setTargetRouter(id, targetId),
     onSuccess: () => {
       setCurrentStep(5);
-      if (migrationId) dryRunMutation.mutate({ id: migrationId });
+      if (migrationId) dryRunMutation.mutate({
+        id: migrationId,
+        assetSelection,
+        interfaceMapping: Object.entries(interfaceMapping)
+          .filter(([, targetInterface]) => Boolean(targetInterface))
+          .map(([sourceKey, targetInterface]) => {
+            const sourcePort = migrationOptions?.sourcePorts.find(port => String(port.id) === sourceKey);
+            const targetPort = migrationOptions?.targetPorts.find(port => port.interface_name === targetInterface);
+            return sourcePort
+              ? { sourcePortId: sourcePort.id, targetPortId: targetPort?.id, targetInterface }
+              : { sourceInterface: sourceKey, targetInterface };
+          }),
+      });
     },
     onError: (error: any) => toast({ title: "Target selection failed", description: error.message, variant: "destructive" }),
   });
@@ -306,6 +347,16 @@ export default function NetworkMigration() {
     for (const id of selectedIds) if (!lastDryRunIds.has(id)) return true;
     return false;
   };
+
+  const mappingPayload = () => Object.entries(interfaceMapping)
+    .filter(([, targetInterface]) => Boolean(targetInterface))
+    .map(([sourceKey, targetInterface]) => {
+      const sourcePort = migrationOptions?.sourcePorts.find(port => String(port.id) === sourceKey);
+      const targetPort = migrationOptions?.targetPorts.find(port => port.interface_name === targetInterface);
+      return sourcePort
+        ? { sourcePortId: sourcePort.id, targetPortId: targetPort?.id, targetInterface }
+        : { sourceInterface: sourceKey, targetInterface };
+    });
 
   const copyText = async (value: string, label: string) => {
     try {
@@ -368,6 +419,8 @@ export default function NetworkMigration() {
     setDryRunData(null);
     setReportData(null);
     setTargetRouterId(null);
+    setAssetSelection({ plans: true, pppoe: true, hotspot: true });
+    setInterfaceMapping({});
     setSourceVerification(null);
     setVerificationError("");
     setCurrentStep(1);
@@ -386,10 +439,17 @@ export default function NetworkMigration() {
     }
   };
 
+  const mappingIncomplete = migrationOptionsQuery.isLoading || Boolean(
+    migrationOptions && (
+      migrationOptions.sourcePorts.length > 0
+        ? migrationOptions.sourcePorts.some(port => !interfaceMapping[String(port.id)])
+        : migrationOptions.sourceInterfaces.some(name => !interfaceMapping[name])
+    ),
+  );
   const primaryDisabled =
     isBusy ||
     (currentStep === 1 && !migrationId) ||
-    (currentStep === 4 && !targetRouterId) ||
+    (currentStep === 4 && (!targetRouterId || mappingIncomplete)) ||
     (currentStep === 5 && (!dryRunData || isDryRunDirty() || dryRunData.plannedChanges.length === 0 || selectedIds.size === 0)) ||
     (currentStep === 6 && confirmationText !== "MODIFY TARGET ROUTER");
   const scriptsGenerated = Boolean(tunnel?.command && collector?.tunnelCommand && collector?.command);
@@ -623,6 +683,30 @@ export default function NetworkMigration() {
                   {exportData.findings.warnings.map((finding, index) => <div className="migration-finding warn" key={`warning-${index}`}><AlertTriangle size={13} />{finding}</div>)}
                   {!exportData.findings.unsupported.length && !exportData.findings.manual.length && !exportData.findings.warnings.length && <div className="migration-finding good"><CheckCircle2 size={13} />No compatibility warnings were reported for this export.</div>}
                 </div>
+                 <div className="migration-section-heading">
+                   <h3>Migration assets</h3>
+                   <span>Choose what is copied</span>
+                 </div>
+                 <div className="migration-asset-grid">
+                   {([
+                     ["plans", "Internet packages / profiles", "Copy PPPoE and Hotspot profiles, plus local billing packages."],
+                     ["pppoe", "PPPoE secrets", "Copy usernames and passwords from the encrypted tenant snapshot."],
+                     ["hotspot", "Hotspot users / vouchers", "Copy active tenant users and their credentials where available."],
+                   ] as const).map(([key, title, description]) => (
+                     <label key={key} className={`migration-asset-option ${assetSelection[key] ? "selected" : ""}`}>
+                       <input
+                         type="checkbox"
+                         checked={assetSelection[key]}
+                         onChange={event => setAssetSelection(current => ({ ...current, [key]: event.target.checked }))}
+                       />
+                       <span>
+                         <strong>{title}</strong>
+                         <small>{description}</small>
+                       </span>
+                       <Check size={14} />
+                     </label>
+                   ))}
+                 </div>
               </>
             )}
           </div>
@@ -650,6 +734,59 @@ export default function NetworkMigration() {
               })}
             </div>
             {!routersLoading && (!routers || routers.length < 2) && <p className="migration-inline-empty">Add an online replacement router before continuing.</p>}
+             {targetRouterId && (
+               <div className="migration-mapping-panel">
+                  <div className="migration-section-heading">
+                    <h3>Hardware Interface Relocation Matrix</h3>
+                   <span>{migrationOptionsQuery.isLoading ? "Loading interfaces…" : "Required for reseller queues"}</span>
+                 </div>
+                  <p className="migration-help">Map source ports to destination ports to ensure reseller paths and QoS limits bind to the correct physical interfaces. Matching names are suggested automatically; review every row before continuing.</p>
+                 {migrationOptionsQuery.error && <div className="migration-finding danger"><AlertTriangle size={13} />{migrationOptionsQuery.error instanceof Error ? migrationOptionsQuery.error.message : "Destination interfaces could not be loaded."}</div>}
+                 {migrationOptions && migrationOptions.sourcePorts.length > 0 ? (
+                   <div className="migration-mapping-grid">
+                      <div className="migration-mapping-header"><span>Source Interface Wire</span><span>Target Destination Interface</span><span>Capacity</span></div>
+                     {migrationOptions.sourcePorts.map(port => {
+                       const targetInterface = interfaceMapping[String(port.id)];
+                       const targetPort = migrationOptions.targetPorts.find(item => item.interface_name === targetInterface);
+                       return (
+                         <div className="migration-mapping-row" key={port.id}>
+                           <div><strong>{port.interfaceName}</strong><small>{port.resellerId ? `reseller ${port.resellerId}` : "unassigned source port"}</small></div>
+                           <select
+                             className="migration-select"
+                             value={targetInterface ?? ""}
+                             onChange={event => setInterfaceMapping(current => ({ ...current, [String(port.id)]: event.target.value }))}
+                           >
+                             <option value="">Choose destination interface</option>
+                             {Array.from(new Set([
+                               ...migrationOptions.targetPorts.map(option => option.interface_name),
+                               ...migrationOptions.targetInterfaces.map(option => option.name),
+                             ])).map(name => <option key={name} value={name}>{name}</option>)}
+                           </select>
+                           <span className="migration-mono">{targetPort?.reseller_bandwidth_cap ?? targetPort?.bandwidth_cap_mbps ?? "—"}{targetPort ? " Mbps" : ""}</span>
+                         </div>
+                       );
+                     })}
+                   </div>
+                 ) : migrationOptions && migrationOptions.sourceInterfaces.length > 0 ? (
+                   <div className="migration-mapping-grid">
+                     <div className="migration-mapping-header"><span>Source Interface Wire</span><span>Target Destination Interface</span><span>Status</span></div>
+                     {migrationOptions.sourceInterfaces.map(sourceInterface => (
+                       <div className="migration-mapping-row" key={sourceInterface}>
+                         <div><strong>{sourceInterface}</strong><small>detected on source export</small></div>
+                         <select className="migration-select" value={interfaceMapping[sourceInterface] ?? ""} onChange={event => setInterfaceMapping(current => ({ ...current, [sourceInterface]: event.target.value }))}>
+                           <option value="">Choose destination interface</option>
+                           {migrationOptions.targetInterfaces.map(option => <option key={option.name} value={option.name}>{option.name}</option>)}
+                         </select>
+                         <span className="migration-mono">{interfaceMapping[sourceInterface] ? "mapped" : "required"}</span>
+                       </div>
+                     ))}
+                   </div>
+                 ) : migrationOptions && (
+                   <div className="migration-finding warn"><AlertTriangle size={13} />No reseller-owned source ports were found. RouterOS interfaces are available for review, but local reseller assignments cannot be cloned without a registered source port.</div>
+                 )}
+                 {migrationOptions && migrationOptions.sourceInterfaces.length > 0 && <p className="migration-footer-note">Detected source interfaces: {migrationOptions.sourceInterfaces.join(", ")}</p>}
+               </div>
+             )}
           </div>
         </section>
       );
@@ -669,7 +806,7 @@ export default function NetworkMigration() {
                 </tbody></table>
                 {dryRunData.skipped.length > 0 && <div className="migration-finding warn"><AlertTriangle size={13} />Skipped: {dryRunData.skipped.join("; ")}</div>}
                 {dryRunData.conflicts.length > 0 && <div className="migration-finding warn"><AlertTriangle size={13} />Conflicts: {dryRunData.conflicts.join("; ")}</div>}
-                <div className="migration-action-bar"><span className="migration-footer-note"><strong style={{ color: "var(--isp-text)" }}>{selectedIds.size}</strong> of {dryRunData.plannedChanges.length} groups approved</span>{isDryRunDirty() && <button className="migration-button ghost" onClick={() => migrationId && dryRunMutation.mutate({ id: migrationId, approvedItemIds: Array.from(selectedIds) })} disabled={isBusy}><RefreshCw size={12} /> Verify approvals</button>}</div>
+                 <div className="migration-action-bar"><span className="migration-footer-note"><strong style={{ color: "var(--isp-text)" }}>{selectedIds.size}</strong> of {dryRunData.plannedChanges.length} groups approved</span>{isDryRunDirty() && <button className="migration-button ghost" onClick={() => migrationId && dryRunMutation.mutate({ id: migrationId, approvedItemIds: Array.from(selectedIds), assetSelection, interfaceMapping: mappingPayload() })} disabled={isBusy}><RefreshCw size={12} /> Verify approvals</button>}</div>
               </>
             ) : <div className="migration-preparing"><RefreshCw size={14} className="animate-spin" /> Preparing the non-destructive simulation…</div>}
           </div>
