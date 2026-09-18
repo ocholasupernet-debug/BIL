@@ -17,7 +17,9 @@ import {
   Replace,
   RefreshCw,
   Router as RouterIcon,
+  Save,
   Server,
+  Rocket,
   WifiOff,
 } from "lucide-react";
 
@@ -62,6 +64,22 @@ interface DeployableSource {
 
 interface DeployableSourcesResponse {
   sources: DeployableSource[];
+}
+
+interface PortServiceBinding {
+  id: number;
+  router_id: number;
+  interface_name: string;
+  reseller_id: number | null;
+  assigned_reseller_id: number | null;
+  hotspot_enabled: boolean;
+  hotspot_template_path: string | null;
+  hotspot_folder_path: string | null;
+  pppoe_enabled: boolean;
+  pppoe_folder_path: string | null;
+  reseller_bandwidth_cap: number | null;
+  bandwidth_cap_mbps: number;
+  status: string;
 }
 
 const HOTSPOT_FILE_NAMES = new Set([
@@ -169,6 +187,16 @@ async function fetchDeployableSources(): Promise<DeployableSource[]> {
     throw new Error(data.error ?? `Could not load local files (HTTP ${response.status})`);
   }
   return Array.isArray(data.sources) ? data.sources : [];
+}
+
+async function fetchPortServices(routerId: number): Promise<PortServiceBinding[]> {
+  const headers = new Headers();
+  const token = getAdminApiToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`/api/admin/port-services?routerId=${encodeURIComponent(String(routerId))}`, { headers });
+  const data = await response.json() as { ports?: PortServiceBinding[]; error?: string };
+  if (!response.ok) throw new Error(data.error ?? `Could not load port bindings (HTTP ${response.status})`);
+  return Array.isArray(data.ports) ? data.ports : [];
 }
 
 function CategoryBadge({ category }: { category: ReturnType<typeof fileCategory> }) {
@@ -294,6 +322,15 @@ export default function Files() {
   const [managementImporting, setManagementImporting] = useState(false);
   const [managementImportMessage, setManagementImportMessage] = useState("");
   const [managementImportError, setManagementImportError] = useState(false);
+  const [portDrafts, setPortDrafts] = useState<Record<number, { hotspotEnabled: boolean; pppoeEnabled: boolean; hotspotFolderPath: string; pppoeFolderPath: string }>>({});
+  const [portAction, setPortAction] = useState<number | null>(null);
+  const [portActionMessage, setPortActionMessage] = useState("");
+  const [portActionError, setPortActionError] = useState(false);
+  const [gatewayType, setGatewayType] = useState("mpesa");
+  const [gatewayConfig, setGatewayConfig] = useState("");
+  const [gatewaySaving, setGatewaySaving] = useState(false);
+  const [gatewayMessage, setGatewayMessage] = useState("");
+  const [gatewayError, setGatewayError] = useState(false);
 
   const routersQuery = useQuery<RouterSummary[]>({
     queryKey: ["router-files-routers", getSelectedTenantId()],
@@ -305,6 +342,13 @@ export default function Files() {
   const deployableSourcesQuery = useQuery<DeployableSource[]>({
     queryKey: ["router-file-sources"],
     queryFn: fetchDeployableSources,
+    retry: 1,
+  });
+
+  const portServicesQuery = useQuery<PortServiceBinding[]>({
+    queryKey: ["router-port-services", getSelectedTenantId(), selectedRouterId],
+    queryFn: () => fetchPortServices(selectedRouterId as number),
+    enabled: selectedRouterId !== null,
     retry: 1,
   });
 
@@ -337,6 +381,97 @@ export default function Files() {
     [deployableSourcesQuery.data, sourceType],
   );
   const allDeployableSources = deployableSourcesQuery.data ?? [];
+  const portalSources = useMemo(
+    () => allDeployableSources.filter(source => source.type === "hotspot"),
+    [allDeployableSources],
+  );
+
+  useEffect(() => {
+    if (!portServicesQuery.data) return;
+    setPortDrafts(Object.fromEntries(portServicesQuery.data.map(port => [port.id, {
+      hotspotEnabled: port.hotspot_enabled,
+      pppoeEnabled: port.pppoe_enabled,
+      hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
+      pppoeFolderPath: port.pppoe_folder_path ?? "",
+    }])));
+  }, [portServicesQuery.data]);
+
+  async function savePortServices(port: PortServiceBinding): Promise<void> {
+    const draft = portDrafts[port.id];
+    if (!draft) return;
+    setPortAction(port.id);
+    setPortActionMessage("");
+    setPortActionError(false);
+    try {
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch(`/api/admin/port-services/${port.id}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(draft),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? `Could not save port binding (HTTP ${response.status})`);
+      setPortActionMessage(`${port.interface_name} bindings saved.`);
+      await portServicesQuery.refetch();
+    } catch (error) {
+      setPortActionError(true);
+      setPortActionMessage(error instanceof Error ? error.message : "Could not save port binding.");
+    } finally {
+      setPortAction(null);
+    }
+  }
+
+  async function deployPortServices(port: PortServiceBinding): Promise<void> {
+    setPortAction(port.id);
+    setPortActionMessage("");
+    setPortActionError(false);
+    try {
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch(`/api/admin/port-services/${port.id}/deploy`, {
+        method: "POST",
+        headers,
+      });
+      const data = await response.json() as { error?: string; hotspotDestination?: string; pppoeDestination?: string };
+      if (!response.ok) throw new Error(data.error ?? `Could not deploy port services (HTTP ${response.status})`);
+      setPortActionMessage(`${port.interface_name} deployed${data.hotspotDestination ? " · Hotspot" : ""}${data.pppoeDestination ? " · PPPoE" : ""}.`);
+    } catch (error) {
+      setPortActionError(true);
+      setPortActionMessage(error instanceof Error ? error.message : "Could not deploy port services.");
+    } finally {
+      setPortAction(null);
+    }
+  }
+
+  async function savePaymentGateway(): Promise<void> {
+    setGatewaySaving(true);
+    setGatewayMessage("");
+    setGatewayError(false);
+    try {
+      const config = JSON.parse(gatewayConfig || "{}") as unknown;
+      if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Gateway credentials must be a JSON object.");
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = getAdminApiToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const response = await fetch("/api/admin/payment-gateways", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ gatewayType, config }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? `Could not save gateway (HTTP ${response.status})`);
+      setGatewayConfig("");
+      setGatewayMessage(`${gatewayType.toUpperCase()} credentials saved securely.`);
+    } catch (error) {
+      setGatewayError(true);
+      setGatewayMessage(error instanceof Error ? error.message : "Could not save gateway credentials.");
+    } finally {
+      setGatewaySaving(false);
+    }
+  }
 
   useEffect(() => {
     if (availableSources.length > 0 && !availableSources.some(source => source.name === sourceName)) {
@@ -703,6 +838,156 @@ export default function Files() {
             </button>
           )}
         </div>
+
+        {selectedRouter && (
+          <section style={{
+            maxWidth: 980,
+            marginBottom: "1rem",
+            padding: "1.1rem 1.25rem 1.2rem",
+            borderRadius: 12,
+            background: "var(--isp-section)",
+            border: "1px solid var(--isp-border)",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", marginBottom: "1rem" }}>
+              <span style={{ width: 31, height: 31, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, borderRadius: 8, background: "rgba(192,132,252,0.12)", color: "#c084fc" }}>
+                <RouterIcon size={16} />
+              </span>
+              <div>
+                <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.9rem", fontWeight: 700 }}>Per-port service bindings</h2>
+                <p style={{ margin: "0.25rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.73rem", lineHeight: 1.5 }}>
+                  Bind independent Hotspot and PPPoE assets to a physical interface. Both services can be enabled on the same port.
+                </p>
+              </div>
+            </div>
+            {portServicesQuery.isLoading ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--isp-text-muted)", fontSize: "0.76rem" }}>
+                <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Loading assigned ports…
+              </div>
+            ) : portServicesQuery.error ? (
+              <p style={{ margin: 0, color: "#f87171", fontSize: "0.74rem" }}>{(portServicesQuery.error as Error).message}</p>
+            ) : portServicesQuery.data?.length ? (
+              <div style={{ display: "grid", gap: "0.65rem" }}>
+                {portServicesQuery.data.map(port => {
+                  const draft = portDrafts[port.id] ?? {
+                    hotspotEnabled: port.hotspot_enabled,
+                    pppoeEnabled: port.pppoe_enabled,
+                    hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
+                    pppoeFolderPath: port.pppoe_folder_path ?? "",
+                  };
+                  const busy = portAction === port.id;
+                  return (
+                    <div key={port.id} style={{ padding: "0.8rem", borderRadius: 9, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.7rem", marginBottom: "0.65rem" }}>
+                        <div>
+                          <strong style={{ color: "var(--isp-text)", fontSize: "0.78rem", fontFamily: "monospace" }}>{port.interface_name}</strong>
+                          <span style={{ display: "block", marginTop: "0.18rem", color: "var(--isp-text-muted)", fontSize: "0.68rem" }}>
+                            {port.status} · {port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap
+                          </span>
+                        </div>
+                        <span style={{ color: port.status === "active" ? "#6ee7b7" : "#fbbf24", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase" }}>{port.status}</span>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "0.7rem" }}>
+                        <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.35rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={draft.hotspotEnabled}
+                              onChange={event => setPortDrafts(current => ({ ...current, [port.id]: { ...draft, hotspotEnabled: event.target.checked } }))}
+                            />
+                            Hotspot portal page
+                          </span>
+                          <select
+                            value={draft.hotspotFolderPath}
+                            onChange={event => setPortDrafts(current => ({ ...current, [port.id]: { ...draft, hotspotFolderPath: event.target.value } }))}
+                            disabled={!draft.hotspotEnabled}
+                            style={{ ...inputStyle, opacity: draft.hotspotEnabled ? 1 : 0.55 }}
+                          >
+                            <option value="">Choose local asset…</option>
+                            {portalSources.map(source => <option key={source.id} value={source.name}>{source.name}</option>)}
+                          </select>
+                        </label>
+                        <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.35rem" }}>
+                            <input
+                              type="checkbox"
+                              checked={draft.pppoeEnabled}
+                              onChange={event => setPortDrafts(current => ({ ...current, [port.id]: { ...draft, pppoeEnabled: event.target.checked } }))}
+                            />
+                            PPPoE landing page
+                          </span>
+                          <select
+                            value={draft.pppoeFolderPath}
+                            onChange={event => setPortDrafts(current => ({ ...current, [port.id]: { ...draft, pppoeFolderPath: event.target.value } }))}
+                            disabled={!draft.pppoeEnabled}
+                            style={{ ...inputStyle, opacity: draft.pppoeEnabled ? 1 : 0.55 }}
+                          >
+                            <option value="">Choose local asset…</option>
+                            {portalSources.map(source => <option key={source.id} value={source.name}>{source.name}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.65rem", flexWrap: "wrap", marginTop: "0.7rem" }}>
+                        <div style={{ display: "flex", gap: "0.45rem" }}>
+                          <button type="button" onClick={() => void savePortServices(port)} disabled={busy} style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.45rem 0.65rem", border: "1px solid rgba(96,165,250,0.3)", borderRadius: 7, background: "rgba(96,165,250,0.1)", color: "#93c5fd", fontSize: "0.7rem", fontWeight: 750, cursor: busy ? "wait" : "pointer", fontFamily: "inherit" }}>
+                            <Save size={12} /> Save binding
+                          </button>
+                          <button type="button" onClick={() => void deployPortServices({ ...port, ...draft })} disabled={busy} style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.45rem 0.65rem", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 7, background: "rgba(52,211,153,0.1)", color: "#6ee7b7", fontSize: "0.7rem", fontWeight: 750, cursor: busy ? "wait" : "pointer", fontFamily: "inherit" }}>
+                            {busy ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Rocket size={12} />} Deploy dual service
+                          </button>
+                        </div>
+                        {portActionMessage && portAction === null && <span style={{ color: portActionError ? "#f87171" : "#6ee7b7", fontSize: "0.68rem" }}>{portActionMessage}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.74rem" }}>No reseller ports are assigned to this router yet.</p>
+            )}
+          </section>
+        )}
+
+        {selectedRouter && (
+          <section style={{
+            maxWidth: 980,
+            marginBottom: "1rem",
+            padding: "1.1rem 1.25rem 1.2rem",
+            borderRadius: 12,
+            background: "var(--isp-section)",
+            border: "1px solid var(--isp-border)",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", marginBottom: "0.8rem" }}>
+              <span style={{ width: 31, height: 31, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, borderRadius: 8, background: "rgba(251,191,36,0.12)", color: "#fbbf24" }}>
+                <Server size={16} />
+              </span>
+              <div>
+                <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.9rem", fontWeight: 700 }}>Independent payment gateway</h2>
+                <p style={{ margin: "0.25rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.73rem", lineHeight: 1.5 }}>
+                  Gateway credentials belong to the signed-in ISP or reseller account. They are encrypted server-side and never returned to the browser.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "160px minmax(0, 1fr) auto", gap: "0.65rem", alignItems: "end" }}>
+              <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+                Gateway
+                <select value={gatewayType} onChange={event => setGatewayType(event.target.value)} style={{ ...inputStyle, marginTop: "0.3rem" }}>
+                  <option value="mpesa">M-Pesa</option>
+                  <option value="stripe">Stripe</option>
+                  <option value="paypal">PayPal</option>
+                </select>
+              </label>
+              <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
+                Credentials JSON
+                <textarea value={gatewayConfig} onChange={event => setGatewayConfig(event.target.value)} placeholder='{"apiKey":"…","accountId":"…"}' rows={2} style={{ ...inputStyle, marginTop: "0.3rem", resize: "vertical" }} />
+              </label>
+              <button type="button" onClick={() => void savePaymentGateway()} disabled={gatewaySaving || !gatewayConfig.trim()} style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", minHeight: 37, padding: "0.55rem 0.8rem", border: "1px solid rgba(251,191,36,0.35)", borderRadius: 8, background: "rgba(251,191,36,0.1)", color: "#fcd34d", fontSize: "0.72rem", fontWeight: 750, cursor: gatewaySaving ? "wait" : "pointer", fontFamily: "inherit", opacity: gatewaySaving || !gatewayConfig.trim() ? 0.55 : 1 }}>
+                {gatewaySaving ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={13} />}
+                {gatewaySaving ? "Saving…" : "Save gateway"}
+              </button>
+            </div>
+            {gatewayMessage && <p style={{ margin: "0.6rem 0 0", color: gatewayError ? "#f87171" : "#6ee7b7", fontSize: "0.72rem" }}>{gatewayMessage}</p>}
+          </section>
+        )}
 
         {selectedRouter && (
           <div style={{
