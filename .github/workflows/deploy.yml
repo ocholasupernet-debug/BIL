@@ -22,17 +22,46 @@ jobs:
       - name: Check out the release
         uses: actions/checkout@v4
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Build release artifacts on the runner
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+        run: |
+          pnpm install --frozen-lockfile
+          BASE_PATH="/" pnpm --filter @workspace/ochola-supernet run build:vps
+          pnpm --filter @workspace/api-server run build
+          test -s artifacts/ochola-supernet/dist/public/index.html
+          test -s artifacts/api-server/dist/index.mjs
+
       - name: Package release for VPS
         run: |
           release_archive="${RUNNER_TEMP}/ocholasupernet-release.tgz"
           tar \
             --exclude='./.git' \
+            --exclude='./.local' \
+            --exclude='./.cache' \
+            --exclude='./.agents' \
+            --exclude='./screenshots' \
+            --exclude='./attached_assets' \
             --exclude='./.env' \
             --exclude='*/.env' \
             --exclude='./node_modules' \
             --exclude='*/node_modules' \
-            --exclude='./dist' \
-            --exclude='*/dist' \
+            --exclude='./artifacts/ocholasupernet-mobile' \
+            --exclude='./artifacts/mockup-sandbox' \
+            --exclude='./artifacts/ocholasupernet-mobile/dist' \
+            --exclude='./artifacts/mockup-sandbox/dist' \
             --exclude='./logs' \
             --exclude='*/logs' \
             --exclude='*.log' \
@@ -138,6 +167,7 @@ jobs:
             # required workspace binaries are absent.
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SKIP_INSTALL=1 \
+            DEPLOY_SKIP_BUILD=1 \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
             api_ready=false

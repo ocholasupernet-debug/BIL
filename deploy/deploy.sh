@@ -182,21 +182,37 @@ apply_supabase_migration
 # 4. Build the frontend (VPS config — no Replit plugins)
 #    .env has already been loaded so VITE_SUPABASE_URL / VITE_SUPABASE_KEY are embedded at build time
 echo "[4/7] Building frontend..."
-if [ -f "$PROJECT_DIR/.env" ]; then
-  set -a; source "$PROJECT_DIR/.env"; set +a
-  echo "      ✓ Sourced .env (VITE_SUPABASE_URL=${VITE_SUPABASE_URL:+set})"
+if [ "${DEPLOY_SKIP_BUILD:-0}" = "1" ]; then
+  if [ ! -s "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/index.html" ]; then
+    echo "      ✗ Prebuilt frontend artifact is missing: $PROJECT_DIR/artifacts/ochola-supernet/dist/public/index.html" >&2
+    exit 1
+  fi
+  echo "      ✓ Using frontend artifact built on the GitHub runner"
 else
-  echo "      ⚠ No .env found — Supabase env vars may be missing"
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a; source "$PROJECT_DIR/.env"; set +a
+    echo "      ✓ Sourced .env (VITE_SUPABASE_URL=${VITE_SUPABASE_URL:+set})"
+  else
+    echo "      ⚠ No .env found — Supabase env vars may be missing"
+  fi
+  cd "$PROJECT_DIR/artifacts/ochola-supernet"
+  BASE_PATH="/" pnpm run build:vps
+  cd "$PROJECT_DIR"
 fi
-cd "$PROJECT_DIR/artifacts/ochola-supernet"
-BASE_PATH="/" pnpm run build:vps
-cd "$PROJECT_DIR"
 
 # 5. Build the API server
 echo "[5/7] Building API server..."
-cd "$PROJECT_DIR/artifacts/api-server"
-pnpm run build
-cd "$PROJECT_DIR"
+if [ "${DEPLOY_SKIP_BUILD:-0}" = "1" ]; then
+  if [ ! -s "$PROJECT_DIR/artifacts/api-server/dist/index.mjs" ]; then
+    echo "      ✗ Prebuilt API artifact is missing: $PROJECT_DIR/artifacts/api-server/dist/index.mjs" >&2
+    exit 1
+  fi
+  echo "      ✓ Using API artifact built on the GitHub runner"
+else
+  cd "$PROJECT_DIR/artifacts/api-server"
+  pnpm run build
+  cd "$PROJECT_DIR"
+fi
 
 # 6. Publish frontend build → the active web root
 echo "[6/7] Publishing frontend to the active web root..."
