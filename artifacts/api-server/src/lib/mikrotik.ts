@@ -2685,6 +2685,10 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
+  const safeCaCertificateName = validateRouterOsResourceName(
+    caCertificateName,
+    "RouterOS CA certificate filename",
+  );
   const coexistence = installationMode === "coexist" || installationMode === "direct";
   const routerOs7 = routerOsMajor >= 7;
   const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
@@ -2881,20 +2885,25 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     :error $ocholaVpnChildError
 }`;
 
+  const caFileName = `${safeCaCertificateName}.crt`;
+  const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
+  const caBuildFileName = `${caBuildBaseName}.txt`;
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
 # endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
 # an unverified download.
-:local caFile "${caCertificateName}.crt"
-:local caBuildBase "${caCertificateName}-bootstrap"
-:local caBuildFile "${caCertificateName}-bootstrap.txt"
-:local caImportFile $caFile
+:global ocholaCaPhase
+:global ocholaCaError
+:global ocholaCaImportError
+:set ocholaCaPhase "prepare CA file"
+:set ocholaCaError ""
+:set ocholaCaImportError ""
 :do {
-    :do { /file remove [find name="$caFile"] } on-error={}
-    :do { /file remove [find name="$caBuildFile"] } on-error={}
+    :do { /file remove [find name="${caFileName}"] } on-error={}
+    :do { /file remove [find name="${caBuildFileName}"] } on-error={}
     :local fetchedViaTrustedStore false
     :do {
-        /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=yes
+        /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caFileName}" keep-result=yes mode=https check-certificate=yes
         :set fetchedViaTrustedStore true
     } on-error={}
     :if (!$fetchedViaTrustedStore) do={
@@ -2905,35 +2914,63 @@ ${routerOsCertificateFileWriter(
   "caBuildBase",
   "        ",
   {
-    fileName: `${caCertificateName}-bootstrap.txt`,
-    baseName: `${caCertificateName}-bootstrap`,
+    fileName: caBuildFileName,
+    baseName: caBuildBaseName,
   },
 )}
-        :set caImportFile $caBuildFile
     }
-    :if ([:len [/file find where name="$caImportFile"]] = 0) do={
-        :error ("management VPN CA file was not created: " . $caImportFile)
-    }
-    :local caImportError ""
-    :do {
-        /certificate import file-name="$caImportFile" passphrase=""
-    } on-error={
-        :set caImportError $error
-    }
-    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
-        :if ([:len $caImportError] > 0) do={
-            :error ("management VPN CA certificate import failed: " . $caImportError)
+    :set ocholaCaPhase "verify CA file"
+    :if (!$fetchedViaTrustedStore) do={
+        :if ([:len [/file find where name="${caBuildFileName}"]] = 0) do={
+            :error "management VPN CA embedded file was not created"
         }
+    } else={
+        :if ([:len [/file find where name="${caFileName}"]] = 0) do={
+            :error "management VPN CA downloaded file was not created"
+        }
+    }
+    :set ocholaCaPhase "import CA certificate"
+    :if (!$fetchedViaTrustedStore) do={
+        :do {
+            /certificate import file-name="${caBuildFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+    } else={
+        :do {
+            /certificate import file-name="${caFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("management VPN CA certificate import failed: " . $ocholaCaImportError)
+    }
+    :set ocholaCaPhase "verify imported CA certificate"
+    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
         :error "management VPN CA certificate common name was not found after import"
     }
-    /certificate set [find where common-name="ISRG Root X1"] trusted=yes
-    :do { /file remove [find name="$caFile"] } on-error={}
-    :do { /file remove [find name="$caBuildFile"] } on-error={}
+    :set ocholaCaPhase "trust imported CA certificate"
+    :do {
+        /certificate set [find where common-name="ISRG Root X1"] trusted=yes
+    } on-error={
+        :set ocholaCaImportError $error
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("management VPN CA trust update failed: " . $ocholaCaImportError)
+    }
+    :set ocholaCaPhase "clean up CA file"
+    :do { /file remove [find name="${caFileName}"] } on-error={}
+    :do { /file remove [find name="${caBuildFileName}"] } on-error={}
     :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
         :error "management VPN CA was not imported"
     }
 } on-error={
-    :set ocholaVpnChildError ("${tag}: management VPN CA import failed: " . $error)
+    :set ocholaCaError $error
+    :if ([:len $ocholaCaError] = 0) do={
+        :set ocholaCaError "RouterOS returned no diagnostic text"
+    }
+    :set ocholaVpnChildError ("${tag}: management VPN CA failed during " . $ocholaCaPhase . ": " . $ocholaCaError)
     :error $ocholaVpnChildError
 }
 
