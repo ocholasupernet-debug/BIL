@@ -2803,15 +2803,18 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "        ")}
         :set caImportFile $caBuildFile
     }
-    /certificate import file-name=$caImportFile name=${routerOsString(caCertificateName)}
-    /certificate set [find name=${routerOsString(caCertificateName)}] trusted=yes
+    /certificate import file-name=$caImportFile
+    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
+        :error "management VPN CA certificate common name was not found after import"
+    }
+    /certificate set [find where common-name="ISRG Root X1"] trusted=yes
     :do { /file remove [find name="$caFile"] } on-error={}
     :do { /file remove [find name="$caBuildFile"] } on-error={}
-    :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={
+    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
         :error "management VPN CA was not imported"
     }
 } on-error={
-    :set ocholaVpnChildError "${tag}: management VPN CA import failed; refusing an unverified OpenVPN connection."
+    :set ocholaVpnChildError ("${tag}: management VPN CA import failed: " . $error)
     :error $ocholaVpnChildError
 }
 

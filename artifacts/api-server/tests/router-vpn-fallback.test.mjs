@@ -114,6 +114,9 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.match(ros6, /interface ovpn-client set \[find where name="ocholasupernet"\] mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
   assert.match(ros6, /\/file print file=\$caBuildBase/);
   assert.match(ros6, /\/file set \[find name=\$caBuildFile\] contents=\$caText/);
+  assert.match(ros6, /\/certificate import file-name=\$caImportFile\n/);
+  assert.doesNotMatch(ros6, /\/certificate import[^\n]* name=/);
+  assert.match(ros6, /\/certificate set \[find where common-name="ISRG Root X1"\] trusted=yes/);
   assert.doesNotMatch(ros6, /\/file add name="\$caFile" contents=/);
   assert.doesNotMatch(ros6, /\\r\\n/);
   assert.doesNotMatch(ros6, /cipher=aes128-cbc/);
