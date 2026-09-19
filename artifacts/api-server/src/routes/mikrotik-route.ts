@@ -50,6 +50,7 @@ import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.j
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
+import { isSafeRouterName } from "../lib/router-name-policy.js";
 
 const router: IRouter = Router();
 
@@ -1253,6 +1254,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     res.status(404).json({ error: "Router not found for this ISP account" });
     return;
   }
+  if (!isSafeRouterName(found.row.name)) {
+    res.status(409).json({
+      error: "This router profile has an invalid name and cannot generate a Self Install script.",
+      detail: "Create a new Self Install profile with the router name left blank so the server can assign a safe company router name.",
+    });
+    return;
+  }
 
   const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
   if (!vpsIp) {
@@ -1280,13 +1288,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const requestedOsMajor = Number.parseInt(String(req.query.rosMajor ?? "6"), 10);
   const routerOsMajor = requestedOsMajor === 7 ? 7 : 6;
 
-  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
-    routerId: id,
-    adminId,
-    routerName: found.row.name,
-  });
-
   try {
+    const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+      routerId: id,
+      adminId,
+      routerName: found.row.name,
+    });
     const provisioning = await provisionRouterManagementOpenVpn({
       adminId,
       routerId: id,

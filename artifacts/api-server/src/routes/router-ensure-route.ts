@@ -18,6 +18,7 @@ import { readIppEntries } from "../lib/vpn-status.js";
 import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
+import { isSafeRouterName, normalizeRouterName } from "../lib/router-name-policy.js";
 
 const router: IRouter = Router();
 
@@ -123,7 +124,7 @@ async function unfinishedRouterName(adminId: number): Promise<string> {
   const rows = await unfinishedRes.json() as Array<{ name?: string | null; created_at?: string | null }>;
   const names = rows
     .map(row => String(row.name ?? "").trim())
-    .filter(Boolean);
+    .filter(isSafeRouterName);
 
   /* Resume the first conventional company router before later numbered
      records. This prevents a stale/failed come2 profile from stealing a
@@ -211,7 +212,16 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     return;
   }
 
-  let name = typeof routerName === "string" ? routerName.trim() : "";
+  let name = "";
+  try {
+    name = normalizeRouterName(routerName);
+  } catch (error) {
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "The router name is invalid",
+    });
+    return;
+  }
   if (!name) {
     try {
       name = await unfinishedRouterName(adminId)
