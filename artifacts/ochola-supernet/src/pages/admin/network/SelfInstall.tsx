@@ -88,6 +88,15 @@ type FinishResult = {
   error?: string;
 };
 
+type SelfInstallStep = {
+  id: "network" | "vpn";
+  order: number;
+  title: string;
+  fileName: string;
+  description: string;
+  command: string;
+};
+
 const MODE_OPTIONS: Array<{
   value: InstallMode;
   backend: BackendInstallMode;
@@ -303,8 +312,8 @@ export default function SelfInstall() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
-  const [scriptText, setScriptText] = useState("");
-  const [scriptCopied, setScriptCopied] = useState(false);
+  const [scriptSteps, setScriptSteps] = useState<SelfInstallStep[]>([]);
+  const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -447,7 +456,7 @@ export default function SelfInstall() {
     }
   };
 
-  const fetchSelfInstallScript = async (): Promise<string> => {
+  const fetchSelfInstallSteps = async (): Promise<SelfInstallStep[]> => {
     if (!router) throw new Error("Create the router profile before generating a Self Install script.");
     const params = new URLSearchParams({
       adminId: String(ADMIN_ID),
@@ -461,30 +470,48 @@ export default function SelfInstall() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
     }
-    const text = await response.text();
-    if (!text.trim()) throw new Error("The generated Self Install script was empty.");
-    setScriptText(text);
-    setScriptCopied(false);
-    return text;
+    const payload = await response.json().catch(() => ({}));
+    const steps = Array.isArray(payload.steps) ? payload.steps as SelfInstallStep[] : [];
+    if (steps.length === 0) throw new Error("The generated Self Install steps were empty.");
+    setScriptSteps(steps);
+    setCopiedStep(null);
+    return steps;
   };
 
-  const downloadSelfInstallScript = async () => {
+  const refreshSelfInstallSteps = async () => {
     if (!router) return;
     setBusy("script");
     setError("");
     setNotice("");
     try {
-      const text = await fetchSelfInstallScript();
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      await fetchSelfInstallSteps();
+      setNotice("The ordered Self Install steps are ready. Run Step 1 first, then Step 2.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const downloadSelfInstallStep = async (stepId: SelfInstallStep["id"]) => {
+    if (!router) return;
+    setBusy("script");
+    setError("");
+    setNotice("");
+    try {
+      const steps = scriptSteps.length > 0 ? scriptSteps : await fetchSelfInstallSteps();
+      const step = steps.find(item => item.id === stepId);
+      if (!step) throw new Error("That Self Install step is not available.");
+      const blob = new Blob([step.command], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-       link.download = `vpnsetup-bootstrap${router.id}.rsc`;
+      link.download = `step-${step.order}-${step.fileName.replace(/\.rsc$/i, "")}-command-${router.id}.rsc`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("The VPN setup script is ready. Copy it into the MikroTik terminal; it will download and import vpnsetup.rsc.");
+      setNotice(`Step ${step.order} is ready. Run it in the MikroTik terminal before moving to the next step.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -492,16 +519,18 @@ export default function SelfInstall() {
     }
   };
 
-  const copySelfInstallScript = async () => {
+  const copySelfInstallStep = async (stepId: SelfInstallStep["id"]) => {
     if (!router) return;
     setBusy("script");
     setError("");
     setNotice("");
     try {
-      const text = scriptText || await fetchSelfInstallScript();
-      await navigator.clipboard.writeText(text);
-      setScriptCopied(true);
-       setNotice("The VPN setup command was copied. Paste it into the MikroTik terminal; it will download and import vpnsetup.rsc.");
+      const steps = scriptSteps.length > 0 ? scriptSteps : await fetchSelfInstallSteps();
+      const step = steps.find(item => item.id === stepId);
+      if (!step) throw new Error("That Self Install step is not available.");
+      await navigator.clipboard.writeText(step.command);
+      setCopiedStep(step.id);
+      setNotice(`Step ${step.order} was copied. Run it in the MikroTik terminal, wait for it to complete, then continue.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -677,41 +706,71 @@ export default function SelfInstall() {
                      <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the management VPN command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                        The copied command downloads and imports one router-scoped file: <code>vpnsetup.rsc</code>. The router reads its installed RouterOS version, selects the compatible client syntax and cipher, imports the management CA trust, adds the OpenVPN interface, and waits for the management tunnel. Network, hotspot, and registration files are intentionally not included yet.
+                        Self Install is deliberately ordered into independent router-terminal steps. Start with <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, wait for it to finish, then run <strong style={{ color: "var(--isp-text)" }}>Step 2</strong>. Nothing imports the two files automatically as one combined configuration.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button
                      type="button"
-                     onClick={() => void downloadSelfInstallScript()}
+                      onClick={() => void refreshSelfInstallSteps()}
                      disabled={busy !== "" || !endpointReady}
                      style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-accent)" : "var(--isp-section)", color: endpointReady && busy === "" ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
                    >
-                     {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <Download size={15} />}
-                      Generate and download bootstrap
+                      {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <TerminalSquare size={15} />}
+                      Generate ordered steps
                    </button>
                     <button
                       type="button"
-                      onClick={() => void copySelfInstallScript()}
+                      onClick={() => void refreshSelfInstallSteps()}
                       disabled={busy !== "" || !endpointReady}
                       style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-section)" : "var(--isp-section)", color: endpointReady && busy === "" ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
                     >
-                      {scriptCopied ? <Check size={15} /> : <Clipboard size={15} />}
-                      {scriptCopied ? "Copied to clipboard" : "Copy script"}
+                      <RefreshCw size={15} />
+                      Refresh steps
                     </button>
                  </div>
-                  {scriptText && (
-                    <div style={{ marginTop: "0.8rem" }}>
-                      <div style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginBottom: "0.4rem" }}>
-                         Select the text below if needed, or use <strong style={{ color: "var(--isp-text)" }}>Copy script</strong>, then paste the bootstrap command into the MikroTik terminal.
-                      </div>
-                      <textarea
-                        readOnly
-                        value={scriptText}
-                         aria-label="Generated management VPN RouterOS bootstrap command"
-                        spellCheck={false}
-                        rows={14}
-                        style={{ ...inputStyle, minHeight: 240, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}
-                      />
+                  {scriptSteps.length > 0 && (
+                    <div style={{ marginTop: "0.8rem", display: "grid", gap: "0.7rem" }}>
+                      {scriptSteps.map(step => (
+                        <div key={step.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, padding: "0.8rem", background: "var(--isp-card)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.75rem", flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 800 }}>
+                                Step {step.order}: {step.title}
+                              </div>
+                              <div style={{ marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5 }}>
+                                {step.description} File: <code>{step.fileName}</code>
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                onClick={() => void downloadSelfInstallStep(step.id)}
+                                disabled={busy !== ""}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.48rem 0.7rem", border: "1px solid var(--isp-border)", borderRadius: 7, background: "var(--isp-section)", color: "var(--isp-text)", fontFamily: "inherit", fontWeight: 700, fontSize: "0.7rem", cursor: busy === "" ? "pointer" : "not-allowed" }}
+                              >
+                                <Download size={13} /> Download command
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void copySelfInstallStep(step.id)}
+                                disabled={busy !== ""}
+                                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.48rem 0.7rem", border: 0, borderRadius: 7, background: "var(--isp-accent)", color: "#fff", fontFamily: "inherit", fontWeight: 750, fontSize: "0.7rem", cursor: busy === "" ? "pointer" : "not-allowed" }}
+                              >
+                                {copiedStep === step.id ? <Check size={13} /> : <Clipboard size={13} />}
+                                {copiedStep === step.id ? "Copied" : "Copy command"}
+                              </button>
+                            </div>
+                          </div>
+                          <textarea
+                            readOnly
+                            value={step.command}
+                            aria-label={`Self Install Step ${step.order} command`}
+                            spellCheck={false}
+                            rows={5}
+                            style={{ ...inputStyle, marginTop: "0.65rem", minHeight: 100, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}
+                          />
+                        </div>
+                      ))}
                     </div>
                   )}
                  {!endpointReady && (
