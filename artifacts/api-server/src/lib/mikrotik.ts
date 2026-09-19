@@ -2511,6 +2511,8 @@ export interface RouterAsClientOptions {
   apiPassword?: string;
   /** Dedicated backend management account used alongside the router account. */
   managementApiUsername?: string;
+  /** Password reused for the dedicated backend management account. */
+  managementApiPassword?: string;
   /** Approved hotspot assets to fetch during the same Self Install import. */
   hotspotAssets?: Array<{
     sourceUrl: string;
@@ -2681,6 +2683,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     apiUsername,
     apiPassword,
     managementApiUsername,
+    managementApiPassword,
     hotspotAssets = [],
     minimalManagementSetup = false,
   } = opts;
@@ -2744,6 +2747,9 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     : "";
   const safeManagementApiUsername = !minimalManagementSetup && managementApiUsername
     ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
+    : "";
+  const safeManagementApiPassword = managementApiPassword
+    ? validateRouterOpenVpnCredential(managementApiPassword, "API password")
     : "";
   const hotspotGateway = safeBridgeName ? routerHotspotGateway(lanNetwork) : null;
   const safeHotspotAssets = (minimalManagementSetup ? [] : hotspotAssets).map(asset => {
@@ -2890,6 +2896,32 @@ ${safeApiUsernames.map(username => `:local managementUserIds [/user find where n
     :error $ocholaVpnChildError
 }`).join("\n")}`
     : "";
+  const managementApiUserSetup = safeManagementApiPassword
+    ? `# Create the stable backend API account without removing any existing users.
+/user
+:local ocholaManagementUserIds [/user find where name="ocholasupernet"]
+:if ([:len $ocholaManagementUserIds] = 0) do={
+    :do {
+        add name="ocholasupernet" group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet API"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: ocholasupernet API user creation failed."
+        :error $ocholaVpnChildError
+    }
+} else={
+    :do {
+        set [:pick $ocholaManagementUserIds 0] group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet API"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: ocholasupernet API user update failed."
+        :error $ocholaVpnChildError
+    }
+}
+:if ([:len [/user find where name="ocholasupernet" && disabled=no]] = 0) do={
+    :set ocholaVpnChildError "${tag}: ocholasupernet API user was not verified."
+    :error $ocholaVpnChildError
+}`
+    : "";
+  const apiNetworks = ["10.8.0.0/24", "10.8.5.0/24", "10.8.6.0/24"];
+  const apiNetworkCsv = apiNetworks.join(",");
   const natSetup = safeBridgeName
     ? `# Step 6: Add only the management NAT rules needed for the two interfaces
 /ip firewall nat
@@ -3150,8 +3182,8 @@ ${openVpnOptionalSettings}
 
 # Step 3: Continue after the management tunnel is running.
 ${minimalManagementSetup
-  ? `# Self Install intentionally does not change firewall, NAT, bridge, or API-account settings.
-:put "${tag}: STEP 4/10 skipped - firewall and other network configuration were not requested."`
+  ? `# Core firewall and NAT rules are delivered separately in networksetup.rsc.
+:put "${tag}: STEP 4/10 skipped - core firewall and NAT are in networksetup.rsc."`
   : `# Allow API access from the validated VPN peer.
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
 :put "${tag}: STEP 4/10 - Applying management firewall rules."
@@ -3160,19 +3192,24 @@ ${firewallPreparation}
 :put "${tag}: STEP 4/10 complete - management firewall rules ready."`}
 ${bridgeSetup}
 :if ([:len "${safeBridgeName}"] = 0) do={ :put "${tag}: STEP 5/10 skipped - no hotspot bridge was requested." }
-${safeApiUsernames.length > 0
+${minimalManagementSetup
+  ? `:put "${tag}: STEP 6/10 - Creating the protected OcholaSupernet API account."
+${managementApiUserSetup}
+:put "${tag}: STEP 6/10 complete - OcholaSupernet API account verified."`
+  : safeApiUsernames.length > 0
   ? `:put "${tag}: STEP 6/10 - Creating or reconciling management API accounts."
 ${apiUserSetup}
 :put "${tag}: STEP 6/10 complete - management API accounts verified."`
   : `:put "${tag}: STEP 6/10 skipped - no management API account was requested."`}
 :put "${tag}: STEP 7/10 - Preparing RouterOS API access."
 ${minimalManagementSetup
-  ? `# Enable only the plain RouterOS API service required for backend verification.
+  ? `# Enable the RouterOS API service and allow the isolated API source networks.
 /ip service
-:do { /ip service set [find where name="api"] disabled=no } on-error={
+:do { /ip service set [find where name="api"] disabled=no address=${routerOsString(apiNetworkCsv)} } on-error={
     :set ocholaVpnChildError "${tag}: RouterOS API service could not be enabled."
     :error $ocholaVpnChildError
-}`
+}
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${routerOsString(apiNetworkCsv)} } on-error={}`
   : `${natSetup}
 
 # Step 7: Ensure API service is enabled and restricted
@@ -3366,6 +3403,98 @@ ${firewall}
 }
 
 /* ─── MikroTik firewall script generator ────────────────────────────────── */
+
+export interface RouterNetworkSetupOptions {
+  /** Router ID used to namespace every rule comment. */
+  routerId?: number;
+  /** Networks allowed to reach the RouterOS API. */
+  apiNetworks?: string[];
+}
+
+const DEFAULT_ROUTER_API_NETWORKS = [
+  "10.8.0.0/24",
+  "10.8.5.0/24",
+  "10.8.6.0/24",
+];
+
+/**
+ * Generates the separate core network engine used by Self Install.
+ *
+ * The rules are additive and idempotent: only rules carrying this router's
+ * OcholaSupernet comments are replaced. Existing customer and vendor rules
+ * are not removed or reordered.
+ */
+export function generateNetworkSetupScript(
+  options: RouterNetworkSetupOptions = {},
+): string {
+  const { routerId, apiNetworks = DEFAULT_ROUTER_API_NETWORKS } = options;
+  const tag = `ochola-network-${routerId ?? "router"}`;
+  const safeNetworks = Array.from(new Set(apiNetworks)).filter(network =>
+    /^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12]\d|3[0-2])$/.test(network),
+  );
+  if (safeNetworks.length === 0) {
+    throw new Error("At least one valid RouterOS API network is required.");
+  }
+
+  const apiRules = safeNetworks.map((network, index) => `:do { /ip firewall filter remove [find where comment="${tag}-api-${index}"] } on-error={}
+:do { /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}" place-before=0 } on-error={
+    :put "${tag}: could not add API allow rule for ${network}."
+}`).join("\n");
+
+  return `# ===============================================================
+# OcholaSupernet - networksetup.rsc
+# Core firewall and NAT engine for the router
+# Generated  : ${new Date().toISOString()}
+#
+# This file is intentionally separate from vpnsetup.rsc.
+# It only replaces rules carrying the ${tag} comments.
+# API source networks: ${safeNetworks.join(", ")}
+# ===============================================================
+
+:put "${tag}: starting core firewall and NAT setup."
+/ip firewall filter
+
+# Stateful baseline rules. These are safe to retry and do not delete
+# unrelated firewall policy.
+:do { remove [find where comment="${tag}-established-input"] } on-error={}
+:do { add chain=input action=accept connection-state=established,related comment="${tag}-established-input" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-invalid-input"] } on-error={}
+:do { add chain=input action=drop connection-state=invalid comment="${tag}-invalid-input" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-established-forward"] } on-error={}
+:do { add chain=forward action=accept connection-state=established,related comment="${tag}-established-forward" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-invalid-forward"] } on-error={}
+:do { add chain=forward action=drop connection-state=invalid comment="${tag}-invalid-forward" place-before=0 } on-error={}
+
+# Allow the management and legacy API pools before any existing WAN policy.
+${apiRules}
+
+# Permit ordinary LAN-to-WAN forwarding only when the standard interface
+# lists exist; otherwise leave the router's existing forwarding policy intact.
+:local ocholaLanLists [/interface/list find where name="LAN"]
+:local ocholaWanLists [/interface/list find where name="WAN"]
+:if ([:len $ocholaLanLists] > 0 && [:len $ocholaWanLists] > 0) do={
+    :do { /ip firewall filter remove [find where comment="${tag}-lan-to-wan"] } on-error={}
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN comment="${tag}-lan-to-wan" } on-error={
+        :put "${tag}: could not add LAN-to-WAN forward rule."
+    }
+} else={
+    :put "${tag}: LAN/WAN interface lists are not both present; existing forwarding policy was preserved."
+}
+
+# Masquerade outbound traffic through the standard WAN interface list.
+/ip firewall nat
+:if ([:len $ocholaWanLists] > 0) do={
+    :do { remove [find where comment="${tag}-wan-masquerade"] } on-error={}
+    :do { add chain=srcnat action=masquerade out-interface-list=WAN comment="${tag}-wan-masquerade" } on-error={
+        :put "${tag}: could not add the WAN masquerade rule."
+    }
+} else={
+    :put "${tag}: WAN interface list is not present; existing NAT policy was preserved."
+}
+
+:put "${tag}: core firewall and NAT setup complete."
+`;
+}
 
 /**
  * Generates a MikroTik RouterOS script that restricts API access to a
