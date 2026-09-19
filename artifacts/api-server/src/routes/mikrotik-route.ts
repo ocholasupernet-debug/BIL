@@ -19,6 +19,7 @@ import {
   probeAllHosts,
   probePort,
   generateOvpnClientConfig,
+  generateRouterAsClientScript,
   fetchRouterFiles,
   fetchRouterSecurityState,
   deployRouterFile,
@@ -1202,6 +1203,111 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
     },
     ...info,
   });
+});
+
+/* ─── GET /api/router/:id/self-install-script ───────────────────────────── */
+/**
+ * Generates the single terminal-run RouterOS script for Self Install.
+ *
+ * This is intentionally narrower than the legacy router scripts: it creates
+ * the management OVPN client, the requested hotspot bridge/ports, the
+ * management API account, the scoped firewall/NAT rules, and the completion
+ * callback. It does not install portal files, billing rules, queues, or
+ * customer-service configuration.
+ */
+router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid router id" });
+    return;
+  }
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid signed-in ISP account is required" });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+
+  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  if (!vpsIp) {
+    res.status(400).json({ error: "VPS OpenVPN endpoint is not configured" });
+    return;
+  }
+  const token = String(found.row.token ?? "").trim();
+  if (!token) {
+    res.status(409).json({ error: "Router install callback token is not available" });
+    return;
+  }
+
+  const tunnelRouterIp = String(
+    req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id),
+  ).trim();
+  const bridgeName = String(req.query.bridgeName ?? "hotspot-bridge").trim();
+  const bridgePorts = String(req.query.ports ?? "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+  const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
+  const installationMode = requestedMode === "direct" || requestedMode === "takeover"
+    ? requestedMode
+    : "coexist";
+  const requestedOsMajor = Number.parseInt(String(req.query.rosMajor ?? "6"), 10);
+  const routerOsMajor = requestedOsMajor === 7 ? 7 : 6;
+
+  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+    routerId: id,
+    adminId,
+    routerName: found.row.name,
+  });
+
+  try {
+    const provisioning = await provisionRouterManagementOpenVpn({
+      adminId,
+      routerId: id,
+      routerName: found.row.name,
+      routerIp: tunnelRouterIp,
+    });
+    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
+      res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
+      return;
+    }
+
+    const origin = managementScriptSourceOrigin(req);
+    const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
+    const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
+    const script = generateRouterAsClientScript({
+      vpsPublicIp: vpsIp,
+      vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
+      vpnUsername: openVpnCredentials.username,
+      vpnPassword: openVpnCredentials.password,
+      caCertificateUrl,
+      backendRegistrationUrl: callbackUrl,
+      tunnelRouterIp,
+      tunnelVpsIp: routerManagementVpnContract("primary").gateway,
+      routerId: id,
+      routerOsMajor,
+      installationMode,
+      bridgeName,
+      bridgePorts,
+      apiUsername: found.row.router_username || found.row.name,
+      apiPassword: found.row.router_secret || found.row.name,
+      managementApiUsername: "ocholasupernet",
+    });
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="router-self-install${id}.rsc"`);
+    res.send(script);
+  } catch (error) {
+    res.status(503).json({
+      error: "Self Install script generation failed",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
 });
 
 /* ─── GET /api/router/:id/ovpn-client ──────────────────────────────────── */

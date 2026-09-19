@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Clipboard,
+  Download,
   ExternalLink,
   Globe2,
   Loader2,
@@ -292,16 +293,17 @@ export default function SelfInstall() {
   const [mode, setMode] = useState<InstallMode>("greenfield");
   const [routerName, setRouterName] = useState("");
   const [bridgeInterface, setBridgeInterface] = useState("bridge");
-  const [bridgeName, setBridgeName] = useState("");
+  const [bridgeName, setBridgeName] = useState("hotspot-bridge");
   const [ports, setPorts] = useState("");
   const [router, setRouter] = useState<RouterProfile | null>(null);
   const [vpnInfo, setVpnInfo] = useState<VpnInfo | null>(null);
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null);
   const [finished, setFinished] = useState<FinishResult["router"] | null>(null);
-  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "">("");
+  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
+  const [routerOsMajor, setRouterOsMajor] = useState<6 | 7>(6);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -328,6 +330,8 @@ export default function SelfInstall() {
       setRouter(found);
       setRouterName(found.name);
       setBridgeInterface(found.bridge_interface || "bridge");
+      setBridgeName(found.bridge_interface || "hotspot-bridge");
+      if (found.ros_version?.startsWith("7.")) setRouterOsMajor(7);
       await loadVpnInfo(found.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load the router profile.");
@@ -346,6 +350,8 @@ export default function SelfInstall() {
         `/api/admin/router/install-status/${router.id}?adminId=${ADMIN_ID}&mode=${backendMode(mode)}`,
       );
       setInstallStatus(result);
+      if (result.router?.rosVersion?.startsWith("7.")) setRouterOsMajor(7);
+      if (result.router?.rosVersion && !result.router.rosVersion.startsWith("7.")) setRouterOsMajor(6);
       if (result.vpnIp && vpnInfo && vpnInfo.managementTunnel?.routerTunnelIp !== result.vpnIp) {
         setVpnInfo(current => current ? {
           ...current,
@@ -444,6 +450,44 @@ export default function SelfInstall() {
     }
   };
 
+  const downloadSelfInstallScript = async () => {
+    if (!router) return;
+    setBusy("script");
+    setError("");
+    setNotice("");
+    try {
+      const params = new URLSearchParams({
+        adminId: String(ADMIN_ID),
+        mode: backendMode(mode),
+        rosMajor: String(routerOsMajor),
+        bridgeName: bridgeName.trim() || (mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"),
+        ports,
+      });
+      const token = getAdminApiToken();
+      const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `router-self-install${router.id}.rsc`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice("The minimal Self Install script was generated. Run it once in the MikroTik terminal, then keep this page open for verification.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
+    } finally {
+      setBusy("");
+    }
+  };
+
   const tunnel = vpnInfo?.managementTunnel;
   const live = installStatus;
   const connected = Boolean(live?.connected || finished);
@@ -469,8 +513,8 @@ export default function SelfInstall() {
             <h1 style={{ margin: 0, color: "var(--isp-text)", fontSize: "1.25rem", fontWeight: 800 }}>Self Install</h1>
           </div>
           <p style={{ margin: "0.35rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.8rem", maxWidth: 720, lineHeight: 1.55 }}>
-            Register a MikroTik router, assign its isolated management endpoint from the VPS, and verify the live RouterOS API connection.
-            This flow does not generate or download RouterOS scripts.
+             Register a MikroTik router, generate the limited management script, and verify the live RouterOS API connection.
+             The script only provisions the management VPN, hotspot bridge, scoped firewall/NAT rules, API account, and completion callback.
           </p>
         </div>
 
@@ -540,7 +584,12 @@ export default function SelfInstall() {
                 <button
                   key={option.value}
                   type="button"
-                  onClick={() => setMode(option.value)}
+                   onClick={() => {
+                     setMode(option.value);
+                     if (bridgeName === "hotspot-bridge" || bridgeName === "co-hotspot-bridge") {
+                       setBridgeName(option.value === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge");
+                     }
+                   }}
                   style={{
                     textAlign: "left",
                     padding: "0.75rem",
@@ -602,6 +651,53 @@ export default function SelfInstall() {
                   <strong style={{ color: "var(--isp-text)" }}>Connection boundary:</strong> the VPS reaches the router through the isolated management VPN, then uses RouterOS API port 8728. Public and LAN addresses are not used for the final verification.
                 </div>
               </div>
+               <div style={{ marginTop: "0.9rem", padding: "0.85rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border-subtle)" }}>
+                 <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
+                   <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the one-run RouterOS script
+                 </div>
+                 <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
+                   It creates the management OVPN client tagged <code>mainbillingvpn</code>, creates or reuses the hotspot bridge, adds the selected ports, adds the management API account, and applies only the related firewall/NAT rules.
+                 </div>
+                 <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
+                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
+                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Hotspot bridge</span>
+                     <input
+                       value={bridgeName}
+                       onChange={event => setBridgeName(event.target.value)}
+                       placeholder={mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"}
+                       style={inputStyle}
+                     />
+                   </label>
+                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 220, flex: "1 1 220px" }}>
+                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Physical ports</span>
+                     <input
+                       value={ports}
+                       onChange={event => setPorts(event.target.value)}
+                       placeholder="ether2, ether3"
+                       style={inputStyle}
+                     />
+                   </label>
+                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 150 }}>
+                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>RouterOS major</span>
+                     <select value={routerOsMajor} onChange={event => setRouterOsMajor(Number(event.target.value) === 7 ? 7 : 6)} style={inputStyle}>
+                       <option value={6}>RouterOS 6</option>
+                       <option value={7}>RouterOS 7</option>
+                     </select>
+                   </label>
+                   <button
+                     type="button"
+                     onClick={() => void downloadSelfInstallScript()}
+                     disabled={busy !== "" || !endpointReady}
+                     style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-accent)" : "var(--isp-section)", color: endpointReady && busy === "" ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
+                   >
+                     {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <Download size={15} />}
+                     Generate and download script
+                   </button>
+                 </div>
+                 {!endpointReady && (
+                   <div style={{ marginTop: "0.55rem", color: "#fbbf24", fontSize: "0.7rem" }}>Generate the connection profile first so the VPS endpoint and tunnel credentials are ready.</div>
+                 )}
+               </div>
               {!endpointReady && (
                 <div style={{ marginTop: "0.75rem", color: "#fbbf24", fontSize: "0.74rem", display: "flex", gap: "0.45rem", alignItems: "center" }}>
                   <AlertCircle size={14} /> VPS endpoint is not configured yet. Set ROUTER_OPENVPN_ENDPOINT or VPS_HOST before connecting a router.
@@ -631,12 +727,12 @@ export default function SelfInstall() {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
-                  <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                    <li>Use the VPS endpoint and primary management port above.</li>
-                    <li>Assign the reserved management IP to this router profile.</li>
-                    <li>Allow RouterOS API access only from the management VPN.</li>
-                    <li>Return here when the tunnel and API are responding.</li>
-                  </ul>
+                   <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
+                     <li>Download the generated script and run it once in the MikroTik terminal.</li>
+                     <li>It creates the management VPN interface and requested hotspot bridge/ports.</li>
+                     <li>It adds the management API user and only the related firewall/NAT rules.</li>
+                     <li>Return here while the tunnel, callback, and API verification complete.</li>
+                   </ul>
                 </div>
               </div>
               <div style={{ marginTop: "1rem", display: "flex", alignItems: "center", gap: "0.55rem", flexWrap: "wrap" }}>
