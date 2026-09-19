@@ -70,6 +70,7 @@ interface PendingRouterFileSource {
 }
 
 const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
+const publicRouterFileSources = new Map<string, PendingRouterFileSource>();
 const ROUTER_FILE_SOURCE_TTL_MS = 5 * 60 * 1000;
 type BulkDeployJobStatus = "queued" | "running" | "complete" | "failed";
 interface BulkDeployJob {
@@ -100,6 +101,9 @@ function cleanPendingRouterFileSources(): void {
   const now = Date.now();
   for (const [token, source] of pendingRouterFileSources) {
     if (source.expiresAt <= now) pendingRouterFileSources.delete(token);
+  }
+  for (const [sourceKey, source] of publicRouterFileSources) {
+    if (source.expiresAt <= now) publicRouterFileSources.delete(sourceKey);
   }
 }
 
@@ -227,10 +231,21 @@ function createPendingRouterFileSource(source: Omit<PendingRouterFileSource, "ex
   return token;
 }
 
-/* Short-lived source endpoint used by the router's /tool fetch command. The
-   browser never receives this URL or the file contents. Ordinary transfers
-   are consumed on the first request; Self Install sources opt into a small,
-   bounded retry budget for RouterOS transport retries. */
+function createPublicRouterFileSource(
+  routerId: number,
+  routeName: string,
+  source: Omit<PendingRouterFileSource, "expiresAt">,
+): void {
+  cleanPendingRouterFileSources();
+  publicRouterFileSources.set(`${routerId}/${routeName}`, {
+    ...source,
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+}
+
+/* Short-lived source endpoint used by the router's /tool fetch command.
+   Ordinary transfers are consumed on the first request; Self Install sources
+   opt into a small, bounded retry budget for RouterOS transport retries. */
 router.get("/router-file-source/:token", (req, res): void => {
   cleanPendingRouterFileSources();
   const token = req.params.token;
@@ -244,6 +259,37 @@ router.get("/router-file-source/:token", (req, res): void => {
   source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
   if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) {
     pendingRouterFileSources.delete(token);
+  }
+  res
+    .set("Content-Type", source.contentType)
+    .set("Content-Length", String(source.content.length))
+    .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
+    .set("Cache-Control", "no-store, no-cache, must-revalidate")
+    .send(source.content);
+});
+
+/* Deterministic public paths used by the Self Install bootstrap. The router
+   ID and filename replace the opaque bearer token; the generated content still
+   expires and remains bounded to a small number of fetch attempts. */
+router.get("/router-file-source/:routerId/:fileName", (req, res): void => {
+  cleanPendingRouterFileSources();
+  const routerId = Number.parseInt(String(req.params.routerId), 10);
+  const fileName = String(req.params.fileName ?? "");
+  if (!Number.isInteger(routerId) || routerId <= 0 || !/^[A-Za-z0-9._-]+$/.test(fileName)) {
+    res.status(404).send("Upload source not found");
+    return;
+  }
+  const sourceKey = `${routerId}/${fileName}`;
+  const source = publicRouterFileSources.get(sourceKey);
+  if (!source || source.expiresAt <= Date.now()) {
+    publicRouterFileSources.delete(sourceKey);
+    res.status(404).send("Upload source expired");
+    return;
+  }
+
+  source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
+  if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) {
+    publicRouterFileSources.delete(sourceKey);
   }
   res
     .set("Content-Type", source.contentType)
@@ -1348,19 +1394,20 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const origin = managementScriptSourceOrigin(req);
     const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
-    const hotspotAssets = listDeployableSources().map(source => {
+    const hotspotAssets = listDeployableSources().map((source, index) => {
       const content = getDeployableSource(source.type, source.name);
       if (!content) {
         throw new Error(`Approved hotspot asset could not be read: ${source.name}`);
       }
-      const assetToken = createPendingRouterFileSource({
+      const assetRouteName = `hotspot-asset-${index + 1}`;
+      createPublicRouterFileSource(id, assetRouteName, {
         content: content.content,
         contentType: contentTypeForFile(source.name),
         fileName: source.name.split("/").pop() ?? source.name,
         maxFetchAttempts: 3,
       });
       return {
-        sourceUrl: `${origin}/api/router-file-source/${assetToken}`,
+        sourceUrl: `${origin}/api/router-file-source/${id}/${assetRouteName}`,
         destinationPath: `flash/hotspot/${source.name}`,
         sourceName: source.name,
       };
@@ -1386,13 +1433,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
 
     /*
-     * Keep each router-specific stage behind its own short-lived source URL.
+     * Keep each router-specific stage behind its own short-lived public URL.
      * The router imports them in dependency order, so a failed later stage can
      * be retried without rebuilding or re-embedding the VPN stage.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
     const stagedSources = stages.map((stage) => {
-      const sourceToken = createPendingRouterFileSource({
+      createPublicRouterFileSource(id, stage.fileName, {
         content: Buffer.from(stage.content, "utf8"),
         contentType: "text/plain; charset=utf-8",
         fileName: stage.fileName,
@@ -1400,7 +1447,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       });
       return {
         fileName: stage.fileName,
-        sourceUrl: `${sourceOrigin}/api/router-file-source/${sourceToken}`,
+        sourceUrl: `${sourceOrigin}/api/router-file-source/${id}/${stage.fileName}`,
       };
     });
     const bootstrap = stagedSources
