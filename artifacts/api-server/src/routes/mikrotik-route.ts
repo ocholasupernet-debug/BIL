@@ -243,10 +243,9 @@ function createPublicRouterFileSource(
   });
 }
 
-/* Short-lived source endpoint used by the router's /tool fetch command. The
-   browser never receives this URL or the file contents. Ordinary transfers
-   are consumed on the first request; Self Install sources opt into a small,
-   bounded retry budget for RouterOS transport retries. */
+/* Short-lived source endpoint used by the router's /tool fetch command.
+   Ordinary transfers are consumed on the first request; Self Install sources
+   opt into a small, bounded retry budget for RouterOS transport retries. */
 router.get("/router-file-source/:token", (req, res): void => {
   cleanPendingRouterFileSources();
   const token = req.params.token;
@@ -1395,19 +1394,20 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const origin = managementScriptSourceOrigin(req);
     const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
-    const hotspotAssets = listDeployableSources().map(source => {
+    const hotspotAssets = listDeployableSources().map((source, index) => {
       const content = getDeployableSource(source.type, source.name);
       if (!content) {
         throw new Error(`Approved hotspot asset could not be read: ${source.name}`);
       }
-      const assetToken = createPendingRouterFileSource({
+      const assetRouteName = `hotspot-asset-${index + 1}`;
+      createPublicRouterFileSource(id, assetRouteName, {
         content: content.content,
         contentType: contentTypeForFile(source.name),
         fileName: source.name.split("/").pop() ?? source.name,
         maxFetchAttempts: 3,
       });
       return {
-        sourceUrl: `${origin}/api/router-file-source/${assetToken}`,
+        sourceUrl: `${origin}/api/router-file-source/${id}/${assetRouteName}`,
         destinationPath: `flash/hotspot/${source.name}`,
         sourceName: source.name,
       };
@@ -1433,13 +1433,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
 
     /*
-     * Keep each router-specific stage behind its own short-lived source URL.
+     * Keep each router-specific stage behind its own short-lived public URL.
      * The router imports them in dependency order, so a failed later stage can
      * be retried without rebuilding or re-embedding the VPN stage.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
     const stagedSources = stages.map((stage) => {
-      const sourceToken = createPendingRouterFileSource({
+      createPublicRouterFileSource(id, stage.fileName, {
         content: Buffer.from(stage.content, "utf8"),
         contentType: "text/plain; charset=utf-8",
         fileName: stage.fileName,
@@ -1447,7 +1447,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       });
       return {
         fileName: stage.fileName,
-        sourceUrl: `${sourceOrigin}/api/router-file-source/${sourceToken}`,
+        sourceUrl: `${sourceOrigin}/api/router-file-source/${id}/${stage.fileName}`,
       };
     });
     const bootstrap = stagedSources
