@@ -2920,7 +2920,7 @@ ${natSetup}
     :local addressRows [/ip address find where interface="${interfaceName}"]
     :foreach addressId in=$addressRows do={
         :local addressValue [/ip address get $addressId address]
-        :if ($addressValue ~ "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/") do={
+        :if ($addressValue ~ "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/") do={
             :set liveTunnelIp [:pick $addressValue 0 [:find $addressValue "/"]]
         }
     }
