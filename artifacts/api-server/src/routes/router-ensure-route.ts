@@ -7,7 +7,7 @@
  * Falls back to the anon key and handles 409 conflicts by fetching the
  * existing row.
  *
- * Body: { adminId: number, routerName?: string, bridgeIp?: string, bridgeInterface?: string }
+ * Body: { adminId: number, bridgeIp?: string, bridgeInterface?: string }
  * Response: { ok: true, router: { id, name, router_secret, ... } }
  *            { ok: false, error: string, detail?: string }
  */
@@ -18,7 +18,7 @@ import { readIppEntries } from "../lib/vpn-status.js";
 import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
-import { isSafeRouterName, normalizeRouterName } from "../lib/router-name-policy.js";
+import { isSafeRouterName } from "../lib/router-name-policy.js";
 
 const router: IRouter = Router();
 
@@ -112,8 +112,7 @@ async function unfinishedRouterName(adminId: number): Promise<string> {
       if (subdomain) tenantBase = routerNameBase(subdomain);
     }
   } catch {
-    /* Fall back to the oldest unfinished record if the admin lookup is
-       temporarily unavailable. */
+    /* Without the tenant prefix we cannot safely resume a profile. */
   }
 
   const unfinishedRes = await fetch(
@@ -138,7 +137,7 @@ async function unfinishedRouterName(adminId: number): Promise<string> {
     if (matching.length > 0) return matching[0].name;
   }
 
-  return names[0] ?? "";
+  return "";
 }
 
 /* Credentials are consumed by server-side RouterOS routes and by the
@@ -199,9 +198,8 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     return;
   }
 
-  const { adminId: requestedAdminId, routerName, bridgeIp, bridgeInterface } = req.body as {
+  const { adminId: requestedAdminId, bridgeIp, bridgeInterface } = req.body as {
     adminId?: number;
-    routerName?: string;
     bridgeIp?: string;
     bridgeInterface?: string;
   };
@@ -214,25 +212,19 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
 
   let name = "";
   try {
-    name = normalizeRouterName(routerName);
+    /*
+     * Router names are always tenant-prefix + ordinal (for example come1).
+     * Do not accept a browser-provided name: stale forms and pasted filenames
+     * previously created profiles such as ".env" and "ca.crt".
+     */
+    name = await unfinishedRouterName(adminId)
+      || await nextCompanyRouterName(adminId, req.get("host") ?? "");
   } catch (error) {
-    res.status(400).json({
+    res.status(503).json({
       ok: false,
-      error: error instanceof Error ? error.message : "The router name is invalid",
+      error: `Could not choose a company router name: ${error instanceof Error ? error.message : String(error)}`,
     });
     return;
-  }
-  if (!name) {
-    try {
-      name = await unfinishedRouterName(adminId)
-        || await nextCompanyRouterName(adminId, req.get("host") ?? "");
-    } catch (error) {
-      res.status(503).json({
-        ok: false,
-        error: `Could not choose a company router name: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      return;
-    }
   }
 
   /* ── 1. Try to find an existing router with this name ── */
