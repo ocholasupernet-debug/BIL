@@ -2938,6 +2938,7 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     }
     :if (!$fetchedViaTrustedStore) do={
         :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
+        :set ocholaCaPhase "create embedded CA file"
 ${routerOsCertificateFileWriter(
   ISRG_ROOT_X1_PEM,
   "caBuildFile",
