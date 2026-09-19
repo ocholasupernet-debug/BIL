@@ -394,7 +394,6 @@ export default function SelfInstall() {
           method: "POST",
           body: JSON.stringify({
             adminId: ADMIN_ID,
-            routerName: routerName.trim() || undefined,
             bridgeInterface: bridgeInterface.trim() || "bridge",
           }),
         },
@@ -592,12 +591,12 @@ export default function SelfInstall() {
               <span style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Router name</span>
               <input
                 value={routerName}
-                onChange={event => setRouterName(event.target.value)}
-                placeholder="Leave blank to choose the next company router number"
-                disabled={Boolean(router) || Boolean(reconfigureId)}
+                placeholder="Assigned automatically"
+                readOnly
+                disabled
                 style={inputStyle}
               />
-              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>Names are allocated as company1, company2, and so on.</span>
+              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>Assigned automatically from the company name and next number, for example come1.</span>
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
               <span style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Router bridge interface</span>
@@ -685,7 +684,7 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the mainhotspot bootstrap command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                     The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, and imports it in MikroTik. The generated file then creates the management OVPN client, hotspot bridge, selected ports, management API account, and related firewall/NAT rules.
+                     The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, and imports it in MikroTik. The generated file creates the management OVPN client, hotspot bridge, selected ports, management API account, related firewall/NAT rules, and the complete approved hotspot file bundle.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>

@@ -923,7 +923,14 @@ export async function deployRouterFile(
         Math.max(ms, 120_000),
       );
 
-      const transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+      let transferredFile: RouterFile | undefined;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+        if (transferredFile) break;
+        if (attempt < 4) {
+          await new Promise(resolve => setTimeout(resolve, 750));
+        }
+      }
       if (!transferredFile) {
         throw new Error("The router did not create the destination upload file");
       }
@@ -2502,6 +2509,12 @@ export interface RouterAsClientOptions {
   apiPassword?: string;
   /** Dedicated backend management account used alongside the router account. */
   managementApiUsername?: string;
+  /** Approved hotspot assets to fetch during the same Self Install import. */
+  hotspotAssets?: Array<{
+    sourceUrl: string;
+    destinationPath: string;
+    sourceName: string;
+  }>;
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2628,6 +2641,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     apiUsername,
     apiPassword,
     managementApiUsername,
+    hotspotAssets = [],
   } = opts;
 
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
@@ -2668,6 +2682,41 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeApiPassword = apiPassword ? validateRouterOpenVpnCredential(apiPassword, "API password") : "";
   const safeManagementApiUsername = managementApiUsername
     ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
+    : "";
+  const safeHotspotAssets = hotspotAssets.map(asset => {
+    const destinationPath = String(asset.destinationPath ?? "").trim().replaceAll("\\", "/");
+    if (!/^flash\/hotspot\/[A-Za-z0-9._/-]+$/.test(destinationPath) || destinationPath.includes("..")) {
+      throw new Error("Self Install hotspot asset destination is invalid.");
+    }
+    return {
+      sourceUrl: validateRouterOpenVpnCaUrl(asset.sourceUrl),
+      destinationPath,
+      sourceName: String(asset.sourceName ?? destinationPath.split("/").pop() ?? "asset")
+        .replace(/[\u0000-\u001F\u007F"]/g, ""),
+    };
+  });
+  const hotspotDirectories = Array.from(new Set([
+    "flash/hotspot",
+    ...safeHotspotAssets.map(asset => asset.destinationPath.slice(0, asset.destinationPath.lastIndexOf("/"))),
+  ])).sort((left, right) => left.split("/").length - right.split("/").length);
+  const hotspotAssetInstall = safeHotspotAssets.length > 0
+    ? `# Step 10: Import the approved hotspot asset bundle
+# Existing files are preserved so a retry cannot replace a customized portal.
+${hotspotDirectories.map(directory => `:do { /file make-dir dir-name=${routerOsString(directory)} } on-error={}`).join("\n")}
+${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsString(asset.destinationPath)}]] = 0) do={
+    :do {
+        /tool fetch url=${routerOsString(asset.sourceUrl)} dst-path=${routerOsString(asset.destinationPath)} keep-result=yes mode=https check-certificate=yes
+        :if ([:len [/file find where name=${routerOsString(asset.destinationPath)}]] = 0) do={
+            :put "${asset.sourceName}: RouterOS did not create the destination file."
+        } else={
+            :put "${asset.sourceName}: hotspot asset installed."
+        }
+    } on-error={
+        :put "${asset.sourceName}: hotspot asset download failed; the management install can still finish."
+    }
+} else={
+    :put "${asset.sourceName}: already present; preserved."
+}`).join("\n")}`
     : "";
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
@@ -2955,6 +3004,7 @@ ${natSetup}
 :put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
 
 :log info "${tag}: OVPN client running; dynamic tunnel IPv4=\$liveTunnelIp; backend API verification pending"
+${hotspotAssetInstall}
 `;
 }
 

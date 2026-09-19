@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { installHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
 import {
   AlertCircle,
   Check,
@@ -126,6 +127,8 @@ export default function Files() {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [error, setError] = useState("");
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [deployingHotspot, setDeployingHotspot] = useState(false);
+  const [deploymentSummary, setDeploymentSummary] = useState<HotspotFileDeploymentResult | null>(null);
 
   const loadRouters = useCallback(async () => {
     setLoadingRouters(true);
@@ -200,6 +203,30 @@ export default function Files() {
     }
   };
 
+  const deployHotspotFiles = async () => {
+    if (!selectedRouterId || deployingHotspot) return;
+    if (!window.confirm(
+      `Install the approved hotspot files on ${selectedRouter?.name || "this router"}? Existing files will be kept and skipped; only missing files in flash/hotspot will be added.`,
+    )) return;
+
+    setDeployingHotspot(true);
+    setError("");
+    setDeploymentSummary(null);
+    try {
+      const token = getAdminApiToken();
+      const result = await installHotspotFiles(selectedRouterId, ADMIN_ID, token);
+      setDeploymentSummary(result);
+      if (result.status === "failed" && result.failed.length) {
+        setError(`Hotspot deployment finished with ${result.failed.length} failed file(s).`);
+      }
+      await loadFiles(selectedRouterId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Hotspot files could not be deployed.");
+    } finally {
+      setDeployingHotspot(false);
+    }
+  };
+
   return (
     <AdminLayout>
       <div style={{ maxWidth: 1180, display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -240,11 +267,39 @@ export default function Files() {
             {loadingFiles ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <RefreshCw size={15} />}
             Refresh files
           </button>
+          <button
+            type="button"
+            onClick={() => void deployHotspotFiles()}
+            disabled={!selectedRouterId || deployingHotspot}
+            style={{ ...buttonStyle, background: "var(--isp-accent)", borderColor: "var(--isp-accent)", color: "#fff", cursor: selectedRouterId && !deployingHotspot ? "pointer" : "not-allowed", opacity: selectedRouterId && !deployingHotspot ? 1 : 0.6 }}
+          >
+            {deployingHotspot ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
+            {deployingHotspot ? "Installing hotspot files…" : "Install hotspot files"}
+          </button>
           <button type="button" onClick={() => void loadRouters()} disabled={loadingRouters} style={{ ...buttonStyle, cursor: loadingRouters ? "not-allowed" : "pointer" }}>
             {loadingRouters ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <Server size={15} />}
             Refresh routers
           </button>
         </section>
+
+        {deploymentSummary && (
+          <section style={{ ...panel, padding: "0.9rem 1rem", borderColor: deploymentSummary.failed.length ? "rgba(248,113,113,0.35)" : "rgba(74,222,128,0.3)", background: deploymentSummary.failed.length ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: deploymentSummary.failed.length ? "#fca5a5" : "#86efac", fontWeight: 800, fontSize: "0.82rem" }}>
+              {deploymentSummary.failed.length ? <AlertCircle size={16} /> : <Check size={16} />}
+              Hotspot file installation {deploymentSummary.status === "complete" && !deploymentSummary.failed.length ? "complete" : "finished with errors"}
+            </div>
+            <div style={{ ...mutedText, marginTop: "0.4rem" }}>
+              {deploymentSummary.deployed.length} added · {deploymentSummary.skipped.length} already present · {deploymentSummary.failed.length} failed · {deploymentSummary.processed} of {deploymentSummary.total} processed
+            </div>
+            {deploymentSummary.failed.length > 0 && (
+              <ul style={{ margin: "0.65rem 0 0", paddingLeft: "1.2rem", color: "#fca5a5", fontSize: "0.74rem", lineHeight: 1.5 }}>
+                {deploymentSummary.failed.map(file => (
+                  <li key={`${file.destinationPath}:${file.error}`}>{file.destinationPath}: {file.error}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         {error && (
           <div style={{ ...panel, padding: "0.9rem 1rem", color: "#fca5a5", background: "rgba(248,113,113,0.07)", borderColor: "rgba(248,113,113,0.28)", display: "flex", gap: "0.55rem", alignItems: "flex-start", fontSize: "0.8rem" }}>

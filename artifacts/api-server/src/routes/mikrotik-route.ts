@@ -21,6 +21,7 @@ import {
   generateOvpnClientConfig,
   generateRouterAsClientScript,
   fetchRouterFiles,
+  runRouterCommand,
   fetchRouterSecurityState,
   deployRouterFile,
   syncHotspotPortalHostname,
@@ -49,6 +50,7 @@ import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.j
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
+import { isSafeRouterName } from "../lib/router-name-policy.js";
 
 const router: IRouter = Router();
 
@@ -601,12 +603,31 @@ async function runBulkFileDeployment(
       .replace(/^\/+|\/+$/g, "")
       .toLowerCase();
     const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
-    const directories = new Set(
-      currentFiles.files
-        .filter(file => file.type.toLowerCase().includes("directory"))
-        .map(file => normaliseName(file.name)),
-    );
     const importableDestinations = new Set<string>();
+
+    /* RouterOS only creates nested destinations when their parent directory
+       already exists. The base Self Install creates the hotspot profile, but
+       older routers may not yet have the asset subdirectories. Create every
+       required parent before attempting the file transfers. */
+    const parentDirectories = new Set<string>();
+    for (const source of job.sources) {
+      const lastSlash = source.destinationPath.lastIndexOf("/");
+      if (lastSlash > 0) {
+        const parent = source.destinationPath.slice(0, lastSlash);
+        parentDirectories.add(parent);
+      }
+    }
+    const directoryDepth = (value: string) => value.split("/").length;
+    for (const directory of [...parentDirectories].sort((left, right) => directoryDepth(left) - directoryDepth(right))) {
+      try {
+        await runRouterCommand(creds, ["/file/make-dir", `=dir-name=${directory}`]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/already exists|already have|duplicate|such file/i.test(message)) {
+          logger.warn({ routerId: job.routerId, directory, error: message }, "Could not pre-create router hotspot directory; file transfers will report individual failures");
+        }
+      }
+    }
 
     for (const source of job.sources) {
       const { sourceName, destinationPath } = source;
@@ -614,15 +635,6 @@ async function runBulkFileDeployment(
       if (existingFiles.has(normalisedDestination)) {
         job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
         importableDestinations.add(destinationPath);
-        job.processed += 1;
-        job.updatedAt = Date.now();
-        continue;
-      }
-
-      const lastSlash = destinationPath.lastIndexOf("/");
-      const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
-      if (source.type === "hotspot" && !directories.has(parentDirectory)) {
-        job.skipped.push({ sourceName, destinationPath, reason: "parent directory is missing" });
         job.processed += 1;
         job.updatedAt = Date.now();
         continue;
@@ -1221,9 +1233,9 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
  *
  * This is intentionally narrower than the legacy router scripts: it creates
  * the management OVPN client, the requested hotspot bridge/ports, the
- * management API account, the scoped firewall/NAT rules, and the completion
- * callback. It does not install portal files, billing rules, queues, or
- * customer-service configuration.
+ * management API account, the scoped firewall/NAT rules, the approved hotspot
+ * asset bundle, and the completion callback. It does not install billing
+ * rules, queues, or customer-service configuration.
  */
 router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
@@ -1240,6 +1252,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const found = await getRouterCreds(id, adminId);
   if (!found) {
     res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+  if (!isSafeRouterName(found.row.name)) {
+    res.status(409).json({
+      error: "This router profile has an invalid name and cannot generate a Self Install script.",
+      detail: "Create a new Self Install profile with the router name left blank so the server can assign a safe company router name.",
+    });
     return;
   }
 
@@ -1269,13 +1288,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const requestedOsMajor = Number.parseInt(String(req.query.rosMajor ?? "6"), 10);
   const routerOsMajor = requestedOsMajor === 7 ? 7 : 6;
 
-  const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
-    routerId: id,
-    adminId,
-    routerName: found.row.name,
-  });
-
   try {
+    const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+      routerId: id,
+      adminId,
+      routerName: found.row.name,
+    });
     const provisioning = await provisionRouterManagementOpenVpn({
       adminId,
       routerId: id,
@@ -1290,6 +1308,22 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const origin = managementScriptSourceOrigin(req);
     const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
+    const hotspotAssets = listDeployableSources().map(source => {
+      const content = getDeployableSource(source.type, source.name);
+      if (!content) {
+        throw new Error(`Approved hotspot asset could not be read: ${source.name}`);
+      }
+      const assetToken = createPendingRouterFileSource({
+        content: content.content,
+        contentType: contentTypeForFile(source.name),
+        fileName: source.name.split("/").pop() ?? source.name,
+      });
+      return {
+        sourceUrl: `${origin}/api/router-file-source/${assetToken}`,
+        destinationPath: `flash/hotspot/${source.name}`,
+        sourceName: source.name,
+      };
+    });
     const script = generateRouterAsClientScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
@@ -1307,6 +1341,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       apiUsername: found.row.router_username || found.row.name,
       apiPassword: found.row.router_secret || found.row.name,
       managementApiUsername: "ocholasupernet",
+      hotspotAssets,
     });
 
     /*
