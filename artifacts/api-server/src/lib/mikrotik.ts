@@ -2493,6 +2493,15 @@ export interface RouterAsClientOptions {
   vpnRole?: RouterManagementVpnRole;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
   installationMode?: "coexist" | "direct" | "takeover";
+  /** Optional Self Install bridge that the one-run script creates or reuses. */
+  bridgeName?: string;
+  /** Physical ports to add to the Self Install bridge. */
+  bridgePorts?: string[];
+  /** RouterOS API account to create or reconcile during Self Install. */
+  apiUsername?: string;
+  apiPassword?: string;
+  /** Dedicated backend management account used alongside the router account. */
+  managementApiUsername?: string;
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2577,6 +2586,14 @@ function validateRouterOpenVpnCredential(value: string, label: string): string {
   return value;
 }
 
+function validateRouterOsResourceName(value: string, label: string): string {
+  const resource = String(value ?? "").trim();
+  if (!resource || resource.length > 63 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resource)) {
+    throw new Error(`${label} must contain only letters, numbers, dots, underscores, or hyphens.`);
+  }
+  return resource;
+}
+
 /**
  * Generates a MikroTik RouterOS script (.rsc) that configures the router
  * as an OpenVPN CLIENT connecting back to the VPS server.
@@ -2606,6 +2623,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerOsMajor = 6,
     vpnRole = "primary",
     installationMode = "coexist",
+    bridgeName,
+    bridgePorts = [],
+    apiUsername,
+    apiPassword,
+    managementApiUsername,
   } = opts;
 
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
@@ -2638,6 +2660,15 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     : routerId
       ? `${tag} VPS tunnel`
       : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}${roleSuffix}`;
+  const safeBridgeName = bridgeName ? validateRouterOsResourceName(bridgeName, "Self Install bridge name") : "";
+  const safeBridgePorts = bridgePorts
+    .map(port => validateRouterOsResourceName(port, "Self Install bridge port"))
+    .filter((port, index, values) => values.indexOf(port) === index);
+  const safeApiUsername = apiUsername ? validateRouterOsResourceName(apiUsername, "RouterOS API username") : "";
+  const safeApiPassword = apiPassword ? validateRouterOpenVpnCredential(apiPassword, "API password") : "";
+  const safeManagementApiUsername = managementApiUsername
+    ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
+    : "";
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
@@ -2680,6 +2711,59 @@ remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
+  const bridgeSetup = safeBridgeName
+    ? `# Step 4: Create the requested hotspot bridge and add only the selected ports
+/interface bridge
+:if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
+    :do { /interface bridge add name="${safeBridgeName}" comment="${tag} hotspot bridge" } on-error={
+        :set ocholaVpnChildError "${tag}: hotspot bridge creation failed."
+        :error $ocholaVpnChildError
+    }
+}
+${safeBridgePorts.map(port => `:if ([:len [/interface find where name="${port}"]] = 0) do={
+    :set ocholaVpnChildError "${tag}: physical interface ${port} was not found."
+    :error $ocholaVpnChildError
+}
+:if ([:len [/interface bridge port find where bridge="${safeBridgeName}" && interface="${port}"]] = 0) do={
+    :do { /interface bridge port add bridge="${safeBridgeName}" interface="${port}" comment="${tag} hotspot port" } on-error={
+        :set ocholaVpnChildError "${tag}: could not add ${port} to ${safeBridgeName}."
+        :error $ocholaVpnChildError
+    }
+}`).join("\n")}
+:if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
+    :set ocholaVpnChildError "${tag}: hotspot bridge was not verified."
+    :error $ocholaVpnChildError
+}`
+    : "";
+  const safeApiUsernames = Array.from(new Set([safeManagementApiUsername, safeApiUsername].filter(Boolean)));
+  const apiUserSetup = safeApiPassword && safeApiUsernames.length > 0
+    ? `# Step 5: Create or reconcile the dedicated management API accounts
+/user
+${safeApiUsernames.map(username => `:local managementUserIds [/user find where name="${username}"]
+:if ([:len $managementUserIds] = 0) do={
+    :do { add name="${username}" group=full password="${safeApiPassword}" comment="${username === safeManagementApiUsername ? "DO NOT DELETE - OcholaSupernet management API" : `${tag} router management API`}" } on-error={
+        :set ocholaVpnChildError "${tag}: management API user creation failed for ${username}."
+        :error $ocholaVpnChildError
+    }
+} else={
+    :do { set [:pick $managementUserIds 0] group=full password="${safeApiPassword}" disabled=no comment="${username === safeManagementApiUsername ? "DO NOT DELETE - OcholaSupernet management API" : `${tag} router management API`}" } on-error={
+        :set ocholaVpnChildError "${tag}: management API user update failed for ${username}."
+        :error $ocholaVpnChildError
+    }
+}
+:if ([:len [/user find where name="${username}" && disabled=no]] = 0) do={
+    :set ocholaVpnChildError "${tag}: management API user ${username} was not verified."
+    :error $ocholaVpnChildError
+}`).join("\n")}`
+    : "";
+  const natSetup = safeBridgeName
+    ? `# Step 6: Add only the management NAT rules needed for the two interfaces
+/ip firewall nat
+remove [find where comment="${tag}-mgmt-to-hotspot-nat"]
+add chain=srcnat action=masquerade src-address=${tunnelVpsIp}/32 out-interface="${safeBridgeName}" comment="${tag}-mgmt-to-hotspot-nat"
+remove [find where comment="${tag}-hotspot-to-mgmt-nat"]
+add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"`
+    : "";
   const openVpnOptionalSettings = routerOs7
     ? `# RouterOS 7 path: certificate verification is mandatory.
 :do {
@@ -2809,8 +2893,11 @@ ${openVpnOptionalSettings}
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
 /ip firewall filter
 ${firewallPreparation}
+${bridgeSetup}
+${apiUserSetup}
+${natSetup}
 
-# Step 4: Ensure API service is enabled and restricted
+# Step 7: Ensure API service is enabled and restricted
 /ip service
 :do { /ip service set [find where name="api"] disabled=no address=${tunnelVpsIp}/32 } on-error={
     :set ocholaVpnChildError "${tag}: could not restrict the RouterOS API service to the management VPN peer."
@@ -2818,7 +2905,7 @@ ${firewallPreparation}
 }
 :do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}
 
-# Step 5: Discover and report the live tunnel IPv4
+# Step 8: Discover and report the live tunnel IPv4
 :local ovpnId [/interface ovpn-client find where name="${interfaceName}"]
 :local liveTunnelIp ""
 :if ([:len $ovpnId] > 0) do={
@@ -2835,7 +2922,7 @@ ${firewallPreparation}
     :error $ocholaVpnChildError
 }
 
-# Step 6: Verify RouterOS API reachability and backend registration
+# Step 9: Verify RouterOS API reachability and backend registration
 :local apiReachable false
 :do {
     :local apiIds [/ip service find where name="api" && disabled=no]
