@@ -34,6 +34,11 @@ const syncRoute = await readFile("src/routes/sync-route.ts", "utf8");
 const vpnStatus = await readFile("src/lib/vpn-status.ts", "utf8");
 const vpnSettings = await readFile("../ochola-supernet/src/pages/vpn/Settings.tsx", "utf8");
 
+test("registration auto-probe uses the stored RouterOS API secret", () => {
+  assert.match(syncRoute, /bgAutoProbe\(existingRouter\.router_secret \?\? token, probeIp/);
+  assert.doesNotMatch(syncRoute, /bgAutoProbe\(token, probeIp/);
+});
+
 test("management OpenVPN credentials use the configured router name", () => {
   const credentials = vpnContract.routerManagementOvpnCredentials("come2");
   assert.equal(credentials.username, "come2");
