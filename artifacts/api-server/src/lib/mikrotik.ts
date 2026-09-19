@@ -2811,7 +2811,7 @@ ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsSt
 ${minimalManagementSetup ? "" : `:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
-}`}
+}`}`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="ocholasupernet" comment="mainbillingvpn"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
