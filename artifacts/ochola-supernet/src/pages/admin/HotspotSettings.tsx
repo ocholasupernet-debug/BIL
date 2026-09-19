@@ -1,15 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { useBrand } from "@/context/BrandContext";
 import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
+  getAdminApiToken,
   getSelectedTenantId,
 } from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
+import { installHotspotFiles } from "@/lib/router-hotspot-files";
 import {
-  AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye,
+  AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
   Save, ShieldCheck, Smartphone, Sparkles, Upload, Wifi, X,
 } from "lucide-react";
@@ -541,6 +544,7 @@ export default function HotspotSettings() {
   const [notice, setNotice] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [installingHotspotFiles, setInstallingHotspotFiles] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -775,6 +779,37 @@ export default function HotspotSettings() {
     }
   };
 
+  const handleInstallHotspotFiles = async () => {
+    const routerId = Number(settings.routerId);
+    const adminId = getSelectedTenantId();
+    if (!Number.isSafeInteger(routerId) || routerId < 1) {
+      setNotice({ type: "error", text: "Choose a linked router before installing hotspot files." });
+      return;
+    }
+    if (!adminId) {
+      setNotice({ type: "error", text: "Sign in to an ISP account before installing hotspot files." });
+      return;
+    }
+    if (!window.confirm(
+      "Install the approved hotspot files on this router? Existing files will be kept and skipped; only missing files in flash/hotspot will be added.",
+    )) return;
+
+    setInstallingHotspotFiles(true);
+    setNotice(null);
+    try {
+      const result = await installHotspotFiles(routerId, adminId, getAdminApiToken());
+      if (result.failed.length > 0) {
+        setNotice({ type: "error", text: `Hotspot files finished with ${result.failed.length} failure(s): ${result.deployed.length} added, ${result.skipped.length} already present.` });
+      } else {
+        setNotice({ type: "success", text: `Hotspot files installed: ${result.deployed.length} added, ${result.skipped.length} already present in flash/hotspot.` });
+      }
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "Hotspot files could not be installed." });
+    } finally {
+      setInstallingHotspotFiles(false);
+    }
+  };
+
   const handlePreview = async () => {
     setShowPreview(true);
     setPreviewLoading(true);
@@ -841,6 +876,12 @@ export default function HotspotSettings() {
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting}>
               {deploying ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {deploying ? "Deploying…" : "Deploy to router"}
             </button>
+            <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || deploying || exporting}>
+              {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing files…" : "Install hotspot files"}
+            </button>
+            <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
+              <FolderOpen size={14} /> View router files
+            </Link>
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved" : "Save settings"}

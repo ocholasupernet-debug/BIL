@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { installHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
 import {
   AlertCircle,
   Check,
@@ -127,14 +128,7 @@ export default function Files() {
   const [error, setError] = useState("");
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [deployingHotspot, setDeployingHotspot] = useState(false);
-  const [deploymentSummary, setDeploymentSummary] = useState<{
-    status: string;
-    total: number;
-    processed: number;
-    deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
-    skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
-    failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
-  } | null>(null);
+  const [deploymentSummary, setDeploymentSummary] = useState<HotspotFileDeploymentResult | null>(null);
 
   const loadRouters = useCallback(async () => {
     setLoadingRouters(true);
@@ -220,48 +214,9 @@ export default function Files() {
     setDeploymentSummary(null);
     try {
       const token = getAdminApiToken();
-      const headers = new Headers({ "Content-Type": "application/json" });
-      if (token) headers.set("Authorization", `Bearer ${token}`);
-      const response = await fetch(`/api/router/${selectedRouterId}/files/deploy-bulk`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          adminId: ADMIN_ID,
-          scope: "hotspot",
-          destinationDirectory: "flash/hotspot",
-        }),
-      });
-      const queued = await response.json().catch(() => ({}));
-      if (!response.ok || !queued.jobId) {
-        throw new Error(queued.error || `Hotspot file deployment could not start (HTTP ${response.status})`);
-      }
-
-      let result = queued;
-      for (let attempt = 0; attempt < 360; attempt += 1) {
-        if (result.status === "complete" || result.status === "failed") break;
-        await new Promise(resolve => window.setTimeout(resolve, 1000));
-        const statusResponse = await fetch(
-          `/api/router/${selectedRouterId}/files/deploy-bulk/${queued.jobId}?adminId=${ADMIN_ID}`,
-          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-        );
-        result = await statusResponse.json().catch(() => ({}));
-        if (!statusResponse.ok) {
-          throw new Error(result.error || `Could not read deployment progress (HTTP ${statusResponse.status})`);
-        }
-      }
-
-      if (result.status !== "complete" && result.status !== "failed") {
-        throw new Error("Hotspot file deployment is still running. Refresh the router files shortly to see its result.");
-      }
-      setDeploymentSummary({
-        status: result.status,
-        total: Number(result.total ?? 0),
-        processed: Number(result.processed ?? 0),
-        deployed: Array.isArray(result.deployed) ? result.deployed : [],
-        skipped: Array.isArray(result.skipped) ? result.skipped : [],
-        failed: Array.isArray(result.failed) ? result.failed : [],
-      });
-      if (result.status === "failed" && result.failed?.length) {
+      const result = await installHotspotFiles(selectedRouterId, ADMIN_ID, token);
+      setDeploymentSummary(result);
+      if (result.status === "failed" && result.failed.length) {
         setError(`Hotspot deployment finished with ${result.failed.length} failed file(s).`);
       }
       await loadFiles(selectedRouterId);
