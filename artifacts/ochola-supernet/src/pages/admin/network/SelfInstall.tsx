@@ -394,7 +394,6 @@ export default function SelfInstall() {
           method: "POST",
           body: JSON.stringify({
             adminId: ADMIN_ID,
-            routerName: routerName.trim() || undefined,
             bridgeInterface: bridgeInterface.trim() || "bridge",
           }),
         },
@@ -592,12 +591,12 @@ export default function SelfInstall() {
               <span style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Router name</span>
               <input
                 value={routerName}
-                onChange={event => setRouterName(event.target.value)}
-                placeholder="Leave blank to choose the next company router number"
-                disabled={Boolean(router) || Boolean(reconfigureId)}
+                placeholder="Assigned automatically"
+                readOnly
+                disabled
                 style={inputStyle}
               />
-              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>Names are allocated as company1, company2, and so on.</span>
+              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>Assigned automatically from the company name and next number, for example come1.</span>
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
               <span style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Router bridge interface</span>
