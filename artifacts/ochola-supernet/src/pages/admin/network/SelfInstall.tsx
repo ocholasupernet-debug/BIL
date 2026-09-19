@@ -486,12 +486,12 @@ export default function SelfInstall() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-       link.download = `mainhotspot-bootstrap${router.id}.rsc`;
+       link.download = `ochola-self-install-bootstrap${router.id}.rsc`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import mainhotspot.rsc.");
+       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import the four router setup stages.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -508,7 +508,7 @@ export default function SelfInstall() {
       const text = scriptText || await fetchSelfInstallScript();
       await navigator.clipboard.writeText(text);
       setScriptCopied(true);
-       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import mainhotspot.rsc.");
+       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import the four router setup stages.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -681,10 +681,10 @@ export default function SelfInstall() {
               </div>
                <div style={{ marginTop: "0.9rem", padding: "0.85rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border-subtle)" }}>
                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
-                    <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the mainhotspot bootstrap command
+                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the staged Self Install command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                      The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, waits for the download to finish, and then runs a separate import step. The generated file creates the management OVPN client, hotspot bridge, selected ports, management API account, related firewall/NAT rules, and the complete approved hotspot file bundle.
+                       The copied command downloads and imports four router-scoped files in order: VPN and CA trust, network/API setup, tunnel registration, and hotspot assets. Each stage is small and can be retried independently.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
@@ -739,7 +739,7 @@ export default function SelfInstall() {
                       <textarea
                         readOnly
                         value={scriptText}
-                         aria-label="Generated mainhotspot RouterOS bootstrap command"
+                         aria-label="Generated staged Self Install RouterOS bootstrap command"
                         spellCheck={false}
                         rows={14}
                         style={{ ...inputStyle, minHeight: 240, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}

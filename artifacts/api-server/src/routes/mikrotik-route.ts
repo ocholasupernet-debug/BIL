@@ -19,7 +19,7 @@ import {
   probeAllHosts,
   probePort,
   generateOvpnClientConfig,
-  generateRouterAsClientScript,
+  generateRouterAsClientScriptStages,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -1365,7 +1365,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         sourceName: source.name,
       };
     });
-    const script = generateRouterAsClientScript({
+    const stages = generateRouterAsClientScriptStages({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
       vpnUsername: openVpnCredentials.username,
@@ -1386,25 +1386,33 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
 
     /*
-     * The copied command must be runnable from a MikroTik terminal. Keep the
-     * generated RouterOS payload behind a short-lived, one-time URL rather
-     * than asking the router to call this admin-authenticated endpoint (the
-     * router cannot safely carry the administrator's bearer token).
+     * Keep each router-specific stage behind its own short-lived source URL.
+     * The router imports them in dependency order, so a failed later stage can
+     * be retried without rebuilding or re-embedding the VPN stage.
      */
-    const sourceToken = createPendingRouterFileSource({
-      content: Buffer.from(script, "utf8"),
-      contentType: "text/plain; charset=utf-8",
-      fileName: "mainhotspot.rsc",
-      maxFetchAttempts: 3,
+    const sourceOrigin = managementScriptSourceOrigin(req);
+    const stagedSources = stages.map((stage) => {
+      const sourceToken = createPendingRouterFileSource({
+        content: Buffer.from(stage.content, "utf8"),
+        contentType: "text/plain; charset=utf-8",
+        fileName: stage.fileName,
+        maxFetchAttempts: 3,
+      });
+      return {
+        fileName: stage.fileName,
+        sourceUrl: `${sourceOrigin}/api/router-file-source/${sourceToken}`,
+      };
     });
-    const sourceUrl = `${managementScriptSourceOrigin(req)}/api/router-file-source/${sourceToken}`;
-    const bootstrap = `/tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" mode=https check-certificate=no
-:delay 2s
-/import "mainhotspot.rsc"
-`;
+    const bootstrap = stagedSources
+      .map(({ fileName, sourceUrl }) =>
+        `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no\n`
+        + `:delay 2s\n`
+        + `/import "${fileName}"`,
+      )
+      .join("\n");
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="mainhotspot-bootstrap${id}.rsc"`);
+    res.setHeader("Content-Disposition", `attachment; filename="ochola-self-install-bootstrap${id}.rsc"`);
     res.send(bootstrap);
   } catch (error) {
     res.status(503).json({
