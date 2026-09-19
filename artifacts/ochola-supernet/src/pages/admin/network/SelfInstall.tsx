@@ -304,6 +304,8 @@ export default function SelfInstall() {
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
   const [routerOsMajor, setRouterOsMajor] = useState<6 | 7>(6);
+  const [scriptText, setScriptText] = useState("");
+  const [scriptCopied, setScriptCopied] = useState(false);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -450,28 +452,38 @@ export default function SelfInstall() {
     }
   };
 
+  const fetchSelfInstallScript = async (): Promise<string> => {
+    if (!router) throw new Error("Create the router profile before generating a Self Install script.");
+    const params = new URLSearchParams({
+      adminId: String(ADMIN_ID),
+      mode: backendMode(mode),
+      rosMajor: String(routerOsMajor),
+      bridgeName: bridgeName.trim() || (mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"),
+      ports,
+    });
+    const token = getAdminApiToken();
+    const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
+    }
+    const text = await response.text();
+    if (!text.trim()) throw new Error("The generated Self Install script was empty.");
+    setScriptText(text);
+    setScriptCopied(false);
+    return text;
+  };
+
   const downloadSelfInstallScript = async () => {
     if (!router) return;
     setBusy("script");
     setError("");
     setNotice("");
     try {
-      const params = new URLSearchParams({
-        adminId: String(ADMIN_ID),
-        mode: backendMode(mode),
-        rosMajor: String(routerOsMajor),
-        bridgeName: bridgeName.trim() || (mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"),
-        ports,
-      });
-      const token = getAdminApiToken();
-      const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
-      }
-      const blob = await response.blob();
+      const text = await fetchSelfInstallScript();
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -480,9 +492,26 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setNotice("The minimal Self Install script was generated. Run it once in the MikroTik terminal, then keep this page open for verification.");
+      setNotice("The minimal Self Install script is ready. Copy it into the MikroTik terminal or use the downloaded .rsc file.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const copySelfInstallScript = async () => {
+    if (!router) return;
+    setBusy("script");
+    setError("");
+    setNotice("");
+    try {
+      const text = scriptText || await fetchSelfInstallScript();
+      await navigator.clipboard.writeText(text);
+      setScriptCopied(true);
+      setNotice("The complete RouterOS script was copied. Paste it directly into the MikroTik terminal and run it once.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
       setBusy("");
     }
@@ -656,7 +685,7 @@ export default function SelfInstall() {
                    <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the one-run RouterOS script
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                   It creates the management OVPN client tagged <code>mainbillingvpn</code>, creates or reuses the hotspot bridge, adds the selected ports, adds the management API account, and applies only the related firewall/NAT rules.
+                    It creates the management OVPN client tagged <code>mainbillingvpn</code>, creates or reuses the hotspot bridge, adds the selected ports, adds the management API account, and applies only the related firewall/NAT rules. You can copy the complete script and paste it directly into the MikroTik terminal.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
@@ -693,7 +722,31 @@ export default function SelfInstall() {
                      {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <Download size={15} />}
                      Generate and download script
                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copySelfInstallScript()}
+                      disabled={busy !== "" || !endpointReady}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-section)" : "var(--isp-section)", color: endpointReady && busy === "" ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
+                    >
+                      {scriptCopied ? <Check size={15} /> : <Clipboard size={15} />}
+                      {scriptCopied ? "Copied to clipboard" : "Copy script"}
+                    </button>
                  </div>
+                  {scriptText && (
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <div style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginBottom: "0.4rem" }}>
+                        Select the text below if needed, or use <strong style={{ color: "var(--isp-text)" }}>Copy script</strong>, then paste it into the MikroTik terminal and run it once.
+                      </div>
+                      <textarea
+                        readOnly
+                        value={scriptText}
+                        aria-label="Generated RouterOS Self Install script"
+                        spellCheck={false}
+                        rows={14}
+                        style={{ ...inputStyle, minHeight: 240, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}
+                      />
+                    </div>
+                  )}
                  {!endpointReady && (
                    <div style={{ marginTop: "0.55rem", color: "#fbbf24", fontSize: "0.7rem" }}>Generate the connection profile first so the VPS endpoint and tunnel credentials are ready.</div>
                  )}
