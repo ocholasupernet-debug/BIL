@@ -2892,6 +2892,23 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     :set ocholaVpnChildError "${tag}: OpenVPN client options were rejected after interface creation."
     :error $ocholaVpnChildError
 }`;
+  const openVpnPreflight = `# Create the management interface disabled while CA trust is prepared.
+# This makes the requested OVPN interface visible even if the CA bootstrap
+# needs to be repaired and retried.
+:put "${tag}: Creating management OpenVPN client interface (disabled pending CA trust)."
+:if (!$reuseExistingOvpn) do={
+ :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=yes comment="${interfaceComment}" } on-error={
+    :local routerError ""
+    :do { :set routerError $error } on-error={}
+    :set ovpnError "RouterOS rejected the OpenVPN client add command"
+    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+ }
+}
+:if ([:len $ovpnError] > 0) do={
+    :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Management OpenVPN client interface is present and disabled until CA trust succeeds."`;
 
   const caFileName = `${safeCaCertificateName}.crt`;
   const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
@@ -3022,27 +3039,22 @@ ${routerOsCertificateFileWriter(
 :local ovpnError ""
 :local reuseExistingOvpn false
 :if ([:len "$ocholaVpnChildError"] = 0) do={
-${caBootstrap}
 :put "${tag}: STEP 2/10 - Preparing management VPN resources."
 ${resourcePreparation}
 :put "${tag}: STEP 2/10 complete - management VPN resources ready."
-}
-:put "${tag}: STEP 3/10 - Creating management OpenVPN client."
-:if (!$reuseExistingOvpn) do={
- :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
-    :local routerError ""
-    :do { :set routerError $error } on-error={}
-    :set ovpnError "RouterOS rejected the OpenVPN client add command"
-    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
- }
-}
-:if ([:len $ovpnError] > 0) do={
-    :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
-    :error $ocholaVpnChildError
-}
+${openVpnPreflight}
+${caBootstrap}
+:put "${tag}: STEP 3/10 - Enabling management OpenVPN client."
 ${openVpnPostCreateSettings}
 ${openVpnOptionalSettings}
+:if (!$reuseExistingOvpn) do={
+    :do { /interface ovpn-client set [find where name="${interfaceName}"] disabled=no } on-error={
+        :set ocholaVpnChildError "${tag}: management OpenVPN client could not be enabled after CA trust succeeded."
+        :error $ocholaVpnChildError
+    }
+}
 :put "${tag}: STEP 3/10 complete - OpenVPN client configured."
+}
 
 :put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
 :local ovpnRunning false
