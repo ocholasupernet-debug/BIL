@@ -2774,6 +2774,13 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 }`
     : `# RouterOS 6 path: keep the client command to the conservative common property set.
 # RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
+  const openVpnPostCreateSettings = `# Apply optional OpenVPN settings only after the portable client exists.
+:do {
+    /interface ovpn-client set [find where name="${interfaceName}"] mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no
+} on-error={
+    :set ocholaVpnChildError "${tag}: OpenVPN client options were rejected after interface creation."
+    :error $ocholaVpnChildError
+}`;
 
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
@@ -2846,7 +2853,7 @@ ${caBootstrap}
 ${resourcePreparation}
 }
 :if (!$reuseExistingOvpn) do={
- :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} protocol=tcp mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
+ :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
     :local routerError ""
     :do { :set routerError $error } on-error={}
     :set ovpnError "RouterOS rejected the OpenVPN client add command"
@@ -2857,6 +2864,7 @@ ${resourcePreparation}
     :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
     :error $ocholaVpnChildError
 }
+${openVpnPostCreateSettings}
 ${openVpnOptionalSettings}
 
 :put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
