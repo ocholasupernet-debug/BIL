@@ -1327,7 +1327,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 :local installerUrl "${sourceUrl}";
 :local installerFile "mainhotspot.rsc";
 :do { /file remove [find name=$installerFile] } on-error={}
-:tool fetch url=$installerUrl dst-path=$installerFile keep-result=yes mode=https check-certificate=no
+/tool fetch url=$installerUrl dst-path=$installerFile keep-result=yes mode=https check-certificate=no
 :if ([:len [/file find name=$installerFile]] = 0) do={
     :put "mainhotspot.rsc download failed: no destination file was created."
 } else={
@@ -1336,7 +1336,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     } else={
         :put "Downloaded mainhotspot.rsc. Importing it now..."
         /import $installerFile
-        :put "mainhotspot.rsc was downloaded and imported successfully."
     }
 }
 `;
