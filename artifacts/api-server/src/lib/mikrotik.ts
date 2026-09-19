@@ -2994,6 +2994,8 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 
   const caFileName = `${safeCaCertificateName}.crt`;
   const caBuildFileName = `${safeCaCertificateName}-bootstrap.rsc`;
+  const httpsCaFileName = `${safeCaCertificateName}-https-root.crt`;
+  const publicHttpsCaCommonName = certificateCommonName(ISRG_ROOT_X1_PEM);
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
 # endpoint yet, use the embedded management OpenVPN CA instead of trusting an
@@ -3073,13 +3075,48 @@ ${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        
     :if ([:len $ocholaCaImportError] > 0) do={
         :error ("management VPN CA trust update failed: " . $ocholaCaImportError)
     }
+    :set ocholaCaPhase "prepare public HTTPS CA"
+    :set ocholaCaImportError ""
+    :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
+${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
+        :do {
+            /file add name="${httpsCaFileName}" contents=$ocholaHttpsCa
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("public HTTPS CA file creation failed: " . $ocholaCaImportError)
+        }
+        :do {
+            /certificate import file-name="${httpsCaFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("public HTTPS CA certificate import failed: " . $ocholaCaImportError)
+        }
+    }
+    :set ocholaCaPhase "trust public HTTPS CA"
+    :set ocholaCaImportError ""
+    :do {
+        /certificate set [find where common-name=${routerOsString(publicHttpsCaCommonName)}] trusted=yes
+    } on-error={
+        :set ocholaCaImportError $error
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("public HTTPS CA trust update failed: " . $ocholaCaImportError)
+    }
     :set ocholaCaPhase "clean up CA file"
     :do { /file remove [find name="${caFileName}"] } on-error={}
     :do { /file remove [find name="${caBuildFileName}"] } on-error={}
+    :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
     :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
         :error "management VPN CA was not imported"
     }
-    :put "${tag}: STEP 1/10 complete - CA certificate imported and trusted."
+    :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
+        :error "public HTTPS CA was not imported"
+    }
+    :put "${tag}: STEP 1/10 complete - management and public HTTPS CA certificates imported and trusted."
 } on-error={
     :set ocholaCaError $error
     :if ([:len $ocholaCaError] = 0) do={
