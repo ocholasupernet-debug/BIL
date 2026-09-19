@@ -8,11 +8,6 @@ export const ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1";
 export const ROUTER_HTTPS_CERTIFICATE_FILE = "ochola-isrg-root-x1.pem";
 export const ROUTER_HTTPS_CERTIFICATE_PATH = `/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
 
-type RouterOsCertificateFileWriterOptions = {
-  fileName?: string;
-  baseName?: string;
-};
-
 /**
  * Render a RouterOS string value without putting the complete PEM on one
  * command line. RouterOS 6 has a relatively small command-line limit, so
@@ -24,7 +19,6 @@ export function routerOsTextVariableWriter(
   indent = "",
 ): string {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
   if (lines.length === 0) throw new Error("Cannot render an empty RouterOS text value.");
 
   const escaped = (line: string) =>
@@ -35,47 +29,6 @@ export function routerOsTextVariableWriter(
       `${indent}:set ${variableName} ($${variableName} . "\\n" . "${escaped(line)}")`,
     );
   }
-  return output.join("\n");
-}
-
-/**
- * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
- * command, and the target RouterOS 6 device supports creating an empty file
- * through `/file print file=...`. Build the file from short PEM lines instead.
- * Keep the variable-based form available for callers that already provide
- * their own file base and lookup variables.
- */
-export function routerOsCertificateFileWriter(
-  value: string,
-  fileVariable = "caBuildFile",
-  fileBaseVariable = "caBuildBase",
-  indent = "",
-  options: RouterOsCertificateFileWriterOptions = {},
-): string {
-  const lines = value.replace(/\r\n?/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  if (lines.length === 0) throw new Error("Cannot render an empty RouterOS certificate.");
-
-  const escaped = (line: string) =>
-    line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const quoted = (name: string) => `"${escaped(name)}"`;
-  const file = options.fileName ? quoted(options.fileName) : `$${fileVariable}`;
-  const base = options.baseName ? quoted(options.baseName) : `$${fileBaseVariable}`;
-  const output = [
-    options.fileName
-      ? `${indent}/file print file=${base}`
-      : `${indent}/file print file=${base}\n${indent}/file set [find name=${file}] contents=""`,
-    `${indent}:local caText "${escaped(lines[0])}"`,
-    `${indent}/file set [find name=${file}] contents=$caText`,
-  ];
-
-  for (const line of lines.slice(1)) {
-    output.push(
-      `${indent}:set caText ($caText . "\\n" . "${escaped(line)}")`,
-      `${indent}/file set [find name=${file}] contents=$caText`,
-    );
-  }
-
   return output.join("\n");
 }
 
