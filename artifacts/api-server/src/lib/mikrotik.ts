@@ -2517,6 +2517,8 @@ export interface RouterAsClientOptions {
     destinationPath: string;
     sourceName: string;
   }>;
+  /** Keep Self Install limited to VPN, API enablement, and registration. */
+  minimalManagementSetup?: boolean;
 }
 
 export interface RouterWireGuardClientOptions {
@@ -2680,6 +2682,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     apiPassword,
     managementApiUsername,
     hotspotAssets = [],
+    minimalManagementSetup = false,
   } = opts;
 
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
@@ -2727,17 +2730,23 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     : routerId
       ? `${tag} VPS tunnel`
       : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}${roleSuffix}`;
-  const safeBridgeName = bridgeName ? validateRouterOsResourceName(bridgeName, "Self Install bridge name") : "";
-  const safeBridgePorts = bridgePorts
+  const safeBridgeName = !minimalManagementSetup && bridgeName
+    ? validateRouterOsResourceName(bridgeName, "Self Install bridge name")
+    : "";
+  const safeBridgePorts = (minimalManagementSetup ? [] : bridgePorts)
     .map(port => validateRouterOsResourceName(port, "Self Install bridge port"))
     .filter((port, index, values) => values.indexOf(port) === index);
-  const safeApiUsername = apiUsername ? validateRouterOsResourceName(apiUsername, "RouterOS API username") : "";
-  const safeApiPassword = apiPassword ? validateRouterOpenVpnCredential(apiPassword, "API password") : "";
-  const safeManagementApiUsername = managementApiUsername
+  const safeApiUsername = !minimalManagementSetup && apiUsername
+    ? validateRouterOsResourceName(apiUsername, "RouterOS API username")
+    : "";
+  const safeApiPassword = !minimalManagementSetup && apiPassword
+    ? validateRouterOpenVpnCredential(apiPassword, "API password")
+    : "";
+  const safeManagementApiUsername = !minimalManagementSetup && managementApiUsername
     ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
     : "";
   const hotspotGateway = safeBridgeName ? routerHotspotGateway(lanNetwork) : null;
-  const safeHotspotAssets = hotspotAssets.map(asset => {
+  const safeHotspotAssets = (minimalManagementSetup ? [] : hotspotAssets).map(asset => {
     const destinationPath = String(asset.destinationPath ?? "").trim().replaceAll("\\", "/");
     if (!/^flash\/hotspot\/[A-Za-z0-9._/-]+$/.test(destinationPath) || destinationPath.includes("..")) {
       throw new Error("Self Install hotspot asset destination is invalid.");
@@ -2799,10 +2808,10 @@ ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsSt
         :error $ocholaVpnChildError
     }
 }
-:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
+${minimalManagementSetup ? "" : `:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
-}`
+}`}`
     : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="ocholasupernet" comment="mainbillingvpn"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
@@ -3139,12 +3148,16 @@ ${openVpnOptionalSettings}
     :put "${tag}: OVPN client is running."
 }
 
-# Step 3: Allow API access from the validated VPN peer
+# Step 3: Continue after the management tunnel is running.
+${minimalManagementSetup
+  ? `# Self Install intentionally does not change firewall, NAT, bridge, or API-account settings.
+:put "${tag}: STEP 4/10 skipped - firewall and other network configuration were not requested."`
+  : `# Allow API access from the validated VPN peer.
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
 :put "${tag}: STEP 4/10 - Applying management firewall rules."
 /ip firewall filter
 ${firewallPreparation}
-:put "${tag}: STEP 4/10 complete - management firewall rules ready."
+:put "${tag}: STEP 4/10 complete - management firewall rules ready."`}
 ${bridgeSetup}
 :if ([:len "${safeBridgeName}"] = 0) do={ :put "${tag}: STEP 5/10 skipped - no hotspot bridge was requested." }
 ${safeApiUsernames.length > 0
@@ -3152,8 +3165,15 @@ ${safeApiUsernames.length > 0
 ${apiUserSetup}
 :put "${tag}: STEP 6/10 complete - management API accounts verified."`
   : `:put "${tag}: STEP 6/10 skipped - no management API account was requested."`}
-:put "${tag}: STEP 7/10 - Applying NAT and RouterOS API service settings."
-${natSetup}
+:put "${tag}: STEP 7/10 - Preparing RouterOS API access."
+${minimalManagementSetup
+  ? `# Enable only the plain RouterOS API service required for backend verification.
+/ip service
+:do { /ip service set [find where name="api"] disabled=no } on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS API service could not be enabled."
+    :error $ocholaVpnChildError
+}`
+  : `${natSetup}
 
 # Step 7: Ensure API service is enabled and restricted
 /ip service
@@ -3161,8 +3181,8 @@ ${natSetup}
     :set ocholaVpnChildError "${tag}: could not restrict the RouterOS API service to the management VPN peer."
     :error $ocholaVpnChildError
 }
-:do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}
-:put "${tag}: STEP 7/10 complete - NAT and API service settings ready."
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}`}
+:put "${tag}: STEP 7/10 complete - RouterOS API service is ready."
 
 # Step 8: Discover and report the live tunnel IPv4
 :put "${tag}: STEP 8/10 - Discovering the live management tunnel address."
@@ -3223,6 +3243,7 @@ export function generateRouterManagementVpnScript(
   return generateRouterAsClientScript({
     ...opts,
     autoDetectRouterOsMajor: true,
+    minimalManagementSetup: true,
   }).trim() + "\n";
 }
 

@@ -1317,11 +1317,10 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
 /**
  * Generates the single terminal-run RouterOS script for Self Install.
  *
- * This is intentionally narrower than the legacy router scripts: it creates
- * the management OVPN client, the requested hotspot bridge/ports, the
- * management API account, the scoped firewall/NAT rules, the approved hotspot
- * asset bundle, and the completion callback. It does not install billing
- * rules, queues, or customer-service configuration.
+ * This is intentionally limited to the management OVPN client, CA trust,
+ * plain RouterOS API enablement, live tunnel discovery, and the completion
+ * callback. It does not change firewall, NAT, bridge, user, hotspot, billing,
+ * queue, or customer-service configuration.
  */
 router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
