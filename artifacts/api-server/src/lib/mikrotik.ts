@@ -2712,7 +2712,8 @@ ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsSt
             :put "${asset.sourceName}: hotspot asset installed."
         }
     } on-error={
-        :put "${asset.sourceName}: hotspot asset download failed; the management install can still finish."
+        :local hotspotAssetError $error
+        :put ("${asset.sourceName}: hotspot asset download failed: " . $hotspotAssetError)
     }
 } else={
     :put "${asset.sourceName}: already present; preserved."
