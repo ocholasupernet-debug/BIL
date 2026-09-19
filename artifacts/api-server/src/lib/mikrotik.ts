@@ -3153,8 +3153,8 @@ export interface RouterAsClientScriptStage {
 /**
  * Splits the router-specific installer into the three staged files used by
  * the Self Install terminal bootstrap. The first stage keeps the embedded CA
- * and VPN setup together; the PPPoE stage contains the network/API setup and
- * live tunnel registration; the final stage installs hotspot assets.
+ * and VPN setup together; the hotspot stage installs portal assets; the PPPoE
+ * stage contains the network/API setup and live tunnel registration.
  */
 export function generateRouterAsClientScriptStages(
   opts: RouterAsClientOptions,
@@ -3177,14 +3177,14 @@ export function generateRouterAsClientScriptStages(
       content: fullScript.slice(0, networkStart).trim() + "\n",
     },
     {
-      name: "pppoe",
-      fileName: "pppoesetup.rsc",
-      content: networkPrefix + fullScript.slice(networkStart, assetsStart).trim() + "\n",
-    },
-    {
       name: "hotspot",
       fileName: "hotspotsetup.rsc",
       content: fullScript.slice(assetsStart).trim() + "\n",
+    },
+    {
+      name: "pppoe",
+      fileName: "pppoesetup.rsc",
+      content: networkPrefix + fullScript.slice(networkStart, assetsStart).trim() + "\n",
     },
   ];
 }
