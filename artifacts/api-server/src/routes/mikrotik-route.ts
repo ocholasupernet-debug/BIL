@@ -63,7 +63,7 @@ interface PendingRouterFileSource {
   /*
    * RouterOS can retry a fetch after a connection closes while the response is
    * still being received. Keep ordinary file transfers one-time, but let the
-   * Self Install bootstrap and its generated assets make a few bounded
+   * Self Install steps and their generated assets make a few bounded
    * attempts so a transport retry is not misreported as an expired source.
    */
   maxFetchAttempts?: number;
@@ -173,7 +173,7 @@ function managementScriptSourceOrigin(req: import("express").Request): string {
   if (process.env.NODE_ENV === "production" && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost)) {
     /*
      * The VPS IP can serve the dashboard, but its HTTPS certificate is issued
-     * to isplatty.org. The bootstrap can fetch once with verification disabled
+     * to isplatty.org. The first Self Install step can fetch once with verification disabled
      * for compatibility, but child hotspot assets require certificate
      * validation. Use the certificate-backed hostname when the app was opened
      * by IP.
@@ -269,7 +269,7 @@ router.get("/router-file-source/:token", (req, res): void => {
     .send(source.content);
 });
 
-/* Deterministic public paths used by the Self Install bootstrap. The router
+/* Deterministic public paths used by the Self Install steps. The router
    ID and filename replace the opaque bearer token; the generated content still
    expires and remains bounded to a small number of fetch attempts. */
 router.get("/router-file-source/:routerId/:fileName", (req, res): void => {
@@ -1316,7 +1316,8 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
 
 /* ─── GET /api/router/:id/self-install-script ───────────────────────────── */
 /**
- * Generates the single terminal-run RouterOS script for Self Install.
+ * Generates the ordered, independently executable RouterOS steps for Self
+ * Install.
  *
  * This is intentionally limited to the management OVPN client, CA trust,
  * plain RouterOS API enablement, live tunnel discovery, and the completion
@@ -1411,8 +1412,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 
     /*
      * Begin Self Install with two public sources. The network engine is
-     * intentionally separate from the VPN/API identity script so either
-     * file can be reviewed or retried independently.
+     * intentionally separate from the VPN/API identity script so each
+     * ordered step can be reviewed, copied, downloaded, or retried
+     * independently.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
     const networkFileName = "networksetup.rsc";
@@ -1431,19 +1433,33 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
-    const bootstrap = `/tool fetch url="${networkSourceUrl}" dst-path="${networkFileName}" mode=https check-certificate=no
+    const stepCommand = (sourceUrl: string, fileName: string): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no
 :delay 2s
-/import "${networkFileName}"
-/file remove "${networkFileName}"
-/tool fetch url="${vpnSourceUrl}" dst-path="${vpnFileName}" mode=https check-certificate=no
-:delay 2s
-/import "${vpnFileName}"
-/file remove "${vpnFileName}"
+/import "${fileName}"
+/file remove "${fileName}"
 `;
 
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="network-vpn-bootstrap${id}.rsc"`);
-    res.send(bootstrap);
+    res.json({
+      routerId: id,
+      steps: [
+        {
+          id: "network",
+          order: 1,
+          title: "Configure the router network engine",
+          fileName: networkFileName,
+          description: "Apply the tagged, retry-safe firewall and NAT rules before creating the management tunnel.",
+          command: stepCommand(networkSourceUrl, networkFileName),
+        },
+        {
+          id: "vpn",
+          order: 2,
+          title: "Configure the management VPN and API",
+          fileName: vpnFileName,
+          description: "After Step 1 completes, install CA trust, create the management VPN/API access, and register the router.",
+          command: stepCommand(vpnSourceUrl, vpnFileName),
+        },
+      ],
+    });
   } catch (error) {
     res.status(503).json({
       error: "Self Install script generation failed",
