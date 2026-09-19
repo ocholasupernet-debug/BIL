@@ -3139,8 +3139,64 @@ ${natSetup}
 :put "${tag}: STEP 9/10 complete - backend registration accepted."
 
 :log info "${tag}: OVPN client running; dynamic tunnel IPv4=\$liveTunnelIp; backend API verification pending"
+# Step 10: Hotspot assets
 ${hotspotAssetInstall}
 `;
+}
+
+export interface RouterAsClientScriptStage {
+  name: "vpn" | "network" | "registration" | "assets";
+  fileName: string;
+  content: string;
+}
+
+/**
+ * Splits the router-specific installer at boundaries where every resulting
+ * file has its own RouterOS scope. The first stage keeps the embedded CA and
+ * VPN setup together; later stages deliberately redeclare their globals and
+ * locals so they can be imported independently during recovery.
+ */
+export function generateRouterAsClientScriptStages(
+  opts: RouterAsClientOptions,
+): RouterAsClientScriptStage[] {
+  const fullScript = generateRouterAsClientScript(opts);
+  const networkStart = fullScript.indexOf("# Step 3: Allow API access");
+  const registrationStart = fullScript.indexOf("# Step 8: Discover and report");
+  const assetsStart = fullScript.indexOf("# Step 10: Hotspot assets");
+  if (networkStart < 0 || registrationStart < 0 || assetsStart < 0) {
+    throw new Error("Generated RouterOS installer is missing a required stage boundary.");
+  }
+
+  const networkPrefix = `:global ocholaVpnChildError
+:set ocholaVpnChildError ""
+:local ovpnError ""
+`;
+  const registrationPrefix = `:global ocholaVpnChildError
+:set ocholaVpnChildError ""
+`;
+
+  return [
+    {
+      name: "vpn",
+      fileName: "ochola-vpn.rsc",
+      content: fullScript.slice(0, networkStart).trim() + "\n",
+    },
+    {
+      name: "network",
+      fileName: "ochola-network.rsc",
+      content: networkPrefix + fullScript.slice(networkStart, registrationStart).trim() + "\n",
+    },
+    {
+      name: "registration",
+      fileName: "ochola-registration.rsc",
+      content: registrationPrefix + fullScript.slice(registrationStart, assetsStart).trim() + "\n",
+    },
+    {
+      name: "assets",
+      fileName: "ochola-assets.rsc",
+      content: fullScript.slice(assetsStart).trim() + "\n",
+    },
+  ];
 }
 
 /** Generate a RouterOS 7-only WireGuard management-client script. */
