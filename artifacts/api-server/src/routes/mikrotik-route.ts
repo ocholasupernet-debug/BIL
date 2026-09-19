@@ -21,6 +21,7 @@ import {
   generateOvpnClientConfig,
   generateRouterAsClientScript,
   fetchRouterFiles,
+  runRouterCommand,
   fetchRouterSecurityState,
   deployRouterFile,
   syncHotspotPortalHostname,
@@ -601,12 +602,31 @@ async function runBulkFileDeployment(
       .replace(/^\/+|\/+$/g, "")
       .toLowerCase();
     const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
-    const directories = new Set(
-      currentFiles.files
-        .filter(file => file.type.toLowerCase().includes("directory"))
-        .map(file => normaliseName(file.name)),
-    );
     const importableDestinations = new Set<string>();
+
+    /* RouterOS only creates nested destinations when their parent directory
+       already exists. The base Self Install creates the hotspot profile, but
+       older routers may not yet have the asset subdirectories. Create every
+       required parent before attempting the file transfers. */
+    const parentDirectories = new Set<string>();
+    for (const source of job.sources) {
+      const lastSlash = source.destinationPath.lastIndexOf("/");
+      if (lastSlash > 0) {
+        const parent = source.destinationPath.slice(0, lastSlash);
+        parentDirectories.add(parent);
+      }
+    }
+    const directoryDepth = (value: string) => value.split("/").length;
+    for (const directory of [...parentDirectories].sort((left, right) => directoryDepth(left) - directoryDepth(right))) {
+      try {
+        await runRouterCommand(creds, ["/file/make-dir", `=dir-name=${directory}`]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/already exists|already have|duplicate|such file/i.test(message)) {
+          logger.warn({ routerId: job.routerId, directory, error: message }, "Could not pre-create router hotspot directory; file transfers will report individual failures");
+        }
+      }
+    }
 
     for (const source of job.sources) {
       const { sourceName, destinationPath } = source;
@@ -614,15 +634,6 @@ async function runBulkFileDeployment(
       if (existingFiles.has(normalisedDestination)) {
         job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
         importableDestinations.add(destinationPath);
-        job.processed += 1;
-        job.updatedAt = Date.now();
-        continue;
-      }
-
-      const lastSlash = destinationPath.lastIndexOf("/");
-      const parentDirectory = normaliseName(destinationPath.slice(0, lastSlash));
-      if (source.type === "hotspot" && !directories.has(parentDirectory)) {
-        job.skipped.push({ sourceName, destinationPath, reason: "parent directory is missing" });
         job.processed += 1;
         job.updatedAt = Date.now();
         continue;
