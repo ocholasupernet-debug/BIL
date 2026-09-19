@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 
 /**
  * Single source of truth for the isolated router-management VPN.
@@ -70,6 +70,20 @@ export function routerManagementClientInterfaceName(
 
 export function routerManagementVpnContract(role: RouterManagementVpnRole = "primary") {
   return role === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
+}
+
+/** Read the CA that actually signs the management OpenVPN server certificate. */
+export function readRouterManagementCaCertificate(): string | null {
+  const caPath = ROUTER_MANAGEMENT_VPN.caPaths.find(path => existsSync(path));
+  if (!caPath) return null;
+  try {
+    const pem = readFileSync(caPath, "utf8").trim();
+    return /-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(pem)
+      ? pem
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Map a primary management address to the same router's backup address. */

@@ -47,7 +47,10 @@ import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-
 import {
   provisionRouterManagementOpenVpn,
 } from "../lib/router-vpn-provisioning.js";
-import { routerManagementVpnPortForRouter } from "../lib/router-management-vpn.js";
+import {
+  readRouterManagementCaCertificate,
+  routerManagementVpnPortForRouter,
+} from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -1391,6 +1394,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
       return;
     }
+    const managementCaCertificatePem = readRouterManagementCaCertificate();
+    if (!managementCaCertificatePem) {
+      res.status(503).json({
+        error: "The VPS management OpenVPN CA certificate is unavailable for Self Install generation.",
+      });
+      return;
+    }
 
     const origin = managementScriptSourceOrigin(req);
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
@@ -1401,6 +1411,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       vpnUsername: openVpnCredentials.username,
       vpnPassword: openVpnCredentials.password,
       caCertificateUrl,
+      managementCaCertificatePem,
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
       routerId: id,

@@ -1,4 +1,5 @@
 import * as net from "net";
+import { X509Certificate } from "node:crypto";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
 import {
@@ -2479,6 +2480,8 @@ export interface RouterAsClientOptions {
   vpnPassword: string;
   /** Public HTTPS URL that serves the CA which signs the management VPN server certificate. */
   caCertificateUrl: string;
+  /** CA PEM that signs the management VPN server certificate, embedded for first trust bootstrap. */
+  managementCaCertificatePem?: string;
   /** RouterOS certificate-store name for the management VPN CA. */
   caCertificateName?: string;
   /** Authenticated router registration endpoint used to report the live tunnel IP. */
@@ -2564,6 +2567,21 @@ function routerOsString(value: string): string {
     .replace(/[\u0000-\u001F\u007F]/g, "")
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')}"`;
+}
+
+function certificateCommonName(pem: string): string {
+  let subject: string;
+  try {
+    subject = new X509Certificate(pem).subject;
+  } catch {
+    throw new Error("Management VPN CA certificate PEM could not be parsed.");
+  }
+  const match = /(?:^|[,\n])CN=([^,\n]+)/.exec(subject);
+  const commonName = match?.[1]?.trim() ?? "";
+  if (!commonName || /["\r\n]/.test(commonName)) {
+    throw new Error("Management VPN CA certificate has no safe common name.");
+  }
+  return commonName;
 }
 
 function validateRouterOpenVpnEndpoint(value: string): string {
@@ -2668,6 +2686,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     vpnUsername,
     vpnPassword,
     caCertificateUrl,
+    managementCaCertificatePem,
     caCertificateName = "ochola-router-management-ca",
     backendRegistrationUrl,
     tunnelRouterIp,
@@ -2693,6 +2712,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeVpnUsername = validateRouterOpenVpnCredential(vpnUsername, "username");
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
+  const embeddedManagementCa = String(managementCaCertificatePem ?? ISRG_ROOT_X1_PEM).trim();
+  if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(embeddedManagementCa)) {
+    throw new Error("Management VPN CA certificate PEM is missing or invalid.");
+  }
+  const embeddedManagementCaCommonName = certificateCommonName(embeddedManagementCa);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
   const safeCaCertificateName = validateRouterOsResourceName(
     caCertificateName,
@@ -2972,8 +2996,8 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
   const caBuildFileName = `${safeCaCertificateName}-bootstrap.rsc`;
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
-# endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
-# an unverified download.
+# endpoint yet, use the embedded management OpenVPN CA instead of trusting an
+# unverified download.
 :global ocholaCaPhase
 :global ocholaCaError
 :global ocholaCaImportError
@@ -2991,34 +3015,22 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     } on-error={}
     :if ($fetchedViaTrustedStore && [:len [/file find name="${caFileName}"]] = 0) do={
         :set fetchedViaTrustedStore false
-        :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using embedded ISRG Root X1."
+        :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using the embedded management OpenVPN CA."
     }
     :if (!$fetchedViaTrustedStore) do={
-        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; fetching the known ISRG Root X1 for exact comparison."
-        :set ocholaCaPhase "fetch and verify embedded CA"
+        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; writing the embedded management OpenVPN CA."
+        :set ocholaCaPhase "create embedded CA file"
+${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        ")}
         :do {
-            /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caBuildFileName}" keep-result=yes mode=https check-certificate=no
+            /file add name="${caBuildFileName}" contents=$ocholaExpectedCa
         } on-error={
             :set ocholaCaImportError $error
         }
         :if ([:len $ocholaCaImportError] > 0) do={
-            :error ("management VPN CA bootstrap fetch failed: " . $ocholaCaImportError)
+            :error ("management VPN embedded CA file creation failed: " . $ocholaCaImportError)
         }
         :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
-            :error "management VPN CA bootstrap fetch did not create a file"
-        }
-${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
-        :local ocholaDownloadedCa ""
-        :do {
-            :set ocholaDownloadedCa [/file get [find name="${caBuildFileName}"] contents]
-        } on-error={
-            :set ocholaCaImportError $error
-        }
-        :if ([:len $ocholaCaImportError] > 0) do={
-            :error ("management VPN CA bootstrap contents could not be read: " . $ocholaCaImportError)
-        }
-        :if ($ocholaDownloadedCa != $ocholaExpectedCa) do={
-            :error "management VPN CA bootstrap contents did not match the embedded ISRG Root X1"
+            :error "management VPN embedded CA file was not created"
         }
     }
     :set ocholaCaPhase "verify CA file"
@@ -3049,12 +3061,12 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
         :error ("management VPN CA certificate import failed: " . $ocholaCaImportError)
     }
     :set ocholaCaPhase "verify imported CA certificate"
-    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
+    :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
         :error "management VPN CA certificate common name was not found after import"
     }
     :set ocholaCaPhase "trust imported CA certificate"
     :do {
-        /certificate set [find where common-name="ISRG Root X1"] trusted=yes
+        /certificate set [find where common-name=${routerOsString(embeddedManagementCaCommonName)}] trusted=yes
     } on-error={
         :set ocholaCaImportError $error
     }
@@ -3064,7 +3076,7 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
     :set ocholaCaPhase "clean up CA file"
     :do { /file remove [find name="${caFileName}"] } on-error={}
     :do { /file remove [find name="${caBuildFileName}"] } on-error={}
-    :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
+    :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
         :error "management VPN CA was not imported"
     }
     :put "${tag}: STEP 1/10 complete - CA certificate imported and trusted."
@@ -3437,8 +3449,16 @@ export function generateNetworkSetupScript(
   }
 
   const apiRules = safeNetworks.map((network, index) => `:do { /ip firewall filter remove [find where comment="${tag}-api-${index}"] } on-error={}
-:do { /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}" place-before=0 } on-error={
-    :put "${tag}: could not add API allow rule for ${network}."
+:local ocholaApiRuleError${index} ""
+:local ocholaApiRuleId${index} ""
+:do {
+    :set ocholaApiRuleId${index} [/ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}"]
+    /ip firewall filter move $ocholaApiRuleId${index} destination=0
+} on-error={
+    :set ocholaApiRuleError${index} $error
+}
+:if ([:len $ocholaApiRuleError${index}] > 0) do={
+    :put ("${tag}: could not add API allow rule for ${network}: " . $ocholaApiRuleError${index})
 }`).join("\n");
 
   return `# ===============================================================
