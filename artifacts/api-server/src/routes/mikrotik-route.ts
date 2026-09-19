@@ -20,6 +20,7 @@ import {
   probePort,
   generateOvpnClientConfig,
   generateRouterManagementVpnScript,
+  generateNetworkSetupScript,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -1363,6 +1364,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     return;
   }
+  if (!found.creds.password) {
+    res.status(409).json({
+      error: "This router profile has no stored API password for the ocholasupernet account.",
+    });
+    return;
+  }
   const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
   const installationMode = requestedMode === "direct" || requestedMode === "takeover"
     ? requestedMode
@@ -1398,29 +1405,44 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       routerId: id,
       installationMode,
       backendRegistrationUrl,
+      managementApiPassword: found.creds.password,
     });
+    const networkScript = generateNetworkSetupScript({ routerId: id });
 
     /*
-     * Begin Self Install with one public VPN source. The downloaded file
-     * contains the complete VPN, API-access, and registration sequence.
+     * Begin Self Install with two public sources. The network engine is
+     * intentionally separate from the VPN/API identity script so either
+     * file can be reviewed or retried independently.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
-    const fileName = "vpnsetup.rsc";
-    createPublicRouterFileSource(id, fileName, {
-      content: Buffer.from(vpnScript, "utf8"),
+    const networkFileName = "networksetup.rsc";
+    const vpnFileName = "vpnsetup.rsc";
+    createPublicRouterFileSource(id, networkFileName, {
+      content: Buffer.from(networkScript, "utf8"),
       contentType: "text/plain; charset=utf-8",
-      fileName,
+      fileName: networkFileName,
       maxFetchAttempts: 3,
     });
-    const sourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${fileName}`;
-    const bootstrap = `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no
+    createPublicRouterFileSource(id, vpnFileName, {
+      content: Buffer.from(vpnScript, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName: vpnFileName,
+      maxFetchAttempts: 3,
+    });
+    const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
+    const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
+    const bootstrap = `/tool fetch url="${networkSourceUrl}" dst-path="${networkFileName}" mode=https check-certificate=no
 :delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
+/import "${networkFileName}"
+/file remove "${networkFileName}"
+/tool fetch url="${vpnSourceUrl}" dst-path="${vpnFileName}" mode=https check-certificate=no
+:delay 2s
+/import "${vpnFileName}"
+/file remove "${vpnFileName}"
 `;
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="vpnsetup-bootstrap${id}.rsc"`);
+    res.setHeader("Content-Disposition", `attachment; filename="network-vpn-bootstrap${id}.rsc"`);
     res.send(bootstrap);
   } catch (error) {
     res.status(503).json({
