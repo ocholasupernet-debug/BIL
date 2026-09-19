@@ -3144,49 +3144,30 @@ ${hotspotAssetInstall}
 `;
 }
 
-export interface RouterAsClientScriptStage {
-  name: "vpn" | "pppoe" | "hotspot";
-  fileName: string;
-  content: string;
-}
-
 /**
- * Splits the router-specific installer into the three staged files used by
- * the Self Install terminal bootstrap. The first stage keeps the embedded CA
- * and VPN setup together; the hotspot stage installs portal assets; the PPPoE
- * stage contains the network/API setup and live tunnel registration.
+ * Generates the first Self Install file: the management CA trust bootstrap
+ * and RouterOS OpenVPN client setup. The network, hotspot, and registration
+ * scripts are intentionally not part of this first VPN step.
  */
-export function generateRouterAsClientScriptStages(
-  opts: RouterAsClientOptions,
-): RouterAsClientScriptStage[] {
-  const fullScript = generateRouterAsClientScript(opts);
+export function generateRouterManagementVpnScript(
+  opts: Omit<RouterAsClientOptions, "backendRegistrationUrl">,
+): string {
+  /*
+   * The shared renderer also knows how to produce the later network,
+   * registration, and hotspot sections. Use a valid placeholder only while
+   * rendering those discarded sections; the returned slice ends before any
+   * registration URL is emitted.
+   */
+  const fullScript = generateRouterAsClientScript({
+    ...opts,
+    backendRegistrationUrl: "https://vpn-only.invalid/not-used",
+  });
   const networkStart = fullScript.indexOf("# Step 3: Allow API access");
-  const assetsStart = fullScript.indexOf("# Step 10: Hotspot assets");
-  if (networkStart < 0 || assetsStart < 0) {
-    throw new Error("Generated RouterOS installer is missing a required stage boundary.");
+  if (networkStart < 0) {
+    throw new Error("Generated RouterOS installer is missing the VPN boundary.");
   }
 
-  const networkPrefix = `:global ocholaVpnChildError
-:set ocholaVpnChildError ""
-:local ovpnError ""
-`;
-  return [
-    {
-      name: "vpn",
-      fileName: "vpnsetup.rsc",
-      content: fullScript.slice(0, networkStart).trim() + "\n",
-    },
-    {
-      name: "hotspot",
-      fileName: "hotspotsetup.rsc",
-      content: fullScript.slice(assetsStart).trim() + "\n",
-    },
-    {
-      name: "pppoe",
-      fileName: "pppoesetup.rsc",
-      content: networkPrefix + fullScript.slice(networkStart, assetsStart).trim() + "\n",
-    },
-  ];
+  return fullScript.slice(0, networkStart).trim() + "\n";
 }
 
 /** Generate a RouterOS 7-only WireGuard management-client script. */

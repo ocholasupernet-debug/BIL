@@ -457,8 +457,6 @@ export default function SelfInstall() {
       adminId: String(ADMIN_ID),
       mode: backendMode(mode),
       rosMajor: String(routerOsMajor),
-      bridgeName: bridgeName.trim() || (mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"),
-      ports,
     });
     const token = getAdminApiToken();
     const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
@@ -486,12 +484,12 @@ export default function SelfInstall() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-       link.download = `ochola-self-install-bootstrap${router.id}.rsc`;
+       link.download = `vpnsetup-bootstrap${router.id}.rsc`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import vpnsetup.rsc, hotspotsetup.rsc, and pppoesetup.rsc.");
+       setNotice("The VPN setup script is ready. Copy it into the MikroTik terminal; it will download and import vpnsetup.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -508,7 +506,7 @@ export default function SelfInstall() {
       const text = scriptText || await fetchSelfInstallScript();
       await navigator.clipboard.writeText(text);
       setScriptCopied(true);
-       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import vpnsetup.rsc, hotspotsetup.rsc, and pppoesetup.rsc.");
+       setNotice("The VPN setup command was copied. Paste it into the MikroTik terminal; it will download and import vpnsetup.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -681,30 +679,12 @@ export default function SelfInstall() {
               </div>
                <div style={{ marginTop: "0.9rem", padding: "0.85rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border-subtle)" }}>
                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
-                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the Self Install command
+                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the management VPN command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                       The copied command downloads and imports three router-scoped files in order: <code>vpnsetup.rsc</code>, <code>hotspotsetup.rsc</code>, and <code>pppoesetup.rsc</code>. VPN and CA trust run first, followed by hotspot assets, then PPPoE/network setup and tunnel registration.
+                       The copied command downloads and imports one router-scoped file: <code>vpnsetup.rsc</code>. It imports the management CA trust, adds the RouterOS OpenVPN client interface, and waits for the management tunnel to come up. Network, hotspot, and registration files are intentionally not included yet.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
-                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
-                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Hotspot bridge</span>
-                     <input
-                       value={bridgeName}
-                       onChange={event => setBridgeName(event.target.value)}
-                       placeholder={mode === "brownfield" ? "co-hotspot-bridge" : "hotspot-bridge"}
-                       style={inputStyle}
-                     />
-                   </label>
-                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 220, flex: "1 1 220px" }}>
-                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>Physical ports</span>
-                     <input
-                       value={ports}
-                       onChange={event => setPorts(event.target.value)}
-                       placeholder="ether2, ether3"
-                       style={inputStyle}
-                     />
-                   </label>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 150 }}>
                      <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>RouterOS major</span>
                      <select value={routerOsMajor} onChange={event => setRouterOsMajor(Number(event.target.value) === 7 ? 7 : 6)} style={inputStyle}>
@@ -739,7 +719,7 @@ export default function SelfInstall() {
                       <textarea
                         readOnly
                         value={scriptText}
-                         aria-label="Generated staged Self Install RouterOS bootstrap command"
+                         aria-label="Generated management VPN RouterOS bootstrap command"
                         spellCheck={false}
                         rows={14}
                         style={{ ...inputStyle, minHeight: 240, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}
@@ -779,12 +759,12 @@ export default function SelfInstall() {
                   <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
-                   <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                     <li>Download the generated script and run it once in the MikroTik terminal.</li>
-                     <li>It creates the management VPN interface and requested hotspot bridge/ports.</li>
-                     <li>It adds the management API user and only the related firewall/NAT rules.</li>
-                     <li>Return here while the tunnel, callback, and API verification complete.</li>
-                   </ul>
+                     <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
+                      <li>Download the VPN setup command and run it once in the MikroTik terminal.</li>
+                      <li>It imports the CA trust and adds the management OpenVPN client interface.</li>
+                      <li>It waits for the management tunnel to reach a running state.</li>
+                      <li>Return here after the VPN is up so the next configuration step can be added.</li>
+                    </ul>
                 </div>
               </div>
               <div style={{ marginTop: "1rem", display: "flex", alignItems: "center", gap: "0.55rem", flexWrap: "wrap" }}>

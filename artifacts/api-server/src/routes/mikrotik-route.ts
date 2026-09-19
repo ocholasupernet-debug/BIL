@@ -19,7 +19,7 @@ import {
   probeAllHosts,
   probePort,
   generateOvpnClientConfig,
-  generateRouterAsClientScriptStages,
+  generateRouterManagementVpnScript,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -1353,20 +1353,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     res.status(400).json({ error: "VPS OpenVPN endpoint is not configured" });
     return;
   }
-  const token = String(found.row.token ?? "").trim();
-  if (!token) {
-    res.status(409).json({ error: "Router install callback token is not available" });
-    return;
-  }
-
   const tunnelRouterIp = String(
     req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id),
   ).trim();
-  const bridgeName = String(req.query.bridgeName ?? "hotspot-bridge").trim();
-  const bridgePorts = String(req.query.ports ?? "")
-    .split(",")
-    .map(value => value.trim())
-    .filter(Boolean);
   const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
   const installationMode = requestedMode === "direct" || requestedMode === "takeover"
     ? requestedMode
@@ -1392,75 +1381,42 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     }
 
     const origin = managementScriptSourceOrigin(req);
-    const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
-    const hotspotAssets = listDeployableSources().map((source, index) => {
-      const content = getDeployableSource(source.type, source.name);
-      if (!content) {
-        throw new Error(`Approved hotspot asset could not be read: ${source.name}`);
-      }
-      const assetRouteName = `hotspot-asset-${index + 1}`;
-      createPublicRouterFileSource(id, assetRouteName, {
-        content: content.content,
-        contentType: contentTypeForFile(source.name),
-        fileName: source.name.split("/").pop() ?? source.name,
-        maxFetchAttempts: 3,
-      });
-      return {
-        sourceUrl: `${origin}/api/router-file-source/${id}/${assetRouteName}`,
-        destinationPath: `flash/hotspot/${source.name}`,
-        sourceName: source.name,
-      };
-    });
-    const stages = generateRouterAsClientScriptStages({
+    const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
       vpnUsername: openVpnCredentials.username,
       vpnPassword: openVpnCredentials.password,
       caCertificateUrl,
-      backendRegistrationUrl: callbackUrl,
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
       routerId: id,
       routerOsMajor,
       installationMode,
-      bridgeName,
-      bridgePorts,
-      apiUsername: found.row.router_username || found.row.name,
-      apiPassword: found.row.router_secret || found.row.name,
-      managementApiUsername: "ocholasupernet",
-      hotspotAssets,
     });
 
     /*
-     * Keep each router-specific stage behind its own short-lived public URL.
-     * The router imports them in dependency order, so a failed later stage can
-     * be retried without rebuilding or re-embedding the VPN stage.
+     * Begin Self Install with one public VPN source. Later network, hotspot,
+     * and registration files will be added only after this VPN step is
+     * validated on the target MikroTik.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
-    const stagedSources = stages.map((stage) => {
-      createPublicRouterFileSource(id, stage.fileName, {
-        content: Buffer.from(stage.content, "utf8"),
-        contentType: "text/plain; charset=utf-8",
-        fileName: stage.fileName,
-        maxFetchAttempts: 3,
-      });
-      return {
-        fileName: stage.fileName,
-        sourceUrl: `${sourceOrigin}/api/router-file-source/${id}/${stage.fileName}`,
-      };
+    const fileName = "vpnsetup.rsc";
+    createPublicRouterFileSource(id, fileName, {
+      content: Buffer.from(vpnScript, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName,
+      maxFetchAttempts: 3,
     });
-    const bootstrap = stagedSources
-      .map(({ fileName, sourceUrl }) =>
-        `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no\n`
-        + `:delay 2s\n`
-        + `/import "${fileName}"\n`
-        + `/file remove "${fileName}"`,
-      )
-      .join("\n");
+    const sourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${fileName}`;
+    const bootstrap = `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no
+:delay 2s
+/import "${fileName}"
+/file remove "${fileName}"
+`;
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="ochola-self-install-bootstrap${id}.rsc"`);
+    res.setHeader("Content-Disposition", `attachment; filename="vpnsetup-bootstrap${id}.rsc"`);
     res.send(bootstrap);
   } catch (error) {
     res.status(503).json({
