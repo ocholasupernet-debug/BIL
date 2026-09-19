@@ -2607,6 +2607,41 @@ function validateRouterOsResourceName(value: string, label: string): string {
   return resource;
 }
 
+function routerHotspotGateway(value: string): { address: string; prefix: number } {
+  const raw = String(value ?? "").trim();
+  const [rawIp, rawPrefix] = raw.split("/");
+  const octets = rawIp?.split(".").map(Number) ?? [];
+  const prefix = Number(rawPrefix);
+  if (
+    octets.length !== 4
+    || octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)
+    || !Number.isInteger(prefix)
+    || prefix < 1
+    || prefix > 30
+  ) {
+    throw new Error("Hotspot LAN network must be a valid IPv4 CIDR between /1 and /30.");
+  }
+
+  const ip = ((((octets[0] * 256) + octets[1]) * 256 + octets[2]) * 256 + octets[3]) >>> 0;
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  const network = (ip & mask) >>> 0;
+  const broadcast = (network | (~mask >>> 0)) >>> 0;
+  const gateway = network + 1;
+  if (gateway >= broadcast) {
+    throw new Error("Hotspot LAN network does not have a usable gateway address.");
+  }
+
+  return {
+    address: [
+      (gateway >>> 24) & 255,
+      (gateway >>> 16) & 255,
+      (gateway >>> 8) & 255,
+      gateway & 255,
+    ].join("."),
+    prefix,
+  };
+}
+
 /**
  * Generates a MikroTik RouterOS script (.rsc) that configures the router
  * as an OpenVPN CLIENT connecting back to the VPS server.
@@ -2683,6 +2718,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const safeManagementApiUsername = managementApiUsername
     ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
     : "";
+  const hotspotGateway = safeBridgeName ? routerHotspotGateway(lanNetwork) : null;
   const safeHotspotAssets = hotspotAssets.map(asset => {
     const destinationPath = String(asset.destinationPath ?? "").trim().replaceAll("\\", "/");
     if (!/^flash\/hotspot\/[A-Za-z0-9._/-]+$/.test(destinationPath) || destinationPath.includes("..")) {
@@ -2780,6 +2816,19 @@ ${safeBridgePorts.map(port => `:if ([:len [/interface find where name="${port}"]
         :error $ocholaVpnChildError
     }
 }`).join("\n")}
+:local hotspotAddress "${hotspotGateway!.address}/${hotspotGateway!.prefix}"
+:if ([:len [/ip address find where address=$hotspotAddress && interface="${safeBridgeName}"]] = 0) do={
+    :do {
+        /ip address add address=$hotspotAddress interface="${safeBridgeName}" comment="${tag} hotspot gateway"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: could not add hotspot gateway $hotspotAddress to ${safeBridgeName}."
+        :error $ocholaVpnChildError
+    }
+}
+:if ([:len [/ip address find where address=$hotspotAddress && interface="${safeBridgeName}"]] = 0) do={
+    :set ocholaVpnChildError "${tag}: hotspot gateway $hotspotAddress was not verified on ${safeBridgeName}."
+    :error $ocholaVpnChildError
+}
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: hotspot bridge was not verified."
     :error $ocholaVpnChildError
