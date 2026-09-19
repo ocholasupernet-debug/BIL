@@ -2494,8 +2494,10 @@ export interface RouterAsClientOptions {
   lanNetwork?: string;
   /** Router ID for comment labels */
   routerId?: number;
-  /** RouterOS major version selected by the installer; defaults to the conservative v6 path. */
+  /** RouterOS major version for callers that already know it. */
   routerOsMajor?: number;
+  /** Read the installed RouterOS major from the router during import. */
+  autoDetectRouterOsMajor?: boolean;
   /** Select the isolated backup management OpenVPN instance. */
   vpnRole?: RouterManagementVpnRole;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
@@ -2669,6 +2671,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     lanNetwork      = "192.168.88.0/24",
     routerId,
     routerOsMajor = 6,
+    autoDetectRouterOsMajor = false,
     vpnRole = "primary",
     installationMode = "coexist",
     bridgeName,
@@ -2690,12 +2693,23 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     "RouterOS CA certificate filename",
   );
   const coexistence = installationMode === "coexist" || installationMode === "direct";
-  const routerOs7 = routerOsMajor >= 7;
-  const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
+  const routerOs7 = !autoDetectRouterOsMajor && routerOsMajor >= 7;
+  const routerOsPath = autoDetectRouterOsMajor
+    ? "auto-detected RouterOS 6/7"
+    : routerOs7
+      ? "RouterOS 7+"
+      : "RouterOS 6";
   /* RouterOS 6 calls the CBC cipher "aes128"; RouterOS 7 uses the
-     OpenVPN-compatible "aes128-cbc" value. Do not put both spellings in one
-     script: RouterOS parses the whole command before on-error can run. */
-  const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
+     OpenVPN-compatible "aes128-cbc" value. The auto-detected path assigns
+     the value inside RouterOS so the script never sends the wrong spelling. */
+  const openVpnCipher = autoDetectRouterOsMajor
+    ? "$ocholaOpenVpnCipher"
+    : routerOs7
+      ? "aes128-cbc"
+      : "aes128";
+  const openVpnDisplayCipher = autoDetectRouterOsMajor
+    ? "auto-detected (RouterOS 6: aes128; RouterOS 7+: aes128-cbc)"
+    : openVpnCipher;
   const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
   const interfaceName = vpnRole === "primary"
@@ -2875,7 +2889,10 @@ add chain=srcnat action=masquerade src-address=${tunnelVpsIp}/32 out-interface="
 remove [find where comment="${tag}-hotspot-to-mgmt-nat"]
 add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"`
     : "";
-  const openVpnOptionalSettings = routerOs7
+  const openVpnOptionalSettings = autoDetectRouterOsMajor
+    ? `# The auto-detected path uses only the portable client properties.
+# Avoid version-specific properties that can fail during RouterOS parsing.`
+    : routerOs7
     ? `# RouterOS 7 path: certificate verification is mandatory.
 :do {
     /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=yes
@@ -3009,6 +3026,27 @@ ${routerOsCertificateFileWriter(
 # Step 2: Create the OVPN client interface
 # Make this safe to re-import during recovery or after a failed migration.
 `;
+  const routerOsDetection = autoDetectRouterOsMajor
+    ? `# Detect the installed RouterOS major before selecting version-sensitive values.
+:local ocholaRouterOsVersion ""
+:local ocholaRouterOsMajor ""
+:do {
+    :set ocholaRouterOsVersion [/system resource get version]
+    :set ocholaRouterOsMajor [:pick $ocholaRouterOsVersion 0 1]
+} on-error={
+    :set ocholaVpnChildError "${tag}: could not read the installed RouterOS version."
+    :error $ocholaVpnChildError
+}
+:if (($ocholaRouterOsMajor != "6") && ($ocholaRouterOsMajor != "7")) do={
+    :set ocholaVpnChildError ("${tag}: unsupported RouterOS major version " . $ocholaRouterOsVersion . "; expected 6 or 7.")
+    :error $ocholaVpnChildError
+}
+:local ocholaOpenVpnCipher "aes128"
+:if ($ocholaRouterOsMajor = "7") do={
+    :set ocholaOpenVpnCipher "aes128-cbc"
+}
+:put ("${tag}: detected RouterOS " . $ocholaRouterOsVersion . "; using cipher " . $ocholaOpenVpnCipher . ".")`
+    : "";
 
   return `# ===============================================================
 # OcholaSupernet - MikroTik ${routerOsPath} Router as OpenVPN CLIENT
@@ -3018,7 +3056,7 @@ ${routerOsCertificateFileWriter(
 # VPS OVPN server : ${endpoint}:${port}/tcp  (${contract.interfaceName} ${tunnelVpsIp})
 # Router tunnel IP: dynamic (discover it from /ip address after connect)
 # VPN user        : ${safeVpnUsername}
-# OpenVPN cipher  : ${openVpnCipher} / auth=sha1
+# OpenVPN cipher  : ${openVpnDisplayCipher} / auth=sha1
 #
 # After import:
 #   - Router connects to VPS and receives a dynamic tunnel IPv4 address
@@ -3039,6 +3077,7 @@ ${routerOsCertificateFileWriter(
 :set ocholaVpnChildError ""
 :local ovpnError ""
 :local reuseExistingOvpn false
+${routerOsDetection}
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 :put "${tag}: STEP 2/10 - Preparing management VPN resources."
 ${resourcePreparation}
@@ -3176,6 +3215,7 @@ export function generateRouterManagementVpnScript(
    */
   const fullScript = generateRouterAsClientScript({
     ...opts,
+    autoDetectRouterOsMajor: true,
     backendRegistrationUrl: "https://vpn-only.invalid/not-used",
   });
   const networkStart = fullScript.indexOf("# Step 3: Allow API access");
