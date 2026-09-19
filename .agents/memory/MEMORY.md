@@ -44,6 +44,7 @@
 - [Legacy proxy VPN provisioning](legacy-proxy-vpn-provisioning.md) — The legacy proxy VPN is separate from the 1196/1197 management instances and must be provisioned explicitly.
 - [Router script URL normalization](router-script-url-normalization.md) — Normalize complete URLs before replacement; host/path suffix replacement can otherwise emit `https://https://`.
 - [Production readiness audit](production-readiness-audit.md) — Healthy API/deploy status does not prove tenant TLS, OpenVPN, or RouterOS connectivity.
+- [Router online signal](router-online-signal.md) — Only a recent authenticated RouterOS API heartbeat may make the website show a router online.
 - [Installer result contract](installer-result-contract.md) — Derive aggregate status from verification gates and persist the final callback fields as one validated result.
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.

@@ -99,8 +99,15 @@ async function fetchNetworkTelemetry(routerId: number | "all", portId: number | 
   return data as TelemetryResponse;
 }
 
+const ROUTER_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
+
 function routerOnline(router: DbRouter): boolean {
-  return router.status === "online" || router.status === "connected";
+  if (router.status !== "online" && router.status !== "connected") return false;
+  if (!router.last_seen) return false;
+  const lastSeen = Date.parse(router.last_seen);
+  return Number.isFinite(lastSeen)
+    && lastSeen <= Date.now()
+    && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
 function fmtSince(iso: string | null | undefined): string {
@@ -518,7 +525,7 @@ export default function Dashboard() {
               <span className="panel-title-icon"><Router size={16} /></span>
               <div>
                 <h2>Router status</h2>
-                <p>Heartbeat updated every 10 seconds</p>
+                <p>Online only after a recent RouterOS API heartbeat</p>
               </div>
             </div>
             {!routersLoading && (

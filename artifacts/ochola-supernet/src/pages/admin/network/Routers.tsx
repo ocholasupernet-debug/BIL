@@ -174,10 +174,17 @@ function liveUptime(
   return "—";
 }
 
-/* Router online check — trusts the status field written by the backend.
-   Ping / sweep endpoints are the source of truth; no stale-time penalty. */
+/* Router online check — requires a recent successful RouterOS API heartbeat.
+   A stale database status must not make the website claim the router is online. */
+const ROUTER_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
+
 function isOnline(r: DbRouter) {
-  return r.status === "online" || r.status === "connected";
+  if (r.status !== "online" && r.status !== "connected") return false;
+  if (!r.last_seen) return false;
+  const lastSeen = Date.parse(r.last_seen);
+  return Number.isFinite(lastSeen)
+    && lastSeen <= Date.now()
+    && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
 /* Alias — same logic as isOnline; kept for places that use currOnline */
