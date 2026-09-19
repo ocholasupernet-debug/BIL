@@ -14,6 +14,31 @@ type RouterOsCertificateFileWriterOptions = {
 };
 
 /**
+ * Render a RouterOS string value without putting the complete PEM on one
+ * command line. RouterOS 6 has a relatively small command-line limit, so
+ * append one certificate line at a time.
+ */
+export function routerOsTextVariableWriter(
+  value: string,
+  variableName = "caText",
+  indent = "",
+): string {
+  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length === 0) throw new Error("Cannot render an empty RouterOS text value.");
+
+  const escaped = (line: string) =>
+    line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const output = [`${indent}:local ${variableName} "${escaped(lines[0])}"`];
+  for (const line of lines.slice(1)) {
+    output.push(
+      `${indent}:set ${variableName} ($${variableName} . "\\n" . "${escaped(line)}")`,
+    );
+  }
+  return output.join("\n");
+}
+
+/**
  * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
  * command, and the target RouterOS 6 device supports creating an empty file
  * through `/file print file=...`. Build the file from short PEM lines instead.
