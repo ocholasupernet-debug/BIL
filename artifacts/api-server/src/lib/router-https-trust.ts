@@ -8,6 +8,11 @@ export const ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1";
 export const ROUTER_HTTPS_CERTIFICATE_FILE = "ochola-isrg-root-x1.pem";
 export const ROUTER_HTTPS_CERTIFICATE_PATH = `/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
 
+type RouterOsCertificateFileWriterOptions = {
+  fileName?: string;
+  baseName?: string;
+};
+
 /**
  * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
  * command. Build the file from short base64 lines instead, using the
@@ -18,6 +23,7 @@ export function routerOsCertificateFileWriter(
   fileVariable = "caBuildFile",
   fileBaseVariable = "caBuildBase",
   indent = "",
+  options: RouterOsCertificateFileWriterOptions = {},
 ): string {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");
   if (lines.at(-1) === "") lines.pop();
@@ -25,9 +31,11 @@ export function routerOsCertificateFileWriter(
 
   const escaped = (line: string) =>
     line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const file = `$${fileVariable}`;
+  const quoted = (name: string) => `"${escaped(name)}"`;
+  const file = options.fileName ? quoted(options.fileName) : `$${fileVariable}`;
+  const base = options.baseName ? quoted(options.baseName) : `$${fileBaseVariable}`;
   const output = [
-    `${indent}/file print file=$${fileBaseVariable}`,
+    `${indent}/file print file=${base}`,
     `${indent}/file set [find name=${file}] contents=""`,
     `${indent}:local caText "${escaped(lines[0])}"`,
     `${indent}/file set [find name=${file}] contents=$caText`,
