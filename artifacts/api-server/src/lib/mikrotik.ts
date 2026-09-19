@@ -3470,8 +3470,8 @@ ${apiRules}
 
 # Permit ordinary LAN-to-WAN forwarding only when the standard interface
 # lists exist; otherwise leave the router's existing forwarding policy intact.
-:local ocholaLanLists [/interface/list find where name="LAN"]
-:local ocholaWanLists [/interface/list find where name="WAN"]
+:local ocholaLanLists [/interface list find where name="LAN"]
+:local ocholaWanLists [/interface list find where name="WAN"]
 :if ([:len $ocholaLanLists] > 0 && [:len $ocholaWanLists] > 0) do={
     :do { /ip firewall filter remove [find where comment="${tag}-lan-to-wan"] } on-error={}
     :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN comment="${tag}-lan-to-wan" } on-error={
