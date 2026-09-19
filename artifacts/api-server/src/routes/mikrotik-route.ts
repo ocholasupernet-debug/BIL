@@ -165,6 +165,16 @@ function managementScriptSourceOrigin(req: import("express").Request): string {
     /* The API is reached through /api on the root app hostname. */
     return "https://isplatty.org";
   }
+  if (process.env.NODE_ENV === "production" && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost)) {
+    /*
+     * The VPS IP can serve the dashboard, but its HTTPS certificate is issued
+     * to isplatty.org. The bootstrap can fetch once with verification disabled
+     * for compatibility, but child hotspot assets require certificate
+     * validation. Use the certificate-backed hostname when the app was opened
+     * by IP.
+     */
+    return "https://isplatty.org";
+  }
   return requestOrigin(req);
 }
 
