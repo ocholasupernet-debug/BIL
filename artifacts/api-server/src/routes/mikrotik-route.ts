@@ -127,6 +127,23 @@ function requestOrigin(req: import("express").Request): string {
 }
 
 function managementScriptSourceOrigin(req: import("express").Request): string {
+  /*
+   * Pending router sources live in this API process's memory. During local
+   * development the admin page reaches this process through the Replit
+   * development proxy, while PUBLIC_APP_ORIGIN may still point at the
+   * production VPS. Sending a development-created token to production makes
+   * the router receive a legitimate 404 because the other process never held
+   * that token.
+   */
+  if (process.env.NODE_ENV !== "production") {
+    const developmentDomain = process.env.REPLIT_DEV_DOMAIN?.trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "");
+    if (developmentDomain && /^[a-z0-9.-]+(?::\d+)?$/i.test(developmentDomain)) {
+      return `https://${developmentDomain}`;
+    }
+  }
+
   const configured = process.env.PUBLIC_APP_ORIGIN?.trim().replace(/\/+$/, "");
   if (configured && /^https:\/\/[a-z0-9.-]+$/i.test(configured)) return configured;
 
