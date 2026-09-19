@@ -70,6 +70,7 @@ interface PendingRouterFileSource {
 }
 
 const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
+const publicRouterFileSources = new Map<string, PendingRouterFileSource>();
 const ROUTER_FILE_SOURCE_TTL_MS = 5 * 60 * 1000;
 type BulkDeployJobStatus = "queued" | "running" | "complete" | "failed";
 interface BulkDeployJob {
@@ -100,6 +101,9 @@ function cleanPendingRouterFileSources(): void {
   const now = Date.now();
   for (const [token, source] of pendingRouterFileSources) {
     if (source.expiresAt <= now) pendingRouterFileSources.delete(token);
+  }
+  for (const [sourceKey, source] of publicRouterFileSources) {
+    if (source.expiresAt <= now) publicRouterFileSources.delete(sourceKey);
   }
 }
 
@@ -227,6 +231,18 @@ function createPendingRouterFileSource(source: Omit<PendingRouterFileSource, "ex
   return token;
 }
 
+function createPublicRouterFileSource(
+  routerId: number,
+  routeName: string,
+  source: Omit<PendingRouterFileSource, "expiresAt">,
+): void {
+  cleanPendingRouterFileSources();
+  publicRouterFileSources.set(`${routerId}/${routeName}`, {
+    ...source,
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+}
+
 /* Short-lived source endpoint used by the router's /tool fetch command. The
    browser never receives this URL or the file contents. Ordinary transfers
    are consumed on the first request; Self Install sources opt into a small,
@@ -244,6 +260,37 @@ router.get("/router-file-source/:token", (req, res): void => {
   source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
   if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) {
     pendingRouterFileSources.delete(token);
+  }
+  res
+    .set("Content-Type", source.contentType)
+    .set("Content-Length", String(source.content.length))
+    .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
+    .set("Cache-Control", "no-store, no-cache, must-revalidate")
+    .send(source.content);
+});
+
+/* Deterministic public paths used by the Self Install bootstrap. The router
+   ID and filename replace the opaque bearer token; the generated content still
+   expires and remains bounded to a small number of fetch attempts. */
+router.get("/router-file-source/:routerId/:fileName", (req, res): void => {
+  cleanPendingRouterFileSources();
+  const routerId = Number.parseInt(String(req.params.routerId), 10);
+  const fileName = String(req.params.fileName ?? "");
+  if (!Number.isInteger(routerId) || routerId <= 0 || !/^[A-Za-z0-9._-]+$/.test(fileName)) {
+    res.status(404).send("Upload source not found");
+    return;
+  }
+  const sourceKey = `${routerId}/${fileName}`;
+  const source = publicRouterFileSources.get(sourceKey);
+  if (!source || source.expiresAt <= Date.now()) {
+    publicRouterFileSources.delete(sourceKey);
+    res.status(404).send("Upload source expired");
+    return;
+  }
+
+  source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
+  if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) {
+    publicRouterFileSources.delete(sourceKey);
   }
   res
     .set("Content-Type", source.contentType)
