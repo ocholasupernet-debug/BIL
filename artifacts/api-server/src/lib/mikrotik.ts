@@ -3024,7 +3024,8 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
         :set ocholaCaPhase "create embedded CA file"
 ${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        ")}
         :do {
-            /file add name="${caBuildFileName}" contents=$ocholaExpectedCa
+            /file add name="${caBuildFileName}"
+            /file set [find name="${caBuildFileName}"] contents=$ocholaExpectedCa
         } on-error={
             :set ocholaCaImportError $error
         }
@@ -3079,8 +3080,10 @@ ${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        
     :set ocholaCaImportError ""
     :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
 ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
+        :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
         :do {
-            /file add name="${httpsCaFileName}" contents=$ocholaHttpsCa
+            /file add name="${httpsCaFileName}"
+            /file set [find name="${httpsCaFileName}"] contents=$ocholaHttpsCa
         } on-error={
             :set ocholaCaImportError $error
         }
@@ -3717,9 +3720,9 @@ ${bridgePortSetup}
     /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
 }
 :if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
-    /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot DHCP server`)}
+    /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
 } else={
-    /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot DHCP server`)}
+    /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
 }
 :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
     /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} address-pool=${routerOsString(hotspotPool)} html-directory=hotspot login-by=http-chap,http-pap,cookie comment=${routerOsString(`${tag} Hotspot profile`)}

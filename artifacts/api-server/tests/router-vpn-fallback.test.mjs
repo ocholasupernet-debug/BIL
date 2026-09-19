@@ -117,13 +117,14 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.match(ros6, /VERSION PATH: RouterOS 6/);
   assert.match(ros6, /interface ovpn-client add name="ocholasupernet" connect-to="vpn\.example\.test" port=1196 user="router-42" password="one-time-token" disabled=no/);
   assert.match(ros6, /interface ovpn-client set \[find where name="ocholasupernet"\] mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
-  assert.match(ros6, /\/file print file="ochola-router-management-ca-bootstrap"/);
-  assert.match(ros6, /\/file set \[find name="ochola-router-management-ca-bootstrap\.txt"\] contents=\$caText/);
+  assert.match(ros6, /\/file add name="ochola-router-management-ca-bootstrap\.rsc"\n\s+\/file set \[find name="ochola-router-management-ca-bootstrap\.rsc"\] contents=\$ocholaExpectedCa/);
+  assert.match(ros6, /\/file remove \[find name="ochola-router-management-ca-https-root\.crt"\]/);
   assert.match(ros6, /\/certificate import file-name="\$caImportFile" passphrase=""\n/);
-  assert.match(ros6, /management VPN CA file was not created/);
+  assert.match(ros6, /management VPN CA embedded file was not created/);
   assert.doesNotMatch(ros6, /\/certificate import[^\n]* name=/);
   assert.match(ros6, /\/certificate set \[find where common-name="ISRG Root X1"\] trusted=yes/);
   assert.doesNotMatch(ros6, /\/file add name="\$caFile" contents=/);
+  assert.doesNotMatch(ros6, /\/file add name="[^"]+" contents=/);
   assert.doesNotMatch(ros6, /\\r\\n/);
   assert.doesNotMatch(ros6, /cipher=aes128-cbc/);
   assert.doesNotMatch(ros6, /verify-server-certificate/);
