@@ -16,8 +16,9 @@ type RouterOsCertificateFileWriterOptions = {
 /**
  * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
  * command. Build the file from short PEM lines instead. When a literal file
- * name is supplied, create it with `type=file`; the variable-based form is
- * retained for older callers that use the `/file print` compatibility path.
+ * name is supplied, use the older-compatible `/file add name="..."` form;
+ * the variable-based form is retained for older callers that use the
+ * `/file print` compatibility path.
  */
 export function routerOsCertificateFileWriter(
   value: string,
@@ -37,7 +38,7 @@ export function routerOsCertificateFileWriter(
   const base = options.baseName ? quoted(options.baseName) : `$${fileBaseVariable}`;
   const output = [
     options.fileName
-      ? `${indent}/file add name=${file} type=file`
+      ? `${indent}/file add name=${file}`
       : `${indent}/file print file=${base}\n${indent}/file set [find name=${file}] contents=""`,
     `${indent}:local caText "${escaped(lines[0])}"`,
     `${indent}/file set [find name=${file}] contents=$caText`,
