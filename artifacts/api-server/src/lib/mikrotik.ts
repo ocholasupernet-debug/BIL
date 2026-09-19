@@ -923,7 +923,14 @@ export async function deployRouterFile(
         Math.max(ms, 120_000),
       );
 
-      const transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+      let transferredFile: RouterFile | undefined;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+        if (transferredFile) break;
+        if (attempt < 4) {
+          await new Promise(resolve => setTimeout(resolve, 750));
+        }
+      }
       if (!transferredFile) {
         throw new Error("The router did not create the destination upload file");
       }
