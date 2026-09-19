@@ -2937,7 +2937,7 @@ ${natSetup}
     :if ([:len $apiIds] > 0) do={ :set apiReachable true }
 } on-error={}
 :if (!$apiReachable) do={
-    :set ocholaVpnChildError "${tag}: tunnel IPv4 \${liveTunnelIp} is present but RouterOS API is not enabled."
+    :set ocholaVpnChildError "${tag}: tunnel IPv4 \$liveTunnelIp is present but RouterOS API is not enabled."
     :error $ocholaVpnChildError
 }
 :local registrationUrl ${routerOsString(safeBackendRegistrationUrl)}
@@ -2951,7 +2951,7 @@ ${natSetup}
 :put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp)
 :put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
 
-:log info "${tag}: OVPN client running; dynamic tunnel IPv4=\${liveTunnelIp}; backend API verification pending"
+:log info "${tag}: OVPN client running; dynamic tunnel IPv4=\$liveTunnelIp; backend API verification pending"
 `;
 }
 
