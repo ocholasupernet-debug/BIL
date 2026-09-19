@@ -1416,6 +1416,21 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       .map(port => port.trim())
       .filter(Boolean);
     const portalHostname = new URL(sourceOrigin).hostname;
+    const defaultPortalFiles = [
+      { routeName: "hotspot-login.html", fileName: "login.html", sourceName: "login.html" },
+      { routeName: "hotspot-rlogin.html", fileName: "rlogin.html", sourceName: "rlogin.html" },
+      { routeName: "hotspot-md5.js", fileName: "md5.js", sourceName: "md5.js" },
+    ] as const;
+    const portalFileUrls = {
+      login: `${sourceOrigin}/api/router-file-source/${id}/hotspot-login.html`,
+      roamingLogin: `${sourceOrigin}/api/router-file-source/${id}/hotspot-rlogin.html`,
+      md5: `${sourceOrigin}/api/router-file-source/${id}/hotspot-md5.js`,
+    };
+    const portalFileContents = defaultPortalFiles.map(file => {
+      const source = getDeployableSource("hotspot", file.sourceName);
+      if (!source) throw new Error(`Bundled Hotspot file "${file.sourceName}" is unavailable.`);
+      return { ...file, content: source.content };
+    });
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
@@ -1436,6 +1451,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
       portalHostnames: [portalHostname],
+      portalFileUrls,
     });
 
     /*
@@ -1465,6 +1481,16 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       fileName: serviceFileName,
       maxFetchAttempts: 3,
     });
+    for (const file of portalFileContents) {
+      createPublicRouterFileSource(id, file.routeName, {
+        content: file.content,
+        contentType: file.fileName.endsWith(".js")
+          ? "application/javascript; charset=utf-8"
+          : "text/html; charset=utf-8",
+        fileName: file.fileName,
+        maxFetchAttempts: 3,
+      });
+    }
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
     const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
