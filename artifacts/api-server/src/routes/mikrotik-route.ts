@@ -59,6 +59,14 @@ interface PendingRouterFileSource {
   contentType: string;
   fileName: string;
   expiresAt: number;
+  /*
+   * RouterOS can retry a fetch after a connection closes while the response is
+   * still being received. Keep ordinary file transfers one-time, but let the
+   * Self Install bootstrap and its generated assets make a few bounded
+   * attempts so a transport retry is not misreported as an expired source.
+   */
+  maxFetchAttempts?: number;
+  fetchAttempts?: number;
 }
 
 const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
@@ -209,9 +217,10 @@ function createPendingRouterFileSource(source: Omit<PendingRouterFileSource, "ex
   return token;
 }
 
-/* One-time source endpoint used by the router's /tool fetch command. The
-   browser never receives this URL or the file contents, and the token is
-   consumed on the first request. */
+/* Short-lived source endpoint used by the router's /tool fetch command. The
+   browser never receives this URL or the file contents. Ordinary transfers
+   are consumed on the first request; Self Install sources opt into a small,
+   bounded retry budget for RouterOS transport retries. */
 router.get("/router-file-source/:token", (req, res): void => {
   cleanPendingRouterFileSources();
   const token = req.params.token;
@@ -222,7 +231,10 @@ router.get("/router-file-source/:token", (req, res): void => {
     return;
   }
 
-  pendingRouterFileSources.delete(token);
+  source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
+  if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) {
+    pendingRouterFileSources.delete(token);
+  }
   res
     .set("Content-Type", source.contentType)
     .set("Content-Length", String(source.content.length))
@@ -1334,6 +1346,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         content: content.content,
         contentType: contentTypeForFile(source.name),
         fileName: source.name.split("/").pop() ?? source.name,
+        maxFetchAttempts: 3,
       });
       return {
         sourceUrl: `${origin}/api/router-file-source/${assetToken}`,
@@ -1371,10 +1384,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       content: Buffer.from(script, "utf8"),
       contentType: "text/plain; charset=utf-8",
       fileName: "mainhotspot.rsc",
+      maxFetchAttempts: 3,
     });
     const sourceUrl = `${managementScriptSourceOrigin(req)}/api/router-file-source/${sourceToken}`;
     const bootstrap = `# OcholaSupernet - download and import the router installer
-# This one-time URL expires in 5 minutes and is consumed after one download.
+# This short-lived URL expires in 5 minutes and allows up to three transport attempts.
 # The downloaded payload is kept as mainhotspot.rsc for inspection and retry.
 :if ([:len [/file find name="mainhotspot.rsc"]] > 0) do={
     /file remove [find name="mainhotspot.rsc"]
