@@ -14,7 +14,7 @@ import {
   ISRG_ROOT_X1_PEM,
   ROUTER_HTTPS_CERTIFICATE_FILE,
   ROUTER_HTTPS_CERTIFICATE_NAME,
-  routerOsCertificateFileWriter,
+  routerOsTextVariableWriter,
 } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 
@@ -2928,8 +2928,7 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 :put "${tag}: Management OpenVPN client interface is present and disabled until CA trust succeeds."`;
 
   const caFileName = `${safeCaCertificateName}.crt`;
-  const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
-  const caBuildFileName = `${caBuildBaseName}.txt`;
+  const caBuildFileName = `${safeCaCertificateName}-bootstrap.rsc`;
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
 # endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
@@ -2954,18 +2953,32 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
         :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using embedded ISRG Root X1."
     }
     :if (!$fetchedViaTrustedStore) do={
-        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
-        :set ocholaCaPhase "create embedded CA file"
-${routerOsCertificateFileWriter(
-  ISRG_ROOT_X1_PEM,
-  "caBuildFile",
-  "caBuildBase",
-  "        ",
-  {
-    fileName: caBuildFileName,
-    baseName: caBuildBaseName,
-  },
-)}
+        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; fetching the known ISRG Root X1 for exact comparison."
+        :set ocholaCaPhase "fetch and verify embedded CA"
+        :do {
+            /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caBuildFileName}" keep-result=yes mode=https check-certificate=no
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("management VPN CA bootstrap fetch failed: " . $ocholaCaImportError)
+        }
+        :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
+            :error "management VPN CA bootstrap fetch did not create a file"
+        }
+${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
+        :local ocholaDownloadedCa ""
+        :do {
+            :set ocholaDownloadedCa [/file get [find name="${caBuildFileName}"] contents]
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("management VPN CA bootstrap contents could not be read: " . $ocholaCaImportError)
+        }
+        :if ($ocholaDownloadedCa != $ocholaExpectedCa) do={
+            :error "management VPN CA bootstrap contents did not match the embedded ISRG Root X1"
+        }
     }
     :set ocholaCaPhase "verify CA file"
     :if (!$fetchedViaTrustedStore) do={
@@ -3200,30 +3213,17 @@ ${hotspotAssetInstall}
 }
 
 /**
- * Generates the first Self Install file: the management CA trust bootstrap
- * and RouterOS OpenVPN client setup. The network, hotspot, and registration
- * scripts are intentionally not part of this first VPN step.
+ * Generates the single Self Install file. It starts with the management CA
+ * trust bootstrap and RouterOS OpenVPN client setup, then continues through
+ * API access, live tunnel discovery, and authenticated backend registration.
  */
 export function generateRouterManagementVpnScript(
-  opts: Omit<RouterAsClientOptions, "backendRegistrationUrl">,
+  opts: RouterAsClientOptions,
 ): string {
-  /*
-   * The shared renderer also knows how to produce the later network,
-   * registration, and hotspot sections. Use a valid placeholder only while
-   * rendering those discarded sections; the returned slice ends before any
-   * registration URL is emitted.
-   */
-  const fullScript = generateRouterAsClientScript({
+  return generateRouterAsClientScript({
     ...opts,
     autoDetectRouterOsMajor: true,
-    backendRegistrationUrl: "https://vpn-only.invalid/not-used",
-  });
-  const networkStart = fullScript.indexOf("# Step 3: Allow API access");
-  if (networkStart < 0) {
-    throw new Error("Generated RouterOS installer is missing the VPN boundary.");
-  }
-
-  return fullScript.slice(0, networkStart).trim() + "\n";
+  }).trim() + "\n";
 }
 
 /** Generate a RouterOS 7-only WireGuard management-client script. */
