@@ -1326,20 +1326,40 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 # The downloaded payload is kept as mainhotspot.rsc for inspection and retry.
 :local installerUrl "${sourceUrl}";
 :local installerFile "mainhotspot.rsc";
+:do { /file remove [find name=$installerFile] } on-error={}
 :do {
-    :do { /file remove [find name=$installerFile] } on-error={}
     /tool fetch url=$installerUrl dst-path=$installerFile keep-result=yes mode=https check-certificate=no
-    :local installer [/file find name=$installerFile]
-    :if ([:len $installer] = 0) do={ :error "mainhotspot.rsc was not downloaded" }
-    :if ([/file get $installer type] = "directory") do={ :error "mainhotspot.rsc download created a directory" }
-    :if ([:tonum [/file get $installer size]] <= 0) do={ :error "mainhotspot.rsc download was empty" }
-    :put "Downloaded mainhotspot.rsc. Importing it now..."
-    /import $installerFile
-    :put "mainhotspot.rsc was downloaded and imported successfully."
 } on-error={
-    :put ("mainhotspot.rsc download/import failed: " . $error)
-    :error $error
+    :local fetchError ""
+    :do { :set fetchError $error } on-error={}
+    :if ([:len $fetchError] = 0) do={ :set fetchError "RouterOS could not reach the one-time installer URL; it may have expired, been consumed, or failed TLS/DNS/network checks." }
+    :put ("mainhotspot.rsc download failed: " . $fetchError)
+    :error $fetchError
 }
+:local installer [/file find name=$installerFile]
+:if ([:len $installer] = 0) do={
+    :put "mainhotspot.rsc download failed: no destination file was created."
+    :error "mainhotspot.rsc was not downloaded"
+}
+:if ([/file get $installer type] = "directory") do={
+    :put "mainhotspot.rsc download failed: RouterOS created a directory instead of a file."
+    :error "mainhotspot.rsc download created a directory"
+}
+:if ([:tonum [/file get $installer size]] <= 0) do={
+    :put "mainhotspot.rsc download failed: the destination file is empty."
+    :error "mainhotspot.rsc download was empty"
+}
+:put "Downloaded mainhotspot.rsc. Importing it now..."
+:do {
+    /import $installerFile
+} on-error={
+    :local importError ""
+    :do { :set importError $error } on-error={}
+    :if ([:len $importError] = 0) do={ :set importError "RouterOS rejected a command while importing mainhotspot.rsc; run /import mainhotspot.rsc directly for the failing line." }
+    :put ("mainhotspot.rsc import failed: " . $importError)
+    :error $importError
+}
+:put "mainhotspot.rsc was downloaded and imported successfully."
 `;
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
