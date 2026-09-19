@@ -2906,6 +2906,10 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
         /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caFileName}" keep-result=yes mode=https check-certificate=yes
         :set fetchedViaTrustedStore true
     } on-error={}
+    :if ($fetchedViaTrustedStore && [:len [/file find name="${caFileName}"]] = 0) do={
+        :set fetchedViaTrustedStore false
+        :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using embedded ISRG Root X1."
+    }
     :if (!$fetchedViaTrustedStore) do={
         :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
 ${routerOsCertificateFileWriter(
@@ -2921,11 +2925,11 @@ ${routerOsCertificateFileWriter(
     }
     :set ocholaCaPhase "verify CA file"
     :if (!$fetchedViaTrustedStore) do={
-        :if ([:len [/file find where name="${caBuildFileName}"]] = 0) do={
+        :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
             :error "management VPN CA embedded file was not created"
         }
     } else={
-        :if ([:len [/file find where name="${caFileName}"]] = 0) do={
+        :if ([:len [/file find name="${caFileName}"]] = 0) do={
             :error "management VPN CA downloaded file was not created"
         }
     }
