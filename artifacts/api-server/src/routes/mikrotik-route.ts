@@ -1360,9 +1360,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const installationMode = requestedMode === "direct" || requestedMode === "takeover"
     ? requestedMode
     : "coexist";
-  const requestedOsMajor = Number.parseInt(String(req.query.rosMajor ?? "6"), 10);
-  const routerOsMajor = requestedOsMajor === 7 ? 7 : 6;
-
   try {
     const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
       routerId: id,
@@ -1391,7 +1388,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
       routerId: id,
-      routerOsMajor,
       installationMode,
     });
 

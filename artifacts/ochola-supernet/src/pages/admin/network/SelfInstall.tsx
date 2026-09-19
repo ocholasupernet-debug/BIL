@@ -303,7 +303,6 @@ export default function SelfInstall() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
-  const [routerOsMajor, setRouterOsMajor] = useState<6 | 7>(6);
   const [scriptText, setScriptText] = useState("");
   const [scriptCopied, setScriptCopied] = useState(false);
 
@@ -333,7 +332,6 @@ export default function SelfInstall() {
       setRouterName(found.name);
       setBridgeInterface(found.bridge_interface || "bridge");
       setBridgeName(found.bridge_interface || "hotspot-bridge");
-      if (found.ros_version?.startsWith("7.")) setRouterOsMajor(7);
       await loadVpnInfo(found.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load the router profile.");
@@ -352,8 +350,6 @@ export default function SelfInstall() {
         `/api/admin/router/install-status/${router.id}?adminId=${ADMIN_ID}&mode=${backendMode(mode)}`,
       );
       setInstallStatus(result);
-      if (result.router?.rosVersion?.startsWith("7.")) setRouterOsMajor(7);
-      if (result.router?.rosVersion && !result.router.rosVersion.startsWith("7.")) setRouterOsMajor(6);
       if (result.vpnIp && vpnInfo && vpnInfo.managementTunnel?.routerTunnelIp !== result.vpnIp) {
         setVpnInfo(current => current ? {
           ...current,
@@ -456,7 +452,6 @@ export default function SelfInstall() {
     const params = new URLSearchParams({
       adminId: String(ADMIN_ID),
       mode: backendMode(mode),
-      rosMajor: String(routerOsMajor),
     });
     const token = getAdminApiToken();
     const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
@@ -682,16 +677,9 @@ export default function SelfInstall() {
                      <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the management VPN command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                       The copied command downloads and imports one router-scoped file: <code>vpnsetup.rsc</code>. It imports the management CA trust, adds the RouterOS OpenVPN client interface, and waits for the management tunnel to come up. Network, hotspot, and registration files are intentionally not included yet.
+                        The copied command downloads and imports one router-scoped file: <code>vpnsetup.rsc</code>. The router reads its installed RouterOS version, selects the compatible client syntax and cipher, imports the management CA trust, adds the OpenVPN interface, and waits for the management tunnel. Network, hotspot, and registration files are intentionally not included yet.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
-                   <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 150 }}>
-                     <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase", letterSpacing: "0.05em" }}>RouterOS major</span>
-                     <select value={routerOsMajor} onChange={event => setRouterOsMajor(Number(event.target.value) === 7 ? 7 : 6)} style={inputStyle}>
-                       <option value={6}>RouterOS 6</option>
-                       <option value={7}>RouterOS 7</option>
-                     </select>
-                   </label>
                    <button
                      type="button"
                      onClick={() => void downloadSelfInstallScript()}
