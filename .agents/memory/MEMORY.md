@@ -52,4 +52,4 @@
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
-- [Self Install script scope](self-install-script-scope.md) — Generate one terminal-run RouterOS script for management VPN, hotspot bridge, scoped firewall/NAT, API account, and callback only.
+- [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.

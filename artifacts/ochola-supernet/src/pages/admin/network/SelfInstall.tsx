@@ -509,7 +509,7 @@ export default function SelfInstall() {
       const text = scriptText || await fetchSelfInstallScript();
       await navigator.clipboard.writeText(text);
       setScriptCopied(true);
-      setNotice("The complete RouterOS script was copied. Paste it directly into the MikroTik terminal and run it once.");
+       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import mainhotspot.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -682,10 +682,10 @@ export default function SelfInstall() {
               </div>
                <div style={{ marginTop: "0.9rem", padding: "0.85rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border-subtle)" }}>
                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
-                   <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the one-run RouterOS script
+                    <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the mainhotspot bootstrap command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                    It creates the management OVPN client tagged <code>mainbillingvpn</code>, creates or reuses the hotspot bridge, adds the selected ports, adds the management API account, and applies only the related firewall/NAT rules. You can copy the complete script and paste it directly into the MikroTik terminal.
+                     The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, and imports it in MikroTik. The generated file then creates the management OVPN client, hotspot bridge, selected ports, management API account, and related firewall/NAT rules.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
@@ -720,7 +720,7 @@ export default function SelfInstall() {
                      style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-accent)" : "var(--isp-section)", color: endpointReady && busy === "" ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
                    >
                      {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <Download size={15} />}
-                     Generate and download script
+                      Generate and download bootstrap
                    </button>
                     <button
                       type="button"
@@ -735,12 +735,12 @@ export default function SelfInstall() {
                   {scriptText && (
                     <div style={{ marginTop: "0.8rem" }}>
                       <div style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginBottom: "0.4rem" }}>
-                        Select the text below if needed, or use <strong style={{ color: "var(--isp-text)" }}>Copy script</strong>, then paste it into the MikroTik terminal and run it once.
+                         Select the text below if needed, or use <strong style={{ color: "var(--isp-text)" }}>Copy script</strong>, then paste the bootstrap command into the MikroTik terminal.
                       </div>
                       <textarea
                         readOnly
                         value={scriptText}
-                        aria-label="Generated RouterOS Self Install script"
+                         aria-label="Generated mainhotspot RouterOS bootstrap command"
                         spellCheck={false}
                         rows={14}
                         style={{ ...inputStyle, minHeight: 240, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}

@@ -1337,7 +1337,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     /import $installerFile
     :put "mainhotspot.rsc was downloaded and imported successfully."
 } on-error={
-    :put ("mainhotpot.rsc download/import failed: " . $error)
+    :put ("mainhotspot.rsc download/import failed: " . $error)
     :error $error
 }
 `;
