@@ -3145,25 +3145,24 @@ ${hotspotAssetInstall}
 }
 
 export interface RouterAsClientScriptStage {
-  name: "vpn" | "network" | "registration" | "assets";
+  name: "vpn" | "pppoe" | "hotspot";
   fileName: string;
   content: string;
 }
 
 /**
- * Splits the router-specific installer at boundaries where every resulting
- * file has its own RouterOS scope. The first stage keeps the embedded CA and
- * VPN setup together; later stages deliberately redeclare their globals and
- * locals so they can be imported independently during recovery.
+ * Splits the router-specific installer into the three staged files used by
+ * the Self Install terminal bootstrap. The first stage keeps the embedded CA
+ * and VPN setup together; the PPPoE stage contains the network/API setup and
+ * live tunnel registration; the final stage installs hotspot assets.
  */
 export function generateRouterAsClientScriptStages(
   opts: RouterAsClientOptions,
 ): RouterAsClientScriptStage[] {
   const fullScript = generateRouterAsClientScript(opts);
   const networkStart = fullScript.indexOf("# Step 3: Allow API access");
-  const registrationStart = fullScript.indexOf("# Step 8: Discover and report");
   const assetsStart = fullScript.indexOf("# Step 10: Hotspot assets");
-  if (networkStart < 0 || registrationStart < 0 || assetsStart < 0) {
+  if (networkStart < 0 || assetsStart < 0) {
     throw new Error("Generated RouterOS installer is missing a required stage boundary.");
   }
 
@@ -3171,29 +3170,20 @@ export function generateRouterAsClientScriptStages(
 :set ocholaVpnChildError ""
 :local ovpnError ""
 `;
-  const registrationPrefix = `:global ocholaVpnChildError
-:set ocholaVpnChildError ""
-`;
-
   return [
     {
       name: "vpn",
-      fileName: "ochola-vpn.rsc",
+      fileName: "vpnsetup.rsc",
       content: fullScript.slice(0, networkStart).trim() + "\n",
     },
     {
-      name: "network",
-      fileName: "ochola-network.rsc",
-      content: networkPrefix + fullScript.slice(networkStart, registrationStart).trim() + "\n",
+      name: "pppoe",
+      fileName: "pppoesetup.rsc",
+      content: networkPrefix + fullScript.slice(networkStart, assetsStart).trim() + "\n",
     },
     {
-      name: "registration",
-      fileName: "ochola-registration.rsc",
-      content: registrationPrefix + fullScript.slice(registrationStart, assetsStart).trim() + "\n",
-    },
-    {
-      name: "assets",
-      fileName: "ochola-assets.rsc",
+      name: "hotspot",
+      fileName: "hotspotsetup.rsc",
       content: fullScript.slice(assetsStart).trim() + "\n",
     },
   ];
