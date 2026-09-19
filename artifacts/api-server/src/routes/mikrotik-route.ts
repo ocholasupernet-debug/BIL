@@ -21,6 +21,7 @@ import {
   generateOvpnClientConfig,
   generateRouterManagementVpnScript,
   generateNetworkSetupScript,
+  generateServiceSetupScript,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -1405,6 +1406,16 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const origin = managementScriptSourceOrigin(req);
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
     const backendRegistrationUrl = `${origin}/api/isp/router/register/${encodeURIComponent(registrationToken)}`;
+    const sourceOrigin = managementScriptSourceOrigin(req);
+    const serviceBridgeName = String(
+      req.query.bridgeName
+      ?? (installationMode === "coexist" ? `co-hotspot-bridge-${id}` : "hotspot-bridge"),
+    ).trim();
+    const serviceBridgePorts = String(req.query.bridgePorts ?? "")
+      .split(",")
+      .map(port => port.trim())
+      .filter(Boolean);
+    const portalHostname = new URL(sourceOrigin).hostname;
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
@@ -1420,16 +1431,22 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       managementApiPassword: found.creds.password,
     });
     const networkScript = generateNetworkSetupScript({ routerId: id });
+    const serviceScript = generateServiceSetupScript({
+      routerId: id,
+      bridgeName: serviceBridgeName,
+      bridgePorts: serviceBridgePorts,
+      portalHostnames: [portalHostname],
+    });
 
     /*
-     * Begin Self Install with two public sources. The network engine is
-     * intentionally separate from the VPN/API identity script so each
-     * ordered step can be reviewed, copied, downloaded, or retried
+     * Begin Self Install with three public sources. The network engine,
+     * management plane, and customer service layer are intentionally separate
+     * so each ordered step can be reviewed, copied, downloaded, or retried
      * independently.
      */
-    const sourceOrigin = managementScriptSourceOrigin(req);
     const networkFileName = "networksetup.rsc";
     const vpnFileName = "vpnsetup.rsc";
+    const serviceFileName = "servicessetup.rsc";
     createPublicRouterFileSource(id, networkFileName, {
       content: Buffer.from(networkScript, "utf8"),
       contentType: "text/plain; charset=utf-8",
@@ -1442,9 +1459,16 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       fileName: vpnFileName,
       maxFetchAttempts: 3,
     });
+    createPublicRouterFileSource(id, serviceFileName, {
+      content: Buffer.from(serviceScript, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName: serviceFileName,
+      maxFetchAttempts: 3,
+    });
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
-    const stepCommand = (sourceUrl: string, fileName: string): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no
+    const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
+    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
 :delay 2s
 /import "${fileName}"
 /file remove "${fileName}"
@@ -1468,6 +1492,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           fileName: vpnFileName,
           description: "After Step 1 completes, install CA trust, create the management VPN/API access, and register the router.",
           command: stepCommand(vpnSourceUrl, vpnFileName),
+        },
+        {
+          id: "services",
+          order: 3,
+          title: "Configure Hotspot and PPPoE services",
+          fileName: serviceFileName,
+          description: `After Step 2 completes, create ${serviceBridgeName}, Hotspot DHCP/profile/server, the portal walled garden, PPPoE, and customer NAT.`,
+          command: stepCommand(serviceSourceUrl, serviceFileName, true),
         },
       ],
     });

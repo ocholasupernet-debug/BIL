@@ -3553,6 +3553,193 @@ ${apiRules}
 `;
 }
 
+export interface RouterServiceSetupOptions {
+  /** Router ID used to namespace every service resource and comment. */
+  routerId?: number;
+  /** Bridge that carries the shared Hotspot and PPPoE services. */
+  bridgeName?: string;
+  /** Physical interfaces to attach to the service bridge when unassigned. */
+  bridgePorts?: string[];
+  /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
+  portalHostnames?: string[];
+}
+
+/**
+ * Generates the shared service layer used by both Hotspot and PPPoE.
+ *
+ * This is deliberately separate from networksetup.rsc and vpnsetup.rsc:
+ * networksetup owns core firewall/NAT, vpnsetup owns management access, and
+ * this file owns the customer service bridge, DHCP, Hotspot, PPPoE, walled
+ * garden, and service NAT resources.
+ */
+export function generateServiceSetupScript(
+  options: RouterServiceSetupOptions = {},
+): string {
+  const routerTag = options.routerId == null ? "router" : String(options.routerId);
+  const tag = `ochola-services-${routerTag}`;
+  const bridgeName = validateRouterOsResourceName(
+    options.bridgeName ?? `ochola-hotspot-bridge-${routerTag}`,
+    "Service bridge name",
+  );
+  const bridgePorts = Array.from(new Set((options.bridgePorts ?? [])
+    .map(port => validateRouterOsResourceName(port, "Service bridge port"))));
+  const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
+    .map(host => String(host).trim().toLowerCase())
+    .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
+  const hotspotPool = `${tag}-hotspot-pool`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotServer = `${tag}-hotspot`;
+  const dhcpServer = `${tag}-dhcp`;
+  const hotspotGateway = "192.168.88.1";
+  const hotspotNetwork = "192.168.88.0/24";
+  const pppoeGateway = "192.168.99.1";
+  const pppoeNetwork = "192.168.99.0/24";
+
+  const bridgePortSetup = bridgePorts.map((port, index) => `:local servicePortIds${index} [/interface bridge port find where interface=${routerOsString(port)}]
+:if ([:len $servicePortIds${index}] > 0) do={
+    :local servicePortId${index} [:pick $servicePortIds${index} 0]
+    :local servicePortBridge${index} [/interface bridge port get $servicePortId${index} bridge]
+    :if ($servicePortBridge${index} != ${routerOsString(bridgeName)}) do={
+        :set serviceError ("${tag}: ${port} is already assigned to foreign bridge " . $servicePortBridge${index} . "; it was not moved.")
+        :error $serviceError
+    }
+} else={
+    :do { /interface bridge port add bridge=${routerOsString(bridgeName)} interface=${routerOsString(port)} comment=${routerOsString(`${tag} bridge port`)} } on-error={
+        :set serviceError ("${tag}: could not add bridge port ${port}: " . $error)
+        :error $serviceError
+    }
+}`).join("\n");
+
+  const walledGardenSetup = portalHostnames.length > 0
+    ? portalHostnames.map(hostname => `:do {
+    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(`${tag} walled garden ${hostname}`)}
+} on-error={
+    :set serviceError ("${tag}: could not add walled-garden host ${hostname}: " . $error)
+    :error $serviceError
+}`).join("\n")
+    : `:put "${tag}: no portal hostname was supplied; walled-garden host entries were not added."`;
+
+  return `# ===============================================================
+# OcholaSupernet - servicessetup.rsc
+# Shared Hotspot and PPPoE service layer
+# Generated  : ${new Date().toISOString()}
+#
+# Run after networksetup.rsc and vpnsetup.rsc.
+# This file owns only OcholaSupernet-tagged service resources:
+#   - service bridge and selected physical ports
+#   - Hotspot gateway, DHCP, pool, profile, and server
+#   - Hotspot walled garden for the portal/API hostname
+#   - PPPoE gateway, pool, profile, and server
+#   - customer NAT rules for both service networks
+# Existing foreign bridge memberships and unowned resources are preserved.
+# ===============================================================
+
+:global serviceError
+:set serviceError ""
+:put "${tag}: starting Hotspot and PPPoE service setup."
+
+# 1. Create the shared service bridge without taking ports away from another bridge.
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :do {
+        /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} service bridge`)}
+    } on-error={
+        :set serviceError ("${tag}: service bridge creation failed: " . $error)
+        :error $serviceError
+    }
+}
+${bridgePortSetup}
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :set serviceError "${tag}: service bridge was not verified."
+    :error $serviceError
+}
+
+# 2. Add the Hotspot and PPPoE gateway addresses to the service bridge.
+:if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+    :do { /ip address add address=${routerOsString(`${hotspotGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
+        :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/ip address find where address=${routerOsString(`${pppoeGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+    :do { /ip address add address=${routerOsString(`${pppoeGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
+        :set serviceError ("${tag}: PPPoE gateway creation failed: " . $error)
+        :error $serviceError
+    }
+}
+
+# 3. Hotspot DHCP pool, network, server, and profile.
+:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+    /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+}
+:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
+    /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+}
+:if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
+    /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+} else={
+    /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+}
+:if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
+    /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot DHCP server`)}
+} else={
+    /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot DHCP server`)}
+}
+:if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
+    /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} address-pool=${routerOsString(hotspotPool)} html-directory=hotspot login-by=http-chap,http-pap,cookie comment=${routerOsString(`${tag} Hotspot profile`)}
+} else={
+    /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} address-pool=${routerOsString(hotspotPool)} html-directory=hotspot login-by=http-chap,http-pap,cookie comment=${routerOsString(`${tag} Hotspot profile`)}
+}
+:if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
+    /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot server`)}
+} else={
+    /ip hotspot set [find where name=${routerOsString(hotspotServer)}] interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot server`)}
+}
+
+# 4. Only this installation's walled-garden entries are replaced.
+/ip hotspot walled-garden ip
+:do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
+${walledGardenSetup}
+
+# 5. PPPoE pool, profile, and server on the same service bridge.
+:if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
+    /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+}
+:if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
+    /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+}
+:if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
+    /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+} else={
+    /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+}
+:if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
+    /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+} else={
+    /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+}
+
+# 6. Customer NAT for both service networks, only when the standard WAN list exists.
+:local serviceWanLists [/interface list find where name="WAN"]
+:if ([:len $serviceWanLists] > 0) do={
+    :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
+    :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(hotspotNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} Hotspot masquerade`)} } on-error={
+        :put ("${tag}: Hotspot NAT could not be added: " . $error)
+    }
+    :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} PPPoE masquerade`)}] } on-error={}
+    :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} PPPoE masquerade`)} } on-error={
+        :put ("${tag}: PPPoE NAT could not be added: " . $error)
+    }
+} else={
+    :put "${tag}: WAN interface list is absent; customer NAT was not changed."
+}
+
+:if ([:len $serviceError] > 0) do={ :error $serviceError }
+:put "${tag}: servicessetup.rsc complete - Hotspot bridge, walled garden, Hotspot, PPPoE, and service NAT are ready."
+`;
+}
+
 /**
  * Generates a MikroTik RouterOS script that restricts API access to a
  * specific VPS IP, blocking all other connections to port 8728 and 8729.

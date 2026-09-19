@@ -89,7 +89,7 @@ type FinishResult = {
 };
 
 type SelfInstallStep = {
-  id: "network" | "vpn";
+  id: "network" | "vpn" | "services";
   order: number;
   title: string;
   fileName: string;
@@ -462,6 +462,8 @@ export default function SelfInstall() {
       adminId: String(ADMIN_ID),
       mode: backendMode(mode),
     });
+    if (bridgeName.trim()) params.set("bridgeName", bridgeName.trim());
+    if (ports.trim()) params.set("bridgePorts", ports.trim());
     const token = getAdminApiToken();
     const response = await fetch(`/api/router/${router.id}/self-install-script?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -485,7 +487,7 @@ export default function SelfInstall() {
     setNotice("");
     try {
       await fetchSelfInstallSteps();
-      setNotice("The ordered Self Install steps are ready. Run Step 1 first, then Step 2.");
+       setNotice("The ordered Self Install steps are ready. Run Step 1 first, then Step 2, then Step 3.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -563,8 +565,8 @@ export default function SelfInstall() {
             <h1 style={{ margin: 0, color: "var(--isp-text)", fontSize: "1.25rem", fontWeight: 800 }}>Self Install</h1>
           </div>
           <p style={{ margin: "0.35rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.8rem", maxWidth: 720, lineHeight: 1.55 }}>
-             Register a MikroTik router, generate the limited management script, and verify the live RouterOS API connection.
-             The script only provisions the management VPN, hotspot bridge, scoped firewall/NAT rules, API account, and completion callback.
+             Register a MikroTik router, generate the ordered management and service scripts, and verify the live RouterOS API connection.
+             The three files separate the network engine, management VPN/API, and Hotspot/PPPoE customer service layer.
           </p>
         </div>
 
@@ -706,7 +708,7 @@ export default function SelfInstall() {
                      <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the management VPN command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                        Self Install is deliberately ordered into independent router-terminal steps. Start with <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, wait for it to finish, then run <strong style={{ color: "var(--isp-text)" }}>Step 2</strong>. Nothing imports the two files automatically as one combined configuration.
+                         Self Install is deliberately ordered into independent router-terminal steps. Run <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, wait for it to finish, then run <strong style={{ color: "var(--isp-text)" }}>Step 2</strong> and <strong style={{ color: "var(--isp-text)" }}>Step 3</strong>. Nothing imports the files automatically as one combined configuration.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button
@@ -807,8 +809,8 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
                      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                      <li>Download the VPN setup command and run it once in the MikroTik terminal.</li>
-                      <li>It imports the CA trust and adds the management OpenVPN client interface.</li>
+                       <li>Run the three commands in order: network, VPN/API, then services.</li>
+                       <li>The final services file creates the selected Hotspot bridge, DHCP, walled garden, PPPoE, and service NAT.</li>
                       <li>It waits for the management tunnel to reach a running state.</li>
                       <li>Return here after the VPN is up so the next configuration step can be added.</li>
                     </ul>
