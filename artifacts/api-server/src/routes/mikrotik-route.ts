@@ -1363,14 +1363,25 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     /file remove [find name="mainhotspot.rsc"]
 }
 /tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" keep-result=yes mode=https check-certificate=no
+:local mainhotspotReady false
 :if ([:len [/file find name="mainhotspot.rsc"]] = 0) do={
     :put "mainhotspot.rsc download failed: no destination file was created."
 } else={
     :if ([:tonum [/file get [find name="mainhotspot.rsc"] size]] <= 0) do={
         :put "mainhotspot.rsc download failed: the destination file is empty."
     } else={
-        :put "Downloaded mainhotspot.rsc. Importing it now..."
+        :set mainhotspotReady true
+    }
+}
+:if ($mainhotspotReady) do={
+    :put "Downloaded mainhotspot.rsc. Waiting before the separate import step..."
+    :delay 1s
+    :put "Importing mainhotspot.rsc now..."
+    :do {
         /import "mainhotspot.rsc"
+    } on-error={
+        :local mainhotspotImportError $error
+        :put ("mainhotspot.rsc import failed: " . $mainhotspotImportError)
     }
 }
 `;
