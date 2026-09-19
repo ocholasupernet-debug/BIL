@@ -1,4 +1,9 @@
-import ISRG_ROOT_X1_PEM from "./certificates/isrg-root-x1.pem";
+import { readFileSync } from "node:fs";
+
+const ISRG_ROOT_X1_PEM = readFileSync(
+  new URL("./certificates/isrg-root-x1.pem", import.meta.url),
+  "utf8",
+);
 export { ISRG_ROOT_X1_PEM };
 
 /**
