@@ -2742,6 +2742,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const hotspotAssetInstall = safeHotspotAssets.length > 0
     ? `# Step 10: Import the approved hotspot asset bundle
 # Existing files are preserved so a retry cannot replace a customized portal.
+:put "${tag}: STEP 10/10 - Installing ${safeHotspotAssets.length} approved hotspot assets."
 ${hotspotDirectories.map(directory => `:do { /file make-dir dir-name=${routerOsString(directory)} } on-error={}`).join("\n")}
 ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsString(asset.destinationPath)}]] = 0) do={
     :do {
@@ -2757,8 +2758,9 @@ ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsSt
     }
 } else={
     :put "${asset.sourceName}: already present; preserved."
-}`).join("\n")}`
-    : "";
+}`).join("\n")}
+:put "${tag}: STEP 10/10 complete - hotspot asset installation finished."`
+    : `:put "${tag}: STEP 10/10 skipped - no approved hotspot assets were requested."`;
   const resourcePreparation = coexistence
     ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
@@ -2802,7 +2804,8 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-por
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
   const bridgeSetup = safeBridgeName
-    ? `# Step 4: Create the requested hotspot bridge and add only the selected ports
+    ? `# Step 5: Create the requested hotspot bridge and add only the selected ports
+:put "${tag}: STEP 5/10 - Configuring hotspot bridge ${safeBridgeName}."
 /interface bridge
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
     :do { /interface bridge add name="${safeBridgeName}" comment="${tag} hotspot bridge" } on-error={
@@ -2810,17 +2813,21 @@ add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp commen
         :error $ocholaVpnChildError
     }
 }
-${safeBridgePorts.map(port => `:if ([:len [/interface find where name="${port}"]] = 0) do={
+${safeBridgePorts.map(port => `:put "${tag}: STEP 5/10 - Checking physical port ${port}."
+:if ([:len [/interface find where name="${port}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: physical interface ${port} was not found."
     :error $ocholaVpnChildError
 }
 :if ([:len [/interface bridge port find where bridge="${safeBridgeName}" && interface="${port}"]] = 0) do={
+    :put "${tag}: STEP 5/10 - Adding ${port} to ${safeBridgeName}."
     :do { /interface bridge port add bridge="${safeBridgeName}" interface="${port}" comment="${tag} hotspot port" } on-error={
         :set ocholaVpnChildError "${tag}: could not add ${port} to ${safeBridgeName}."
         :error $ocholaVpnChildError
     }
-}`).join("\n")}
+:put "${tag}: STEP 5/10 - ${port} is attached to ${safeBridgeName}."
+`).join("\n")}
 :local hotspotAddress "${hotspotGateway!.address}/${hotspotGateway!.prefix}"
+:put ("${tag}: STEP 5/10 - Verifying hotspot gateway " . $hotspotAddress . " on ${safeBridgeName}.")
 :if ([:len [/ip address find where address=$hotspotAddress && interface="${safeBridgeName}"]] = 0) do={
     :do {
         /ip address add address=$hotspotAddress interface="${safeBridgeName}" comment="${tag} hotspot gateway"
@@ -2836,7 +2843,8 @@ ${safeBridgePorts.map(port => `:if ([:len [/interface find where name="${port}"]
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: hotspot bridge was not verified."
     :error $ocholaVpnChildError
-}`
+}
+:put "${tag}: STEP 5/10 complete - bridge, ports, and gateway verified."`
     : "";
   const safeApiUsernames = Array.from(new Set([safeManagementApiUsername, safeApiUsername].filter(Boolean)));
   const apiUserSetup = safeApiPassword && safeApiUsernames.length > 0
@@ -2898,6 +2906,7 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 :set ocholaCaPhase "prepare CA file"
 :set ocholaCaError ""
 :set ocholaCaImportError ""
+:put "${tag}: STEP 1/10 - Starting CA trust bootstrap."
 :do {
     :do { /file remove [find name="${caFileName}"] } on-error={}
     :do { /file remove [find name="${caBuildFileName}"] } on-error={}
@@ -2969,6 +2978,7 @@ ${routerOsCertificateFileWriter(
     :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
         :error "management VPN CA was not imported"
     }
+    :put "${tag}: STEP 1/10 complete - CA certificate imported and trusted."
 } on-error={
     :set ocholaCaError $error
     :if ([:len $ocholaCaError] = 0) do={
@@ -3013,8 +3023,11 @@ ${routerOsCertificateFileWriter(
 :local reuseExistingOvpn false
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 ${caBootstrap}
+:put "${tag}: STEP 2/10 - Preparing management VPN resources."
 ${resourcePreparation}
+:put "${tag}: STEP 2/10 complete - management VPN resources ready."
 }
+:put "${tag}: STEP 3/10 - Creating management OpenVPN client."
 :if (!$reuseExistingOvpn) do={
  :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
     :local routerError ""
@@ -3029,6 +3042,7 @@ ${resourcePreparation}
 }
 ${openVpnPostCreateSettings}
 ${openVpnOptionalSettings}
+:put "${tag}: STEP 3/10 complete - OpenVPN client configured."
 
 :put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
 :local ovpnRunning false
@@ -3062,10 +3076,18 @@ ${openVpnOptionalSettings}
 
 # Step 3: Allow API access from the validated VPN peer
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
+:put "${tag}: STEP 4/10 - Applying management firewall rules."
 /ip firewall filter
 ${firewallPreparation}
+:put "${tag}: STEP 4/10 complete - management firewall rules ready."
 ${bridgeSetup}
+:if ([:len "${safeBridgeName}"] = 0) do={ :put "${tag}: STEP 5/10 skipped - no hotspot bridge was requested." }
+${safeApiUsernames.length > 0
+  ? `:put "${tag}: STEP 6/10 - Creating or reconciling management API accounts."
 ${apiUserSetup}
+:put "${tag}: STEP 6/10 complete - management API accounts verified."`
+  : `:put "${tag}: STEP 6/10 skipped - no management API account was requested."`}
+:put "${tag}: STEP 7/10 - Applying NAT and RouterOS API service settings."
 ${natSetup}
 
 # Step 7: Ensure API service is enabled and restricted
@@ -3075,8 +3097,10 @@ ${natSetup}
     :error $ocholaVpnChildError
 }
 :do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}
+:put "${tag}: STEP 7/10 complete - NAT and API service settings ready."
 
 # Step 8: Discover and report the live tunnel IPv4
+:put "${tag}: STEP 8/10 - Discovering the live management tunnel address."
 :local ovpnId [/interface ovpn-client find where name="${interfaceName}"]
 :local liveTunnelIp ""
 :if ([:len $ovpnId] > 0) do={
@@ -3092,8 +3116,10 @@ ${natSetup}
     :set ocholaVpnChildError "${tag}: OpenVPN is running but no valid tunnel IPv4 was assigned."
     :error $ocholaVpnChildError
 }
+:put ("${tag}: STEP 8/10 complete - live tunnel IPv4 is " . $liveTunnelIp . ".")
 
 # Step 9: Verify RouterOS API reachability and backend registration
+:put "${tag}: STEP 9/10 - Verifying RouterOS API and registering the live tunnel."
 :local apiReachable false
 :do {
     :local apiIds [/ip service find where name="api" && disabled=no]
@@ -3113,6 +3139,7 @@ ${natSetup}
 }
 :put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp)
 :put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
+:put "${tag}: STEP 9/10 complete - backend registration accepted."
 
 :log info "${tag}: OVPN client running; dynamic tunnel IPv4=\$liveTunnelIp; backend API verification pending"
 ${hotspotAssetInstall}

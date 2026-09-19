@@ -1400,9 +1400,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const bootstrap = `# OcholaSupernet - download and import the router installer
 # This short-lived URL expires in 5 minutes and allows up to three transport attempts.
 # The downloaded payload is kept as mainhotspot.rsc for inspection and retry.
+:put "OcholaSupernet bootstrap 1/3: removing any previous mainhotspot.rsc."
 :if ([:len [/file find name="mainhotspot.rsc"]] > 0) do={
     /file remove [find name="mainhotspot.rsc"]
 }
+:put "OcholaSupernet bootstrap 2/3: downloading mainhotspot.rsc."
 /tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" keep-result=yes mode=https check-certificate=no
 :local mainhotspotReady false
 :if ([:len [/file find name="mainhotspot.rsc"]] = 0) do={
@@ -1412,18 +1414,21 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         :put "mainhotspot.rsc download failed: the destination file is empty."
     } else={
         :set mainhotspotReady true
+        :put ("OcholaSupernet bootstrap 2/3 complete: mainhotspot.rsc downloaded (" . [/file get [find name="mainhotspot.rsc"] size] . " bytes).")
     }
 }
 :if ($mainhotspotReady) do={
-    :put "Downloaded mainhotspot.rsc. Waiting before the separate import step..."
+    :put "OcholaSupernet bootstrap 3/3: waiting before the separate import step..."
     :delay 1s
-    :put "Importing mainhotspot.rsc now..."
+    :put "OcholaSupernet bootstrap 3/3: importing mainhotspot.rsc now..."
     :do {
         /import "mainhotspot.rsc"
     } on-error={
         :local mainhotspotImportError $error
         :put ("mainhotspot.rsc import failed: " . $mainhotspotImportError)
     }
+} else={
+    :put "OcholaSupernet bootstrap stopped before import because mainhotspot.rsc was not ready."
 }
 `;
 
