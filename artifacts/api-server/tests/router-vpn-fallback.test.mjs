@@ -67,7 +67,8 @@ test("OpenVPN child fails loudly when the client is not created or running", () 
   });
   assert.match(script, /\/interface ovpn-client add name="ocholasupernet"/);
   assert.match(script, /name="ocholasupernet"[^\r\n]*comment="mainbillingvpn"/);
-  assert.match(script, /protocol=tcp mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
+  assert.match(script, /interface ovpn-client add name="ocholasupernet" connect-to="vpn\.example\.test" port=1196 user="router-42" password="one-time-token" disabled=no/);
+  assert.match(script, /interface ovpn-client set \[find where name="ocholasupernet"\] mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
   assert.match(script, /name="ocholasupernet" && running=yes/);
   assert.doesNotMatch(script, /remove \[find where name="coreispbilling"\]/);
   assert.match(script, /name="ocholasupernet"/);
@@ -109,7 +110,8 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   const ros6 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 6 });
   const ros7 = mikrotik.generateRouterAsClientScript({ ...options, routerOsMajor: 7 });
   assert.match(ros6, /VERSION PATH: RouterOS 6/);
-  assert.match(ros6, /protocol=tcp mode=ip cipher=aes128 auth=sha1/);
+  assert.match(ros6, /interface ovpn-client add name="ocholasupernet" connect-to="vpn\.example\.test" port=1196 user="router-42" password="one-time-token" disabled=no/);
+  assert.match(ros6, /interface ovpn-client set \[find where name="ocholasupernet"\] mode=ip cipher=aes128 auth=sha1 add-default-route=no/);
   assert.match(ros6, /\/file print file=\$caBuildBase/);
   assert.match(ros6, /\/file set \[find name=\$caBuildFile\] contents=\$caText/);
   assert.doesNotMatch(ros6, /\/file add name="\$caFile" contents=/);
@@ -117,7 +119,8 @@ test("OpenVPN renders separate RouterOS 6 and 7 compatibility paths", () => {
   assert.doesNotMatch(ros6, /cipher=aes128-cbc/);
   assert.doesNotMatch(ros6, /verify-server-certificate/);
   assert.match(ros7, /VERSION PATH: RouterOS 7\+/);
-  assert.match(ros7, /protocol=tcp mode=ip cipher=aes128-cbc auth=sha1/);
+  assert.match(ros7, /interface ovpn-client add name="ocholasupernet" connect-to="vpn\.example\.test" port=1196 user="router-42" password="one-time-token" disabled=no/);
+  assert.match(ros7, /interface ovpn-client set \[find where name="ocholasupernet"\] mode=ip cipher=aes128-cbc auth=sha1 add-default-route=no/);
   assert.match(ros7, /verify-server-certificate=yes/);
   assert.match(scriptsRoute, /ros-version=/);
   assert.match(scriptsRoute, /routerOsMajor/);
