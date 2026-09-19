@@ -2849,11 +2849,31 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     } on-error={}
     :if (!$fetchedViaTrustedStore) do={
         :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
-${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "        ")}
+${routerOsCertificateFileWriter(
+  ISRG_ROOT_X1_PEM,
+  "caBuildFile",
+  "caBuildBase",
+  "        ",
+  {
+    fileName: `${caCertificateName}-bootstrap.txt`,
+    baseName: `${caCertificateName}-bootstrap`,
+  },
+)}
         :set caImportFile $caBuildFile
     }
-    /certificate import file-name=$caImportFile
+    :if ([:len [/file find where name="$caImportFile"]] = 0) do={
+        :error ("management VPN CA file was not created: " . $caImportFile)
+    }
+    :local caImportError ""
+    :do {
+        /certificate import file-name="$caImportFile" passphrase=""
+    } on-error={
+        :set caImportError $error
+    }
     :if ([:len [/certificate find where common-name="ISRG Root X1"]] = 0) do={
+        :if ([:len $caImportError] > 0) do={
+            :error ("management VPN CA certificate import failed: " . $caImportError)
+        }
         :error "management VPN CA certificate common name was not found after import"
     }
     /certificate set [find where common-name="ISRG Root X1"] trusted=yes
