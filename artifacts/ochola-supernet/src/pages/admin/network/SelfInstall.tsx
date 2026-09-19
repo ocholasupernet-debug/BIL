@@ -487,12 +487,12 @@ export default function SelfInstall() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `router-self-install${router.id}.rsc`;
+       link.download = `mainhotspot-bootstrap${router.id}.rsc`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setNotice("The minimal Self Install script is ready. Copy it into the MikroTik terminal or use the downloaded .rsc file.");
+       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import mainhotspot.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {

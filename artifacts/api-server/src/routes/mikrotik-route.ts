@@ -180,6 +180,16 @@ function contentTypeForFile(fileName: string): string {
   return contentTypes[extension ?? ""] ?? "application/octet-stream";
 }
 
+function createPendingRouterFileSource(source: Omit<PendingRouterFileSource, "expiresAt">): string {
+  cleanPendingRouterFileSources();
+  const token = randomBytes(32).toString("base64url");
+  pendingRouterFileSources.set(token, {
+    ...source,
+    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+  });
+  return token;
+}
+
 /* One-time source endpoint used by the router's /tool fetch command. The
    browser never receives this URL or the file contents, and the token is
    consumed on the first request. */
@@ -1299,9 +1309,42 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       managementApiUsername: "ocholasupernet",
     });
 
+    /*
+     * The copied command must be runnable from a MikroTik terminal. Keep the
+     * generated RouterOS payload behind a short-lived, one-time URL rather
+     * than asking the router to call this admin-authenticated endpoint (the
+     * router cannot safely carry the administrator's bearer token).
+     */
+    const sourceToken = createPendingRouterFileSource({
+      content: Buffer.from(script, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName: "mainhotspot.rsc",
+    });
+    const sourceUrl = `${managementScriptSourceOrigin(req)}/api/router-file-source/${sourceToken}`;
+    const bootstrap = `# OcholaSupernet - download and import the router installer
+# This one-time URL expires in 5 minutes and is consumed after one download.
+# The downloaded payload is kept as mainhotspot.rsc for inspection and retry.
+:local installerUrl "${sourceUrl}";
+:local installerFile "mainhotspot.rsc";
+:do {
+    :do { /file remove [find name=$installerFile] } on-error={}
+    /tool fetch url=$installerUrl dst-path=$installerFile keep-result=yes mode=https check-certificate=no
+    :local installer [/file find name=$installerFile]
+    :if ([:len $installer] = 0) do={ :error "mainhotspot.rsc was not downloaded" }
+    :if ([/file get $installer type] = "directory") do={ :error "mainhotspot.rsc download created a directory" }
+    :if ([:tonum [/file get $installer size]] <= 0) do={ :error "mainhotspot.rsc download was empty" }
+    :put "Downloaded mainhotspot.rsc. Importing it now..."
+    /import $installerFile
+    :put "mainhotspot.rsc was downloaded and imported successfully."
+} on-error={
+    :put ("mainhotpot.rsc download/import failed: " . $error)
+    :error $error
+}
+`;
+
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="router-self-install${id}.rsc"`);
-    res.send(script);
+    res.setHeader("Content-Disposition", `attachment; filename="mainhotspot-bootstrap${id}.rsc"`);
+    res.send(bootstrap);
   } catch (error) {
     res.status(503).json({
       error: "Self Install script generation failed",
