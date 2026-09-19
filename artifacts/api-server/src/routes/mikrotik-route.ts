@@ -1399,6 +1399,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     const sourceUrl = `${managementScriptSourceOrigin(req)}/api/router-file-source/${sourceToken}`;
     const bootstrap = `/tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" mode=https check-certificate=no
+:delay 2s
 /import "mainhotspot.rsc"
 `;
 
