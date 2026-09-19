@@ -2994,31 +2994,19 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
         :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using embedded ISRG Root X1."
     }
     :if (!$fetchedViaTrustedStore) do={
-        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; fetching the known ISRG Root X1 for exact comparison."
-        :set ocholaCaPhase "fetch and verify embedded CA"
+        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; writing the embedded ISRG Root X1."
+        :set ocholaCaPhase "create embedded CA file"
+${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
         :do {
-            /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caBuildFileName}" keep-result=yes mode=https check-certificate=no
+            /file add name="${caBuildFileName}" contents=$ocholaExpectedCa
         } on-error={
             :set ocholaCaImportError $error
         }
         :if ([:len $ocholaCaImportError] > 0) do={
-            :error ("management VPN CA bootstrap fetch failed: " . $ocholaCaImportError)
+            :error ("management VPN embedded CA file creation failed: " . $ocholaCaImportError)
         }
         :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
-            :error "management VPN CA bootstrap fetch did not create a file"
-        }
-${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaExpectedCa", "        ")}
-        :local ocholaDownloadedCa ""
-        :do {
-            :set ocholaDownloadedCa [/file get [find name="${caBuildFileName}"] contents]
-        } on-error={
-            :set ocholaCaImportError $error
-        }
-        :if ([:len $ocholaCaImportError] > 0) do={
-            :error ("management VPN CA bootstrap contents could not be read: " . $ocholaCaImportError)
-        }
-        :if ($ocholaDownloadedCa != $ocholaExpectedCa) do={
-            :error "management VPN CA bootstrap contents did not match the embedded ISRG Root X1"
+            :error "management VPN embedded CA file was not created"
         }
     }
     :set ocholaCaPhase "verify CA file"
@@ -3437,8 +3425,16 @@ export function generateNetworkSetupScript(
   }
 
   const apiRules = safeNetworks.map((network, index) => `:do { /ip firewall filter remove [find where comment="${tag}-api-${index}"] } on-error={}
-:do { /ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}" place-before=0 } on-error={
-    :put "${tag}: could not add API allow rule for ${network}."
+:local ocholaApiRuleError${index} ""
+:local ocholaApiRuleId${index} ""
+:do {
+    :set ocholaApiRuleId${index} [/ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}"]
+    /ip firewall filter move $ocholaApiRuleId${index} destination=0
+} on-error={
+    :set ocholaApiRuleError${index} $error
+}
+:if ([:len $ocholaApiRuleError${index}] > 0) do={
+    :put ("${tag}: could not add API allow rule for ${network}: " . $ocholaApiRuleError${index})
 }`).join("\n");
 
   return `# ===============================================================
