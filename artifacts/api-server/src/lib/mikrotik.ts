@@ -3562,6 +3562,12 @@ export interface RouterServiceSetupOptions {
   bridgePorts?: string[];
   /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
   portalHostnames?: string[];
+  /** One-time HTTPS sources for the default RouterOS Hotspot files. */
+  portalFileUrls?: {
+    login: string;
+    roamingLogin: string;
+    md5: string;
+  };
 }
 
 /**
@@ -3596,6 +3602,13 @@ export function generateServiceSetupScript(
   const hotspotNetwork = "192.168.88.0/24";
   const pppoeGateway = "192.168.99.1";
   const pppoeNetwork = "192.168.99.0/24";
+  const portalFileUrls = options.portalFileUrls
+    ? {
+        login: validateRouterOpenVpnCaUrl(options.portalFileUrls.login),
+        roamingLogin: validateRouterOpenVpnCaUrl(options.portalFileUrls.roamingLogin),
+        md5: validateRouterOpenVpnCaUrl(options.portalFileUrls.md5),
+      }
+    : null;
 
   const bridgePortSetup = bridgePorts.map((port, index) => `:local servicePortIds${index} [/interface bridge port find where interface=${routerOsString(port)}]
 :if ([:len $servicePortIds${index}] > 0) do={
@@ -3640,7 +3653,29 @@ export function generateServiceSetupScript(
 :set serviceError ""
 :put "${tag}: starting Hotspot and PPPoE service setup."
 
-# 1. Create the shared service bridge without taking ports away from another bridge.
+# 1. Install the default RouterOS Hotspot files only when they are absent.
+#    Existing tenant-branded files are never replaced by this bootstrap.
+:do { /file make-dir dir-name="hotspot" } on-error={}
+${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.login)} dst-path="hotspot/login.html" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: default Hotspot login.html could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/file find where name="hotspot/rlogin.html"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.roamingLogin)} dst-path="hotspot/rlogin.html" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: default Hotspot rlogin.html could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/file find where name="hotspot/md5.js"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.md5)} dst-path="hotspot/md5.js" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: Hotspot login helper md5.js could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}` : `:put "${tag}: no default portal sources were supplied; existing Hotspot files were left unchanged."`}
+
+# 2. Create the shared service bridge without taking ports away from another bridge.
 :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
     :do {
         /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} service bridge`)}
@@ -3655,7 +3690,7 @@ ${bridgePortSetup}
     :error $serviceError
 }
 
-# 2. Add the Hotspot and PPPoE gateway addresses to the service bridge.
+# 3. Add the Hotspot and PPPoE gateway addresses to the service bridge.
 :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
     :do { /ip address add address=${routerOsString(`${hotspotGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
         :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
@@ -3669,7 +3704,7 @@ ${bridgePortSetup}
     }
 }
 
-# 3. Hotspot DHCP pool, network, server, and profile.
+# 4. Hotspot DHCP pool, network, server, and profile.
 :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
     /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
 }
@@ -3697,12 +3732,12 @@ ${bridgePortSetup}
     /ip hotspot set [find where name=${routerOsString(hotspotServer)}] interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot server`)}
 }
 
-# 4. Only this installation's walled-garden entries are replaced.
+# 5. Only this installation's walled-garden entries are replaced.
 /ip hotspot walled-garden ip
 :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
 ${walledGardenSetup}
 
-# 5. PPPoE pool, profile, and server on the same service bridge.
+# 6. PPPoE pool, profile, and server on the same service bridge.
 :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
     /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
 }
@@ -3720,7 +3755,7 @@ ${walledGardenSetup}
     /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
 }
 
-# 6. Customer NAT for both service networks, only when the standard WAN list exists.
+# 7. Customer NAT for both service networks, only when the standard WAN list exists.
 :local serviceWanLists [/interface list find where name="WAN"]
 :if ([:len $serviceWanLists] > 0) do={
     :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
@@ -3736,7 +3771,7 @@ ${walledGardenSetup}
 }
 
 :if ([:len $serviceError] > 0) do={ :error $serviceError }
-:put "${tag}: servicessetup.rsc complete - Hotspot bridge, walled garden, Hotspot, PPPoE, and service NAT are ready."
+:put "${tag}: servicessetup.rsc complete - Hotspot files, bridge, walled garden, Hotspot, PPPoE, and service NAT are ready."
 `;
 }
 

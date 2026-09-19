@@ -8,6 +8,11 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
     bridgeName: "co-hotspot-bridge-104",
     bridgePorts: ["ether2", "ether3"],
     portalHostnames: ["come.isplatty.org"],
+    portalFileUrls: {
+      login: "https://isplatty.org/api/router-file-source/104/hotspot-login.html",
+      roamingLogin: "https://isplatty.org/api/router-file-source/104/hotspot-rlogin.html",
+      md5: "https://isplatty.org/api/router-file-source/104/hotspot-md5.js",
+    },
   });
 
   assert.match(script, /servicessetup\.rsc/);
@@ -22,6 +27,10 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /192\.168\.99\.10-192\.168\.99\.254/);
   assert.match(script, /Hotspot masquerade/);
   assert.match(script, /PPPoE masquerade/);
+  assert.match(script, /dst-path="hotspot\/login\.html" mode=https check-certificate=yes/);
+  assert.match(script, /dst-path="hotspot\/rlogin\.html" mode=https check-certificate=yes/);
+  assert.match(script, /dst-path="hotspot\/md5\.js" mode=https check-certificate=yes/);
+  assert.match(script, /file find where name="hotspot\/login\.html"/);
 });
 
 test("service setup rejects unsafe bridge names and preserves foreign bridge ports", () => {
