@@ -113,6 +113,7 @@ const navSections: NavSection[] = [
         name: "Network", icon: Network,
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
+          { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Reseller Ports", href: "/admin/resellers" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "PPP",            href: "/admin/network/ppp" },

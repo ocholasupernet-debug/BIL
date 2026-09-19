@@ -18,6 +18,7 @@ import NetworkRouters from "./pages/admin/network/Routers";
 import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
+import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
@@ -134,6 +135,7 @@ function Router() {
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
+      <Route path="/admin/network/self-install" component={NetworkSelfInstall} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />
       <Route path="/admin/transactions" component={AdminTransactions} />

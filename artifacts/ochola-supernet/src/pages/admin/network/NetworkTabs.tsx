@@ -7,6 +7,7 @@ import {
 
 const TABS = [
   { id: "routers",           label: "Routers",         href: "/admin/network/routers",           icon: Server    },
+  { id: "self-install",      label: "Self Install",    href: "/admin/network/self-install",      icon: Server    },
   { id: "replace-router",    label: "Replace Router",  href: "/admin/network/replace-router",    icon: RotateCcw },
   { id: "ppp",               label: "PPP",             href: "/admin/network/ppp",               icon: Users     },
   { id: "wireless",          label: "Wireless",        href: "/admin/network/wireless",          icon: Wifi      },
