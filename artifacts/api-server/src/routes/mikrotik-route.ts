@@ -249,6 +249,7 @@ router.get("/router-file-source/:token", (req, res): void => {
     .set("Content-Type", source.contentType)
     .set("Content-Length", String(source.content.length))
     .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
+    .set("Cache-Control", "no-store, no-cache, must-revalidate")
     .send(source.content);
 });
 
@@ -1405,17 +1406,31 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     /file remove [find name="mainhotspot.rsc"]
 }
 :put "OcholaSupernet bootstrap 2/3: downloading mainhotspot.rsc."
-/tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" keep-result=yes mode=https check-certificate=no
+:local mainhotspotFetchError ""
+:do {
+    /tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" keep-result=yes mode=https check-certificate=no
+} on-error={
+    :set mainhotspotFetchError $error
+    :if ([:len $mainhotspotFetchError] = 0) do={
+        :set mainhotspotFetchError "RouterOS returned no diagnostic text"
+    }
+    :put ("mainhotspot.rsc fetch command failed: " . $mainhotspotFetchError)
+    :put "The short-lived source may be expired, already consumed, or unavailable from this API process. Generate a fresh bootstrap."
+}
 :local mainhotspotReady false
-:if ([:len [/file find name="mainhotspot.rsc"]] = 0) do={
-    :put "mainhotspot.rsc download failed: no destination file was created."
+:if ([:len $mainhotspotFetchError] > 0) do={
+    :put "mainhotspot.rsc download stopped before file verification."
 } else={
+  :if ([:len [/file find name="mainhotspot.rsc"]] = 0) do={
+    :put "mainhotspot.rsc download failed: no destination file was created."
+  } else={
     :if ([:tonum [/file get [find name="mainhotspot.rsc"] size]] <= 0) do={
         :put "mainhotspot.rsc download failed: the destination file is empty."
     } else={
         :set mainhotspotReady true
         :put ("OcholaSupernet bootstrap 2/3 complete: mainhotspot.rsc downloaded (" . [/file get [find name="mainhotspot.rsc"] size] . " bytes).")
     }
+  }
 }
 :if ($mainhotspotReady) do={
     :put "OcholaSupernet bootstrap 3/3: waiting before the separate import step..."
