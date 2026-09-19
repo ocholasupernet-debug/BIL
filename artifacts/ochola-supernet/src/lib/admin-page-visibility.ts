@@ -45,6 +45,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
     pages: [
       { key: "network.routers", label: "Routers", description: "Connected MikroTik routers and status." },
       { key: "network.self-install", label: "Self Install", description: "Install and register a router." },
+      { key: "network.files", label: "Files", description: "View files stored on tenant routers." },
       { key: "network.replace-router", label: "Replace Router", description: "Replace an existing router." },
       { key: "network.migration", label: "Migration & Recovery", description: "Migrate and recover RouterOS configurations." },
       { key: "network.pppoe", label: "PPPoE", description: "PPPoE network settings." },
@@ -110,6 +111,7 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
   { prefix: "/admin/network/migration", featureKey: "network.migration" },
   { prefix: "/admin/network/replace-router", featureKey: "network.replace-router" },
   { prefix: "/admin/network/self-install", featureKey: "network.self-install" },
+  { prefix: "/admin/network/files", featureKey: "network.files" },
   { prefix: "/admin/network/router-api-config", featureKey: "network.router-api-config" },
   { prefix: "/admin/network/api-config", featureKey: "network.router-api-config" },
   { prefix: "/admin/network/ip-pools", featureKey: "network.ip-pools" },

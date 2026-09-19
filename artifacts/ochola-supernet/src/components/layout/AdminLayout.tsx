@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
-  Network, Settings, Bell, Wifi, Shield,
+  Network, Settings, Bell, Wifi, Shield, FolderOpen,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
   CheckSquare, Search, Sun, Moon, Menu,
 } from "lucide-react";
@@ -114,6 +114,7 @@ const navSections: NavSection[] = [
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Self Install",   href: "/admin/network/self-install" },
+          { name: "Files",          href: "/admin/network/files" },
           { name: "Reseller Ports", href: "/admin/resellers" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "PPP",            href: "/admin/network/ppp" },

@@ -2,12 +2,13 @@ import React from "react";
 import { Link } from "wouter";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import {
-  Server, Activity, Database, Wifi, Users, Settings2, RotateCcw
+  Server, Activity, Database, Wifi, Users, Settings2, RotateCcw, FolderOpen
 } from "lucide-react";
 
 const TABS = [
   { id: "routers",           label: "Routers",         href: "/admin/network/routers",           icon: Server    },
   { id: "self-install",      label: "Self Install",    href: "/admin/network/self-install",      icon: Server    },
+  { id: "files",             label: "Files",           href: "/admin/network/files",              icon: FolderOpen },
   { id: "replace-router",    label: "Replace Router",  href: "/admin/network/replace-router",    icon: RotateCcw },
   { id: "ppp",               label: "PPP",             href: "/admin/network/ppp",               icon: Users     },
   { id: "wireless",          label: "Wireless",        href: "/admin/network/wireless",          icon: Wifi      },
