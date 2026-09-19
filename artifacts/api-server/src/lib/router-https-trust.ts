@@ -15,8 +15,8 @@ type RouterOsCertificateFileWriterOptions = {
 
 /**
  * RouterOS 6 rejects the full PEM as one long `/file add ... contents="..."`
- * command. Build the file from short PEM lines instead, using a small
- * `/file add` followed by bounded `/file set` updates.
+ * command. Build the file from short PEM lines instead, using the RouterOS 6
+ * `/file print` file-creation pattern followed by bounded `/file set` updates.
  */
 export function routerOsCertificateFileWriter(
   value: string,
@@ -33,8 +33,10 @@ export function routerOsCertificateFileWriter(
     line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const quoted = (name: string) => `"${escaped(name)}"`;
   const file = options.fileName ? quoted(options.fileName) : `$${fileVariable}`;
+  const base = options.baseName ? quoted(options.baseName) : `$${fileBaseVariable}`;
   const output = [
-    `${indent}/file add name=${file} contents=""`,
+    `${indent}/file print file=${base}`,
+    `${indent}/file set [find name=${file}] contents=""`,
     `${indent}:local caText "${escaped(lines[0])}"`,
     `${indent}/file set [find name=${file}] contents=$caText`,
   ];
