@@ -1324,18 +1324,18 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const bootstrap = `# OcholaSupernet - download and import the router installer
 # This one-time URL expires in 5 minutes and is consumed after one download.
 # The downloaded payload is kept as mainhotspot.rsc for inspection and retry.
-:local installerUrl "${sourceUrl}";
-:local installerFile "mainhotspot.rsc";
-:do { /file remove [find name=$installerFile] } on-error={}
-/tool fetch url="$installerUrl" dst-path="$installerFile" keep-result=yes mode=https check-certificate=no
-:if ([:len [/file find name=$installerFile]] = 0) do={
+:if ([:len [/file find name="mainhotspot.rsc"]] > 0) do={
+    /file remove [find name="mainhotspot.rsc"]
+}
+/tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" keep-result=yes mode=https check-certificate=no
+:if ([:len [/file find name="mainhotspot.rsc"]] = 0) do={
     :put "mainhotspot.rsc download failed: no destination file was created."
 } else={
-    :if ([:tonum [/file get [find name=$installerFile] size]] <= 0) do={
+    :if ([:tonum [/file get [find name="mainhotspot.rsc"] size]] <= 0) do={
         :put "mainhotspot.rsc download failed: the destination file is empty."
     } else={
         :put "Downloaded mainhotspot.rsc. Importing it now..."
-        /import $installerFile
+        /import "mainhotspot.rsc"
     }
 }
 `;
