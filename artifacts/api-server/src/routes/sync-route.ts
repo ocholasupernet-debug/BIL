@@ -2331,7 +2331,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     const probeIp = isVpnIp(srcIp) ? srcIp : bridgeIp;
     if (probeIp && probeIp !== row?.host) {
       console.log(`[register] scheduling auto-probe for ${routerName} @ ${probeIp}`);
-      bgAutoProbe(token, probeIp, row?.router_username ?? "admin");
+      bgAutoProbe(existingRouter.router_secret ?? token, probeIp, row?.router_username ?? "admin");
     }
 
     /* ── Auto-create VPN user ──────────────────────────────────────
