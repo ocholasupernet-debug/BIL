@@ -1407,7 +1407,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       .map(({ fileName, sourceUrl }) =>
         `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=no\n`
         + `:delay 2s\n`
-        + `/import "${fileName}"`,
+        + `/import "${fileName}"\n`
+        + `/file remove "${fileName}"`,
       )
       .join("\n");
 
