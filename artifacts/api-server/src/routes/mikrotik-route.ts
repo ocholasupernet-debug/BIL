@@ -1356,6 +1356,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const tunnelRouterIp = String(
     req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id),
   ).trim();
+  const registrationToken = String(found.row.router_secret ?? "").trim()
+    || String(found.row.token ?? "").trim();
+  if (!registrationToken) {
+    res.status(409).json({
+      error: "This router profile has no registration token and cannot generate a Self Install script.",
+    });
+    return;
+  }
   const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
   const installationMode = requestedMode === "direct" || requestedMode === "takeover"
     ? requestedMode
@@ -1379,6 +1387,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 
     const origin = managementScriptSourceOrigin(req);
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
+    const backendRegistrationUrl = `${origin}/api/isp/router/register/${encodeURIComponent(registrationToken)}`;
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
@@ -1389,12 +1398,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
       routerId: id,
       installationMode,
+      backendRegistrationUrl,
     });
 
     /*
-     * Begin Self Install with one public VPN source. Later network, hotspot,
-     * and registration files will be added only after this VPN step is
-     * validated on the target MikroTik.
+     * Begin Self Install with one public VPN source. The downloaded file
+     * contains the complete VPN, API-access, and registration sequence.
      */
     const sourceOrigin = managementScriptSourceOrigin(req);
     const fileName = "vpnsetup.rsc";

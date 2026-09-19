@@ -3213,30 +3213,17 @@ ${hotspotAssetInstall}
 }
 
 /**
- * Generates the first Self Install file: the management CA trust bootstrap
- * and RouterOS OpenVPN client setup. The network, hotspot, and registration
- * scripts are intentionally not part of this first VPN step.
+ * Generates the single Self Install file. It starts with the management CA
+ * trust bootstrap and RouterOS OpenVPN client setup, then continues through
+ * API access, live tunnel discovery, and authenticated backend registration.
  */
 export function generateRouterManagementVpnScript(
-  opts: Omit<RouterAsClientOptions, "backendRegistrationUrl">,
+  opts: RouterAsClientOptions,
 ): string {
-  /*
-   * The shared renderer also knows how to produce the later network,
-   * registration, and hotspot sections. Use a valid placeholder only while
-   * rendering those discarded sections; the returned slice ends before any
-   * registration URL is emitted.
-   */
-  const fullScript = generateRouterAsClientScript({
+  return generateRouterAsClientScript({
     ...opts,
     autoDetectRouterOsMajor: true,
-    backendRegistrationUrl: "https://vpn-only.invalid/not-used",
-  });
-  const networkStart = fullScript.indexOf("# Step 3: Allow API access");
-  if (networkStart < 0) {
-    throw new Error("Generated RouterOS installer is missing the VPN boundary.");
-  }
-
-  return fullScript.slice(0, networkStart).trim() + "\n";
+  }).trim() + "\n";
 }
 
 /** Generate a RouterOS 7-only WireGuard management-client script. */
