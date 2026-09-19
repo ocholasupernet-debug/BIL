@@ -491,7 +491,7 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import the four router setup stages.");
+       setNotice("The bootstrap script is ready. Copy it into the MikroTik terminal; it will download and import vpnsetup.rsc, pppoesetup.rsc, and hotspotsetup.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -508,7 +508,7 @@ export default function SelfInstall() {
       const text = scriptText || await fetchSelfInstallScript();
       await navigator.clipboard.writeText(text);
       setScriptCopied(true);
-       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import the four router setup stages.");
+       setNotice("The bootstrap command was copied. Paste it into the MikroTik terminal; it will download and import vpnsetup.rsc, pppoesetup.rsc, and hotspotsetup.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -681,10 +681,10 @@ export default function SelfInstall() {
               </div>
                <div style={{ marginTop: "0.9rem", padding: "0.85rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border-subtle)" }}>
                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", color: "var(--isp-text)", fontWeight: 750, fontSize: "0.78rem" }}>
-                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the staged Self Install command
+                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the Self Install command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                       The copied command downloads and imports four router-scoped files in order: VPN and CA trust, network/API setup, tunnel registration, and hotspot assets. Each stage is small and can be retried independently.
+                       The copied command downloads and imports three router-scoped files in order: <code>vpnsetup.rsc</code>, <code>pppoesetup.rsc</code>, and <code>hotspotsetup.rsc</code>. VPN and CA trust run first, followed by PPPoE/network setup and tunnel registration, then hotspot assets.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
