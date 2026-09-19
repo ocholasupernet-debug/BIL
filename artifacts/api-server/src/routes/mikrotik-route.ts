@@ -1232,9 +1232,9 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
  *
  * This is intentionally narrower than the legacy router scripts: it creates
  * the management OVPN client, the requested hotspot bridge/ports, the
- * management API account, the scoped firewall/NAT rules, and the completion
- * callback. It does not install portal files, billing rules, queues, or
- * customer-service configuration.
+ * management API account, the scoped firewall/NAT rules, the approved hotspot
+ * asset bundle, and the completion callback. It does not install billing
+ * rules, queues, or customer-service configuration.
  */
 router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
@@ -1301,6 +1301,22 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const origin = managementScriptSourceOrigin(req);
     const callbackUrl = `${origin}/api/isp/router/register/${encodeURIComponent(token)}`;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
+    const hotspotAssets = listDeployableSources().map(source => {
+      const content = getDeployableSource(source.type, source.name);
+      if (!content) {
+        throw new Error(`Approved hotspot asset could not be read: ${source.name}`);
+      }
+      const assetToken = createPendingRouterFileSource({
+        content: content.content,
+        contentType: contentTypeForFile(source.name),
+        fileName: source.name.split("/").pop() ?? source.name,
+      });
+      return {
+        sourceUrl: `${origin}/api/router-file-source/${assetToken}`,
+        destinationPath: `flash/hotspot/${source.name}`,
+        sourceName: source.name,
+      };
+    });
     const script = generateRouterAsClientScript({
       vpsPublicIp: vpsIp,
       vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
@@ -1318,6 +1334,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       apiUsername: found.row.router_username || found.row.name,
       apiPassword: found.row.router_secret || found.row.name,
       managementApiUsername: "ocholasupernet",
+      hotspotAssets,
     });
 
     /*

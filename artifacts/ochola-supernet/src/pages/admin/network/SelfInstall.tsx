@@ -685,7 +685,7 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the mainhotspot bootstrap command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                     The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, and imports it in MikroTik. The generated file then creates the management OVPN client, hotspot bridge, selected ports, management API account, and related firewall/NAT rules.
+                     The copied command downloads the router-scoped <code>mainhotspot.rsc</code> file, verifies that it is present and non-empty, and imports it in MikroTik. The generated file creates the management OVPN client, hotspot bridge, selected ports, management API account, related firewall/NAT rules, and the complete approved hotspot file bundle.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", minWidth: 180, flex: "1 1 180px" }}>
