@@ -49,6 +49,17 @@ test("A primary-only generated client does not install a failover scheduler", ()
   assert.doesNotMatch(script, /ochola-mgmt-failover/);
 });
 
+test("Self Install opens the management API before backend registration", () => {
+  const script = generateRouterManagementVpnScript(baseOptions);
+  const apiFirewallRule = script.indexOf('comment="ochola-mgmt-vpn-42-api-from-vps-tunnel"');
+  const registrationStep = script.indexOf("STEP 9/10 - Verifying RouterOS API and registering");
+
+  assert.ok(apiFirewallRule >= 0);
+  assert.ok(apiFirewallRule < registrationStep);
+  assert.match(script, /management API firewall access ready; core firewall and NAT remain in networksetup\.rsc/);
+  assert.match(script, /:local registrationError ""/);
+});
+
 test("Self Install imports the trust anchor and enables RouterOS 7 verification safely", () => {
   const script = generateRouterManagementVpnScript({
     ...baseOptions,
