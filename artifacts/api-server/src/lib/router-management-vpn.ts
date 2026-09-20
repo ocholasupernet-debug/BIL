@@ -55,6 +55,8 @@ export const ROUTER_MANAGEMENT_VPN_BACKUP = {
 /** Stable primary RouterOS management interface requested by the installer. */
 export const ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME = "ocholasupernet";
 export const ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT = "mainbillingvpn";
+/** Dedicated RouterOS API account created by the Self Install management script. */
+export const ROUTER_MANAGEMENT_API_USERNAME = "ocholasupernet";
 
 export type RouterManagementVpnRole = "primary" | "backup";
 
