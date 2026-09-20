@@ -1640,7 +1640,7 @@ export async function addHotspotUser(
   opts: {
     name: string; password: string; profile?: string; comment?: string;
     server?: string; email?: string;
-    limitUptime?: string; limitBytesTotal?: string;
+    address?: string; limitUptime?: string; limitBytesTotal?: string;
   }
 ): Promise<void> {
   return withConn(creds, async (conn) => {
@@ -1654,6 +1654,7 @@ export async function addHotspotUser(
     if (opts.comment)         params.push(`=comment=${opts.comment}`);
     if (opts.server)          params.push(`=server=${opts.server}`);
     if (opts.email)           params.push(`=email=${opts.email}`);
+    if (opts.address)         params.push(`=address=${opts.address}`);
     if (opts.limitUptime)     params.push(`=limit-uptime=${opts.limitUptime}`);
     if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
     await withTimeout(conn.write(params), ms);
@@ -1667,6 +1668,74 @@ export async function addHotspotUser(
  */
 function hotspotExpirySchedulerName(name: string): string {
   return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function hotspotPaidExpirySchedulerName(name: string): string {
+  return `ochola-paid-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function isLegacyPaidHotspotBinding(row: Record<string, string>): boolean {
+  return row.type === "bypassed" &&
+    /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? "");
+}
+
+function sameMacAddress(left: string | undefined, right: string): boolean {
+  const normalize = (value: string | undefined) => String(value ?? "").replace(/[:-]/g, "").toUpperCase();
+  return normalize(left) === normalize(right);
+}
+
+export async function removeHotspotIpBinding(
+  creds: RouterCredentials,
+  opts: { macAddress: string; comment: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let rows = (await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      rows = (await withTimeout(
+        conn.write(["/ip/hotspot/ip-binding/print"]),
+        ms,
+      )) as Record<string, string>[];
+    }
+    const bindings = (Array.isArray(rows) ? rows : [])
+      .filter((row) =>
+        sameMacAddress(row["mac-address"], opts.macAddress) &&
+        (row.comment === opts.comment || isLegacyPaidHotspotBinding(row)),
+      );
+    for (const binding of bindings) {
+      if (binding[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/ip-binding/remove", `=.id=${binding[".id"]}`]),
+          ms,
+        );
+      }
+    }
+
+    const schedulerNames = new Set([
+      hotspotPaidExpirySchedulerName(opts.comment),
+      ...bindings
+        .map((binding) => binding.comment)
+        .filter((comment): comment is string => Boolean(comment))
+        .map(hotspotPaidExpirySchedulerName),
+    ]);
+    for (const schedulerName of schedulerNames) {
+      const schedulers = (await withTimeout(
+        conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+        ms,
+      )) as Record<string, string>[];
+      for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+        if (scheduler[".id"]) {
+          await withTimeout(
+            conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]),
+            ms,
+          );
+        }
+      }
+    }
+  });
 }
 
 export async function removeHotspotUserExpiry(
@@ -1710,6 +1779,8 @@ export async function scheduleHotspotUserExpiry(
     const expiryScript =
       `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
       `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.name}"] do={/ip hotspot ip-binding remove $id}; ` +
+      `:foreach id in=[/queue simple find where name="${hotspotRateQueueName(opts.name)}"] do={/queue simple remove $id}; ` +
       `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = (await withTimeout(
       conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
@@ -1745,6 +1816,10 @@ export async function reconcileHotspotUserAccess(
     expiresAt?: string | null;
     enabled: boolean;
     limitBytesTotal?: string;
+    address?: string | null;
+    macAddress?: string | null;
+    rateLimit?: string;
+    sharedUsers?: number;
   },
 ): Promise<void> {
   const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
@@ -1754,9 +1829,18 @@ export async function reconcileHotspotUserAccess(
     password: opts.password,
     profile: opts.profile,
     disabled: !enabled,
+    ...(opts.address ? { address: opts.address } : {}),
     ...(opts.comment !== undefined ? { comment: opts.comment } : {}),
     ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
   };
+
+  if (opts.rateLimit !== undefined) {
+    await ensureHotspotUserProfile(creds, {
+      name: opts.profile,
+      sharedUsers: opts.sharedUsers ?? 1,
+      rateLimit: opts.rateLimit,
+    });
+  }
 
   try {
     await updateHotspotUser(creds, opts.name, fields);
@@ -1766,6 +1850,7 @@ export async function reconcileHotspotUserAccess(
       password: opts.password,
       profile: opts.profile,
       comment: opts.comment,
+      address: opts.address ?? undefined,
       limitBytesTotal: opts.limitBytesTotal,
     });
     if (!enabled) await updateHotspotUser(creds, opts.name, { disabled: true });
@@ -1773,8 +1858,26 @@ export async function reconcileHotspotUserAccess(
 
   if (!enabled) {
     await disconnectHotspotActiveUser(creds, opts.name).catch(() => {});
+    await removeHotspotUserRateQueue(creds, opts.name).catch(() => {});
     await removeHotspotUserExpiry(creds, opts.name).catch(() => {});
+    if (opts.macAddress) {
+      await removeHotspotIpBinding(creds, {
+        macAddress: opts.macAddress,
+        comment: opts.name,
+      });
+    }
     return;
+  }
+
+  if (opts.limitBytesTotal !== undefined) {
+    await resetHotspotUserCounters(creds, opts.name).catch(() => {});
+  }
+  if (opts.address && opts.rateLimit) {
+    await ensureHotspotUserRateQueue(creds, {
+      username: opts.name,
+      address: opts.address,
+      maxLimit: opts.rateLimit,
+    });
   }
 
   /* Force RouterOS to recreate the active queue with the current profile. */
@@ -1918,7 +2021,7 @@ export async function updateHotspotUser(
   name: string,
   fields: {
     password?: string; profile?: string; disabled?: boolean; comment?: string;
-    email?: string; limitUptime?: string; limitBytesTotal?: string;
+    email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
   }
 ): Promise<void> {
   return withConn(creds, async (conn) => {
@@ -1932,9 +2035,36 @@ export async function updateHotspotUser(
     if (fields.disabled        !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
     if (fields.comment         !== undefined) params.push(`=comment=${fields.comment}`);
     if (fields.email           !== undefined) params.push(`=email=${fields.email}`);
+    if (fields.address         !== undefined) params.push(`=address=${fields.address}`);
     if (fields.limitUptime     !== undefined) params.push(`=limit-uptime=${fields.limitUptime}`);
     if (fields.limitBytesTotal !== undefined) params.push(`=limit-bytes-total=${fields.limitBytesTotal}`);
     await withTimeout(conn.write(params), ms);
+  });
+}
+
+/**
+ * Start a fresh RouterOS byte counter for a renewed prepaid hotspot account.
+ * `limit-bytes-total` is cumulative on the user record; changing the limit
+ * alone does not give a renewed package a fresh allowance.
+ */
+export async function resetHotspotUserCounters(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/user/reset-counters", `=.id=${row[".id"]}`]),
+          ms,
+        );
+      }
+    }
   });
 }
 
@@ -1990,18 +2120,29 @@ export async function connectHotspotUser(
  */
 export async function addHotspotIpBinding(
   creds: RouterCredentials,
-  opts: { macAddress: string; ipAddress?: string; comment: string; expiresInSeconds: number },
-): Promise<void> {
+  opts: {
+    macAddress: string;
+    ipAddress?: string;
+    comment: string;
+    expiresInSeconds: number;
+    queueName?: string;
+    bindingType?: "bypassed" | "regular";
+  },
+): Promise<boolean> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const existing = (await withTimeout(
       conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
       ms,
     )) as Record<string, string>[];
-    const paidBinding = existing.find((row) => row.comment === opts.comment);
+    const paidBinding = existing.find((row) => row.comment === opts.comment)
+      ?? existing.find((row) =>
+        row.type === "bypassed" &&
+        /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? ""),
+      );
     /* An administrator's existing bypass remains untouched. It already grants
        access and must not be removed by a later paid-device expiry. */
-    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return;
+    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return false;
     if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
       throw new Error("A positive hotspot access duration is required.");
     }
@@ -2013,8 +2154,17 @@ export async function addHotspotIpBinding(
     const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
     if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
     const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
-    const schedulerName = `ochola-paid-${opts.comment.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
-    const expiryScript = `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; /system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulerName = hotspotPaidExpirySchedulerName(opts.comment);
+    const queueName = opts.queueName ?? hotspotRateQueueName(opts.comment);
+    const queueExpiry = queueName
+      ? `:foreach id in=[/queue simple find where name="${queueName}"] do={/queue simple remove $id}; `
+      : "";
+    const expiryScript =
+      `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; ` +
+      `:foreach id in=[/ip hotspot active find where user="${opts.comment}"] do={/ip hotspot active remove $id}; ` +
+      `:foreach id in=[/ip hotspot user find where name="${opts.comment}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      queueExpiry +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = (await withTimeout(
       conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
       ms,
@@ -2036,7 +2186,7 @@ export async function addHotspotIpBinding(
       const params: string[] = id
         ? ["/ip/hotspot/ip-binding/set", `=.id=${id}`]
         : ["/ip/hotspot/ip-binding/add", `=mac-address=${opts.macAddress}`];
-      params.push("=type=bypassed", `=comment=${opts.comment}`);
+      params.push(`=type=${opts.bindingType ?? "bypassed"}`, `=comment=${opts.comment}`);
       if (opts.ipAddress) params.push(`=address=${opts.ipAddress}`);
       await withTimeout(conn.write(params), ms);
     } catch (error) {
@@ -2057,6 +2207,63 @@ export async function addHotspotIpBinding(
           .catch(() => undefined);
       }
       throw error;
+    }
+    return true;
+  });
+}
+
+function hotspotRateQueueName(username: string): string {
+  return `ochola-rate-${username.replace(/[^A-Za-z0-9_-]/g, "-").slice(-52)}`;
+}
+
+/**
+ * A `bypassed` hotspot binding skips the hotspot login queue. Keep a
+ * per-device simple queue for paid MAC access so the plan speed is enforced
+ * even when the client is admitted without a captive-portal login.
+ */
+export async function ensureHotspotUserRateQueue(
+  creds: RouterCredentials,
+  opts: { username: string; address?: string | null; maxLimit?: string },
+): Promise<void> {
+  const address = opts.address;
+  if (!address || !opts.maxLimit) return;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(opts.username);
+    const target = address.includes("/") ? address : `${address}/32`;
+    const rows = (await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    const existing = Array.isArray(rows) ? rows[0] : undefined;
+    const command = existing?.[".id"]
+      ? ["/queue/simple/set", `=.id=${existing[".id"]}`]
+      : ["/queue/simple/add", `=name=${name}`];
+    command.push(
+      `=target=${target}`,
+      `=max-limit=${opts.maxLimit}`,
+      `=comment=${opts.username}`,
+      "=disabled=no",
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+
+export async function removeHotspotUserRateQueue(
+  creds: RouterCredentials,
+  username: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(username);
+    const rows = (await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row[".id"]) {
+        await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
     }
   });
 }
