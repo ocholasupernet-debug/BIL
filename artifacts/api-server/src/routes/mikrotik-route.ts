@@ -547,15 +547,18 @@ router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, 
     const networking = await repairGeneratedServiceNetworking(found.creds, id);
     const result = await disableGeneratedHotspot(found.creds, id);
     logger.warn({ routerId: id, adminId, hotspotName: result.name }, "Generated Hotspot disabled through recovery action");
+    const egressDescription = networking.egressInterface
+      ? ` Outbound policy uses ${networking.egressInterface}.`
+      : " No WAN interface or active default-route egress was found, so forwarding/NAT may still need the router's WAN interface configured.";
     res.json({
       ok: true,
       routerId: id,
       routerName: found.row.name,
       networking,
       ...result,
-      message: result.alreadyDisabled
+      message: `${result.alreadyDisabled
         ? `Network policy repaired and the generated Hotspot server "${result.name}" was already disabled.`
-        : `Network policy repaired and the generated Hotspot server "${result.name}" is now disabled.`,
+        : `Network policy repaired and the generated Hotspot server "${result.name}" is now disabled.`}${egressDescription}`,
     });
   } catch (err) {
     routerErrorResponse(res, err);
