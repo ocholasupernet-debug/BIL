@@ -256,7 +256,8 @@ export default function SuperAdminPaymentsPackages() {
     setPlanMessage("");
     setPageError("");
     const validity = Number(form.validity);
-    const validityDays = form.validity_unit === "hours" ? Math.ceil(validity / 24) :
+    const validityDays = form.validity_unit === "mins" ? Math.max(1, Math.ceil(validity / (24 * 60))) :
+      form.validity_unit === "hours" ? Math.ceil(validity / 24) :
       form.validity_unit === "weeks" ? validity * 7 :
       form.validity_unit === "months" ? validity * 30 : validity;
     const body = {
@@ -451,7 +452,7 @@ export default function SuperAdminPaymentsPackages() {
                   <Field label="Download (Mbps)"><input required type="number" min="0" step="0.1" value={form.speed_down} onChange={event => setFormValue("speed_down", event.target.value)} style={inputStyle} /></Field>
                   <Field label="Upload (Mbps)"><input required type="number" min="0" step="0.1" value={form.speed_up} onChange={event => setFormValue("speed_up", event.target.value)} style={inputStyle} /></Field>
                   <Field label="Validity"><input required type="number" min="1" max="3650" step="1" value={form.validity} onChange={event => setFormValue("validity", event.target.value)} style={inputStyle} /></Field>
-                  <Field label="Unit"><select value={form.validity_unit} onChange={event => setFormValue("validity_unit", event.target.value)} style={inputStyle}><option value="hours">Hours</option><option value="days">Days</option><option value="weeks">Weeks</option><option value="months">Months</option></select></Field>
+                  <Field label="Unit"><select value={form.validity_unit} onChange={event => setFormValue("validity_unit", event.target.value)} style={inputStyle}><option value="mins">Minutes</option><option value="hours">Hours</option><option value="days">Days</option><option value="weeks">Weeks</option><option value="months">Months</option></select></Field>
                 </div>
                 <Field label="Shared users"><input required type="number" min="1" max="10000" step="1" value={form.shared_users} onChange={event => setFormValue("shared_users", event.target.value)} style={inputStyle} /></Field>
                 <Field label="Description"><textarea maxLength={500} value={form.description} onChange={event => setFormValue("description", event.target.value)} style={{ ...inputStyle, minHeight: 62, resize: "vertical" }} placeholder="Optional customer-facing description" /></Field>

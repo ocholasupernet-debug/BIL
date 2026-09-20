@@ -64,6 +64,18 @@ async function fetchPools(): Promise<DbPool[]> {
 function planValidity(p: DbPlan) {
   return `${p.validity} ${p.validity_unit}`;
 }
+
+type PlanValidityUnit = "mins" | "hours" | "days" | "weeks" | "months";
+
+function normalizePlanValidityUnit(value: unknown): PlanValidityUnit {
+  const unit = String(value ?? "").trim().toLowerCase();
+  if (unit.startsWith("min")) return "mins";
+  if (unit.startsWith("hr") || unit.startsWith("hour")) return "hours";
+  if (unit.startsWith("day")) return "days";
+  if (unit.startsWith("week")) return "weeks";
+  if (unit.startsWith("month")) return "months";
+  return "days";
+}
 function planSpeed(p: DbPlan) {
   return `${p.speed_down}Mbps / ${p.speed_up}Mbps`;
 }
@@ -118,7 +130,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
     initialData?.shared_users && initialData.shared_users > 1 ? initialData.shared_users.toString() : "5"
   );
   const [validity,      setValidity]      = useState(initialData?.validity?.toString() ?? "");
-  const [valUnit,       setValUnit]       = useState(initialData?.validity_unit ?? "Days");
+  const [valUnit,       setValUnit]       = useState<PlanValidityUnit>(
+    normalizePlanValidityUnit(initialData?.validity_unit),
+  );
   const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
   const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
   const [activePool,    setActivePool]    = useState(initialData?.active_ip_pool ?? "");
@@ -142,7 +156,13 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const [dataLimitVal,  setDataLimitVal]  = useState(initDataVal);
   const [dataLimitUnit, setDataLimitUnit] = useState<"MB"|"GB"|"TB">(initDataUnit as "MB"|"GB"|"TB");
 
-  const units = ["Mins", "Hrs", "Days", "Weeks", "Months"];
+  const units: { value: PlanValidityUnit; label: string }[] = [
+    { value: "mins", label: "Mins" },
+    { value: "hours", label: "Hrs" },
+    { value: "days", label: "Days" },
+    { value: "weeks", label: "Weeks" },
+    { value: "months", label: "Months" },
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -376,8 +396,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
           <span style={LBL}>Plan Validity</span>
           <div style={{ flex: 1, display: "flex", gap: "0.5rem" }}>
             <input type="number" min="1" style={INPUT} value={validity} onChange={e => setValidity(e.target.value)} placeholder="e.g. 1" required />
-            <select style={SELECT} value={valUnit} onChange={e => setValUnit(e.target.value)}>
-              {units.map(u => <option key={u}>{u}</option>)}
+            <select style={SELECT} value={valUnit} onChange={e => setValUnit(normalizePlanValidityUnit(e.target.value))}>
+              {units.map(unit => <option key={unit.value} value={unit.value}>{unit.label}</option>)}
             </select>
           </div>
         </div>
