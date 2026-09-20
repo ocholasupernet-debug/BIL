@@ -137,12 +137,11 @@ export default function HotspotLogin() {
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
-          fetch(`/api/plans?adminId=${adminId}`),
+          fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true`),
           fetch(`/api/settings/mpesa?adminId=${adminId}`).catch(() => null),
         ]);
         const plansData: Plan[] = await plansRes.json();
-        const hs = plansData.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
-        setPlans(hs.length > 0 ? hs : plansData);
+        setPlans(plansData);
 
         if (mpesaRes?.ok) {
           const mpesaData = await mpesaRes.json();

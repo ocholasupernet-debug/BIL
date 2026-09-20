@@ -408,9 +408,9 @@ export function PPPoELogin({
   useEffect(() => {
     if (!customerContext) return;
     setPackagesLoading(true);
-    fetch(`/api/plans?adminId=${customerContext.adminId}`)
+    fetch(`/api/plans?adminId=${encodeURIComponent(String(customerContext.adminId))}&type=pppoe&activeOnly=true&purchasableOnly=true`)
       .then(response => response.ok ? response.json() as Promise<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>> : [])
-      .then(rows => setPackages(rows.filter(plan => String(plan.type || "").toLowerCase() === "pppoe" && plan.id)))
+      .then(rows => setPackages(rows.filter(plan => plan.id)))
       .catch(() => setPackages([]))
       .finally(() => setPackagesLoading(false));
   }, [customerContext]);
