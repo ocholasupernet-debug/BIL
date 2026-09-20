@@ -31,6 +31,11 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
   assert.match(script, /interface pppoe-server server add/);
   assert.match(script, /192\.168\.99\.10-192\.168\.99\.254/);
+  assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
+  assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN/);
+  assert.match(script, /ip dns set allow-remote-requests=yes/);
+  assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=udp dst-port=53/);
+  assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=tcp dst-port=53/);
   assert.match(script, /Hotspot masquerade/);
   assert.match(script, /PPPoE masquerade/);
   assert.match(script, /dst-path="hotspot\/login\.html" mode=https check-certificate=yes/);
