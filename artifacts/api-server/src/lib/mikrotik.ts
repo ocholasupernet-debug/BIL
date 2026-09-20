@@ -417,6 +417,36 @@ export async function runRouterCommand(
 }
 
 /**
+ * Emergency recovery for an admin who enabled the generated customer Hotspot
+ * on their own management WLAN. Only the generated server for this router is
+ * disabled; bridge, DHCP, PPPoE, users, and files are left untouched.
+ */
+export async function disableGeneratedHotspot(
+  creds: RouterCredentials,
+  routerId: number,
+): Promise<{ name: string; alreadyDisabled: boolean }> {
+  const name = `ochola-services-${routerId}-hotspot`;
+  const rows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,disabled",
+    `?name=${name}`,
+  ]);
+  const server = (Array.isArray(rows) ? rows : []).find(row => row.name === name);
+  if (!server?.[".id"]) {
+    throw new Error(`Generated Hotspot server "${name}" was not found on the router.`);
+  }
+  const alreadyDisabled = String(server.disabled ?? "").toLowerCase() === "true";
+  if (!alreadyDisabled) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${server[".id"]}`,
+      "=disabled=yes",
+    ]);
+  }
+  return { name, alreadyDisabled };
+}
+
+/**
  * Add or refresh one tenant portal hostname on the router's active hotspot
  * gateway. The gateway is read from the active hotspot profile instead of
  * reusing the management VPN address.
