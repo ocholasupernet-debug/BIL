@@ -413,18 +413,8 @@
 </div>
 
 <script>
-/* ── Fallback hardcoded plans (used if API unavailable) ── */
-var FALLBACK_PLANS=[
-  {id:1,name:"OKOA COMRADE",price:4,  validity:30, unit:"Mins"},
-  {id:2,name:"BASIC",       price:5,  validity:1,  unit:"Hrs"},
-  {id:3,name:"KUMI",        price:10, validity:135,unit:"Mins"},
-  {id:4,name:"5 HOURS",     price:15, validity:5,  unit:"Hrs"},
-  {id:5,name:"MBAO",        price:20, validity:9,  unit:"Hrs"},
-  {id:6,name:"DAILY",       price:35, validity:1,  unit:"Days"},
-  {id:7,name:"3 DAYS",      price:90, validity:3,  unit:"Days"},
-  {id:8,name:"WEEKLY",      price:195,validity:7,  unit:"Days"},
-  {id:9,name:"MONTHLY",     price:600,validity:1,  unit:"Months"},
-];
+/* Plans are assigned by the ISP to a specific router or physical port.
+   A new router remains empty until an administrator adds a package. */
 var COLORS=[
   {from:"#f472b6",to:"#be185d",badge:"#831843",glow:"#f472b6"},
   {from:"#a78bfa",to:"#7c3aed",badge:"#4c1d95",glow:"#a78bfa"},
@@ -635,15 +625,14 @@ function loadPortalTypography(done){
     var query=(PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"")+
       (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"");
    var finished=false;
-   function finish(data){
+    function finish(data,apiSucceeded){
      if(finished)return;
      finished=true;
      planRequestInFlight=false;
      var remotePlans=normalisePlanList(data);
-     /* Keep the visible embedded/fallback plans if a captive browser cannot
-        reach the API. A successful non-empty response replaces them, so a
-        newly added plan appears without requiring a portal-file redeploy. */
-     if(remotePlans.length){
+      /* A successful empty response is authoritative: it clears stale
+         embedded packages so a new router cannot show another router's plans. */
+      if(apiSucceeded){
        var signature=planSignature(remotePlans);
        if(signature!==lastPlanSignature){
          PLANS=remotePlans;
@@ -655,16 +644,18 @@ function loadPortalTypography(done){
    /* A pre-authenticated RouterOS request can remain pending instead of
       rejecting when the walled garden blocks the API. Never make the initial
       package display wait for that request. */
-   fetch(apiUrl("/api/plans?type=hotspot"+query))
-     .then(function(r){return r.ok?r.json():null;})
-     .then(finish)
-     .catch(function(){finish(null);});
-   setTimeout(function(){finish(null);},5000);
+    fetch(apiUrl("/api/plans?type=hotspot"+query))
+      .then(function(r){
+        if(!r.ok)return {ok:false,data:null};
+        return r.json().then(function(data){return {ok:true,data:data};});
+      })
+      .then(function(result){finish(result.data,result.ok);})
+      .catch(function(){finish(null,false);});
+    setTimeout(function(){finish(null,false);},5000);
  }
  function loadPlans(){
    if(!plansInitialised){
-     var embeddedPlans=EMBEDDED_PLANS.slice();
-     PLANS=embeddedPlans.length?embeddedPlans:FALLBACK_PLANS;
+      PLANS=EMBEDDED_PLANS.slice();
      lastPlanSignature=planSignature(PLANS);
      renderPlans();
      plansInitialised=true;
