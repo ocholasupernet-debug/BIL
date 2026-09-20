@@ -1020,21 +1020,6 @@ export default function HotspotLogin() {
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
-                                      <div className="hp-device-card">
-                                        <div className="hp-device-icon"><Wifi size={16} /></div>
-                                        <div className="hp-device-copy">
-                                          <span className="hp-device-kicker">This device</span>
-                                          <strong>{deviceMacAddress || "Identified by router"}</strong>
-                                          <small>{portalContext.ip ? `Router IP ${portalContext.ip} · MAC resolved server-side` : "MikroTik will resolve this device securely"}</small>
-                                        </div>
-                                        {deviceMacAddress && <span className="hp-device-state"><CheckCircle2 size={12} /> Detected</span>}
-                                      </div>
-                                      {!deviceMacAddress && (
-                                        <div className="hp-error" role="alert">
-                                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                          Your router will identify this device from its assigned Wi-Fi address. Keep this page open while you pay.
-                                        </div>
-                                      )}
                                       <div className="hp-input-group">
                                         <div className="hp-input-wrap">
                                           <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
@@ -1252,6 +1237,14 @@ export default function HotspotLogin() {
             </div>
           )}
 
+          <div style={{ padding: "0 0 16px", textAlign: "center" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 8, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
+              Your MAC address:
+              <strong style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
+                {deviceMacAddress || "Resolved by router"}
+              </strong>
+            </span>
+          </div>
           <div className="hp-footer">
             {new Date().getFullYear()} {brand.ispName} &middot; {brand.domain}
           </div>

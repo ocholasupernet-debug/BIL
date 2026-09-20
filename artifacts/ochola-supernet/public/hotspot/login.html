@@ -344,6 +344,14 @@
   </div>
 </section>
 
+<!-- Detected device identity -->
+<div id="portalDeviceMac" style="max-width:1200px;margin:0 auto;padding:0 1.25rem 1.25rem;text-align:center">
+  <div style="display:inline-flex;align-items:center;gap:.45rem;padding:.55rem .8rem;border-radius:.6rem;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.45);font-size:.75rem">
+    <span>Your MAC address:</span>
+    <strong id="portalDeviceMacValue" style="color:rgba(255,255,255,.78);font-family:monospace;font-weight:700">Detecting…</strong>
+  </div>
+</div>
+
 <!-- Footer -->
 <footer style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.25)">
   <div style="display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:.875rem">
@@ -698,9 +706,6 @@ function renderModal(){
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
-      '<div style="border-radius:.625rem;padding:.75rem 1rem;margin-bottom:1.25rem;background:'+(DEVICE_MAC?'rgba(16,185,129,.08)':'rgba(245,158,11,.08)')+';border:1px solid '+(DEVICE_MAC?'rgba(16,185,129,.22)':'rgba(245,158,11,.22)')+';color:'+(DEVICE_MAC?'#a7f3d0':'#fde68a')+';font-size:.75rem;line-height:1.5">'+
-      (DEVICE_MAC?'This device was detected automatically: <strong>'+DEVICE_MAC+'</strong>':(DEVICE_IP?'Your router will identify this device from its assigned Wi-Fi address.':'Open this page from the Wi-Fi sign-in prompt so the router can identify this device.'))+
-      '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
       '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
@@ -937,6 +942,10 @@ function submitMpesa(){
 }
 
 function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display=window.innerWidth>=640?"block":"none";}
+function renderPortalDeviceMac(){
+  var value=document.getElementById("portalDeviceMacValue");
+  if(value)value.textContent=DEVICE_MAC||"Resolved by router";
+}
 window.addEventListener("resize",checkWidth); checkWidth();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
@@ -944,6 +953,7 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
 loadPlans();
 bindPlanButtons();
 loadPortalTypography(loadPlans);
+renderPortalDeviceMac();
 applyCredentialsFromHash();
 </script>
 </body>
