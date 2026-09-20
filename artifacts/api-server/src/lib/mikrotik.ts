@@ -3941,9 +3941,9 @@ ${bridgePortSetup}
     /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
 }
 :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
-    /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie comment=${routerOsString(`${tag} Hotspot profile`)}
+    /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
 } else={
-    /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie comment=${routerOsString(`${tag} Hotspot profile`)}
+    /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
 }
 :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
     /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} Hotspot server`)}
