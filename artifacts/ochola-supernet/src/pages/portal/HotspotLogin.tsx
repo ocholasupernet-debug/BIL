@@ -202,7 +202,11 @@ export default function HotspotLogin() {
     if (!tvDialogOpen) return;
     setTvDevicesLoading(true);
     setTvDialogError("");
-    fetch(`/api/mpesa/hotspot-devices${adminId ? `?adminId=${encodeURIComponent(String(adminId))}` : ""}`)
+    const deviceQuery = [
+      adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+      portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+    ].filter(Boolean).join("&");
+    fetch(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`)
       .then(async response => {
         const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
         if (!response.ok || !data.ok) throw new Error(data.error || "Connected devices could not be loaded.");
@@ -213,7 +217,7 @@ export default function HotspotLogin() {
         setTvDialogError(error instanceof Error ? error.message : "Connected devices could not be loaded.");
       })
       .finally(() => setTvDevicesLoading(false));
-  }, [adminId, tvDialogOpen]);
+  }, [adminId, portalScope.routerId, tvDialogOpen]);
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
@@ -364,7 +368,7 @@ export default function HotspotLogin() {
     setTvDialogOpen(true);
     setTvDialogError("");
     setTvDeviceChoice("");
-    setTvMacAddress(deviceMacAddress || portalContext.mac);
+    setTvMacAddress("");
     setTvDeviceName("");
     setTvPlanId(selectedPlan ? String(selectedPlan.id) : plans[0] ? String(plans[0].id) : "");
     setTvPhone("");
@@ -376,6 +380,9 @@ export default function HotspotLogin() {
     if (device) {
       setTvMacAddress(device.macAddress);
       setTvDeviceName(device.name);
+    } else {
+      setTvMacAddress("");
+      setTvDeviceName("");
     }
   };
 
@@ -1431,10 +1438,10 @@ export default function HotspotLogin() {
                       value={tvDeviceChoice}
                       onChange={e => handleTvDeviceChoice(e.target.value)}
                     >
-                      <option value="">Enter a MAC address manually</option>
+                      <option value="">Add a TV manually</option>
                       {tvDevices.map(device => (
                         <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
-                          {device.name} — {device.macAddress}
+                          {device.name} — {device.macAddress}{device.address ? ` · ${device.address}` : ""}
                         </option>
                       ))}
                     </select>
@@ -1442,8 +1449,8 @@ export default function HotspotLogin() {
                       {tvDevicesLoading
                         ? "Checking the connected devices on your hotspot router…"
                         : tvDevices.length > 0
-                          ? "Choose a named connected device, or enter another TV MAC address below."
-                          : "No named connected devices were found. Enter the TV MAC address below."}
+                         ? "Every device reported by the router is listed with its MAC address. Select one or add a TV manually."
+                         : "No devices were reported by the router. Add the TV MAC address manually."}
                     </div>
                     {!tvDevicesLoading && tvDevices.length > 0 && (
                       <div className="hp-tv-device-list" aria-label="Available connected devices">
@@ -1452,7 +1459,7 @@ export default function HotspotLogin() {
                             <Tv size={14} color="#34d399" />
                             <div>
                               <strong>{device.name}</strong>
-                              <span>{device.macAddress}{device.routerName ? ` · ${device.routerName}` : ""}</span>
+                              <span>{device.macAddress}{device.address ? ` · ${device.address}` : ""}{device.routerName ? ` · ${device.routerName}` : ""}</span>
                             </div>
                           </div>
                         ))}

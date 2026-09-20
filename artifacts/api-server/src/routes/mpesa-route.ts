@@ -623,8 +623,14 @@ setInterval(() => {
  */
 router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promise<void> => {
   const adminId = await resolvePortalAdminId(req, req.query.adminId);
+  const requestedRouterId = Number(req.query.routerId);
+  const hasRouterFilter = Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0;
   if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1) {
     res.status(400).json({ ok: false, error: "Open this portal from the ISP's assigned hostname or provide its ISP account." });
+    return;
+  }
+  if (req.query.routerId !== undefined && !hasRouterFilter) {
+    res.status(400).json({ ok: false, error: "The hotspot router context is invalid." });
     return;
   }
   if (!await isActiveIspAdmin(adminId)) {
@@ -634,7 +640,7 @@ router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promis
 
   const routers = await sbSelect<HotspotRouterRow & { id: number; name: string }>(
     "isp_routers",
-    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
+    `${hasRouterFilter ? `id=eq.${requestedRouterId}&` : ""}admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
   );
   const devices: Array<{
     name: string;

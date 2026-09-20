@@ -904,14 +904,16 @@ function sendStk(){
      tvDeviceRouterId=Number(device.routerId)||0;
    }else{
      tvDeviceRouterId=0;
+     tvMacAddress="";
+     tvDeviceName="";
    }
    renderTvModal();
  }
  function renderTvModal(){
    var body=document.getElementById("tvModalBody");
    if(!body)return;
-   var deviceOptions='<option value="">Enter a MAC address manually</option>'+tvDevices.map(function(device){
-     return '<option value="'+tvEsc(device.macAddress)+'"'+(tvDeviceChoice===device.macAddress?" selected":"")+'>'+tvEsc(device.name)+" — "+tvEsc(device.macAddress)+"</option>";
+   var deviceOptions='<option value="">Add a TV manually</option>'+tvDevices.map(function(device){
+     return '<option value="'+tvEsc(device.macAddress)+'"'+(tvDeviceChoice===device.macAddress?" selected":"")+'>'+tvEsc(device.name)+" — "+tvEsc(device.macAddress)+(device.address?" · "+tvEsc(device.address):"")+'</option>';
    }).join("");
    var planOptions='<option value="" disabled'+(tvPlanId?"":" selected")+'>Choose a package</option>'+PLANS.map(function(plan){
      return '<option value="'+plan.id+'"'+(String(plan.id)===String(tvPlanId)?" selected":"")+'>'+tvEsc(plan.name)+" — Ksh "+plan.price+" · "+tvEsc(plan.validity+" "+plan.unit)+'</option>';
@@ -920,7 +922,7 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Connected devices</label>'+
      '<select id="tvDeviceChoice" class="inp" style="margin-bottom:.45rem" onchange="tvDeviceChanged(this.value)">'+deviceOptions+'</select>'+
      '<p style="color:rgba(255,255,255,.35);font-size:.7rem;line-height:1.45;margin-bottom:1rem">'+
-       (tvDevicesLoading?"Checking connected devices…":(tvDevices.length?"Choose a named device or enter another MAC address below.":"No named connected devices found. Enter the TV MAC address below."))+
+       (tvDevicesLoading?"Checking every device visible on this hotspot network…":(tvDevices.length?"Every device reported by the router is listed with its MAC address. Select one or add a TV manually.":"No devices were reported by the router. Add the TV MAC address manually."))+
      '</p>'+
      '<label class="lbl" style="color:#6ee7b7">Device MAC address</label>'+
      '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="AA:BB:CC:DD:EE:FF" oninput="tvMacAddress=this.value.toUpperCase()" />'+
@@ -938,11 +940,11 @@ function sendStk(){
  }
  function openTvModal(){
    if(!MPESA_PROMPT_ENABLED)return;
-   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=DEVICE_MAC||""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0;
+   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0;
    document.getElementById("tvModal").style.display="flex";
    renderTvModal();
    tvDevicesLoading=true; renderTvModal();
-   fetch(apiUrl("/api/mpesa/hotspot-devices?adminId="+encodeURIComponent(PORTAL_ADMIN_ID)))
+   fetch(apiUrl("/api/mpesa/hotspot-devices?adminId="+encodeURIComponent(PORTAL_ADMIN_ID)+(PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")))
      .then(function(r){return r.ok?r.json():{ok:false};})
      .then(function(data){tvDevices=Array.isArray(data.devices)?data.devices:[];})
      .catch(function(){tvDevices=[];})
