@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
+import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
 
 const router: IRouter = Router();
 
@@ -47,8 +48,7 @@ function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Rec
   const sharedUsers = Number(input.sharedUsers ?? 1);
   const speedDown = Number(input.speedDown ?? input.speed ?? 10);
   const speedUp = Number(input.speedUp ?? input.speed ?? 10);
-  const rawValidityUnit = typeof input.validityUnit === "string" ? input.validityUnit.trim().toLowerCase() : "days";
-  const validityUnit = ["mins", "hours", "days", "weeks", "months"].includes(rawValidityUnit) ? rawValidityUnit : "days";
+  const validityUnit = normalizePlanValidityUnit(input.validityUnit);
   return {
     name: String(input.name ?? "").trim(),
     type: input.type ?? "hotspot",

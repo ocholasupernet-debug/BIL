@@ -29,6 +29,7 @@ import {
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
 import { prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
+import { planValiditySeconds } from "./plan-validity.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
 interface SbCustomer {
@@ -52,6 +53,8 @@ interface SbPlan {
   name: string;
   type: string;
   plan_type: string;
+  validity: number | null;
+  validity_unit: string | null;
   validity_days: number;
   router_id: number | null;
   speed_down: number | null;
@@ -227,9 +230,11 @@ function normalizePhone(raw: string): string[] {
 }
 
 /* ── Calculate expiry date based on plan validity ─────────────────────────── */
-function calcExpiry(validityDays: number): string {
+function calcExpiry(validity: number | null, validityUnit?: string | null, legacyValidityDays?: number | null): string {
   const d = new Date();
-  d.setDate(d.getDate() + Math.max(validityDays, 1));
+  const configuredValidity = Number(validity ?? legacyValidityDays ?? 0);
+  const seconds = planValiditySeconds(configuredValidity, validityUnit);
+  d.setTime(d.getTime() + Math.max(seconds, 1) * 1000);
   return d.toISOString();
 }
 
@@ -296,7 +301,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -342,7 +347,7 @@ export async function autoProvision(opts: {
     : (generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
   const password = customer.password || "changeme";
   const comment  = username;
-  const expiresAt = calcExpiry(plan.validity_days);
+  const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   let action: "created" | "renewed" | "enabled" = "created";
 
   try {
@@ -459,7 +464,7 @@ export async function autoProvision(opts: {
 async function activateCustomer(customer: SbCustomer, plan: SbPlan, username?: string): Promise<void> {
   await sbUpdate("isp_customers", `id=eq.${customer.id}`, {
     status:     "active",
-    expires_at: calcExpiry(plan.validity_days),
+    expires_at: calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
     ...(username && plan.plan_type !== "pppoe" ? { username } : {}),
     updated_at: new Date().toISOString(),
   });

@@ -33,6 +33,7 @@ import {
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import { planValiditySeconds } from "../lib/plan-validity.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
@@ -1396,14 +1397,8 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     `id=eq.${plan.id}&admin_id=eq.${adminId}&select=validity,validity_unit,validity_days&limit=1`,
   );
   const planValidity = planRow[0];
-  const validityUnit = String(planValidity?.validity_unit ?? "days").toLowerCase();
-  const configuredValidity = Number(planValidity?.validity_days ?? planValidity?.validity ?? 0);
-  const validityValue = validityUnit === "hours" && configuredValidity === 0
-    ? Number(planValidity?.validity ?? 1)
-    : configuredValidity;
-  const expiresInSeconds = validityUnit === "hours"
-    ? validityValue * 60 * 60
-    : validityValue * 24 * 60 * 60;
+  const configuredValidity = Number(planValidity?.validity ?? planValidity?.validity_days ?? 0);
+  const expiresInSeconds = planValiditySeconds(configuredValidity, planValidity?.validity_unit);
   if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
     res.status(409).json({ ok: false, error: "The hotspot plan has no valid access duration configured." });
     return;
