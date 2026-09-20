@@ -459,6 +459,7 @@ export async function repairGeneratedServiceNetworking(
 ): Promise<{
   bridgeName: string;
   wanInterfaceListFound: boolean;
+  egressInterface: string | null;
   dnsEnabled: boolean;
 }> {
   const tag = `ochola-services-${routerId}`;
@@ -509,6 +510,28 @@ export async function repairGeneratedServiceNetworking(
   }
 
   await runRouterCommand(creds, ["/ip/dns/set", "=allow-remote-requests=yes"]);
+  const routeRows = await runRouterCommand(creds, [
+    "/ip/route/print",
+    "=.proplist=dst-address,active,disabled,interface,immediate-gw,gateway",
+  ]);
+  const defaultRoute = (Array.isArray(routeRows) ? routeRows : []).find(row =>
+    row["dst-address"] === "0.0.0.0/0"
+    && String(row.disabled ?? "").toLowerCase() !== "true"
+    && String(row.active ?? "").toLowerCase() !== "false"
+  );
+  const immediateGatewayInterface = String(defaultRoute?.["immediate-gw"] ?? "")
+    .split("%")[1]
+    ?.trim() ?? "";
+  const rawEgressInterface = [
+    defaultRoute?.interface,
+    immediateGatewayInterface,
+    defaultRoute?.gateway,
+  ]
+    .map(value => String(value ?? "").trim())
+    .find(Boolean) ?? "";
+  const egressInterface = /^[A-Za-z0-9_.-]+$/.test(rawEgressInterface)
+    ? rawEgressInterface
+    : null;
 
   const filterRows = await runRouterCommand(creds, [
     "/ip/firewall/filter/print",
@@ -532,12 +555,17 @@ export async function repairGeneratedServiceNetworking(
   };
 
   const wanInterfaceListFound = listRows.some(row => row.name === "WAN");
-  if (wanInterfaceListFound) {
+  const egressField = wanInterfaceListFound
+    ? "=out-interface-list=WAN"
+    : egressInterface
+      ? `=out-interface=${egressInterface}`
+      : null;
+  if (egressField) {
     await addFilter(`${tag} service-to-wan`, [
       "=chain=forward",
       "=action=accept",
       `=in-interface=${bridgeName}`,
-      "=out-interface-list=WAN",
+      egressField,
       "=connection-state=new,established,related",
     ]);
   }
@@ -572,7 +600,7 @@ export async function repairGeneratedServiceNetworking(
     ]);
   }
 
-  if (wanInterfaceListFound) {
+  if (egressField) {
     const natRows = await runRouterCommand(creds, [
       "/ip/firewall/nat/print",
       "=.proplist=.id,comment",
@@ -594,13 +622,13 @@ export async function repairGeneratedServiceNetworking(
         "=chain=srcnat",
         "=action=masquerade",
         `=src-address=${source}`,
-        "=out-interface-list=WAN",
+        egressField,
         `=comment=${comment}`,
       ]);
     }
   }
 
-  return { bridgeName, wanInterfaceListFound, dnsEnabled: true };
+  return { bridgeName, wanInterfaceListFound, egressInterface, dnsEnabled: true };
 }
 
 /**
