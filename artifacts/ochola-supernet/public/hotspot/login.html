@@ -176,6 +176,7 @@
     <p style="font-size:.6875rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(192,38,211,.7);margin-bottom:.625rem">Our Packages</p>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">Choose Your Plan</h2>
     <p style="color:rgba(255,255,255,.4);font-size:.9375rem">All plans activate instantly after M-Pesa payment</p>
+    <button type="button" onclick="openTvModal()" style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:pointer">Connect to TV</button>
   </div>
   <div id="plansGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:1rem">
     <div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3);font-size:.875rem">Loading plans…</div>
@@ -392,6 +393,24 @@
   </div>
 </div>
 
+<!-- Connect to TV modal -->
+<div id="tvModal" style="display:none;position:fixed;inset:0;z-index:110;align-items:center;justify-content:center;padding:1rem;background:rgba(0,0,0,.86);backdrop-filter:blur(16px)">
+  <div style="width:100%;max-width:30rem;max-height:calc(100vh - 2rem);overflow:auto;border-radius:1.375rem;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);background:linear-gradient(160deg,#1a0533,#0e0222)">
+    <div style="height:3px;background:linear-gradient(90deg,#34d399,#0891b2,#7c3aed)"></div>
+    <div style="padding:1.5rem 1.5rem 1.125rem;display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#6ee7b7;margin-bottom:.375rem">TV CONNECT</p>
+        <h3 style="font-size:1.25rem;font-weight:800;letter-spacing:-.02em;color:white">Connect to TV</h3>
+        <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.25rem">Bind a device, choose a package, and pay with M-Pesa.</p>
+      </div>
+      <button onclick="closeTvModal()" style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.5);cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="tvModalBody" style="padding:0 1.5rem 1.75rem"></div>
+  </div>
+</div>
+
 <script>
 /* ── Fallback hardcoded plans (used if API unavailable) ── */
 var FALLBACK_PLANS=[
@@ -418,6 +437,7 @@ var COLORS=[
 ];
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
+ var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
 var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
@@ -680,6 +700,7 @@ function renderPlans(){
 /* ── STK Modal ── */
 function openModal(i){
   if(!MPESA_PROMPT_ENABLED)return;
+  tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0;
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
   document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" Unlimited";
@@ -794,6 +815,7 @@ function renderModal(){
        checkout_id:checkoutId,
        adminId:PORTAL_ADMIN_ID,
        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+        ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{}),
        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
      })
    }).then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
@@ -822,8 +844,10 @@ function sendStk(){
   if(!phone.trim())return;
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
   stkPhone=phone; stkError=""; stkState="loading"; renderModal();
-  var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID};
+   var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID};
   if(DEVICE_MAC)checkout.mac_address=DEVICE_MAC;
+   if(tvPurchase&&tvDeviceName)checkout.device_name=tvDeviceName;
+   if(tvPurchase&&tvDeviceRouterId)checkout.device_router_id=tvDeviceRouterId;
   if(DEVICE_IP)checkout.client_ip=DEVICE_IP;
   fetch(apiUrl("/api/mpesa/intent"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(checkout)})
     .then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
@@ -836,7 +860,8 @@ function sendStk(){
       var intentData=data.data;
       return fetch(apiUrl("/api/mpesa/stk"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:intentData.amount,adminId:PORTAL_ADMIN_ID,
-        account_ref:"Hotspot",paymentIntent:intentData.paymentIntent
+         account_ref:"Hotspot",paymentIntent:intentData.paymentIntent,
+         ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{})
       })}).then(function(r){return r.json().then(function(response){return{ok:r.ok,data:response};});});
     })
     .catch(function(){return{ok:false,data:{error:"Network error"}};})
@@ -863,6 +888,85 @@ function sendStk(){
                  stkState="access_error"; renderModal();
                });
              }
+
+ function closeTvModal(){
+   document.getElementById("tvModal").style.display="none";
+   tvError=""; tvDevicesLoading=false;
+ }
+ function tvEsc(value){return escapePortalText(value);}
+ function tvDeviceChanged(value){
+   tvDeviceChoice=value;
+   var device=tvDevices.find(function(item){return item.macAddress===value;});
+   if(device){
+     tvMacAddress=device.macAddress;
+     tvDeviceName=device.name;
+     tvDeviceRouterId=Number(device.routerId)||0;
+   }else{
+     tvDeviceRouterId=0;
+   }
+   renderTvModal();
+ }
+ function renderTvModal(){
+   var body=document.getElementById("tvModalBody");
+   if(!body)return;
+   var deviceOptions='<option value="">Enter a MAC address manually</option>'+tvDevices.map(function(device){
+     return '<option value="'+tvEsc(device.macAddress)+'"'+(tvDeviceChoice===device.macAddress?" selected":"")+'>'+tvEsc(device.name)+" — "+tvEsc(device.macAddress)+"</option>";
+   }).join("");
+   var planOptions='<option value="" disabled'+(tvPlanId?"":" selected")+'>Choose a package</option>'+PLANS.map(function(plan){
+     return '<option value="'+plan.id+'"'+(String(plan.id)===String(tvPlanId)?" selected":"")+'>'+tvEsc(plan.name)+" — Ksh "+plan.price+" · "+tvEsc(plan.validity+" "+plan.unit)+'</option>';
+   }).join("");
+   body.innerHTML=
+     '<label class="lbl" style="color:#6ee7b7">Connected devices</label>'+
+     '<select id="tvDeviceChoice" class="inp" style="margin-bottom:.45rem" onchange="tvDeviceChanged(this.value)">'+deviceOptions+'</select>'+
+     '<p style="color:rgba(255,255,255,.35);font-size:.7rem;line-height:1.45;margin-bottom:1rem">'+
+       (tvDevicesLoading?"Checking connected devices…":(tvDevices.length?"Choose a named device or enter another MAC address below.":"No named connected devices found. Enter the TV MAC address below."))+
+     '</p>'+
+     '<label class="lbl" style="color:#6ee7b7">Device MAC address</label>'+
+     '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="AA:BB:CC:DD:EE:FF" oninput="tvMacAddress=this.value.toUpperCase()" />'+
+     '<label class="lbl" style="color:#6ee7b7">Device name</label>'+
+     '<input id="tvDeviceName" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvDeviceName)+'" maxlength="64" placeholder="e.g. Living Room TV" oninput="tvDeviceName=this.value" />'+
+     '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
+     '<select id="tvPlanId" class="inp" style="margin-bottom:1rem" onchange="tvPlanId=this.value">'+planOptions+'</select>'+
+     '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" oninput="tvPhone=this.value" />'+
+     '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
+     '<div style="display:flex;gap:.625rem">'+
+       '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
+       '<button type="button" onclick="bindAndPayTv()" class="btn btn-green btn-full">Bind &amp; Pay</button>'+
+     '</div>';
+ }
+ function openTvModal(){
+   if(!MPESA_PROMPT_ENABLED)return;
+   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=DEVICE_MAC||""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0;
+   document.getElementById("tvModal").style.display="flex";
+   renderTvModal();
+   tvDevicesLoading=true; renderTvModal();
+   fetch(apiUrl("/api/mpesa/hotspot-devices?adminId="+encodeURIComponent(PORTAL_ADMIN_ID)))
+     .then(function(r){return r.ok?r.json():{ok:false};})
+     .then(function(data){tvDevices=Array.isArray(data.devices)?data.devices:[];})
+     .catch(function(){tvDevices=[];})
+     .then(function(){tvDevicesLoading=false;renderTvModal();});
+ }
+ function bindAndPayTv(){
+   tvMacAddress=(document.getElementById("tvMacAddress")||{}).value||tvMacAddress;
+   tvDeviceName=(document.getElementById("tvDeviceName")||{}).value||tvDeviceName;
+   tvPlanId=(document.getElementById("tvPlanId")||{}).value||tvPlanId;
+   tvPhone=(document.getElementById("tvPhone")||{}).value||tvPhone;
+   var mac=normaliseMac(tvMacAddress);
+   if(!mac){tvError="Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF.";renderTvModal();return;}
+   if(!tvDeviceName.trim()){tvError="Give the device a name so you can recognize it later.";renderTvModal();return;}
+   if(!tvPlanId){tvError="Choose a package before continuing.";renderTvModal();return;}
+   if(!tvPhone.trim()){tvError="Enter the phone number that will receive the M-Pesa prompt.";renderTvModal();return;}
+   selectedPlan=PLANS.find(function(plan){return String(plan.id)===String(tvPlanId);})||null;
+   if(!selectedPlan){tvError="The selected package is no longer available. Refresh and try again.";renderTvModal();return;}
+   DEVICE_MAC=mac;
+   closeTvModal();
+   stkState="idle"; stkPhone=tvPhone; stkError=""; paidCheckoutId="";
+   document.getElementById("modalPlanName").textContent=selectedPlan.name+" · "+tvDeviceName;
+   document.getElementById("modalPlanDetails").textContent="TV package · Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit;
+   renderModal();
+   document.getElementById("stkModal").style.display="flex";
+ }
            })
           .catch(function(){});
         if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}

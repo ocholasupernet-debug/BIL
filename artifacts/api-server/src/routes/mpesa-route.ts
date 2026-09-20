@@ -23,6 +23,7 @@ import {
   resolveHotspotClientMac,
   scheduleHotspotUserExpiry,
   updateHotspotUser,
+  fetchHotspotConnectedDevices,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
@@ -274,6 +275,12 @@ function readClientIp(value: unknown): string {
   if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) return "";
   const octets = ip.split(".").map(Number);
   return octets.every((octet) => octet >= 0 && octet <= 255) ? ip : "";
+}
+
+function readDeviceName(value: unknown): string {
+  return typeof value === "string"
+    ? value.trim().replace(/\s+/g, " ").slice(0, 64)
+    : "";
 }
 
 function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
@@ -548,6 +555,53 @@ setInterval(() => {
   void processDeferredMpesaCallbacks().catch(err => logger.error({ err }, "[mpesa/callback] Deferred callback retry failed"));
 }, 60_000).unref();
 
+/**
+ * Return named devices currently visible on this ISP's hotspot routers.
+ * Router credentials stay server-side; the portal receives only the client
+ * identity data needed to choose a TV or streaming device.
+ */
+router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promise<void> => {
+  const adminId = Number(req.query.adminId);
+  if (!Number.isSafeInteger(adminId) || adminId < 1) {
+    res.status(400).json({ ok: false, error: "A valid ISP account is required." });
+    return;
+  }
+  if (!await isActiveIspAdmin(adminId)) {
+    res.status(404).json({ ok: false, error: "This ISP account is not available." });
+    return;
+  }
+
+  const routers = await sbSelect<HotspotRouterRow & { id: number; name: string }>(
+    "isp_routers",
+    `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
+  );
+  const devices: Array<{
+    name: string;
+    macAddress: string;
+    address: string;
+    routerId: number;
+    routerName: string;
+  }> = [];
+  for (const row of routers) {
+    if (!row.id || (!row.host && !row.bridge_ip && !row.vpn_ip)) continue;
+    try {
+      const connected = await fetchHotspotConnectedDevices(hotspotRouterCredentials(row));
+      for (const device of connected) {
+        devices.push({
+          name: device.name,
+          macAddress: device.macAddress,
+          address: device.address,
+          routerId: row.id,
+          routerName: row.name || `Router ${row.id}`,
+        });
+      }
+    } catch (error) {
+      logger.warn({ err: error, adminId, routerId: row.id }, "[mpesa/hotspot-devices] router lookup failed");
+    }
+  }
+  res.json({ ok: true, devices });
+});
+
 function stkCredentials(shortcode: string, passkey: string): { timestamp: string; password: string } {
   const timestamp = new Date()
     .toISOString()
@@ -572,6 +626,8 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const adminId = Number(req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
+  const deviceName = readDeviceName(req.body?.device_name);
+  const deviceRouterId = Number(req.body?.device_router_id);
   const requestedService = req.body?.service_type === "pppoe" ? "pppoe" : "hotspot";
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
@@ -596,6 +652,10 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const serviceType = String(plan?.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
   if (plan && serviceType !== requestedService) {
     res.status(409).json({ ok: false, error: "The selected package is for a different service. Refresh and try again." });
+    return;
+  }
+  if (plan && Number.isSafeInteger(deviceRouterId) && deviceRouterId > 0 && plan.router_id !== deviceRouterId) {
+    res.status(409).json({ ok: false, error: "Choose a package assigned to the selected device's router." });
     return;
   }
   if (serviceType === "pppoe" && (!Number.isSafeInteger(requestedCustomerId) || requestedCustomerId < 1)) {
@@ -672,6 +732,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
       ok: true,
       paymentIntent: generatePaymentIntent({
         adminId, planId, amount, phone, serviceType,
+        ...(deviceName ? { deviceName } : {}),
         ...(serviceType === "pppoe" ? { customerId: requestedCustomerId } : {}),
         ...(resolvedMac ? { macAddress: resolvedMac } : {}),
       }),
@@ -910,10 +971,11 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string;
   };
   const requestedMac = readMacAddress(mac_address);
+  const requestedDeviceName = readDeviceName(device_name);
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
@@ -953,6 +1015,10 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null);
   if (intent && (intent.macAddress ?? "") !== mac.value) {
     res.status(400).json({ ok: false, error: "The TV MAC address changed. Start the payment again." });
+    return;
+  }
+  if (intent && (intent.deviceName ?? "") !== requestedDeviceName) {
+    res.status(400).json({ ok: false, error: "The TV name changed. Start the payment again." });
     return;
   }
   if (!hasSuperAdminSession && !hasAdminSession && !hasMatchingIntent) {
@@ -1175,6 +1241,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const adminId = Number(req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
+  const requestedDeviceName = readDeviceName(req.body?.device_name);
 
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "A paid checkout and ISP context are required." });
@@ -1351,7 +1418,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
     const customerFields = {
       admin_id: adminId,
-      name: `Hotspot ${paymentPhone}`,
+      name: requestedDeviceName || `Hotspot ${paymentPhone}`,
       phone: paymentPhone,
       username: hotspotUsername,
       password: hotspotPassword,

@@ -36,6 +36,7 @@ export interface PaymentIntentPayload {
   serviceType?: "hotspot" | "pppoe";
   customerId?: number;
   macAddress?: string;
+  deviceName?: string;
   issuedAt: number;
   nonce: string;
 }
@@ -116,6 +117,7 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
         (payload.serviceType !== undefined && payload.serviceType !== "hotspot" && payload.serviceType !== "pppoe") ||
         (payload.customerId !== undefined && (!Number.isSafeInteger(payload.customerId) || payload.customerId <= 0)) ||
         (payload.macAddress !== undefined && !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(payload.macAddress)) ||
+         (payload.deviceName !== undefined && (typeof payload.deviceName !== "string" || payload.deviceName.length > 64)) ||
         Date.now() - payload.issuedAt > PAYMENT_INTENT_TTL_MS ||
         payload.issuedAt > Date.now() + MAX_CLOCK_SKEW_S * 1000) return null;
     return payload;
