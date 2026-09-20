@@ -72,4 +72,6 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="hotspot-bridge"/);
   assert.match(script, /pppoe-server server add service-name="ochola-services-104-pppoe" interface="hotspot-bridge"/);
   assert.match(script, /ip hotspot add name="ochola-services-104-hotspot" interface="hotspot-bridge"/);
+  assert.doesNotMatch(script, /interface bridge add name="hotspot-bridge" comment=/);
+  assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
 });
