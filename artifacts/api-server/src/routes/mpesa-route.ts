@@ -1542,24 +1542,19 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
   try {
     const hotspotProfile = `ochola-plan-${plan.id}`;
-    await ensureHotspotUserProfile(credentials, {
-      name: hotspotProfile,
-      sharedUsers: 1,
-      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
-    });
-    const paidBindingApplied = await addHotspotIpBinding(credentials, {
-      macAddress: mac,
-      ipAddress: routerAddress || undefined,
-      comment: hotspotUsername,
-      expiresInSeconds,
-      bindingType: "regular",
-    });
-    if (paidBindingApplied) {
-      await ensureHotspotUserRateQueue(credentials, {
-        username: hotspotUsername,
-        address: routerAddress || undefined,
-        maxLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
+    const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
+    let effectiveProfile = hotspotProfile;
+    try {
+      await ensureHotspotUserProfile(credentials, {
+        name: hotspotProfile,
+        sharedUsers: 1,
+        rateLimit,
       });
+    } catch (error) {
+      /* The built-in default profile still permits credential login if a
+         tenant-specific profile cannot be created on this RouterOS version. */
+      effectiveProfile = "default";
+      logger.warn({ err: error, router: routerRow.name, profile: hotspotProfile }, "[mpesa/hotspot-mac-access] plan profile unavailable; using default profile");
     }
     if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
       await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
@@ -1568,7 +1563,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     try {
       await updateHotspotUser(credentials, hotspotUsername, {
         password: hotspotPassword,
-        profile: hotspotProfile,
+        profile: effectiveProfile,
         disabled: false,
         comment: hotspotUsername,
         address: routerAddress || undefined,
@@ -1578,7 +1573,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       await addHotspotUser(credentials, {
         name: hotspotUsername,
         password: hotspotPassword,
-        profile: hotspotProfile,
+        profile: effectiveProfile,
         comment: hotspotUsername,
         address: routerAddress || undefined,
         limitBytesTotal,
@@ -1589,7 +1584,29 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     await scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,
       expiresInSeconds: Math.max(1, Math.ceil((expiresAt.getTime() - now) / 1000)),
+    }).catch((error) => {
+      logger.warn({ err: error, router: routerRow.name, username: hotspotUsername }, "[mpesa/hotspot-mac-access] expiry scheduling deferred");
     });
+
+    let paidBindingApplied = false;
+    try {
+      paidBindingApplied = await addHotspotIpBinding(credentials, {
+        macAddress: mac,
+        ipAddress: routerAddress || undefined,
+        comment: hotspotUsername,
+        expiresInSeconds,
+        bindingType: "regular",
+      });
+      if (paidBindingApplied) {
+        await ensureHotspotUserRateQueue(credentials, {
+          username: hotspotUsername,
+          address: routerAddress || undefined,
+          maxLimit: rateLimit,
+        });
+      }
+    } catch (error) {
+      logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
+    }
     if (paidBindingApplied && routerAddress) {
       await connectHotspotUser(credentials, {
         user: hotspotUsername,
@@ -1604,18 +1621,18 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
      await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       customer_id: customer.id,
       plan_id: plan.id,
-      notes: `M-Pesa payment verified; hotspot credentials assigned and MAC access granted on ${routerRow.name}.`,
+      notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${paidBindingApplied ? " and MAC access granted." : "; device binding is pending."}`,
     });
     res.json({
       ok: true,
-      access: "hotspot-authenticated",
+      access: paidBindingApplied ? "hotspot-authenticated" : "hotspot-credentials",
       router: routerRow.name,
       mac_address: mac,
       credentials: { username: hotspotUsername, password: hotspotPassword },
       expires_at: expiresAt.toISOString(),
     });
   } catch (error) {
-    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] binding failed");
+    logger.error({ err: error, checkoutId, routerId: routerRow.id, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] hotspot user update failed");
     res.status(503).json({
       ok: false,
       error: "Payment is confirmed and the prepaid account was saved, but the hotspot router could not be updated. Keep this page open and retry connection.",
