@@ -522,12 +522,13 @@ export async function repairGeneratedServiceNetworking(
   const immediateGatewayInterface = String(defaultRoute?.["immediate-gw"] ?? "")
     .split("%")[1]
     ?.trim() ?? "";
-  const rawEgressInterface = String(
-    defaultRoute?.interface
-    ?? immediateGatewayInterface
-    ?? defaultRoute?.gateway
-    ?? "",
-  ).trim();
+  const rawEgressInterface = [
+    defaultRoute?.interface,
+    immediateGatewayInterface,
+    defaultRoute?.gateway,
+  ]
+    .map(value => String(value ?? "").trim())
+    .find(Boolean) ?? "";
   const egressInterface = /^[A-Za-z0-9_.-]+$/.test(rawEgressInterface)
     ? rawEgressInterface
     : null;
