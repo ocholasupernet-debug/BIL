@@ -1450,7 +1450,7 @@ export interface HotspotConnectedDevice {
   name: string;
   macAddress: string;
   address: string;
-  source: "hotspot" | "dhcp";
+  source: "hotspot" | "dhcp" | "host" | "arp";
 }
 
 function validRouterMac(value: unknown): string {
@@ -1459,9 +1459,10 @@ function validRouterMac(value: unknown): string {
 }
 
 /**
- * Return connected client identities that have both a human-readable name and
- * a MAC address. The hotspot active table is preferred, with DHCP leases as a
- * fallback for devices that are connected but have not authenticated yet.
+ * Return client identities visible on the router with a MAC address. The
+ * hotspot and DHCP tables are preferred, while host/ARP entries include
+ * devices that are connected but have not authenticated or received a
+ * hostname yet.
  */
 export async function fetchHotspotConnectedDevices(
   creds: RouterCredentials,
@@ -1469,15 +1470,16 @@ export async function fetchHotspotConnectedDevices(
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const byMac = new Map<string, HotspotConnectedDevice>();
-    const add = (row: Record<string, string>, source: "hotspot" | "dhcp"): void => {
+    const add = (row: Record<string, string>, source: HotspotConnectedDevice["source"]): void => {
       const mac = validRouterMac(row["mac-address"]);
-      const name = String(
+      const reportedName = String(
         source === "hotspot"
           ? row.user ?? row.comment ?? row["host-name"]
           : row["host-name"] ?? row.comment ?? row.user,
-      ).trim().slice(0, 64);
-      if (!mac || !name) return;
+      ).trim();
+      if (!mac) return;
       const address = String(row.address ?? "").trim();
+      const name = (reportedName || `Network device ${mac}`).slice(0, 64);
       if (!byMac.has(mac) || source === "hotspot") {
         byMac.set(mac, { name, macAddress: mac, address, source });
       }
@@ -1501,6 +1503,26 @@ export async function fetchHotspotConnectedDevices(
       for (const row of Array.isArray(rows) ? rows : []) add(row, "dhcp");
     } catch {
       /* DHCP is optional on some RouterOS hotspot installations. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "host");
+    } catch {
+      /* Host entries are optional on non-hotspot RouterOS installations. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "arp");
+    } catch {
+      /* ARP is optional when the management account cannot read it. */
     }
 
     return [...byMac.values()].sort((a, b) => a.name.localeCompare(b.name));
