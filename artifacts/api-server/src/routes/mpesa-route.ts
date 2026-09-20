@@ -1435,9 +1435,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
   /*
    * A paid hotspot account is one database customer plus one RouterOS user.
-   * Keep the RouterOS identifier stable and readable. Reused paid devices keep
-   * their existing account; every new account receives the payment id suffix
-   * so the username can never collide with another customer.
+   * Keep the RouterOS identifier readable. Reused paid devices keep their
+   * existing account; every new account receives a random suffix and is checked
+   * against existing usernames before it is saved.
    */
   const existingCustomers = await sbSelect<{
     id: number;
@@ -1465,10 +1465,22 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     ? existingCustomers[0]
     : undefined);
 
-   const hotspotUsername = reusableCustomer?.username?.trim()
-     || prepaidHotspotUsername(paymentPhone, mac, transaction.id);
+   let hotspotUsername = reusableCustomer?.username?.trim() || "";
+   if (!hotspotUsername) {
+     for (let attempt = 0; attempt < 12; attempt += 1) {
+       const candidate = prepaidHotspotUsername(paymentPhone, mac);
+       const collision = await sbSelect<{ id: number }>(
+         "isp_customers",
+         `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(candidate)}&select=id&limit=1`,
+       );
+       if (!collision[0]) {
+         hotspotUsername = candidate;
+         break;
+       }
+     }
+   }
   if (!hotspotUsername) {
-    res.status(409).json({ ok: false, error: "The payment does not include enough phone and device information for a hotspot username." });
+     res.status(503).json({ ok: false, error: "A unique hotspot username could not be generated. Please retry the connection." });
     return;
   }
   const collision = await sbSelect<{ id: number }>(

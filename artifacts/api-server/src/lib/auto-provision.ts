@@ -341,7 +341,7 @@ export async function autoProvision(opts: {
 
   /* ── 4. Provision on router ── */
   const planType = (plan.plan_type || plan.type || "hotspot").toLowerCase();
-  const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address, customer.id);
+  const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address);
   const username = planType === "pppoe"
     ? (customer.pppoe_username || customer.username || `user_${customer.id}`)
     : (customer.username || generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));

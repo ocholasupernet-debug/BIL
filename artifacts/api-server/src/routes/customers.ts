@@ -125,7 +125,6 @@ async function reconcileCustomerAccess(
     const generated = prepaidHotspotUsername(
       updates.phone ?? current.phone,
       updates.mac_address ?? current.mac_address,
-      current.id,
     );
     if (generated) {
       const identityChanged = updates.phone !== undefined || updates.mac_address !== undefined;
