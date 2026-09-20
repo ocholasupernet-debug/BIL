@@ -468,56 +468,14 @@ export default function PrepaidUsers() {
     setActionError("");
     setActionBusy(user.id);
     try {
-      const { error } = await supabase
-        .from("isp_customers")
-        .update({ ...updates, updated_at: new Date().toISOString() })
-        .eq("id", user.id)
-        .eq("admin_id", ADMIN_ID);
-      if (error) throw error;
-
-      /* Keep the RADIUS gate in step with lifecycle and identity changes. */
-      const previousUsername = user.pppoe_username || user.username;
-      const nextUsername = String(
-        updates[user.type === "pppoe" ? "pppoe_username" : "username"] ?? previousUsername ?? "",
-      ).trim();
-      if (previousUsername && nextUsername && previousUsername !== nextUsername) {
-        await supabase.from("radcheck").delete().eq("username", previousUsername);
-        await supabase.from("radusergroup").delete().eq("username", previousUsername);
-        if (user.password) {
-          const { error: authError } = await supabase.from("radcheck").insert({
-            username: nextUsername, attribute: "Cleartext-Password", op: ":=", value: user.password,
-          });
-          if (authError) throw authError;
-        }
-      }
-      const radiusUsername = nextUsername || previousUsername;
-      if (radiusUsername && updates.status !== undefined) {
-        await supabase.from("radcheck").delete().eq("username", radiusUsername).eq("attribute", "Auth-Type");
-        if (updates.status === "suspended") {
-          const { error: rejectError } = await supabase.from("radcheck").insert({
-            username: radiusUsername, attribute: "Auth-Type", op: ":=", value: "Reject",
-          });
-          if (rejectError) throw rejectError;
-        }
-      }
-      if (radiusUsername && updates.expires_at !== undefined) {
-        await supabase.from("radcheck").delete().eq("username", radiusUsername).eq("attribute", "Expiration");
-        if (updates.expires_at) {
-          const { error: expiryError } = await supabase.from("radcheck").insert({
-            username: radiusUsername, attribute: "Expiration", op: ":=", value: new Date(String(updates.expires_at)).toDateString(),
-          });
-          if (expiryError) throw expiryError;
-        }
-      }
-      if (radiusUsername && updates.plan_id !== undefined) {
-        await supabase.from("radusergroup").delete().eq("username", radiusUsername);
-        const nextPlan = updates.plan_id ? planMap[Number(updates.plan_id)] : null;
-        if (nextPlan) {
-          const { error: groupError } = await supabase.from("radusergroup").insert({
-            username: radiusUsername, groupname: nextPlan.name, priority: 1,
-          });
-          if (groupError) throw groupError;
-        }
+      const response = await fetch(`${API}/api/customers/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId: ADMIN_ID, ...updates }),
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "The live router account could not be updated.");
       }
       await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
     } finally {

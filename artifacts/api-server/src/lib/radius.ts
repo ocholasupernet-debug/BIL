@@ -306,6 +306,89 @@ export async function addRadiusCustomer(opts: RadiusCustomerOpts): Promise<boole
   return true;
 }
 
+export interface RadiusCustomerSyncOpts {
+  username: string;
+  password?: string | null;
+  planId: number;
+  planType: "hotspot" | "pppoe";
+  enabled: boolean;
+  sharedUsers?: number;
+  fullname?: string | null;
+  rateUp?: number | null;
+  rateUpUnit?: string | null;
+  rateDown?: number | null;
+  rateDownUnit?: string | null;
+  burst?: string | null;
+  dataLimitMb?: number | null;
+  expiresAt?: string | null;
+}
+
+/**
+ * Keep RADIUS authorization and reply attributes aligned with the live
+ * RouterOS account after an admin edits a prepaid user. This intentionally
+ * does not clear accounting rows: editing an expiry or rate must not erase
+ * usage history.
+ */
+export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<void> {
+  if (!supabaseConfigured) return;
+
+  if (opts.password) {
+    await upsertRadCheck(opts.username, "Cleartext-Password", opts.password);
+  }
+  await upsertRadCheck(
+    opts.username,
+    "Simultaneous-Use",
+    String(opts.planType === "pppoe" ? 1 : Math.max(1, opts.sharedUsers ?? 1)),
+  );
+  await setUserGroup(opts.username, `plan_${opts.planId}`);
+
+  await deleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
+  await deleteRadCheck(opts.username, "Max-Data");
+  await deleteRadCheck(opts.username, "Max-All-Session");
+  await deleteRadCheck(opts.username, "WISPr-Session-Terminate-Time");
+  await deleteRadCheck(opts.username, "Expiration");
+
+  const down = Number(opts.rateDown);
+  const up = Number(opts.rateUp);
+  if (Number.isFinite(down) && down > 0 && Number.isFinite(up) && up > 0) {
+    const unitUp = rateUnitToSuffix(opts.rateUpUnit ?? "Mbps");
+    const unitDown = rateUnitToSuffix(opts.rateDownUnit ?? "Mbps");
+    let rate = `${up}${unitUp}/${down}${unitDown}`;
+    if (opts.burst?.trim()) rate = `${rate} ${opts.burst.trim()}`;
+    await upsertRadCheck(opts.username, "Mikrotik-Rate-Limit", rate);
+  }
+
+  const dataLimitMb = Number(opts.dataLimitMb);
+  if (opts.planType === "hotspot" && Number.isFinite(dataLimitMb) && dataLimitMb > 0) {
+    await upsertRadCheck(opts.username, "Max-Data", String(Math.floor(dataLimitMb * 1_000_000)));
+  }
+
+  if (opts.expiresAt) {
+    const expiresAt = new Date(opts.expiresAt);
+    if (!Number.isNaN(expiresAt.getTime())) {
+      const remainingSeconds = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+      await upsertRadCheck(opts.username, "Max-All-Session", String(remainingSeconds));
+      await upsertRadCheck(
+        opts.username,
+        "Expiration",
+        expiresAt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+          + " " + expiresAt.toTimeString().slice(0, 8),
+      );
+      const isoTerminate = expiresAt.toISOString().replace(/\.\d+Z$/, "+00:00").replace(/Z$/, "+00:00");
+      await upsertRadCheck(
+        opts.username,
+        "WISPr-Session-Terminate-Time",
+        `${isoTerminate.slice(0, 10)}T${isoTerminate.slice(11, 19)}+00:00`,
+      );
+    }
+  }
+
+  await deleteRadCheck(opts.username, "Auth-Type");
+  if (!opts.enabled) {
+    await upsertRadCheck(opts.username, "Auth-Type", "Reject");
+  }
+}
+
 export async function removeRadiusCustomer(username: string): Promise<void> {
   await sbDelete("radcheck", `username=eq.${enc(username)}`);
   await removeUserGroup(username);
