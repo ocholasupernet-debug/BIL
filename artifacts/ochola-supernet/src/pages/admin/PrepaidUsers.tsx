@@ -3,7 +3,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, type DbCustomer } from "@/lib/supabase";
 import {
-  Search, Loader2, RefreshCw, Wifi, Network, Globe,
+  Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
   ChevronDown, Filter, Download, UploadCloud, Eye,
   X, Phone, Mail, CalendarDays, Server, Edit3, PlusCircle,
@@ -464,10 +464,14 @@ export default function PrepaidUsers() {
   const [search,      setSearch]      = useState("");
   const [statusTab,   setStatusTab]   = useState<StatusFilter>("all");
   const [typeFilter,  setTypeFilter]  = useState("");
+  const [routerFilter, setRouterFilter] = useState("");
+  const [entries,     setEntries]     = useState(PAGE_SIZE);
   const [page,        setPage]        = useState(1);
   const [detailUser,  setDetailUser]  = useState<Customer | null>(null);
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
+  const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
+  const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionBusy, setActionBusy] = useState<number | null>(null);
 
@@ -548,6 +552,9 @@ export default function PrepaidUsers() {
     if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
     if (typeFilter)          list = list.filter(c => c.type  === typeFilter);
+    if (routerFilter) {
+      list = list.filter(c => String(c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : "") ?? "") === routerFilter);
+    }
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(c =>
@@ -559,10 +566,10 @@ export default function PrepaidUsers() {
       );
     }
     return list;
-  }, [customers, statusTab, typeFilter, search, onlineUsers]);
+  }, [customers, statusTab, typeFilter, routerFilter, search, onlineUsers, planMap]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows   = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / entries));
+  const pageRows   = filtered.slice((page - 1) * entries, page * entries);
 
   /* ── Sync handler ── */
   async function handleSync() {
@@ -602,21 +609,22 @@ export default function PrepaidUsers() {
     cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
   });
   const INPUT: React.CSSProperties = {
-    background: "var(--isp-input-bg,rgba(255,255,255,0.05))",
-    border: "1px solid var(--isp-border)", borderRadius: 6,
-    padding: "0.42rem 0.75rem", color: "var(--isp-text)",
+    background: "#fff",
+    border: "1px solid #cbd5e1", borderRadius: 5,
+    padding: "0.48rem 0.7rem", color: "#1e293b",
     fontSize: "0.82rem", fontFamily: "inherit", outline: "none",
   };
   const TH: React.CSSProperties = {
-    padding: "0.55rem 0.875rem", fontSize: "0.68rem", fontWeight: 800,
-    color: "var(--isp-text-muted)", textTransform: "uppercase",
+    padding: "0.58rem 0.8rem", fontSize: "0.68rem", fontWeight: 800,
+    color: "#334155", textTransform: "uppercase",
     letterSpacing: "0.06em", textAlign: "left",
-    background: "rgba(255,255,255,0.025)",
-    borderBottom: "1px solid var(--isp-border)",
+    background: "#f8fafc",
+    borderBottom: "1px solid #e2e8f0",
+    borderRight: "1px solid #e2e8f0",
   };
   const TD: React.CSSProperties = {
-    padding: "0.7rem 0.875rem", fontSize: "0.8rem",
-    color: "var(--isp-text)", borderBottom: "1px solid rgba(255,255,255,0.03)",
+    padding: "0.5rem 0.8rem", fontSize: "0.78rem",
+    color: "#1e293b", borderBottom: "1px solid #f1f5f9",
     verticalAlign: "middle",
   };
 
@@ -649,6 +657,35 @@ export default function PrepaidUsers() {
         .prepaid-primary-button:disabled{opacity:.55;cursor:wait}
         .prepaid-help{font-size:.72rem;line-height:1.45;color:var(--isp-text-muted);margin:10px 0 0}
         .prepaid-spin{animation:spin 1s linear infinite}
+        .prepaid-toolbar-card{position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:12px;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+        .prepaid-filter-grid{display:grid;grid-template-columns:minmax(260px,2fr) minmax(160px,1fr) minmax(100px,.65fr) minmax(160px,1fr);gap:10px;align-items:end}
+        .prepaid-filter-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+        .prepaid-filter-label{color:#64748b;font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+        .prepaid-search-control{display:flex;min-width:0}
+        .prepaid-search-control input{width:100%;min-width:0;border-radius:5px 0 0 5px!important;border-right:0!important}
+        .prepaid-search-control button{border:1px solid #00bfa5;border-radius:0 5px 5px 0;background:#00bfa5;color:#fff;padding:0 15px;font:700 .76rem inherit;cursor:pointer}
+        .prepaid-search-control button:hover{background:#00a991}
+        .prepaid-recharge-wrap{display:flex;min-width:0}
+        .prepaid-recharge-button{width:100%;min-height:34px;border:1px solid #007bef;border-radius:5px;background:#007bef;color:#fff;padding:0 12px;font:700 .76rem inherit;cursor:pointer}
+        .prepaid-recharge-button:hover{background:#006ddd}
+        .prepaid-recharge-picker{position:absolute;right:12px;top:74px;z-index:60;width:min(290px,calc(100% - 24px));padding:10px;background:#fff;border:1px solid #cbd5e1;border-radius:5px;box-shadow:0 10px 25px rgba(15,23,42,.15)}
+        .prepaid-recharge-picker select{width:100%;margin-bottom:8px}
+        .prepaid-recharge-picker button{width:100%;border:0;border-radius:4px;background:#007bef;color:#fff;padding:8px;font:700 .74rem inherit;cursor:pointer}
+        .prepaid-recharge-picker button:disabled{opacity:.45;cursor:not-allowed}
+        .prepaid-secondary-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9}
+        .prepaid-status-tabs{display:flex;gap:2px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;padding:3px}
+        .prepaid-status-tabs button{border:0;border-radius:3px;background:transparent;padding:5px 9px;color:#64748b;font:700 .72rem inherit;cursor:pointer}
+        .prepaid-status-tabs button.active{background:#fff;color:#007bef;box-shadow:0 1px 2px rgba(15,23,42,.08)}
+        .prepaid-table-shell{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:6px!important;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+        .prepaid-table-shell tbody tr{background:#fff}
+        .prepaid-table-shell tbody tr:hover{background:#f8fafc}
+        .prepaid-table-shell tbody tr.prepaid-row-expired{background:#fff7f7}
+        .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:#fef2f2}
+        .prepaid-table-shell tbody td{border-right:1px solid #f8fafc}
+        .prepaid-username-link{border:0;background:transparent;color:#4a90e2;padding:0;font:800 .78rem monospace;white-space:nowrap;cursor:pointer;text-align:left}
+        .prepaid-username-link:hover{text-decoration:underline;color:#2563eb}
+        @media(max-width:900px){.prepaid-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        @media(max-width:520px){.prepaid-filter-grid{grid-template-columns:1fr}.prepaid-recharge-picker{position:static;width:auto;margin-top:10px}}
         @media(max-width:680px){.prepaid-form-grid{grid-template-columns:1fr}.prepaid-table-shell{margin-right:-16px;border-right:0;border-radius:10px 0 0 10px}}
       `}</style>
 
@@ -779,55 +816,97 @@ export default function PrepaidUsers() {
           </div>
         )}
 
-        {/* ── Status tabs + filters ── */}
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-          {/* Status tabs */}
-          <div style={{ display: "flex", gap: "0.25rem", background: "rgba(255,255,255,0.03)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.25rem" }}>
+        {/* ── Compact filter toolbar ── */}
+        <div className="prepaid-toolbar-card">
+          <div className="prepaid-filter-grid">
+            <label className="prepaid-filter-field">
+              <span className="prepaid-filter-label">Username Search</span>
+              <span className="prepaid-search-control">
+                <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
+                  placeholder="Search name, username, phone…"
+                  style={INPUT} />
+                <button type="button" onClick={() => setPage(1)}>Search</button>
+              </span>
+            </label>
+
+            <label className="prepaid-filter-field">
+              <span className="prepaid-filter-label">Router</span>
+              <select value={routerFilter} onChange={e => { setRouterFilter(e.target.value); setPage(1); }}
+                style={{ ...INPUT, cursor: "pointer" }}>
+                <option value="">All routers</option>
+                {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
+              </select>
+            </label>
+
+            <label className="prepaid-filter-field">
+              <span className="prepaid-filter-label">Entries</span>
+              <select value={entries} onChange={e => { setEntries(Number(e.target.value)); setPage(1); }}
+                style={{ ...INPUT, cursor: "pointer" }}>
+                {[10, 20, 50, 100].map(value => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+
+            <div className="prepaid-recharge-wrap">
+              <button type="button" className="prepaid-recharge-button" onClick={() => setRechargePickerOpen(open => !open)}>
+                + Recharge Account
+              </button>
+            </div>
+          </div>
+
+          {rechargePickerOpen && (
+            <div className="prepaid-recharge-picker">
+              <select value={rechargeTargetId} onChange={event => setRechargeTargetId(event.target.value)} style={INPUT}>
+                <option value="">Choose an account to recharge</option>
+                {filtered.map(user => <option key={user.id} value={user.id}>{purchaseUsername(user)} — {user.name || "Unnamed"}</option>)}
+              </select>
+              <button type="button" disabled={!rechargeTargetId} onClick={() => {
+                const target = customers.find(user => user.id === Number(rechargeTargetId));
+                if (target) {
+                  setExtendingUser(target);
+                  setRechargePickerOpen(false);
+                }
+              }}>
+                Continue to recharge
+              </button>
+            </div>
+          )}
+
+          <div className="prepaid-secondary-filters">
+            {/* Status tabs */}
+            <div className="prepaid-status-tabs">
             {TABS.map(t => (
-              <button key={t.key} onClick={() => { setStatusTab(t.key); setPage(1); }}
+              <button key={t.key} className={statusTab === t.key ? "active" : undefined} onClick={() => { setStatusTab(t.key); setPage(1); }}
                 style={{
-                  padding: "0.3rem 0.75rem", borderRadius: 6, border: "none", fontFamily: "inherit",
-                  fontSize: "0.75rem", fontWeight: 700, cursor: "pointer",
-                  background: statusTab === t.key ? "rgba(255,255,255,0.1)" : "transparent",
-                  color: statusTab === t.key ? t.color : "var(--isp-text-muted)",
-                  transition: "all 0.15s",
+                  color: statusTab === t.key ? t.color : undefined,
                 }}>
                 {t.label}
                 <span style={{
                   marginLeft: "0.35rem", fontSize: "0.6rem", fontWeight: 700,
-                  background: statusTab === t.key ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.06)",
+                  background: statusTab === t.key ? "#e0f2fe" : "#f1f5f9",
                   padding: "0.1rem 0.4rem", borderRadius: 3,
-                  color: statusTab === t.key ? t.color : "var(--isp-text-muted)",
+                  color: statusTab === t.key ? t.color : "#64748b",
                 }}>
                   {t.count}
                 </span>
               </button>
             ))}
-          </div>
+            </div>
 
-          {/* Type filter */}
-          <div style={{ position: "relative" }}>
-            <select value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1); }}
-              style={{ ...INPUT, paddingRight: "1.75rem", cursor: "pointer", appearance: "none" }}>
-              <option value="">All types</option>
-              <option value="hotspot">Hotspot</option>
-              <option value="pppoe">PPPoE</option>
-              <option value="static">Static IP</option>
-            </select>
-            <Filter size={11} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-muted)", pointerEvents: "none" }} />
-          </div>
-
-          {/* Search */}
-          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-            <Search size={13} style={{ position: "absolute", left: "0.65rem", top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-muted)", pointerEvents: "none" }} />
-            <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Search name, username, phone…"
-              style={{ ...INPUT, paddingLeft: "2rem", width: "100%" }} />
+            <div style={{ position: "relative" }}>
+              <select value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1); }}
+                style={{ ...INPUT, paddingRight: "1.75rem", cursor: "pointer", appearance: "none" }}>
+                <option value="">All types</option>
+                <option value="hotspot">Hotspot</option>
+                <option value="pppoe">PPPoE</option>
+                <option value="static">Static IP</option>
+              </select>
+              <Filter size={11} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
+            </div>
           </div>
         </div>
 
         {/* ── Table ── */}
-        <div className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
+        <div id="prepaid-users-table" className="prepaid-table-shell" style={{ overflowX: "auto" }}>
              <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -876,14 +955,13 @@ export default function PrepaidUsers() {
                   const expired  = isExpired(user.expires_at);
                   return (
                     <tr key={user.id}
-                      onMouseOver={e => (e.currentTarget as HTMLTableRowElement).style.background = "rgba(255,255,255,0.02)"}
-                      onMouseOut={e  => (e.currentTarget as HTMLTableRowElement).style.background = "transparent"}
+                      className={expired || user.status === "expired" ? "prepaid-row-expired" : undefined}
                       style={{ transition: "background 0.1s" }}
                     >
                       <td style={TD}>
-                        <span style={{ fontWeight: 800, fontSize: "0.78rem", color: "var(--isp-text)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                        <button type="button" className="prepaid-username-link" onClick={() => setDetailUser(user)} title={`View ${username}`}>
                           {username}
-                        </span>
+                        </button>
                       </td>
                       <td style={TD}><TypeBadge type={user.type} /></td>
                       <td style={TD}>
