@@ -130,6 +130,7 @@ create table if not exists isp_plans (
   shared_users   integer not null default 1,
   description    text,
   is_active      boolean not null default true,
+  client_can_purchase boolean not null default true,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
