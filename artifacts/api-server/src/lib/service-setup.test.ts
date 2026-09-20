@@ -37,6 +37,12 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /dst-path="hotspot\/rlogin\.html" mode=https check-certificate=yes/);
   assert.match(script, /dst-path="hotspot\/md5\.js" mode=https check-certificate=yes/);
   assert.match(script, /file find where name="hotspot\/login\.html"/);
+  assert.match(script, /SERVICE STEP 1\/7 - portal files starting/);
+  assert.match(script, /SERVICE STEP 2\/7 - service bridge starting/);
+  assert.match(script, /SERVICE STEP 4\/7 - Hotspot DHCP, profile, and server starting/);
+  assert.match(script, /SERVICE STEP 7\/7 - customer NAT starting/);
+  assert.match(script, /servicessetup\.rsc finished with failed service steps/);
+  assert.match(script, /Fix the listed failures and rerun servicessetup\.rsc/);
 });
 
 test("service setup rejects unsafe bridge names and preserves foreign bridge ports", () => {
