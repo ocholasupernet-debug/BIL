@@ -725,15 +725,6 @@ function AdminRouterCard({
             style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", color: "#fbbf24", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
             <Zap size={11} /> Test
           </button>
-          <button
-            onClick={() => onDisableHotspot(router.id)}
-            disabled={hotspotRecoveryBusy}
-            title="Disable the generated Hotspot server and restore normal WLAN web access"
-            style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171", cursor: hotspotRecoveryBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, opacity: hotspotRecoveryBusy ? 0.7 : 1 }}
-          >
-            {hotspotRecoveryBusy ? <Loader2 size={11} className="animate-spin" /> : <AlertTriangle size={11} />}
-            {hotspotRecoveryBusy ? "Disabling…" : "Disable Hotspot"}
-          </button>
           <button onClick={() => onEdit(router)}
             title="Edit credentials"
             style={{ padding: "6px 10px", borderRadius: 7, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", color: "var(--isp-accent)", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
@@ -744,6 +735,32 @@ function AdminRouterCard({
             {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
         </div>
+      </div>
+
+      <div style={{
+        padding: "11px 20px", borderTop: "1px solid rgba(248,113,113,0.14)",
+        borderBottom: expanded ? "1px solid rgba(255,255,255,0.06)" : "none",
+        background: "rgba(248,113,113,0.035)", display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <AlertTriangle size={13} style={{ color: "#f87171", flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: "#f87171" }}>WLAN recovery</p>
+            <p style={{ margin: "2px 0 0", fontSize: 10, color: "var(--isp-text-muted)" }}>
+              Repairs firewall, DNS, and NAT, then disables the generated Hotspot.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => onDisableHotspot(router.id)}
+          disabled={hotspotRecoveryBusy}
+          title="Repair the service network and restore normal WLAN web access"
+          style={{ padding: "7px 13px", borderRadius: 7, background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.32)", color: "#f87171", cursor: hotspotRecoveryBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 800, opacity: hotspotRecoveryBusy ? 0.7 : 1, flexShrink: 0 }}
+        >
+          {hotspotRecoveryBusy ? <Loader2 size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
+          {hotspotRecoveryBusy ? "Recovering…" : "Recover WLAN access"}
+        </button>
       </div>
 
       {expanded && (
