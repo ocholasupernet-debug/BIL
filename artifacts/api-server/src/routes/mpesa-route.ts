@@ -1325,9 +1325,10 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     router_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
+    data_limit_mb: number | null;
   }>(
     "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up&limit=1`,
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
   if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot") {
@@ -1360,6 +1361,10 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     res.status(409).json({ ok: false, error: "The hotspot plan has no valid access duration configured." });
     return;
   }
+  const dataLimitMb = Number(plan.data_limit_mb);
+  const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
+    ? String(Math.floor(dataLimitMb * 1_000_000))
+    : "0";
 
   const routers = await sbSelect<{
     id: number;
@@ -1446,6 +1451,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
          profile: hotspotProfile,
         disabled: false,
         comment: `OcholaSupernet paid ${checkoutId}`,
+        limitBytesTotal,
       });
     } catch {
       await addHotspotUser(credentials, {
@@ -1453,6 +1459,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         password: hotspotPassword,
          profile: hotspotProfile,
         comment: `OcholaSupernet paid ${checkoutId}`,
+        limitBytesTotal,
       });
     }
     await scheduleHotspotUserExpiry(credentials, {
@@ -1576,9 +1583,10 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     router_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
+    data_limit_mb: number | null;
   }>(
     "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up&limit=1`,
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
   if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot" || !plan.router_id) {
@@ -1621,6 +1629,10 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
 
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
   const hotspotProfile = `ochola-plan-${plan.id}`;
+  const dataLimitMb = Number(plan.data_limit_mb);
+  const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
+    ? String(Math.floor(dataLimitMb * 1_000_000))
+    : "0";
   try {
     await ensureHotspotUserProfile(credentials, {
       name: hotspotProfile,
@@ -1638,6 +1650,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         profile: hotspotProfile,
         disabled: false,
         comment: `OcholaSupernet SMS reconnect ${receipt}`,
+        limitBytesTotal,
       });
     } catch {
       await addHotspotUser(credentials, {
@@ -1645,6 +1658,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         password: customer.password,
         profile: hotspotProfile,
         comment: `OcholaSupernet SMS reconnect ${receipt}`,
+          limitBytesTotal,
       });
     }
     await scheduleHotspotUserExpiry(credentials, {

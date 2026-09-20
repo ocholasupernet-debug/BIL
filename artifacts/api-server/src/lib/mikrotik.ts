@@ -1665,6 +1665,29 @@ export async function addHotspotUser(
  * RouterOS hotspot users do not have a wall-clock expiry field, so use a
  * one-shot scheduler and disconnect an active session when it fires.
  */
+function hotspotExpirySchedulerName(name: string): string {
+  return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+export async function removeHotspotUserExpiry(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = hotspotExpirySchedulerName(name);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
 export async function scheduleHotspotUserExpiry(
   creds: RouterCredentials,
   opts: { name: string; expiresInSeconds: number },
@@ -1683,7 +1706,7 @@ export async function scheduleHotspotUserExpiry(
     if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
 
     const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
-    const schedulerName = `ochola-user-${opts.name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+    const schedulerName = hotspotExpirySchedulerName(opts.name);
     const expiryScript =
       `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
       `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
@@ -1705,6 +1728,180 @@ export async function scheduleHotspotUserExpiry(
     );
     await withTimeout(conn.write(schedulerCommand), ms);
   });
+}
+
+/**
+ * Reconcile one hotspot account after an admin changes its plan, expiry, or
+ * lifecycle status. RouterOS creates the bandwidth queue at login, so an
+ * existing active session must be removed after a profile change.
+ */
+export async function reconcileHotspotUserAccess(
+  creds: RouterCredentials,
+  opts: {
+    name: string;
+    password: string;
+    profile: string;
+    comment?: string;
+    expiresAt?: string | null;
+    enabled: boolean;
+    limitBytesTotal?: string;
+  },
+): Promise<void> {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+  const fields = {
+    password: opts.password,
+    profile: opts.profile,
+    disabled: !enabled,
+    ...(opts.comment !== undefined ? { comment: opts.comment } : {}),
+    ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
+  };
+
+  try {
+    await updateHotspotUser(creds, opts.name, fields);
+  } catch {
+    await addHotspotUser(creds, {
+      name: opts.name,
+      password: opts.password,
+      profile: opts.profile,
+      comment: opts.comment,
+      limitBytesTotal: opts.limitBytesTotal,
+    });
+    if (!enabled) await updateHotspotUser(creds, opts.name, { disabled: true });
+  }
+
+  if (!enabled) {
+    await disconnectHotspotActiveUser(creds, opts.name).catch(() => {});
+    await removeHotspotUserExpiry(creds, opts.name).catch(() => {});
+    return;
+  }
+
+  /* Force RouterOS to recreate the active queue with the current profile. */
+  await disconnectHotspotActiveUser(creds, opts.name);
+  if (Number.isFinite(expiryMs)) {
+    await scheduleHotspotUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    });
+  } else {
+    await removeHotspotUserExpiry(creds, opts.name);
+  }
+}
+
+function pppExpirySchedulerName(name: string): string {
+  return `ochola-ppp-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+export async function removePppUserExpiry(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = pppExpirySchedulerName(name);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+export async function schedulePppUserExpiry(
+  creds: RouterCredentials,
+  opts: { name: string; expiresInSeconds: number },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive PPP user duration is required.");
+    }
+    const clockRows = (await withTimeout(conn.write(["/system/clock/print"]), ms)) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The PPP router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = pppExpirySchedulerName(opts.name);
+    const expiryScript =
+      `:foreach id in=[/ppp active find where name="${opts.name}"] do={/ppp active remove $id}; ` +
+      `:foreach id in=[/ppp secret find where name="${opts.name}"] do={/ppp secret set $id disabled=yes}; ` +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const command = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    command.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet PPP user expiry",
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+
+export async function reconcilePppoeUserAccess(
+  creds: RouterCredentials,
+  opts: {
+    name: string;
+    password: string;
+    profile: string;
+    comment?: string;
+    expiresAt?: string | null;
+    enabled: boolean;
+    remoteAddress?: string | null;
+  },
+): Promise<void> {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+  const secrets = await fetchPPPSecrets(creds);
+  const existing = secrets.find(secret => secret.name === opts.name);
+  if (existing?.id) {
+    await updatePPPSecret(creds, existing.id, {
+      password: opts.password,
+      profile: opts.profile,
+      disabled: !enabled,
+      comment: opts.comment,
+      ...(opts.remoteAddress !== undefined && opts.remoteAddress !== null
+        ? { remoteAddress: opts.remoteAddress }
+        : {}),
+    });
+  } else {
+    await addPPPSecret(creds, {
+      name: opts.name,
+      password: opts.password,
+      profile: opts.profile,
+      service: "pppoe",
+      comment: opts.comment,
+      ...(opts.remoteAddress ? { remoteAddress: opts.remoteAddress } : {}),
+    });
+    if (!enabled) {
+      const created = (await fetchPPPSecrets(creds)).find(secret => secret.name === opts.name);
+      if (created?.id) await updatePPPSecret(creds, created.id, { disabled: true });
+    }
+  }
+
+  await disconnectPPPActiveByName(creds, opts.name).catch(() => {});
+  if (!enabled) {
+    await removePppUserExpiry(creds, opts.name).catch(() => {});
+  } else if (Number.isFinite(expiryMs)) {
+    await schedulePppUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    });
+  } else {
+    await removePppUserExpiry(creds, opts.name);
+  }
 }
 
 export async function removeHotspotUser(creds: RouterCredentials, name: string): Promise<void> {
@@ -1763,8 +1960,10 @@ export async function disconnectHotspotActiveUser(
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
-    const id = rows[0]?.[".id"];
-    if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = row[".id"];
+      if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+    }
   });
 }
 

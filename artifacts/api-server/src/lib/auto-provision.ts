@@ -21,6 +21,8 @@ import {
   addHotspotUser,
   updateHotspotUser,
   ensureHotspotUserProfile,
+  scheduleHotspotUserExpiry,
+  schedulePppUserExpiry,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
@@ -49,6 +51,7 @@ interface SbPlan {
   router_id: number | null;
   speed_down: number | null;
   speed_up: number | null;
+  data_limit_mb: number | null;
 }
 
 interface SbRouter {
@@ -284,7 +287,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up,data_limit_mb&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -327,6 +330,7 @@ export async function autoProvision(opts: {
   const username = customer.pppoe_username || customer.username || `user_${customer.id}`;
   const password = customer.password || "changeme";
   const comment  = `ISP Auto-provision — ${reference}`;
+  const expiresAt = calcExpiry(plan.validity_days);
   let action: "created" | "renewed" | "enabled" = "created";
 
   try {
@@ -346,27 +350,43 @@ export async function autoProvision(opts: {
           action = "renewed";
         }
       }
+      await schedulePppUserExpiry(creds, {
+        name: username,
+        expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+      });
     } else {
       /* Hotspot */
       const profile = `ochola-plan-${plan.id}`;
+      const dataLimitMb = Number(plan.data_limit_mb);
+      const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
+        ? String(Math.floor(dataLimitMb * 1_000_000))
+        : "0";
       await ensureHotspotUserProfile(creds, {
         name: profile,
         sharedUsers: 1,
         rateLimit: hotspotRateLimit(plan),
       });
       try {
-        await updateHotspotUser(creds, username, { disabled: false, profile, comment });
+        await updateHotspotUser(creds, username, {
+          disabled: false, profile, comment, limitBytesTotal,
+        });
         action = "enabled";
       } catch {
         try {
-          await addHotspotUser(creds, { name: username, password, profile, comment });
+          await addHotspotUser(creds, { name: username, password, profile, comment, limitBytesTotal });
           action = "created";
         } catch (e2) {
           logger.warn({ err: (e2 as Error).message }, "[provision] Hotspot add failed, trying update again");
-          await updateHotspotUser(creds, username, { disabled: false, profile });
+          await updateHotspotUser(creds, username, {
+            disabled: false, profile, limitBytesTotal,
+          });
           action = "renewed";
         }
       }
+      await scheduleHotspotUserExpiry(creds, {
+        name: username,
+        expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+      });
     }
 
     logger.info({ username, planType, action, router: router.name }, "[provision] Router account provisioned");

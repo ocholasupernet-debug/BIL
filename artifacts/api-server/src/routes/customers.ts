@@ -1,8 +1,183 @@
 import { Router, type IRouter } from "express";
 import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
+import {
+  reconcileHotspotUserAccess,
+  reconcilePppoeUserAccess,
+  disconnectHotspotActiveUser,
+  disconnectPPPActiveByName,
+  removeHotspotUser,
+  removePPPSecretByName,
+} from "../lib/mikrotik.js";
+import { syncRadiusCustomer } from "../lib/radius.js";
 
 const router: IRouter = Router();
+
+type CustomerRow = {
+  id: number;
+  admin_id: number;
+  name: string | null;
+  phone: string | null;
+  username: string | null;
+  pppoe_username: string | null;
+  password: string | null;
+  type: string | null;
+  plan_id: number | null;
+  router_id: number | null;
+  ip_address: string | null;
+  status: string;
+  expires_at: string | null;
+  fup_limit_mb: number | null;
+};
+
+type PlanRow = {
+  id: number;
+  name: string;
+  type: string | null;
+  plan_type: string | null;
+  router_id: number | null;
+  speed_down: number | null;
+  speed_up: number | null;
+  speed_down_unit: string | null;
+  speed_up_unit: string | null;
+  data_limit_mb: number | null;
+  shared_users: number | null;
+};
+
+type RouterRow = {
+  id: number;
+  name: string;
+  host: string | null;
+  bridge_ip: string | null;
+  vpn_ip: string | null;
+  router_username: string | null;
+  router_secret: string | null;
+};
+
+function asOptionalIso(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) throw new Error("expiryDate must be a valid date and time");
+  return parsed.toISOString();
+}
+
+function profileName(plan: PlanRow): string {
+  return `ochola-plan-${plan.id}`;
+}
+
+function routerCredentials(row: RouterRow) {
+  const host = row.vpn_ip?.trim() || row.host?.trim() || row.bridge_ip?.trim() || "";
+  if (!host) throw new Error(`Router '${row.name}' has no reachable management address`);
+  return {
+    host,
+    port: 8728,
+    username: row.router_username?.trim() || "admin",
+    password: row.router_secret || "",
+    useSSL: false,
+    bridgeIp: row.vpn_ip?.trim() || row.bridge_ip?.trim() || undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+}
+
+async function reconcileCustomerAccess(
+  current: CustomerRow,
+  updates: Record<string, unknown>,
+  adminId: number,
+): Promise<void> {
+  const currentName = current.pppoe_username || current.username || "";
+  const nextName = String(
+    updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? currentName,
+  ).trim();
+  const nextPassword = String(updates.password ?? current.password ?? "");
+  const nextType = String(updates.type ?? current.type ?? "hotspot").toLowerCase();
+  const nextPlanId = updates.plan_id !== undefined
+    ? (updates.plan_id === null || updates.plan_id === "" ? null : Number(updates.plan_id))
+    : current.plan_id;
+  const nextRouterId = updates.router_id !== undefined
+    ? (updates.router_id === null || updates.router_id === "" ? null : Number(updates.router_id))
+    : current.router_id;
+  const nextStatus = String(updates.status ?? current.status ?? "active").toLowerCase();
+  const nextExpiry = updates.expires_at !== undefined
+    ? (updates.expires_at as string | null)
+    : current.expires_at;
+  const plan = nextPlanId
+    ? (await sbSelect<PlanRow>(
+        "isp_plans",
+        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,plan_type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+      ))[0]
+    : undefined;
+  const planType = String(plan?.plan_type || plan?.type || nextType).toLowerCase();
+  const enabled = nextStatus === "active" &&
+    (!nextExpiry || (Number.isFinite(Date.parse(nextExpiry)) && Date.parse(nextExpiry) > Date.now()));
+
+  if (nextName && plan) {
+    const routerId = nextRouterId ?? plan.router_id;
+    if (routerId) {
+      const router = (await sbSelect<RouterRow>(
+        "isp_routers",
+        `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+      ))[0];
+      if (!router) throw new Error("The selected router was not found for this ISP account");
+      const creds = routerCredentials(router);
+      const dataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
+      const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
+        ? String(Math.floor(dataLimitMb * 1_000_000))
+        : "0";
+
+      if (currentName && currentName !== nextName) {
+        if (planType === "pppoe") {
+          await disconnectPPPActiveByName(creds, currentName).catch(() => {});
+          await removePPPSecretByName(creds, currentName).catch(() => {});
+        } else {
+          await disconnectHotspotActiveUser(creds, currentName).catch(() => {});
+          await removeHotspotUser(creds, currentName).catch(() => {});
+        }
+      }
+
+      if (planType === "pppoe") {
+        await reconcilePppoeUserAccess(creds, {
+          name: nextName,
+          password: nextPassword,
+          profile: plan.name,
+          comment: `OcholaSupernet admin sync — ${nextName}`,
+          expiresAt: nextExpiry,
+          enabled,
+          remoteAddress: String(updates.ip_address ?? current.ip_address ?? "").trim() || null,
+        });
+      } else if (planType === "hotspot") {
+        await reconcileHotspotUserAccess(creds, {
+          name: nextName,
+          password: nextPassword,
+          profile: profileName(plan),
+          comment: `OcholaSupernet admin sync — ${nextName}`,
+          expiresAt: nextExpiry,
+          enabled,
+          limitBytesTotal,
+        });
+      }
+    }
+  }
+
+  if (nextName && plan) {
+    await syncRadiusCustomer({
+      username: nextName,
+      password: nextPassword,
+      planId: plan.id,
+      planType: planType === "pppoe" ? "pppoe" : "hotspot",
+      enabled,
+      sharedUsers: plan.shared_users ?? 1,
+      fullname: String(updates.name ?? current.name ?? ""),
+      rateUp: plan.speed_up,
+      rateUpUnit: plan.speed_up_unit,
+      rateDown: plan.speed_down,
+      rateDownUnit: plan.speed_down_unit,
+      dataLimitMb: Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb),
+      expiresAt: nextExpiry,
+    });
+  }
+}
 
 /*
  * /api/customers — Supabase isp_customers proxy.
@@ -42,19 +217,65 @@ router.post("/customers", async (req, res): Promise<void> => {
 
 router.patch("/customers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
-  const { adminId = 1, ispId, name, phone, email, planId, type, ipAddress, status, expiryDate } = req.body;
+  const {
+    adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id,
+    type, ipAddress, ip_address, username, pppoe_username, status, expiryDate, expires_at,
+    password, fup_limit_mb,
+  } = req.body;
+  const effectiveAdminId = Number(adminId || ispId || 1);
+  if (!Number.isSafeInteger(effectiveAdminId) || effectiveAdminId < 1) {
+    res.status(400).json({ error: "A valid ISP account is required" });
+    return;
+  }
+  const current = (await sbSelect<CustomerRow>(
+    "isp_customers",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=*&limit=1`,
+  ))[0];
+  if (!current) { res.status(404).json({ error: "Customer not found" }); return; }
+
+  let normalizedExpiry: string | null | undefined;
+  try {
+    normalizedExpiry = asOptionalIso(expiryDate !== undefined ? expiryDate : expires_at);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid expiry date" });
+    return;
+  }
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name       !== undefined) updates.name       = name;
   if (phone      !== undefined) updates.phone      = phone;
   if (email      !== undefined) updates.email      = email;
-  if (planId     !== undefined) updates.plan_id    = planId;
+  if (planId !== undefined || plan_id !== undefined) updates.plan_id = planId ?? plan_id;
+  if (routerId !== undefined || router_id !== undefined) updates.router_id = routerId ?? router_id;
   if (type       !== undefined) updates.type       = type;
-  if (ipAddress  !== undefined) updates.ip_address = ipAddress;
+  if (ipAddress !== undefined || ip_address !== undefined) updates.ip_address = ipAddress ?? ip_address;
+  if (username   !== undefined) updates.username   = username;
+  if (pppoe_username !== undefined) updates.pppoe_username = pppoe_username;
+  if (password   !== undefined) updates.password   = password;
+  if (fup_limit_mb !== undefined) updates.fup_limit_mb = fup_limit_mb;
   if (status     !== undefined) updates.status     = status;
-  if (expiryDate !== undefined) updates.expires_at = new Date(expiryDate).toISOString();
-  const [row] = await sbUpdate<Record<string, unknown>>("isp_customers", `id=eq.${id}`, updates);
+  if (normalizedExpiry !== undefined) updates.expires_at = normalizedExpiry;
+  if (normalizedExpiry !== undefined && status === undefined) {
+    const expiryMs = normalizedExpiry ? Date.parse(normalizedExpiry) : NaN;
+    updates.status = Number.isFinite(expiryMs) && expiryMs <= Date.now() ? "expired" : "active";
+  }
+
+  try {
+    await reconcileCustomerAccess(current, updates, effectiveAdminId);
+  } catch (error) {
+    res.status(503).json({
+      error: `Router access was not updated, so the customer record was not changed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return;
+  }
+
+  const [row] = await sbUpdate<Record<string, unknown>>(
+    "isp_customers",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}`,
+    updates,
+  );
   if (!row) { res.status(404).json({ error: "Customer not found" }); return; }
-  const effectiveAdminId = adminId || ispId || 1;
   void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "updated", subject: String(updates.name ?? id), details: updates });
   res.json(row);
 });
