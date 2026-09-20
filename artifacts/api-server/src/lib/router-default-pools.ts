@@ -6,7 +6,7 @@ type DefaultPool = {
   range_end: string;
 };
 
-const DEFAULT_BRIDGE_IP = "192.168.88.1";
+const DEFAULT_BRIDGE_IP = "192.168.180.1";
 
 function bridgePrefix(bridgeIp: string | null | undefined): string {
   const raw = String(bridgeIp ?? "").trim().replace(/\/\d+$/, "");

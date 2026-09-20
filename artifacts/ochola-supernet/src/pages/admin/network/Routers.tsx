@@ -174,10 +174,17 @@ function liveUptime(
   return "—";
 }
 
-/* Router online check — trusts the status field written by the backend.
-   Ping / sweep endpoints are the source of truth; no stale-time penalty. */
+/* Router online check — requires a recent successful RouterOS API heartbeat.
+   A stale database status must not make the website claim the router is online. */
+const ROUTER_HEARTBEAT_MAX_AGE_MS = 15 * 60 * 1000;
+
 function isOnline(r: DbRouter) {
-  return r.status === "online" || r.status === "connected";
+  if (r.status !== "online" && r.status !== "connected") return false;
+  if (!r.last_seen) return false;
+  const lastSeen = Date.parse(r.last_seen);
+  return Number.isFinite(lastSeen)
+    && lastSeen <= Date.now()
+    && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
 /* Alias — same logic as isOnline; kept for places that use currOnline */
@@ -1457,14 +1464,14 @@ export default function Routers() {
         <Modal title={`Edit Router — ${editRouter.name}`} onClose={() => setEditRouter(null)}>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
             <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.07)", border: "1px solid rgba(56,189,248,0.2)", color: "#7dd3fc", fontSize: "0.72rem", lineHeight: 1.5 }}>
-              <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and set its <em>Router Management VPN IP</em>. Use the assigned <strong>10.8.5.x</strong> address; the <em>Hotspot/LAN Gateway</em> such as 192.168.88.1 is not a tunnel address.
+              <strong>VPN setup:</strong> If your router has no public IP (common in Kenya), leave <em>WAN IP</em> empty and set its <em>Router Management VPN IP</em>. Use the assigned <strong>10.8.5.x</strong> address; the <em>Hotspot/LAN Gateway</em> such as 192.168.180.1 is not a tunnel address.
             </div>
             {(["name", "host", "vpn_ip", "bridge_ip", "proxy_ip", "bridge_interface", "router_username", "router_secret", "coordinates", "coverage"] as const).map((field) => {
               const labels: Record<string, string> = {
                 name:             "Router Name",
                 host:             "WAN / Public IP (optional — leave empty if no public IP)",
                 vpn_ip:           "Router Management VPN IP (10.8.5.x) — TCP 1196",
-                bridge_ip:        "Hotspot/LAN Gateway (for example 192.168.88.1)",
+                bridge_ip:        "Hotspot/LAN Gateway (for example 192.168.180.1)",
                 proxy_ip:         "Proxy VPN IP (10.9.0.x) — Backup connection via OcholaSuper-Proxy",
                 bridge_interface: "Hotspot Bridge Interface",
                 router_username:  "API Username",
@@ -1476,7 +1483,7 @@ export default function Routers() {
                 name:             "e.g. come1",
                 host:             "e.g. 41.80.123.45 — public WAN IP if available",
                 vpn_ip:           "e.g. 10.8.5.42 — assigned by router-management OpenVPN",
-                bridge_ip:        "e.g. 192.168.88.1 — local hotspot gateway",
+                bridge_ip:        "e.g. 192.168.180.1 — local hotspot gateway",
                 proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
                 bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",

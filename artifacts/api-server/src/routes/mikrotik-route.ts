@@ -23,6 +23,7 @@ import {
   generateNetworkSetupScript,
   generateServiceSetupScript,
   disableGeneratedHotspot,
+  reconcileGeneratedServiceConfiguration,
   repairGeneratedServiceNetworking,
   fetchRouterFiles,
   runRouterCommand,
@@ -544,18 +545,23 @@ router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, 
   if (!found) { res.status(404).json({ error: "Router not found or not assigned to this administrator" }); return; }
 
   try {
+    const service = await reconcileGeneratedServiceConfiguration(found.creds, id);
     const networking = await repairGeneratedServiceNetworking(found.creds, id);
     const result = await disableGeneratedHotspot(found.creds, id);
     logger.warn({ routerId: id, adminId, hotspotName: result.name }, "Generated Hotspot disabled through recovery action");
+    const egressDescription = networking.egressInterface
+      ? ` Outbound policy uses ${networking.egressInterface}.`
+      : " No WAN interface or active default-route egress was found, so forwarding/NAT may still need the router's WAN interface configured.";
     res.json({
       ok: true,
       routerId: id,
       routerName: found.row.name,
+      service,
       networking,
       ...result,
-      message: result.alreadyDisabled
+      message: `${result.alreadyDisabled
         ? `Network policy repaired and the generated Hotspot server "${result.name}" was already disabled.`
-        : `Network policy repaired and the generated Hotspot server "${result.name}" is now disabled.`,
+        : `Network policy repaired and the generated Hotspot server "${result.name}" is now disabled.`}${egressDescription}`,
     });
   } catch (err) {
     routerErrorResponse(res, err);
@@ -1596,7 +1602,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
  *   vpnUsername   — VPN user (default "router-<id>")
  *   VPN credentials are derived from the router's stored install secret.
  *   routeAll      — "true" to route ALL traffic through VPN (default: split)
- *   lanNetwork    — LAN to route through tunnel (default "192.168.88.0/24")
+ *   lanNetwork    — LAN to route through tunnel (default "192.168.180.0/22")
  */
 router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
@@ -1624,7 +1630,7 @@ router.get("/router/:id/ovpn-client", async (req, res): Promise<void> => {
     vpnPort:        req.query.vpnPort     ? parseInt(String(req.query.vpnPort),     10) : 1194,
     vpnUsername,
     vpnPassword,
-    lanNetwork:     String(req.query.lanNetwork   ?? "192.168.88.0/24"),
+    lanNetwork:     String(req.query.lanNetwork   ?? "192.168.180.0/22"),
     routeAll:       req.query.routeAll === "true",
   });
 

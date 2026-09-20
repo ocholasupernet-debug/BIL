@@ -18,7 +18,7 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /servicessetup\.rsc/);
   assert.match(script, /co-hotspot-bridge-104/);
   assert.match(script, /interface bridge port add/);
-  assert.match(script, /192\.168\.88\.1\/24/);
+  assert.match(script, /192\.168\.180\.1\/22/);
   assert.match(script, /ip dhcp-server add/);
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="co-hotspot-bridge-104" address-pool="ochola-services-104-hotspot-pool" disabled=no\n/);
   assert.doesNotMatch(script, /ip dhcp-server (?:add|set)[^\n]*comment=/);
@@ -30,7 +30,7 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.doesNotMatch(script, /ip hotspot (?:add|set)[^\n]*comment=/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
   assert.match(script, /interface pppoe-server server add/);
-  assert.match(script, /192\.168\.99\.10-192\.168\.99\.254/);
+  assert.match(script, /192\.168\.180\.10-192\.168\.183\.254/);
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
   assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN/);
   assert.match(script, /ip dns set allow-remote-requests=yes/);
@@ -64,4 +64,12 @@ test("service setup rejects unsafe bridge names and preserves foreign bridge por
   });
   assert.match(script, /already assigned to foreign bridge/);
   assert.doesNotMatch(script, /bridge port remove/);
+});
+
+test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway", () => {
+  const script = generateServiceSetupScript({ routerId: 104, bridgeName: "hotspot-bridge" });
+  assert.match(script, /ip address add address="192\.168\.180\.1\/22" interface="hotspot-bridge"/);
+  assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="hotspot-bridge"/);
+  assert.match(script, /pppoe-server server add service-name="ochola-services-104-pppoe" interface="hotspot-bridge"/);
+  assert.match(script, /ip hotspot add name="ochola-services-104-hotspot" interface="hotspot-bridge"/);
 });
