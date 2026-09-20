@@ -883,6 +883,13 @@ function sendStk(){
                });
              }
 
+           })
+          .catch(function(){});
+        if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
+      },5000);
+    });
+}
+
  function closeTvModal(){
    document.getElementById("tvModal").style.display="none";
    tvError=""; tvDevicesLoading=false;
@@ -961,12 +968,6 @@ function sendStk(){
    renderModal();
    document.getElementById("stkModal").style.display="flex";
  }
-           })
-          .catch(function(){});
-        if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
-      },5000);
-    });
-}
 
 /* Captive-browser-safe plan activation. Some RouterOS/WebView clients
    ignore inline onclick handlers even when the page itself loads normally. */

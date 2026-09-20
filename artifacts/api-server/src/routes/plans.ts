@@ -90,8 +90,10 @@ router.get("/plans", async (req, res): Promise<void> => {
   }
 
   const requestedType = typeof req.query.type === "string" ? req.query.type : "";
-  const typeFilter = requestedType === "hotspot" || requestedType === "pppoe"
-    ? `&type=eq.${requestedType}`
+  const typeFilter = requestedType === "hotspot"
+    ? "&type=in.(hotspot,trials,trial)"
+    : requestedType === "pppoe"
+      ? "&type=eq.pppoe"
     : "";
   const requestedRouterId = parseOptionalId(req.query.routerId);
   const requestedPortId = parseOptionalId(req.query.portId);
