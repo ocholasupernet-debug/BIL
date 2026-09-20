@@ -92,6 +92,10 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     res.status(403).json({ error: "Account has expired. Please renew your plan." });
     return;
   }
+  if (customer.expires_at && Date.parse(String(customer.expires_at)) <= Date.now()) {
+    res.status(403).json({ error: "Account has expired. Please renew your plan." });
+    return;
+  }
   // Return customer without exposing password
   const { password: _pw, ...safe } = customer;
   res.json({ ok: true, customer: safe });

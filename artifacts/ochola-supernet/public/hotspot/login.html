@@ -344,6 +344,14 @@
   </div>
 </section>
 
+<!-- Detected device identity -->
+<div id="portalDeviceMac" style="max-width:1200px;margin:0 auto;padding:0 1.25rem 1.25rem;text-align:center">
+  <div style="display:inline-flex;align-items:center;gap:.45rem;padding:.55rem .8rem;border-radius:.6rem;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.45);font-size:.75rem">
+    <span>Your MAC address:</span>
+    <strong id="portalDeviceMacValue" style="color:rgba(255,255,255,.78);font-family:monospace;font-weight:700">Detecting…</strong>
+  </div>
+</div>
+
 <!-- Footer -->
 <footer style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.25)">
   <div style="display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:.875rem">
@@ -409,7 +417,7 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
- var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, MPESA_PROMPT_ENABLED=true;
+ var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
 var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
@@ -698,9 +706,6 @@ function renderModal(){
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
-      '<div style="border-radius:.625rem;padding:.75rem 1rem;margin-bottom:1.25rem;background:'+(DEVICE_MAC?'rgba(16,185,129,.08)':'rgba(245,158,11,.08)')+';border:1px solid '+(DEVICE_MAC?'rgba(16,185,129,.22)':'rgba(245,158,11,.22)')+';color:'+(DEVICE_MAC?'#a7f3d0':'#fde68a')+';font-size:.75rem;line-height:1.5">'+
-      (DEVICE_MAC?'This device was detected automatically: <strong>'+DEVICE_MAC+'</strong>':(DEVICE_IP?'Your router will identify this device from its assigned Wi-Fi address.':'Open this page from the Wi-Fi sign-in prompt so the router can identify this device.'))+
-      '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
       '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
@@ -720,7 +725,16 @@ function renderModal(){
       '</div></div>'+
       '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">Sending STK Push…</p>'+
       '<p style="color:rgba(255,255,255,.45);font-size:.875rem">Contacting M-Pesa, please wait</p></div>';
-  }else if(stkState==="sent"){
+   }else if(stkState==="provisioning"){
+     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
+       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
+       pingRings("#34d399")+
+       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
+       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#34d399,#059669);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(16,185,129,.4)">'+PHONE_SVG+'</div>'+
+       '</div></div>'+
+       '<p style="font-size:1rem;font-weight:700;color:#6ee7b7;margin-bottom:.5rem">Assigning your hotspot credentials…</p>'+
+       '<p style="color:rgba(255,255,255,.45);font-size:.875rem">Payment is confirmed. Updating your sign-in account</p></div>';
+   }else if(stkState==="sent"){
     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
       pingRings("#f59e0b")+
@@ -730,22 +744,77 @@ function renderModal(){
       '<p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">STK Push Sent!</p>'+
       '<p style="color:rgba(255,255,255,.5);font-size:.8375rem;margin-bottom:.75rem">Check your phone and enter your M-Pesa PIN to complete payment</p>'+
       '<p style="color:rgba(255,255,255,.3);font-size:.75rem" id="pollCounter">Verifying payment… (0/12)</p></div>';
-  }else if(stkState==="error"){
+   }else if(stkState==="access_error"){
+     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
+       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(245,158,11,.12);border:2px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
+       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#fbbf24" stroke-width="2"><circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 8v4m0 4h.01"/></svg></div>'+
+       '<p style="font-size:1.0625rem;font-weight:800;color:#fbbf24;margin-bottom:.5rem">Payment Confirmed</p>'+
+       '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:.75rem">Your payment was received, but the hotspot account is still being updated.</p>'+
+       '<p style="color:#fca5a5;font-size:.8125rem;margin-bottom:1.5rem">'+(stkError||"Please retry the account setup.")+'</p>'+
+       '<button onclick="retryPaidHotspotAccess()" class="btn btn-green btn-full">Retry Account Setup</button></div>';
+   }else if(stkState==="error"){
     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(239,68,68,.12);border:2px solid rgba(239,68,68,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#f87171" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></div>'+
-      '<p style="font-size:1.0625rem;font-weight:800;color:#f87171;margin-bottom:.5rem">Payment Failed</p>'+
+       '<p style="font-size:1.0625rem;font-weight:800;color:#f87171;margin-bottom:.5rem">Payment Failed</p>'+
        '<p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.5rem">'+(stkError||"Something went wrong. Please try again.")+'</p>'+
       '<button onclick="stkState=\'idle\';renderModal()" class="btn btn-purple btn-full">Try Again</button></div>';
-  }else if(stkState==="confirmed"){
+   }else if(stkState==="confirmed"){
+     var credentialBlock=hotspotCredentials?
+       '<div style="display:grid;gap:.5rem;text-align:left;margin:0 auto 1.25rem;max-width:300px">'+
+       '<div style="padding:.625rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.05)"><div style="font-size:.625rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.08em">Username</div><strong style="color:white;font-size:.875rem">'+escapePortalText(hotspotCredentials.username)+'</strong></div>'+
+       '<div style="padding:.625rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.05)"><div style="font-size:.625rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.08em">Password</div><strong style="color:white;font-size:.875rem">'+escapePortalText(hotspotCredentials.password)+'</strong></div></div>':'';
     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(74,222,128,.12);border:2px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'+
-      '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Received!</p>'+
-      '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1.5rem">Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. Scroll up to log in.</p>'+
+       '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Received!</p>'+
+       '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.</p>'+
+       credentialBlock+
       '<button onclick="closeModal();scrollToLogin()" class="btn btn-green btn-full">Go to Login →</button></div>';
   }
 }
+
+ function escapePortalText(value){
+   return String(value||"").replace(/[&<>"']/g,function(ch){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch];});
+ }
+ function applyPaidHotspotCredentials(credentials){
+   if(!credentials||!credentials.username||!credentials.password)return false;
+   hotspotCredentials={username:String(credentials.username),password:String(credentials.password)};
+   var user=document.getElementById("loginUser");
+   var pass=document.getElementById("loginPass");
+   if(user)user.value=hotspotCredentials.username;
+   if(pass)pass.value=hotspotCredentials.password;
+   return true;
+ }
+ function assignPaidHotspotAccess(checkoutId){
+   return fetch(apiUrl("/api/mpesa/hotspot-mac-access"),{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+       checkout_id:checkoutId,
+       adminId:PORTAL_ADMIN_ID,
+       ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+     })
+   }).then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
+     .then(function(result){
+       var data=result.data||{};
+       if(!result.ok||!data.ok||!applyPaidHotspotCredentials(data.credentials)){
+         throw new Error(data.error||"Payment was confirmed, but the hotspot account could not be updated.");
+       }
+       return data;
+     });
+ }
+ function retryPaidHotspotAccess(){
+   if(!paidCheckoutId)return;
+   stkError=""; stkState="provisioning"; renderModal();
+   assignPaidHotspotAccess(paidCheckoutId).then(function(){
+     stkState="confirmed"; renderModal();
+   }).catch(function(error){
+     stkError=error&&error.message?error.message:"The hotspot account could not be updated yet.";
+     stkState="access_error"; renderModal();
+   });
+ }
 
 function sendStk(){
   if(!MPESA_PROMPT_ENABLED)return;
@@ -775,14 +844,26 @@ function sendStk(){
       if(!result)return;
       var data=result.data||{};
       if(!result.ok||data.error){stkError=data.error||"Failed to send the M-Pesa prompt.";stkState="error";renderModal();return;}
-      stkState="sent"; renderModal(); pollCount=0;
+       paidCheckoutId=data.CheckoutRequestID||"";
+       stkState="sent"; renderModal(); pollCount=0;
       pollTimer=setInterval(function(){
         pollCount++;
         var el=document.getElementById("pollCounter");
         if(el)el.textContent="Verifying payment… ("+pollCount+"/12)";
         fetch(apiUrl("/api/mpesa/status?checkout_id="+encodeURIComponent(data.CheckoutRequestID||"")))
           .then(function(r){return r.ok?r.json():{};})
-          .then(function(s){if(s.paid){clearInterval(pollTimer);stkState="confirmed";renderModal();}})
+           .then(function(s){
+             if(s.paid){
+               clearInterval(pollTimer);
+               stkState="provisioning"; renderModal();
+               assignPaidHotspotAccess(paidCheckoutId).then(function(){
+                 stkState="confirmed"; renderModal();
+               }).catch(function(error){
+                 stkError=error&&error.message?error.message:"The hotspot account could not be updated yet.";
+                 stkState="access_error"; renderModal();
+               });
+             }
+           })
           .catch(function(){});
         if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
       },5000);
@@ -806,6 +887,19 @@ window.sendStk=sendStk;
 
 function scrollToLogin(){document.getElementById("loginSection").scrollIntoView({behavior:"smooth"});}
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
+function applyCredentialsFromHash(){
+  var hash=(window.location.hash||"").replace(/^#/,"");
+  if(!hash)return;
+  try{
+    var params=new URLSearchParams(hash);
+    if(applyPaidHotspotCredentials({
+      username:params.get("hotspot_username")||"",
+      password:params.get("hotspot_password")||""
+    })){
+      if(window.history&&window.history.replaceState)window.history.replaceState(null,"",window.location.pathname+window.location.search);
+    }
+  }catch(e){}
+}
 
 /* ── MikroTik login with MD5 hashing ── */
 function doLogin(form){
@@ -848,6 +942,10 @@ function submitMpesa(){
 }
 
 function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display=window.innerWidth>=640?"block":"none";}
+function renderPortalDeviceMac(){
+  var value=document.getElementById("portalDeviceMacValue");
+  if(value)value.textContent=DEVICE_MAC||"Resolved by router";
+}
 window.addEventListener("resize",checkWidth); checkWidth();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
@@ -855,6 +953,8 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
 loadPlans();
 bindPlanButtons();
 loadPortalTypography(loadPlans);
+renderPortalDeviceMac();
+applyCredentialsFromHash();
 </script>
 </body>
 </html>

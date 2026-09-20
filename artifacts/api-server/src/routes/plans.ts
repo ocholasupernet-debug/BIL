@@ -7,7 +7,9 @@ const router: IRouter = Router();
 
 /*
  * /api/plans — Supabase isp_plans proxy.
- * Query param: adminId or ispId → filters by admin_id
+ * Query param: adminId or ispId → filters by admin_id.
+ * Customer-facing callers can pass activeOnly=true and purchasableOnly=true
+ * to receive only packages that are currently available for purchase.
  */
 
 router.get("/plans", async (req, res): Promise<void> => {
@@ -28,8 +30,14 @@ router.get("/plans", async (req, res): Promise<void> => {
   const typeFilter = requestedType === "hotspot" || requestedType === "pppoe"
     ? `&type=eq.${requestedType}`
     : "";
+  const activeOnly = req.query.activeOnly === "true";
+  const purchasableOnly = req.query.purchasableOnly === "true";
+  const availabilityFilters = [
+    activeOnly ? "is_active=is.true" : "",
+    purchasableOnly ? "client_can_purchase=is.true" : "",
+  ].filter(Boolean).map(filter => `&${filter}`).join("");
   const rows = adminId
-    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}&select=*&order=price.asc`)
+    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
     : [];
   res.json(rows);
 });
@@ -51,6 +59,7 @@ router.post("/plans", async (req, res): Promise<void> => {
     routerId,
     dataLimitMb,
     isActive,
+    clientCanPurchase,
   } = req.body;
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
@@ -71,6 +80,7 @@ router.post("/plans", async (req, res): Promise<void> => {
     router_id:     routerId ?? null,
     data_limit_mb: dataLimitMb ?? null,
     is_active:     isActive ?? true,
+    client_can_purchase: clientCanPurchase ?? true,
     description:  description ?? null,
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }

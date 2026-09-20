@@ -513,7 +513,7 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice(`Step ${step.order} is ready. Its terminal output will show completed, failed, and pending steps; completed steps are skipped on retry.`);
+       setNotice(`Step ${step.order} is ready. Run it in the MikroTik terminal before moving to the next step.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -532,7 +532,7 @@ export default function SelfInstall() {
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
       setCopiedStep(step.id);
-       setNotice(`Step ${step.order} was copied. The terminal output will identify completed and failed steps, and completed steps will be skipped on retry.`);
+       setNotice(`Step ${step.order} was copied. Run it in the MikroTik terminal, wait for it to complete, then continue.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -708,7 +708,7 @@ export default function SelfInstall() {
                      <TerminalSquare size={14} style={{ color: "var(--isp-accent)" }} /> Generate the management VPN command
                  </div>
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                          Self Install is ordered into independent router-terminal steps. Every command prints the current status of all three steps, preserves failed files for diagnosis, and skips steps already marked complete on retry. Run <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, then <strong style={{ color: "var(--isp-text)" }}>Step 2</strong> and <strong style={{ color: "var(--isp-text)" }}>Step 3</strong>.
+                          Self Install is deliberately ordered into independent router-terminal steps. Run <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, wait for it to finish, then run <strong style={{ color: "var(--isp-text)" }}>Step 2</strong> and <strong style={{ color: "var(--isp-text)" }}>Step 3</strong>. Nothing imports the files automatically as one combined configuration.
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button

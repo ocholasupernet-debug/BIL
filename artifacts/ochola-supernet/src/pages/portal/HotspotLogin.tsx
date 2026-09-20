@@ -13,6 +13,10 @@ interface Plan {
   speed_down: number; speed_up: number;
   description: string | null; plan_type?: string; type?: string;
 }
+interface HotspotCredentials {
+  username: string;
+  password: string;
+}
 type Tab = "plans" | "tv" | "login" | "voucher";
 const DEFAULT_PORTAL_ADMIN_ID = 5;
 
@@ -124,6 +128,7 @@ export default function HotspotLogin() {
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [accessReady, setAccessReady] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
+  const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
   const bindingInFlight = useRef(false);
   const [mpesaStatus, setMpesaStatus] = useState<{
     configured: boolean;
@@ -137,12 +142,11 @@ export default function HotspotLogin() {
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
-          fetch(`/api/plans?adminId=${adminId}`),
+          fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true`),
           fetch(`/api/settings/mpesa?adminId=${adminId}`).catch(() => null),
         ]);
         const plansData: Plan[] = await plansRes.json();
-        const hs = plansData.filter(p => !p.type || p.type === "hotspot" || p.plan_type === "hotspot");
-        setPlans(hs.length > 0 ? hs : plansData);
+        setPlans(plansData);
 
         if (mpesaRes?.ok) {
           const mpesaData = await mpesaRes.json();
@@ -186,13 +190,20 @@ export default function HotspotLogin() {
               mac_address: deviceMacAddress,
             }),
           });
-          const accessData = await accessResponse.json() as { ok?: boolean; error?: string };
-          if (accessResponse.ok && accessData.ok) {
+          const accessData = await accessResponse.json() as {
+            ok?: boolean;
+            error?: string;
+            credentials?: HotspotCredentials;
+          };
+          if (accessResponse.ok && accessData.ok && accessData.credentials?.username && accessData.credentials.password) {
+            setHotspotCredentials(accessData.credentials);
+            setLoginUsername(accessData.credentials.username);
+            setLoginPassword(accessData.credentials.password);
             setAccessReady(true);
             setPaymentConfirmed(true);
             clearInterval(interval);
           } else {
-            setPayError(accessData.error || "Payment confirmed, but the device could not be connected yet.");
+            setPayError(accessData.error || "Payment confirmed, but hotspot credentials could not be assigned yet.");
             bindingInFlight.current = false;
           }
         } else if (data.status === "failed") {
@@ -207,17 +218,28 @@ export default function HotspotLogin() {
 
   useEffect(() => {
     if (!accessReady) return;
-    const destination = portalContext.linkOrig || portalContext.linkLogin;
-    if (!/^https?:\/\//i.test(destination)) return;
-    const redirectTimer = window.setTimeout(() => window.location.assign(destination), 1200);
+    const destination = portalContext.linkLogin || portalContext.linkOrig;
+    if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
+      setActiveTab("login");
+      return;
+    }
+    const destinationWithoutHash = destination.split("#", 1)[0];
+    const credentialHash = new URLSearchParams({
+      hotspot_username: hotspotCredentials.username,
+      hotspot_password: hotspotCredentials.password,
+    }).toString();
+    const redirectTimer = window.setTimeout(
+      () => window.location.assign(`${destinationWithoutHash}#${credentialHash}`),
+      1200,
+    );
     return () => window.clearTimeout(redirectTimer);
-  }, [accessReady]);
+  }, [accessReady, hotspotCredentials]);
 
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan || !phone.trim()) return;
     const macAddress = normalizeMacAddress(deviceMacAddress);
-    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setPollTimedOut(false);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setHotspotCredentials(null); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
       const intentResponse = await fetch("/api/mpesa/intent", {
@@ -818,7 +840,19 @@ export default function HotspotLogin() {
                         </div>
                           <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : "Payment Confirmed"}</h3>
                          <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? "Your device has been authorized by the hotspot." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          {hotspotCredentials && (
+                            <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
+                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
+                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Username</div>
+                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.username}</strong>
+                              </div>
+                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
+                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Password</div>
+                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.password}</strong>
+                              </div>
+                            </div>
+                          )}
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
                             {accessReady ? "Connected" : "Payment received"}
@@ -986,21 +1020,6 @@ export default function HotspotLogin() {
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
-                                      <div className="hp-device-card">
-                                        <div className="hp-device-icon"><Wifi size={16} /></div>
-                                        <div className="hp-device-copy">
-                                          <span className="hp-device-kicker">This device</span>
-                                          <strong>{deviceMacAddress || "Identified by router"}</strong>
-                                          <small>{portalContext.ip ? `Router IP ${portalContext.ip} · MAC resolved server-side` : "MikroTik will resolve this device securely"}</small>
-                                        </div>
-                                        {deviceMacAddress && <span className="hp-device-state"><CheckCircle2 size={12} /> Detected</span>}
-                                      </div>
-                                      {!deviceMacAddress && (
-                                        <div className="hp-error" role="alert">
-                                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                          Your router will identify this device from its assigned Wi-Fi address. Keep this page open while you pay.
-                                        </div>
-                                      )}
                                       <div className="hp-input-group">
                                         <div className="hp-input-wrap">
                                           <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
@@ -1218,6 +1237,14 @@ export default function HotspotLogin() {
             </div>
           )}
 
+          <div style={{ padding: "0 0 16px", textAlign: "center" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 8, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
+              Your MAC address:
+              <strong style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
+                {deviceMacAddress || "Resolved by router"}
+              </strong>
+            </span>
+          </div>
           <div className="hp-footer">
             {new Date().getFullYear()} {brand.ispName} &middot; {brand.domain}
           </div>

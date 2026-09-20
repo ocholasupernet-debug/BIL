@@ -279,7 +279,7 @@ export async function buildPortalHtml(settings: HSettings, domain: string): Prom
   const apiBase = await resolvePortalApiBase(domain);
   let plans: PortalPlan[] = [];
   try {
-    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot`, {
+    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot&activeOnly=true&purchasableOnly=true`, {
       cache: "no-store",
     });
     if (plansResponse.ok) {

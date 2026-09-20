@@ -11,13 +11,20 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
-import { sbDelete, sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
-import { addHotspotIpBinding, resolveHotspotClientMac, type RouterCredentials } from "../lib/mikrotik.js";
+import {
+  addHotspotIpBinding,
+  addHotspotUser,
+  resolveHotspotClientMac,
+  scheduleHotspotUserExpiry,
+  updateHotspotUser,
+  type RouterCredentials,
+} from "../lib/mikrotik.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
@@ -1266,6 +1273,55 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
 
   const credentials = hotspotRouterCredentials(routerRow);
+  const paymentPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
+  if (!/^254\d{9}$/.test(paymentPhone)) {
+    res.status(409).json({ ok: false, error: "The paid checkout has no valid Kenyan purchase phone number." });
+    return;
+  }
+
+  /*
+   * A paid hotspot account is one database customer plus one RouterOS user.
+   * Reuse a still-active generated account for a renewal, otherwise create a
+   * phone-based username with the Nairobi purchase time suffix requested by
+   * the portal (for example 254791941974-4:43).
+   */
+  const existingCustomers = await sbSelect<{
+    id: number;
+    username: string | null;
+    password: string | null;
+    status: string;
+    expires_at: string | null;
+  }>(
+    "isp_customers",
+    `admin_id=eq.${adminId}&type=eq.hotspot&phone=eq.${encodeURIComponent(paymentPhone)}&select=id,username,password,status,expires_at&order=id.desc&limit=20`,
+  );
+  const now = Date.now();
+  const generatedPrefix = `${paymentPhone}-`;
+  const reusableCustomer = existingCustomers.find((customer) => {
+    const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
+    return customer.status === "active" &&
+      Number.isFinite(expiresAt) &&
+      expiresAt > now &&
+      typeof customer.username === "string" &&
+      customer.username.startsWith(generatedPrefix);
+  });
+
+  const purchaseTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const purchaseHour = Number(purchaseTime.find(part => part.type === "hour")?.value ?? 0);
+  const purchaseMinute = purchaseTime.find(part => part.type === "minute")?.value ?? "00";
+  let hotspotUsername = reusableCustomer?.username ?? `${paymentPhone}-${purchaseHour}:${purchaseMinute}`;
+  if (!reusableCustomer && existingCustomers.some(customer => customer.username === hotspotUsername)) {
+    hotspotUsername = `${hotspotUsername}-${transaction.id}`;
+  }
+  const hotspotPassword = "12345";
+  const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
+  const expiryBase = reusableCustomer && Number.isFinite(existingExpiry) ? Math.max(now, existingExpiry) : now;
+  const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
 
   try {
     await addHotspotIpBinding(credentials, {
@@ -1273,10 +1329,58 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       comment: `OcholaSupernet paid ${checkoutId}`,
       expiresInSeconds,
     });
-    await sbUpdate("isp_transactions", `id=eq.${transaction.id}`, {
-      notes: `M-Pesa payment verified; MAC hotspot access granted on ${routerRow.name}.`,
+    try {
+      await updateHotspotUser(credentials, hotspotUsername, {
+        password: hotspotPassword,
+        profile: plan.name,
+        disabled: false,
+        comment: `OcholaSupernet paid ${checkoutId}`,
+      });
+    } catch {
+      await addHotspotUser(credentials, {
+        name: hotspotUsername,
+        password: hotspotPassword,
+        profile: plan.name,
+        comment: `OcholaSupernet paid ${checkoutId}`,
+      });
+    }
+    await scheduleHotspotUserExpiry(credentials, {
+      name: hotspotUsername,
+      expiresInSeconds: Math.max(1, Math.ceil((expiresAt.getTime() - now) / 1000)),
     });
-    res.json({ ok: true, access: "mac-bypassed", router: routerRow.name, mac_address: mac });
+
+    const customerFields = {
+      admin_id: adminId,
+      name: `Hotspot ${paymentPhone}`,
+      phone: paymentPhone,
+      username: hotspotUsername,
+      password: hotspotPassword,
+      plan_id: plan.id,
+      type: "hotspot",
+      mac_address: mac,
+      status: "active",
+      expires_at: expiresAt.toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+     const customerRows = reusableCustomer
+       ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
+       : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
+    const customer = customerRows[0] as { id?: number } | undefined;
+    if (!customer) throw new Error("The paid hotspot customer account could not be saved.");
+
+     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
+      customer_id: customer.id,
+      plan_id: plan.id,
+      notes: `M-Pesa payment verified; hotspot credentials assigned and MAC access granted on ${routerRow.name}.`,
+    });
+    res.json({
+      ok: true,
+      access: "mac-bypassed",
+      router: routerRow.name,
+      mac_address: mac,
+      credentials: { username: hotspotUsername, password: hotspotPassword },
+      expires_at: expiresAt.toISOString(),
+    });
   } catch (error) {
     logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] binding failed");
     res.status(503).json({ ok: false, error: "Payment is confirmed, but the hotspot router could not be updated. Please retry connection." });

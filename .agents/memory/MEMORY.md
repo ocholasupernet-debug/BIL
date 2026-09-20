@@ -9,6 +9,7 @@
 - [Tenant-scoped admin APIs](tenant-scoped-admin-apis.md) — Most APIs remain tenant-scoped; migration is an intentional authenticated-global exception.
 - [Migration UI safety flow](migration-ui-safety-flow.md) — Keep tenant scope, two-script order, distinct export review, and the explicit write boundary visible.
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
+- [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
@@ -41,9 +42,11 @@
 - [Router installer stale files](router-installer-stale-files.md) — Verify the dynamic installer revision and no-store response before treating repeated RouterOS output as current.
 - [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
 - [Router hotspot walled garden](router-hotspot-walled-garden.md) — Allow the tenant portal hostname before login and ignore default hotspot profiles with a 0.0.0.0 gateway.
+- [Hotspot service forwarding](hotspot-service-forwarding.md) — Service masquerade alone is insufficient; explicitly allow bridge forwarding and router DNS while protecting WAN DNS.
 - [Legacy proxy VPN provisioning](legacy-proxy-vpn-provisioning.md) — The legacy proxy VPN is separate from the 1196/1197 management instances and must be provisioned explicitly.
 - [Router script URL normalization](router-script-url-normalization.md) — Normalize complete URLs before replacement; host/path suffix replacement can otherwise emit `https://https://`.
 - [Production readiness audit](production-readiness-audit.md) — Healthy API/deploy status does not prove tenant TLS, OpenVPN, or RouterOS connectivity.
+- [Router online signal](router-online-signal.md) — Only a recent authenticated RouterOS API heartbeat may make the website show a router online.
 - [Installer result contract](installer-result-contract.md) — Derive aggregate status from verification gates and persist the final callback fields as one validated result.
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
