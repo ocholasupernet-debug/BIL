@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
   AlertCircle, User, Loader2, Shield, Clock,
@@ -162,6 +162,7 @@ export default function HotspotLogin() {
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [accessReady, setAccessReady] = useState(false);
+  const [accessRetrying, setAccessRetrying] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
   const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
   const bindingInFlight = useRef(false);
@@ -221,6 +222,46 @@ export default function HotspotLogin() {
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
+  const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string): Promise<boolean> => {
+    setAccessRetrying(true);
+    try {
+      const accessResponse = await fetch("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkout_id: activeCheckoutId,
+          ...(adminId ? { adminId } : {}),
+          mac_address: deviceMacAddress,
+          device_name: deviceName,
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const accessData = await accessResponse.json() as {
+        ok?: boolean;
+        error?: string;
+        credentials?: HotspotCredentials;
+      };
+      if (!accessResponse.ok || !accessData.ok || !accessData.credentials?.username || !accessData.credentials.password) {
+        throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
+      }
+      setHotspotCredentials(accessData.credentials);
+      setLoginUsername(accessData.credentials.username);
+      setLoginPassword(accessData.credentials.password);
+      setAccessReady(true);
+      setPaymentConfirmed(true);
+      setPayError(null);
+      return true;
+    } catch (error) {
+      setPaymentConfirmed(true);
+      setAccessReady(false);
+      setPayError(error instanceof Error ? error.message : "The hotspot router could not be updated yet.");
+      return false;
+    } finally {
+      setAccessRetrying(false);
+      bindingInFlight.current = false;
+    }
+  }, [adminId, deviceMacAddress, deviceName, portalContext.ip]);
+
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
     setPollTimedOut(false);
@@ -237,33 +278,8 @@ export default function HotspotLogin() {
         const data = await res.json();
         if (data.paid && !bindingInFlight.current) {
           bindingInFlight.current = true;
-          const accessResponse = await fetch("/api/mpesa/hotspot-mac-access", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              checkout_id: checkoutId,
-              ...(adminId ? { adminId } : {}),
-              mac_address: deviceMacAddress,
-              device_name: deviceName,
-              ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
-            }),
-          });
-          const accessData = await accessResponse.json() as {
-            ok?: boolean;
-            error?: string;
-            credentials?: HotspotCredentials;
-          };
-          if (accessResponse.ok && accessData.ok && accessData.credentials?.username && accessData.credentials.password) {
-            setHotspotCredentials(accessData.credentials);
-            setLoginUsername(accessData.credentials.username);
-            setLoginPassword(accessData.credentials.password);
-            setAccessReady(true);
-            setPaymentConfirmed(true);
-            clearInterval(interval);
-          } else {
-            setPayError(accessData.error || "Payment confirmed, but hotspot credentials could not be assigned yet.");
-            bindingInFlight.current = false;
-          }
+          setPaymentConfirmed(true);
+          if (await bindPaidHotspotAccess(checkoutId)) clearInterval(interval);
         } else if (data.status === "failed") {
           setPayError(data.failureReason || "M-Pesa cancelled or declined the payment prompt.");
           setPaymentFailed(true);
@@ -272,7 +288,7 @@ export default function HotspotLogin() {
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
-  }, [checkoutId, paymentConfirmed, deviceMacAddress, deviceName, adminId]);
+  }, [checkoutId, paymentConfirmed, paymentFailed, adminId, bindPaidHotspotAccess]);
 
   useEffect(() => {
     if (!accessReady) return;
@@ -1042,13 +1058,13 @@ export default function HotspotLogin() {
                             Daraja shortcode: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
                           </p>
                         )}
-                        <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                        <button className="hp-btn hp-btn-ghost" disabled={accessRetrying} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                           onClick={() => {
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
-                            else { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setAccessReady(false); bindingInFlight.current = false; }
+                            else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId); }
                           }}>
-                          {accessReady ? "Continue online" : "Start over"}
+                          {accessReady ? "Continue online" : accessRetrying ? "Retrying connection…" : "Retry connection"}
                         </button>
                       </>
                     ) : paymentFailed ? (
