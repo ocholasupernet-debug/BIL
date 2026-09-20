@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 export function normalisePrepaidPhone(value: unknown): string {
   const digits = typeof value === "string" ? value.replace(/\D/g, "") : "";
   if (digits.startsWith("0") && digits.length === 10) return `254${digits.slice(1)}`;
@@ -13,24 +15,35 @@ export function normalisePrepaidMac(value: unknown): string {
   return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
 }
 
+const PREPAID_SUFFIX_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+function randomPrepaidSuffix(): string {
+  const bytes = randomBytes(4);
+  const chars = Array.from(bytes, byte => PREPAID_SUFFIX_ALPHABET[byte % PREPAID_SUFFIX_ALPHABET.length]);
+  return `${chars[0]}${chars[1]}:${chars[2]}${chars[3]}`;
+}
+
 /**
- * Use a stable, human-readable account identifier in RouterOS:
- * 254798088650-11:5F-123
+ * Use a human-readable account identifier in RouterOS:
+ * 254798088650-G6:48
  *
- * The last two MAC octets keep the username short while the optional suffix
- * makes every newly-created account unique, even when a phone and device are
- * reused for another purchase.
+ * The suffix is random rather than derived from the phone or MAC address, so
+ * repeated purchases with the same phone can receive different identifiers.
+ * Callers that need deterministic output in tests may provide an explicit
+ * suffix such as "G6:48".
  */
-export function prepaidHotspotUsername(phone: unknown, macAddress: unknown, uniqueSuffix?: unknown): string {
+export function prepaidHotspotUsername(phone: unknown, _macAddress?: unknown, explicitSuffix?: unknown): string {
   const normalizedPhone = normalisePrepaidPhone(phone);
-  const normalizedMac = normalisePrepaidMac(macAddress);
-  if (!normalizedPhone || !normalizedMac) return "";
-  const suffix = String(uniqueSuffix ?? "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
-  return `${normalizedPhone}-${normalizedMac.slice(-5)}${suffix ? `-${suffix}` : ""}`;
+  if (!normalizedPhone) return "";
+  const requestedSuffix = String(explicitSuffix ?? "").trim().toUpperCase();
+  const suffix = /^[A-Z0-9]{2}:[A-Z0-9]{2}$/.test(requestedSuffix)
+    ? requestedSuffix
+    : randomPrepaidSuffix();
+  return `${normalizedPhone}-${suffix}`;
 }
 
 export function isPrepaidHotspotUsername(value: unknown): boolean {
-  return typeof value === "string" && /^\d{9,15}-[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?$/i.test(value.trim());
+  return typeof value === "string" && /^\d{9,15}-(?:[A-Z0-9]{2}:[A-Z0-9]{2}(?:-[a-zA-Z0-9_-]+)?|[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?)$/i.test(value.trim());
 }
 
 export function routerRateLimit(
