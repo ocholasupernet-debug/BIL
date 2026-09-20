@@ -90,20 +90,8 @@ function normalizePhone(phone?: string | null) {
 function purchaseUsername(user: Customer) {
   const type = String(user.type ?? "").toLowerCase();
   const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
-  if (!actual && type === "hotspot" && user.phone && user.mac_address) {
-    const phoneDigits = user.phone.replace(/\D/g, "");
-    const phone = phoneDigits.startsWith("0") && phoneDigits.length === 10
-      ? `254${phoneDigits.slice(1)}`
-      : phoneDigits.startsWith("254") && phoneDigits.length === 12
-        ? phoneDigits
-        : phoneDigits.length === 9 && phoneDigits.startsWith("7")
-          ? `254${phoneDigits}`
-          : "";
-    const mac = user.mac_address.replace(/[:-]/g, "").toUpperCase();
-    if (phone && /^[0-9A-F]{12}$/.test(mac)) return `${phone}-${mac.slice(-4, -2)}:${mac.slice(-2)}`;
-  }
   if (actual) return actual;
-  return `user-${user.id}`;
+  return `prepaid-${user.id}`;
 }
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
@@ -699,7 +687,7 @@ export default function PrepaidUsers() {
               Prepaid Users
             </h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: 0 }}>
-              All WiFi subscribers — hotspot, PPPoE & static
+              Every paid account is recorded here with its assigned username and access history.
             </p>
           </div>
 
