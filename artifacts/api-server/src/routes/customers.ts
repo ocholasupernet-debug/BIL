@@ -125,9 +125,11 @@ async function reconcileCustomerAccess(
     const generated = prepaidHotspotUsername(
       updates.phone ?? current.phone,
       updates.mac_address ?? current.mac_address,
+      current.id,
     );
     if (generated) {
-      nextName = generated;
+      const identityChanged = updates.phone !== undefined || updates.mac_address !== undefined;
+      nextName = !identityChanged && isPrepaidHotspotUsername(currentName) ? currentName : generated;
     } else if (!isPrepaidHotspotUsername(nextName)) {
       throw new Error("A hotspot user needs a valid phone number and device MAC address");
     }

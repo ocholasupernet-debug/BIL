@@ -15,20 +15,22 @@ export function normalisePrepaidMac(value: unknown): string {
 
 /**
  * Use a stable, human-readable account identifier in RouterOS:
- * 254798088650-11:5F
+ * 254798088650-11:5F-123
  *
- * The last two MAC octets keep the username short while still separating
- * devices that buy access from the same phone number.
+ * The last two MAC octets keep the username short while the optional suffix
+ * makes every newly-created account unique, even when a phone and device are
+ * reused for another purchase.
  */
-export function prepaidHotspotUsername(phone: unknown, macAddress: unknown): string {
+export function prepaidHotspotUsername(phone: unknown, macAddress: unknown, uniqueSuffix?: unknown): string {
   const normalizedPhone = normalisePrepaidPhone(phone);
   const normalizedMac = normalisePrepaidMac(macAddress);
   if (!normalizedPhone || !normalizedMac) return "";
-  return `${normalizedPhone}-${normalizedMac.slice(-5)}`;
+  const suffix = String(uniqueSuffix ?? "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  return `${normalizedPhone}-${normalizedMac.slice(-5)}${suffix ? `-${suffix}` : ""}`;
 }
 
 export function isPrepaidHotspotUsername(value: unknown): boolean {
-  return typeof value === "string" && /^\d{9,15}-[0-9A-F]{2}:[0-9A-F]{2}$/i.test(value.trim());
+  return typeof value === "string" && /^\d{9,15}-[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?$/i.test(value.trim());
 }
 
 export function routerRateLimit(

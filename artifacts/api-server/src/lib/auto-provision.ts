@@ -341,10 +341,10 @@ export async function autoProvision(opts: {
 
   /* ── 4. Provision on router ── */
   const planType = (plan.plan_type || plan.type || "hotspot").toLowerCase();
-  const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address);
+  const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address, customer.id);
   const username = planType === "pppoe"
     ? (customer.pppoe_username || customer.username || `user_${customer.id}`)
-    : (generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
+    : (customer.username || generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
   const password = customer.password || "changeme";
   const comment  = username;
   const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
