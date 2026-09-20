@@ -508,12 +508,13 @@ export default function PrepaidUsers() {
     if (!window.confirm(`Delete ${purchaseUsername(user)}? This cannot be undone.`)) return;
     try {
       setActionBusy(user.id);
-      const radUsername = user.pppoe_username || user.username || purchaseUsername(user);
-      const { error } = await supabase.from("isp_customers").delete().eq("id", user.id).eq("admin_id", ADMIN_ID);
-      if (error) throw error;
-      await supabase.from("radcheck").delete().eq("username", radUsername);
-      await supabase.from("radusergroup").delete().eq("username", radUsername);
+      const response = await fetch(`${API}/api/customers/${user.id}?adminId=${ADMIN_ID}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error || "Could not delete this user.");
       await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      await qc.invalidateQueries({ queryKey: ["isp_transactions"] });
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not delete this user.");
     } finally {

@@ -20,12 +20,15 @@ import {
   updatePPPSecret,
   addHotspotUser,
   updateHotspotUser,
+  resetHotspotUserCounters,
+  disconnectHotspotActiveUser,
   ensureHotspotUserProfile,
   scheduleHotspotUserExpiry,
   schedulePppUserExpiry,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
+import { prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
 interface SbCustomer {
@@ -35,6 +38,8 @@ interface SbCustomer {
   username: string | null;
   password: string | null;
   phone: string | null;
+  mac_address: string | null;
+  ip_address: string | null;
   type: string | null;
   plan_id: number | null;
   status: string;
@@ -51,6 +56,8 @@ interface SbPlan {
   router_id: number | null;
   speed_down: number | null;
   speed_up: number | null;
+  speed_down_unit: string | null;
+  speed_up_unit: string | null;
   data_limit_mb: number | null;
 }
 
@@ -227,10 +234,12 @@ function calcExpiry(validityDays: number): string {
 }
 
 function hotspotRateLimit(plan: SbPlan): string | undefined {
-  const down = Number(plan.speed_down);
-  const up = Number(plan.speed_up);
-  if (!Number.isFinite(down) || !Number.isFinite(up) || down <= 0 || up <= 0) return undefined;
-  return `${up}M/${down}M`;
+  return routerRateLimit(
+    plan.speed_down,
+    plan.speed_up,
+    plan.speed_down_unit ?? "Mbps",
+    plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+  );
 }
 
 /* ── Log webhook event (best-effort — table may not exist yet) ───────────── */
@@ -287,7 +296,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up,data_limit_mb&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -327,9 +336,12 @@ export async function autoProvision(opts: {
 
   /* ── 4. Provision on router ── */
   const planType = (plan.plan_type || plan.type || "hotspot").toLowerCase();
-  const username = customer.pppoe_username || customer.username || `user_${customer.id}`;
+  const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address);
+  const username = planType === "pppoe"
+    ? (customer.pppoe_username || customer.username || `user_${customer.id}`)
+    : (generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
   const password = customer.password || "changeme";
-  const comment  = `ISP Auto-provision — ${reference}`;
+  const comment  = username;
   const expiresAt = calcExpiry(plan.validity_days);
   let action: "created" | "renewed" | "enabled" = "created";
 
@@ -369,20 +381,36 @@ export async function autoProvision(opts: {
       try {
         await updateHotspotUser(creds, username, {
           disabled: false, profile, comment, limitBytesTotal,
+          address: customer.ip_address || undefined,
         });
         action = "enabled";
       } catch {
         try {
-          await addHotspotUser(creds, { name: username, password, profile, comment, limitBytesTotal });
+          await addHotspotUser(creds, {
+            name: username,
+            password,
+            profile,
+            comment,
+            address: customer.ip_address || undefined,
+            limitBytesTotal,
+          });
           action = "created";
         } catch (e2) {
           logger.warn({ err: (e2 as Error).message }, "[provision] Hotspot add failed, trying update again");
           await updateHotspotUser(creds, username, {
-            disabled: false, profile, limitBytesTotal,
+            disabled: false,
+            profile,
+            comment,
+            address: customer.ip_address || undefined,
+            limitBytesTotal,
           });
           action = "renewed";
         }
       }
+      await resetHotspotUserCounters(creds, username).catch(error => {
+        logger.warn({ err: (error as Error).message, username }, "[provision] Hotspot counter reset failed");
+      });
+      await disconnectHotspotActiveUser(creds, username).catch(() => {});
       await scheduleHotspotUserExpiry(creds, {
         name: username,
         expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
@@ -395,7 +423,7 @@ export async function autoProvision(opts: {
     const msg = `Router provisioning failed: ${(routerErr as Error).message}`;
     logger.error({ err: routerErr }, "[provision] Router provisioning error");
     await recordTransaction(customer, amount, paymentMethod, reference, plan);
-    await activateCustomer(customer, plan);
+    await activateCustomer(customer, plan, username);
     await logEvent({
       event: "provision_router_error", gateway, reference,
       customer_id: customer.id, plan_id: plan.id, router_id: router.id,
@@ -405,7 +433,7 @@ export async function autoProvision(opts: {
   }
 
   /* ── 5. Update customer in Supabase ── */
-  await activateCustomer(customer, plan);
+  await activateCustomer(customer, plan, username);
 
   /* ── 6. Record transaction ── */
   await recordTransaction(customer, amount, paymentMethod, reference, plan);
@@ -428,10 +456,11 @@ export async function autoProvision(opts: {
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
-async function activateCustomer(customer: SbCustomer, plan: SbPlan): Promise<void> {
+async function activateCustomer(customer: SbCustomer, plan: SbPlan, username?: string): Promise<void> {
   await sbUpdate("isp_customers", `id=eq.${customer.id}`, {
     status:     "active",
     expires_at: calcExpiry(plan.validity_days),
+    ...(username && plan.plan_type !== "pppoe" ? { username } : {}),
     updated_at: new Date().toISOString(),
   });
 }

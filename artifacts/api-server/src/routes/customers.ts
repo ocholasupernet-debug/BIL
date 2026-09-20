@@ -1,5 +1,13 @@
 import { Router, type IRouter } from "express";
-import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
+import {
+  sbSelect,
+  sbSelectStrict,
+  sbInsert,
+  sbUpdate,
+  sbUpdateStrict,
+  sbDelete,
+  sbDeleteStrict,
+} from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -360,10 +368,65 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
 });
 
 router.delete("/customers/:id", async (req, res): Promise<void> => {
-  const rows = await sbSelect<{ name: string; admin_id: number }>("isp_customers", `id=eq.${req.params.id}&select=name,admin_id&limit=1`);
+  const requestedAdminId = Number(req.query.adminId ?? req.body?.adminId);
+  const customerFilter = Number.isSafeInteger(requestedAdminId) && requestedAdminId > 0
+    ? `id=eq.${req.params.id}&admin_id=eq.${requestedAdminId}&select=id,name,admin_id,username,pppoe_username&limit=1`
+    : `id=eq.${req.params.id}&select=id,name,admin_id,username,pppoe_username&limit=1`;
+  const rows = await sbSelectStrict<{
+    id: number;
+    name: string;
+    admin_id: number;
+    username: string | null;
+    pppoe_username: string | null;
+  }>("isp_customers", customerFilter);
   const row = rows[0];
-  await sbDelete("isp_customers", `id=eq.${req.params.id}`);
-  if (row) void logActivity({ adminId: row.admin_id, type: "customer", action: "deleted", subject: row.name });
+  if (!row) {
+    res.status(404).json({ error: "Customer not found" });
+    return;
+  }
+
+  const transactions = await sbSelectStrict<{
+    id: number;
+    amount: number | null;
+    status: string;
+  }>(
+    "isp_transactions",
+    `customer_id=eq.${row.id}&admin_id=eq.${row.admin_id}&select=id,amount,status`,
+  );
+  const incomeStatuses = new Set(["completed", "paid", "success", "pending"]);
+  const voidable = transactions.filter(transaction => incomeStatuses.has(String(transaction.status).toLowerCase()));
+  if (voidable.length > 0) {
+    await sbUpdateStrict(
+      "isp_transactions",
+      `customer_id=eq.${row.id}&admin_id=eq.${row.admin_id}&status=in.(completed,paid,success,pending)`,
+      { status: "voided" },
+    );
+  }
+
+  const deleted = await sbDeleteStrict(
+    "isp_customers",
+    `id=eq.${row.id}&admin_id=eq.${row.admin_id}`,
+  );
+  if (!deleted.length) {
+    res.status(409).json({ error: "The customer could not be deleted." });
+    return;
+  }
+
+  const radiusUsername = row.pppoe_username || row.username;
+  if (radiusUsername) {
+    await sbDelete("radcheck", `username=eq.${encodeURIComponent(radiusUsername)}`);
+    await sbDelete("radusergroup", `username=eq.${encodeURIComponent(radiusUsername)}`);
+  }
+  void logActivity({
+    adminId: row.admin_id,
+    type: "customer",
+    action: "deleted",
+    subject: row.name,
+    details: {
+      voidedTransactionCount: voidable.length,
+      voidedIncome: voidable.reduce((sum, transaction) => sum + Number(transaction.amount ?? 0), 0),
+    },
+  });
   res.sendStatus(204);
 });
 

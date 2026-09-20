@@ -46,6 +46,7 @@ async function loadExportBuilder() {
             "brand-context": `export function useBrand() { return { domain: "tenant", ispName: "Staging ISP" }; }`,
             "supabase": `
               export const ADMIN_ID = 7;
+              export function getAdminApiToken() { return ""; }
               export function getSelectedTenantId() { return 7; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
             `,
@@ -139,7 +140,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
       "$(link-login-only)",
       "$(link-orig)",
       "$(if error)",
-      "$(endif error)",
+      "$(endif)",
       "$(username)",
     ]) assert.match(html, new RegExp(`\\$\\(${macro.slice(2, -1)}\\)`));
     assert.match(html, /name="password" type="password"/);
@@ -151,12 +152,12 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     assert.ok(configMatch, "generated config bootstrap is present");
     const config = JSON.parse(configMatch[1]);
     assert.equal(config.apiBase, "https://tenant.example.test");
+    assert.equal(config.routerId, 3);
     assert.equal(config.ispName, stagingSettings().ispName);
     assert.equal(config.freeTrialEnabled, true);
     assert.equal(config.vouchersEnabled, true);
     assert.equal(config.mpesaPromptEnabled, true);
     for (const key of [
-      "routerId",
       "routerSecret",
       "routerPassword",
       "paymentSecret",
@@ -221,7 +222,7 @@ test("deploy UI uses two confirmations and sends generated content through the d
   assert.ok(deployStart >= 0 && deployEnd > deployStart, "deploy handler is present");
   const deployActions = source.slice(deployStart, deployEnd);
 
-  assert.equal((deployActions.match(/window\.confirm/g) ?? []).length, 2);
+  assert.equal((deployActions.match(/window\.confirm/g) ?? []).length, 3);
   assert.match(deployActions, /hotspot-portal\/deploy/);
   assert.match(deployActions, /deploy\(false\)/);
   assert.match(deployActions, /deploy\(true\)/);

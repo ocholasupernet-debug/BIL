@@ -54,6 +54,7 @@ import {
 } from "../lib/router-vpn-provisioning.js";
 import {
   readRouterManagementCaCertificate,
+  ROUTER_MANAGEMENT_API_USERNAME,
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
@@ -352,6 +353,9 @@ function rowToCreds(row: SbRouter): RouterCredentials {
     port,
     username: row.router_username || "admin",
     password: row.router_secret   || "",
+    alternateUsernames: vpnFallback && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [ROUTER_MANAGEMENT_API_USERNAME]
+      : undefined,
     useSSL,
     bridgeIp: vpnFallback,
   };

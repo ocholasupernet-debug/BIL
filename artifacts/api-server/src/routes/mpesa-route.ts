@@ -22,14 +22,22 @@ import {
   addHotspotUser,
   ensureHotspotUserProfile,
   resolveHotspotClientMac,
+  connectHotspotUser,
   scheduleHotspotUserExpiry,
+  disconnectHotspotActiveUser,
+  removeHotspotUser,
+  resetHotspotUserCounters,
+  ensureHotspotUserRateQueue,
   updateHotspotUser,
   fetchHotspotConnectedDevices,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
+import { prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -95,6 +103,9 @@ function hotspotRouterCredentials(row: HotspotRouterRow): RouterCredentials {
     port: 8728,
     username: row.router_username || "admin",
     password: row.router_secret || "",
+    alternateUsernames: managementIp && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [ROUTER_MANAGEMENT_API_USERNAME]
+      : undefined,
     useSSL: false,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
@@ -249,6 +260,19 @@ async function isActiveIspAdmin(adminId: number): Promise<boolean> {
   return !!rows[0];
 }
 
+async function resolvePortalAdminId(req: Request, requestedAdminId: unknown): Promise<number | null> {
+  const explicitId = Number(requestedAdminId);
+  if (Number.isSafeInteger(explicitId) && explicitId > 0) return explicitId;
+
+  const subdomain = getTenantSubdomainFromRequest(req);
+  if (!subdomain) return null;
+  const admins = await sbSelect<{ id: number }>(
+    "isp_admins",
+    `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&select=id&limit=1`,
+  );
+  return admins[0]?.id && Number.isSafeInteger(admins[0].id) ? admins[0].id : null;
+}
+
 function normaliseKenyanPhone(value: string): string {
   const raw = value.replace(/\D/g, "");
   if (raw.startsWith("0")) return `254${raw.slice(1)}`;
@@ -284,15 +308,13 @@ function readDeviceName(value: unknown): string {
     : "";
 }
 
-function hotspotRateLimit(speedDown: unknown, speedUp: unknown): string | undefined {
-  const down = Number(speedDown);
-  const up = Number(speedUp);
-  if (!Number.isFinite(down) || !Number.isFinite(up) || down <= 0 || up <= 0) return undefined;
-  return `${up}M/${down}M`;
-}
-
-function randomHotspotUsername(): string {
-  return `hs_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+function hotspotRateLimit(
+  speedDown: unknown,
+  speedUp: unknown,
+  speedDownUnit: unknown = "Mbps",
+  speedUpUnit: unknown = speedDownUnit,
+): string | undefined {
+  return routerRateLimit(speedDown, speedUp, speedDownUnit, speedUpUnit);
 }
 
 function extractMpesaReceipt(message: unknown): string {
@@ -599,9 +621,9 @@ setInterval(() => {
  * identity data needed to choose a TV or streaming device.
  */
 router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promise<void> => {
-  const adminId = Number(req.query.adminId);
-  if (!Number.isSafeInteger(adminId) || adminId < 1) {
-    res.status(400).json({ ok: false, error: "A valid ISP account is required." });
+  const adminId = await resolvePortalAdminId(req, req.query.adminId);
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1) {
+    res.status(400).json({ ok: false, error: "Open this portal from the ISP's assigned hostname or provide its ISP account." });
     return;
   }
   if (!await isActiveIspAdmin(adminId)) {
@@ -661,7 +683,7 @@ router.get("/mpesa/token", (_req: Request, res: Response): void => {
 
 /* Public hotspot checkout gets a short-lived, plan-bound token before STK. */
 router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
+  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
   const deviceName = readDeviceName(req.body?.device_name);
@@ -670,7 +692,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
-  if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
     return;
   }
@@ -1023,8 +1045,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
-  const scopedAdminId = Number(adminId);
-  if (!Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
+  const scopedAdminId = await resolvePortalAdminId(req, adminId);
+  if (scopedAdminId === null || !Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
     res.status(400).json({ ok: false, error: "A valid ISP admin context is required for M-Pesa payments." });
     return;
   }
@@ -1277,11 +1299,12 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
  */
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
-  const adminId = Number(req.body?.adminId);
+  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const requestedDeviceName = readDeviceName(req.body?.device_name);
+  const clientIp = readClientIp(req.body?.client_ip);
 
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "A paid checkout and ISP context are required." });
     return;
   }
@@ -1325,10 +1348,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     router_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
+    speed_down_unit: string | null;
+    speed_up_unit: string | null;
     data_limit_mb: number | null;
   }>(
     "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,data_limit_mb&limit=1`,
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
   if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot") {
@@ -1391,100 +1416,157 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-   /*
-    * A paid hotspot account is one database customer plus one RouterOS user.
-    * Reuse an active randomly generated account for a renewal, otherwise
-    * allocate a new random username. Usernames must not disclose the phone
-    * number or purchase time.
-    */
+  /*
+   * A paid hotspot account is one database customer plus one RouterOS user.
+   * Keep the RouterOS identifier stable and readable: phone + last two MAC
+   * octets, for example 254798088650-11:5F.
+   */
   const existingCustomers = await sbSelect<{
     id: number;
     username: string | null;
     password: string | null;
+    mac_address: string | null;
+    ip_address: string | null;
     status: string;
     expires_at: string | null;
   }>(
     "isp_customers",
-    `admin_id=eq.${adminId}&type=eq.hotspot&phone=eq.${encodeURIComponent(paymentPhone)}&select=id,username,password,status,expires_at&order=id.desc&limit=20`,
+    `admin_id=eq.${adminId}&type=eq.hotspot&phone=eq.${encodeURIComponent(paymentPhone)}&select=id,username,password,mac_address,ip_address,status,expires_at&order=id.desc&limit=20`,
   );
   const now = Date.now();
-  const reusableCustomer = existingCustomers.find((customer) => {
+  const isReusable = (customer: typeof existingCustomers[number]) => {
     const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
     return customer.status === "active" &&
       Number.isFinite(expiresAt) &&
       expiresAt > now &&
-       typeof customer.username === "string" &&
-       /^hs_[A-Za-z0-9]{12,20}$/.test(customer.username);
-  });
+      typeof customer.username === "string";
+  };
+  const reusableCustomer = existingCustomers.find((customer) =>
+    isReusable(customer) && normaliseMacAddress(customer.mac_address) === mac
+  ) ?? (existingCustomers.length === 1 && !existingCustomers[0].mac_address && isReusable(existingCustomers[0])
+    ? existingCustomers[0]
+    : undefined);
 
-   let hotspotUsername = reusableCustomer?.username ?? randomHotspotUsername();
-   if (!reusableCustomer) {
-     for (let attempt = 0; attempt < 5; attempt += 1) {
-       const collision = await sbSelect<{ id: number }>(
-         "isp_customers",
-         `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(hotspotUsername)}&select=id&limit=1`,
-       );
-       if (!collision[0]) break;
-       hotspotUsername = randomHotspotUsername();
-     }
+  const hotspotUsername = prepaidHotspotUsername(paymentPhone, mac);
+  if (!hotspotUsername) {
+    res.status(409).json({ ok: false, error: "The payment does not include enough phone and device information for a hotspot username." });
+    return;
+  }
+  const collision = await sbSelect<{ id: number }>(
+    "isp_customers",
+    `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(hotspotUsername)}&select=id&limit=1`,
+  );
+  if (collision[0] && collision[0].id !== reusableCustomer?.id) {
+    res.status(409).json({ ok: false, error: "This device identifier is already assigned to another hotspot account." });
+    return;
   }
   const hotspotPassword = "12345";
+  const routerAddress = clientIp || reusableCustomer?.ip_address || "";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
   const expiryBase = reusableCustomer && Number.isFinite(existingExpiry) ? Math.max(now, existingExpiry) : now;
   const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
 
+  const customerFields = {
+    admin_id: adminId,
+    name: requestedDeviceName || `Hotspot ${paymentPhone}`,
+    phone: paymentPhone,
+    username: hotspotUsername,
+    password: hotspotPassword,
+    plan_id: plan.id,
+    type: "hotspot",
+    mac_address: mac,
+    ip_address: routerAddress || null,
+    status: "active",
+    expires_at: expiresAt.toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  let customer: { id: number } | undefined;
   try {
-     const hotspotProfile = `ochola-plan-${plan.id}`;
-     await ensureHotspotUserProfile(credentials, {
-       name: hotspotProfile,
-       sharedUsers: 1,
-       rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up),
-     });
-    await addHotspotIpBinding(credentials, {
-      macAddress: mac,
-      comment: `OcholaSupernet paid ${checkoutId}`,
-      expiresInSeconds,
+    /*
+     * Persist the paid account before touching RouterOS. The router/API can be
+     * temporarily unavailable after payment; keeping the customer and linking
+     * the transaction makes the same checkout or receipt retryable.
+     */
+    const customerRows = reusableCustomer
+      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
+      : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
+    customer = customerRows[0] as { id: number } | undefined;
+    if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");
+
+    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
+      customer_id: customer.id,
+      plan_id: plan.id,
+      notes: `M-Pesa payment verified; prepaid hotspot account saved and awaiting router access on ${routerRow.name}.`,
     });
+  } catch (error) {
+    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] prepaid account persistence failed");
+    res.status(503).json({
+      ok: false,
+      error: "Payment is confirmed, but the prepaid account could not be saved. Please retry connection.",
+    });
+    return;
+  }
+
+  try {
+    const hotspotProfile = `ochola-plan-${plan.id}`;
+    await ensureHotspotUserProfile(credentials, {
+      name: hotspotProfile,
+      sharedUsers: 1,
+      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
+    });
+    const paidBindingApplied = await addHotspotIpBinding(credentials, {
+      macAddress: mac,
+      ipAddress: routerAddress || undefined,
+      comment: hotspotUsername,
+      expiresInSeconds,
+      bindingType: "regular",
+    });
+    if (paidBindingApplied) {
+      await ensureHotspotUserRateQueue(credentials, {
+        username: hotspotUsername,
+        address: routerAddress || undefined,
+        maxLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
+      });
+    }
+    if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
+      await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
+      await removeHotspotUser(credentials, reusableCustomer.username).catch(() => {});
+    }
     try {
       await updateHotspotUser(credentials, hotspotUsername, {
         password: hotspotPassword,
-         profile: hotspotProfile,
+        profile: hotspotProfile,
         disabled: false,
-        comment: `OcholaSupernet paid ${checkoutId}`,
+        comment: hotspotUsername,
+        address: routerAddress || undefined,
         limitBytesTotal,
       });
     } catch {
       await addHotspotUser(credentials, {
         name: hotspotUsername,
         password: hotspotPassword,
-         profile: hotspotProfile,
-        comment: `OcholaSupernet paid ${checkoutId}`,
+        profile: hotspotProfile,
+        comment: hotspotUsername,
+        address: routerAddress || undefined,
         limitBytesTotal,
       });
     }
+    await resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
+    await disconnectHotspotActiveUser(credentials, hotspotUsername).catch(() => {});
     await scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,
       expiresInSeconds: Math.max(1, Math.ceil((expiresAt.getTime() - now) / 1000)),
     });
-
-    const customerFields = {
-      admin_id: adminId,
-      name: requestedDeviceName || `Hotspot ${paymentPhone}`,
-      phone: paymentPhone,
-      username: hotspotUsername,
-      password: hotspotPassword,
-      plan_id: plan.id,
-      type: "hotspot",
-      mac_address: mac,
-      status: "active",
-      expires_at: expiresAt.toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-     const customerRows = reusableCustomer
-       ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
-       : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
-    const customer = customerRows[0] as { id?: number } | undefined;
-    if (!customer) throw new Error("The paid hotspot customer account could not be saved.");
+    if (paidBindingApplied && routerAddress) {
+      await connectHotspotUser(credentials, {
+        user: hotspotUsername,
+        password: hotspotPassword,
+        ip: routerAddress,
+        macAddress: mac,
+      }).catch((error) => {
+        logger.warn({ err: error, username: hotspotUsername }, "[mpesa/hotspot-mac-access] active login deferred");
+      });
+    }
 
      await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       customer_id: customer.id,
@@ -1493,7 +1575,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
     res.json({
       ok: true,
-      access: "mac-bypassed",
+      access: "hotspot-authenticated",
       router: routerRow.name,
       mac_address: mac,
       credentials: { username: hotspotUsername, password: hotspotPassword },
@@ -1501,7 +1583,10 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
   } catch (error) {
     logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] binding failed");
-    res.status(503).json({ ok: false, error: "Payment is confirmed, but the hotspot router could not be updated. Please retry connection." });
+    res.status(503).json({
+      ok: false,
+      error: "Payment is confirmed and the prepaid account was saved, but the hotspot router could not be updated. Keep this page open and retry connection.",
+    });
   }
 });
 
@@ -1559,11 +1644,12 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     password: string | null;
     name: string | null;
     mac_address: string | null;
+    ip_address: string | null;
     status: string;
     expires_at: string | null;
   }>(
     "isp_customers",
-    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,mac_address,status,expires_at&limit=1`,
+    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,mac_address,ip_address,status,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer?.username || !customer.password) {
@@ -1583,10 +1669,12 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     router_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
+    speed_down_unit: string | null;
+    speed_up_unit: string | null;
     data_limit_mb: number | null;
   }>(
     "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,data_limit_mb&limit=1`,
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
   if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot" || !plan.router_id) {
@@ -1637,19 +1725,29 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     await ensureHotspotUserProfile(credentials, {
       name: hotspotProfile,
       sharedUsers: 1,
-      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up),
+      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
     });
-    await addHotspotIpBinding(credentials, {
+    const paidBindingApplied = await addHotspotIpBinding(credentials, {
       macAddress: mac,
-      comment: `OcholaSupernet SMS reconnect ${receipt}`,
+      ipAddress: clientIp || undefined,
+      comment: customer.username,
       expiresInSeconds,
+      bindingType: "regular",
     });
+    if (paidBindingApplied) {
+      await ensureHotspotUserRateQueue(credentials, {
+        username: customer.username,
+        address: clientIp || customer.ip_address || undefined,
+        maxLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
+      });
+    }
     try {
       await updateHotspotUser(credentials, customer.username, {
         password: customer.password,
         profile: hotspotProfile,
         disabled: false,
-        comment: `OcholaSupernet SMS reconnect ${receipt}`,
+        comment: customer.username,
+        address: clientIp || customer.ip_address || undefined,
         limitBytesTotal,
       });
     } catch {
@@ -1657,14 +1755,27 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         name: customer.username,
         password: customer.password,
         profile: hotspotProfile,
-        comment: `OcholaSupernet SMS reconnect ${receipt}`,
-          limitBytesTotal,
+        comment: customer.username,
+        address: clientIp || customer.ip_address || undefined,
+        limitBytesTotal,
       });
     }
+    await resetHotspotUserCounters(credentials, customer.username).catch(() => {});
+    await disconnectHotspotActiveUser(credentials, customer.username).catch(() => {});
     await scheduleHotspotUserExpiry(credentials, {
       name: customer.username,
       expiresInSeconds,
     });
+    if (paidBindingApplied && (clientIp || customer.ip_address)) {
+      await connectHotspotUser(credentials, {
+        user: customer.username,
+        password: customer.password,
+        ip: clientIp || customer.ip_address!,
+        macAddress: mac,
+      }).catch((error) => {
+        logger.warn({ err: error, username: customer.username }, "[mpesa/verify] active login deferred");
+      });
+    }
     res.json({
       ok: true,
       transaction_id: transaction.id,
