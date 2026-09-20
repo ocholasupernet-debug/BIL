@@ -11,6 +11,7 @@
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
+- [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.

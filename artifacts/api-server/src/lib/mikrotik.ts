@@ -1435,6 +1435,67 @@ export interface ActiveHotspotUser {
   server: string;
 }
 
+export interface HotspotConnectedDevice {
+  name: string;
+  macAddress: string;
+  address: string;
+  source: "hotspot" | "dhcp";
+}
+
+function validRouterMac(value: unknown): string {
+  const mac = String(value ?? "").trim();
+  return /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(mac) ? mac.toUpperCase() : "";
+}
+
+/**
+ * Return connected client identities that have both a human-readable name and
+ * a MAC address. The hotspot active table is preferred, with DHCP leases as a
+ * fallback for devices that are connected but have not authenticated yet.
+ */
+export async function fetchHotspotConnectedDevices(
+  creds: RouterCredentials,
+): Promise<HotspotConnectedDevice[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const byMac = new Map<string, HotspotConnectedDevice>();
+    const add = (row: Record<string, string>, source: "hotspot" | "dhcp"): void => {
+      const mac = validRouterMac(row["mac-address"]);
+      const name = String(
+        source === "hotspot"
+          ? row.user ?? row.comment ?? row["host-name"]
+          : row["host-name"] ?? row.comment ?? row.user,
+      ).trim().slice(0, 64);
+      if (!mac || !name) return;
+      const address = String(row.address ?? "").trim();
+      if (!byMac.has(mac) || source === "hotspot") {
+        byMac.set(mac, { name, macAddress: mac, address, source });
+      }
+    };
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/active/print", "=.proplist=user,address,mac-address,comment,host-name"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "hotspot");
+    } catch {
+      /* A router may expose DHCP but not the hotspot active table. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/dhcp-server/lease/print", "?status=bound", "=.proplist=host-name,address,mac-address,comment"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "dhcp");
+    } catch {
+      /* DHCP is optional on some RouterOS hotspot installations. */
+    }
+
+    return [...byMac.values()].sort((a, b) => a.name.localeCompare(b.name));
+  });
+}
+
 export interface ActivePPPoESession {
   id: string;
   name: string;
@@ -1863,6 +1924,33 @@ export async function addHotspotUserProfile(
     if (opts.rateLimit) params.push(`=rate-limit=${opts.rateLimit}`);
     await withTimeout(conn.write(params), ms);
   });
+}
+
+/**
+ * Create or update a tenant-owned hotspot profile. Paid users should never
+ * inherit an existing profile with a broader rate limit just because a plan
+ * happens to share its display name with that profile.
+ */
+export async function ensureHotspotUserProfile(
+  creds: RouterCredentials,
+  opts: { name: string; sharedUsers?: number; rateLimit?: string },
+): Promise<void> {
+  try {
+    await updateHotspotUserProfile(creds, opts.name, {
+      sharedUsers: opts.sharedUsers,
+      rateLimit: opts.rateLimit,
+    });
+  } catch {
+    try {
+      await addHotspotUserProfile(creds, opts);
+    } catch {
+      /* A concurrent request may have created it between update and add. */
+      await updateHotspotUserProfile(creds, opts.name, {
+        sharedUsers: opts.sharedUsers,
+        rateLimit: opts.rateLimit,
+      });
+    }
+  }
 }
 
 export async function updateHotspotUserProfile(

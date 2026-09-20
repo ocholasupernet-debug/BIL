@@ -12,10 +12,18 @@ interface Plan {
   validity: number; validity_unit: string; validity_days: number;
   speed_down: number; speed_up: number;
   description: string | null; plan_type?: string; type?: string;
+  router_id?: number | null;
 }
 interface HotspotCredentials {
   username: string;
   password: string;
+}
+interface ConnectedDevice {
+  name: string;
+  macAddress: string;
+  address: string;
+  routerId: number;
+  routerName: string;
 }
 type Tab = "plans" | "tv" | "login" | "voucher";
 const DEFAULT_PORTAL_ADMIN_ID = 5;
@@ -121,6 +129,16 @@ export default function HotspotLogin() {
   const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
   const [phone, setPhone] = useState("");
   const [deviceMacAddress, setDeviceMacAddress] = useState(portalContext.mac);
+  const [deviceName, setDeviceName] = useState("");
+  const [tvDialogOpen, setTvDialogOpen] = useState(false);
+  const [tvDevices, setTvDevices] = useState<ConnectedDevice[]>([]);
+  const [tvDevicesLoading, setTvDevicesLoading] = useState(false);
+  const [tvDeviceChoice, setTvDeviceChoice] = useState("");
+  const [tvMacAddress, setTvMacAddress] = useState(portalContext.mac);
+  const [tvDeviceName, setTvDeviceName] = useState("");
+  const [tvPlanId, setTvPlanId] = useState("");
+  const [tvPhone, setTvPhone] = useState("");
+  const [tvDialogError, setTvDialogError] = useState("");
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [stkSent, setStkSent] = useState(false);
@@ -163,6 +181,23 @@ export default function HotspotLogin() {
     })();
   }, [adminId]);
 
+  useEffect(() => {
+    if (!tvDialogOpen) return;
+    setTvDevicesLoading(true);
+    setTvDialogError("");
+    fetch(`/api/mpesa/hotspot-devices?adminId=${encodeURIComponent(String(adminId))}`)
+      .then(async response => {
+        const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
+        if (!response.ok || !data.ok) throw new Error(data.error || "Connected devices could not be loaded.");
+        setTvDevices(Array.isArray(data.devices) ? data.devices : []);
+      })
+      .catch(error => {
+        setTvDevices([]);
+        setTvDialogError(error instanceof Error ? error.message : "Connected devices could not be loaded.");
+      })
+      .finally(() => setTvDevicesLoading(false));
+  }, [adminId, tvDialogOpen]);
+
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
   useEffect(() => {
@@ -188,6 +223,7 @@ export default function HotspotLogin() {
               checkout_id: checkoutId,
               adminId,
               mac_address: deviceMacAddress,
+              device_name: deviceName,
             }),
           });
           const accessData = await accessResponse.json() as {
@@ -214,7 +250,7 @@ export default function HotspotLogin() {
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
-  }, [checkoutId, paymentConfirmed, deviceMacAddress, adminId]);
+  }, [checkoutId, paymentConfirmed, deviceMacAddress, deviceName, adminId]);
 
   useEffect(() => {
     if (!accessReady) return;
@@ -235,10 +271,20 @@ export default function HotspotLogin() {
     return () => window.clearTimeout(redirectTimer);
   }, [accessReady, hotspotCredentials]);
 
-  const handlePay = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedPlan || !phone.trim()) return;
-    const macAddress = normalizeMacAddress(deviceMacAddress);
+  const startPayment = async (options: {
+    plan: Plan;
+    phoneValue: string;
+    macValue: string;
+    deviceNameValue?: string;
+    deviceRouterId?: number;
+  }) => {
+    const { plan, phoneValue, macValue, deviceNameValue = "", deviceRouterId } = options;
+    const macAddress = normalizeMacAddress(macValue);
+    const normalizedDeviceName = deviceNameValue.trim().replace(/\s+/g, " ").slice(0, 64);
+    setSelectedPlan(plan);
+    setPhone(phoneValue);
+    setDeviceMacAddress(macAddress);
+    setDeviceName(normalizedDeviceName);
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setHotspotCredentials(null); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
@@ -246,10 +292,12 @@ export default function HotspotLogin() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone: phone.trim(),
-          plan_id: selectedPlan.id,
+          phone: phoneValue.trim(),
+          plan_id: plan.id,
           adminId,
           ...(macAddress ? { mac_address: macAddress } : {}),
+          ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
+          ...(deviceRouterId ? { device_router_id: deviceRouterId } : {}),
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
@@ -263,13 +311,14 @@ export default function HotspotLogin() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone: phone.trim(),
+          phone: phoneValue.trim(),
           amount: intentData.amount,
-          plan_id: selectedPlan.id,
+          plan_id: plan.id,
           adminId,
           account_ref: brand.ispName,
           paymentIntent: intentData.paymentIntent,
           ...(macAddress ? { mac_address: macAddress } : {}),
+          ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
         }),
       });
       const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
@@ -282,13 +331,79 @@ export default function HotspotLogin() {
     finally { setPayLoading(false); }
   };
 
+  const handlePay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPlan || !phone.trim()) return;
+    await startPayment({
+      plan: selectedPlan,
+      phoneValue: phone.trim(),
+      macValue: deviceMacAddress,
+      deviceNameValue: deviceName,
+    });
+  };
+
+  const openTvDialog = () => {
+    setTvDialogOpen(true);
+    setTvDialogError("");
+    setTvDeviceChoice("");
+    setTvMacAddress(deviceMacAddress || portalContext.mac);
+    setTvDeviceName("");
+    setTvPlanId(selectedPlan ? String(selectedPlan.id) : plans[0] ? String(plans[0].id) : "");
+    setTvPhone("");
+  };
+
+  const handleTvDeviceChoice = (value: string) => {
+    setTvDeviceChoice(value);
+    const device = tvDevices.find(item => item.macAddress === value);
+    if (device) {
+      setTvMacAddress(device.macAddress);
+      setTvDeviceName(device.name);
+    }
+  };
+
+  const handleTvBindPay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const plan = plans.find(item => String(item.id) === tvPlanId);
+    const macAddress = normalizeMacAddress(tvMacAddress);
+    if (!plan) {
+      setTvDialogError("Choose a package before continuing.");
+      return;
+    }
+    if (!macAddress) {
+      setTvDialogError("Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF.");
+      return;
+    }
+    if (!tvDeviceName.trim()) {
+      setTvDialogError("Give the device a name so you can recognize it later.");
+      return;
+    }
+    if (!tvPhone.trim()) {
+      setTvDialogError("Enter the phone number that will receive the M-Pesa prompt.");
+      return;
+    }
+    setActiveTab("tv");
+    setPaymentMode("tv");
+    setTvDialogOpen(false);
+    await startPayment({
+      plan,
+      phoneValue: tvPhone.trim(),
+      macValue: macAddress,
+      deviceNameValue: tvDeviceName,
+      deviceRouterId: tvDevices.find(item => item.macAddress === macAddress)?.routerId,
+    });
+  };
+
   const handleTabChange = (tab: Tab) => {
     if (stkSent) return;
+    if (tab === "tv") {
+      openTvDialog();
+      return;
+    }
     setActiveTab(tab);
     setSelectedPlan(null);
     setPhone("");
     setPayError(null);
-    if (tab === "plans" || tab === "tv") setPaymentMode(tab === "tv" ? "tv" : "data");
+    if (tab === "plans") setPaymentMode("data");
   };
 
   const selectPlan = (plan: Plan) => {
@@ -566,6 +681,43 @@ export default function HotspotLogin() {
            display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
            flex: 0 0 auto; color: #34d399; font-size: 10px; font-weight: 800;
          }
+         .hp-tv-trigger {
+           display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+           margin-top: 14px; padding: 11px 16px; border-radius: 11px;
+           border: 1px solid var(--isp-accent-border); background: var(--isp-accent-glow);
+           color: #fff; font: 800 12px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+           transition: transform .2s ease, background .2s ease;
+         }
+         .hp-tv-trigger:hover { transform: translateY(-1px); background: var(--isp-accent-border); }
+         .hp-modal-backdrop {
+           position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
+           justify-content: center; padding: 18px; background: rgba(0,5,12,.78);
+           backdrop-filter: blur(12px);
+         }
+         .hp-tv-modal {
+           width: min(100%, 520px); max-height: min(760px, calc(100vh - 36px)); overflow: auto;
+           border: 1px solid rgba(255,255,255,.12); border-radius: 22px;
+           background: linear-gradient(145deg, #0b1a29, #07111d);
+           box-shadow: 0 30px 90px rgba(0,0,0,.5); color: #fff;
+         }
+         .hp-tv-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
+         .hp-tv-modal-head h3 { font-size:18px; font-weight:850; margin-bottom:5px; }
+         .hp-tv-modal-head p { color:rgba(255,255,255,.46); font-size:12px; line-height:1.5; }
+         .hp-tv-modal-close { border:0; background:rgba(255,255,255,.06); color:rgba(255,255,255,.7); width:32px; height:32px; border-radius:9px; cursor:pointer; font-size:20px; line-height:1; }
+         .hp-tv-modal-body { padding:20px 22px 22px; }
+         .hp-tv-field { margin-bottom:15px; }
+         .hp-tv-label { display:block; margin-bottom:7px; color:rgba(255,255,255,.56); font-size:11px; font-weight:800; letter-spacing:.04em; }
+         .hp-tv-select, .hp-tv-input { width:100%; border:1px solid rgba(255,255,255,.1); border-radius:11px; padding:12px 13px; color:#fff; background:rgba(255,255,255,.055); font:600 13px 'Plus Jakarta Sans', sans-serif; outline:none; }
+         .hp-tv-select:focus, .hp-tv-input:focus { border-color:var(--isp-accent-border); box-shadow:0 0 0 3px var(--isp-accent-glow); }
+         .hp-tv-select option { color:#0b1420; background:#fff; }
+         .hp-tv-help { margin-top:6px; color:rgba(255,255,255,.3); font-size:10px; line-height:1.45; }
+         .hp-tv-device-list { display:grid; gap:7px; margin-top:9px; max-height:130px; overflow:auto; }
+         .hp-tv-device-row { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:10px; background:rgba(52,211,153,.06); border:1px solid rgba(52,211,153,.14); }
+         .hp-tv-device-row strong { display:block; font-size:11px; color:#fff; }
+         .hp-tv-device-row span { display:block; margin-top:2px; color:rgba(255,255,255,.42); font:10px monospace; }
+         .hp-tv-actions { display:flex; gap:9px; margin-top:20px; }
+         .hp-tv-actions .hp-btn { flex:1; }
+         .hp-tv-cancel { background:rgba(255,255,255,.06); color:rgba(255,255,255,.65); border:1px solid rgba(255,255,255,.1); box-shadow:none; }
 
         .hp-plans-grid {
           display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
@@ -935,6 +1087,11 @@ export default function HotspotLogin() {
                        {isTvMode ? <Tv size={27} strokeWidth={1.8} /> : <Sparkles size={27} strokeWidth={1.8} />}
                      </div>
                    </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+                      <button type="button" className="hp-tv-trigger" onClick={openTvDialog}>
+                        <Tv size={15} /> Connect to TV
+                      </button>
+                    </div>
                    <div className="hp-trust-row">
                      <div className="hp-trust-item"><CheckCircle2 size={14} /> Instant access</div>
                      <div className="hp-trust-item"><Shield size={14} /> Secure payment</div>
@@ -1233,6 +1390,138 @@ export default function HotspotLogin() {
                     </form>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {tvDialogOpen && (
+            <div className="hp-modal-backdrop" role="presentation">
+              <div className="hp-tv-modal" role="dialog" aria-modal="true" aria-labelledby="connect-tv-title">
+                <div className="hp-tv-modal-head">
+                  <div>
+                    <h3 id="connect-tv-title">Connect to TV</h3>
+                    <p>Add a TV or streaming device, choose its package, and pay securely with M-Pesa.</p>
+                  </div>
+                  <button type="button" className="hp-tv-modal-close" onClick={() => setTvDialogOpen(false)} aria-label="Close">×</button>
+                </div>
+                <form className="hp-tv-modal-body" onSubmit={handleTvBindPay}>
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-label" htmlFor="tv-connected-device">CONNECTED DEVICES</label>
+                    <select
+                      id="tv-connected-device"
+                      className="hp-tv-select"
+                      value={tvDeviceChoice}
+                      onChange={e => handleTvDeviceChoice(e.target.value)}
+                    >
+                      <option value="">Enter a MAC address manually</option>
+                      {tvDevices.map(device => (
+                        <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
+                          {device.name} — {device.macAddress}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="hp-tv-help">
+                      {tvDevicesLoading
+                        ? "Checking the connected devices on your hotspot router…"
+                        : tvDevices.length > 0
+                          ? "Choose a named connected device, or enter another TV MAC address below."
+                          : "No named connected devices were found. Enter the TV MAC address below."}
+                    </div>
+                    {!tvDevicesLoading && tvDevices.length > 0 && (
+                      <div className="hp-tv-device-list" aria-label="Available connected devices">
+                        {tvDevices.map(device => (
+                          <div className="hp-tv-device-row" key={`device-${device.routerId}-${device.macAddress}`}>
+                            <Tv size={14} color="#34d399" />
+                            <div>
+                              <strong>{device.name}</strong>
+                              <span>{device.macAddress}{device.routerName ? ` · ${device.routerName}` : ""}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-label" htmlFor="tv-mac-address">DEVICE MAC ADDRESS</label>
+                    <input
+                      id="tv-mac-address"
+                      className="hp-tv-input"
+                      value={tvMacAddress}
+                      onChange={e => setTvMacAddress(e.target.value.toUpperCase())}
+                      placeholder="AA:BB:CC:DD:EE:FF"
+                      inputMode="text"
+                      autoCapitalize="characters"
+                      required
+                    />
+                  </div>
+
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-label" htmlFor="tv-device-name">DEVICE NAME</label>
+                    <input
+                      id="tv-device-name"
+                      className="hp-tv-input"
+                      value={tvDeviceName}
+                      onChange={e => setTvDeviceName(e.target.value)}
+                      placeholder="e.g. Living Room TV"
+                      maxLength={64}
+                      required
+                    />
+                  </div>
+
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-label" htmlFor="tv-package">PACKAGE TO PURCHASE</label>
+                    <select
+                      id="tv-package"
+                      className="hp-tv-select"
+                      value={tvPlanId}
+                      onChange={e => setTvPlanId(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>Choose a package</option>
+                      {plans.map(plan => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.name} — {getCurrencySymbol()} {plan.price} · {formatValidity(plan)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-label" htmlFor="tv-phone">PHONE NUMBER</label>
+                    <input
+                      id="tv-phone"
+                      className="hp-tv-input"
+                      type="tel"
+                      value={tvPhone}
+                      onChange={e => setTvPhone(e.target.value)}
+                      placeholder="7XX XXX XXX"
+                      inputMode="tel"
+                      required
+                    />
+                    <div className="hp-tv-help">The M-Pesa payment prompt will be sent to this number.</div>
+                  </div>
+
+                  {tvDialogError && (
+                    <div className="hp-error" role="alert">
+                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                      {tvDialogError}
+                    </div>
+                  )}
+
+                  <div className="hp-tv-actions">
+                    <button type="button" className="hp-btn hp-tv-cancel" onClick={() => setTvDialogOpen(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="hp-btn hp-btn-mpesa" disabled={payLoading || plansLoading}>
+                      {payLoading ? (
+                        <><Loader2 size={16} style={{ animation: "spin 1.5s linear infinite" }} /> Starting…</>
+                      ) : (
+                        <><Tv size={16} /> Bind &amp; Pay</>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}

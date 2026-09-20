@@ -54,24 +54,48 @@ function fmtDate(d?: string | null) {
     hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
 }
+function fmtDateOnly(d?: string | null) {
+  if (!d) return "—";
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-KE", {
+    day: "2-digit", month: "short", year: "numeric",
+  });
+}
+function fmtTimeOnly(d?: string | null) {
+  if (!d) return "No expiry time";
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return "Invalid time";
+  return date.toLocaleTimeString("en-KE", {
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+function toDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+function fromDateTimeLocal(value: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
 function normalizePhone(phone?: string | null) {
   return (phone ?? "").replace(/\D/g, "");
 }
 function purchaseUsername(user: Customer) {
   const actual = user.pppoe_username || user.username;
   if (actual) return actual;
-  const created = new Date(user.created_at);
-  const time = Number.isNaN(created.getTime())
-    ? "0000"
-    : `${String(created.getHours()).padStart(2, "0")}${String(created.getMinutes()).padStart(2, "0")}`;
-  return `${time}-${normalizePhone(user.phone) || user.id}`;
+  return `user-${user.id}`;
 }
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
-  const reference = payment.reference || payment.mpesa_receipt || String(payment.id);
-  if (method.includes("till")) return `mpesatillStk-${reference}`;
-  if (method.includes("mpesa")) return `M-Pesa STK-${reference}`;
+  const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
+  if (method.includes("till")) return `M-Pesa Till · ${transactionId}`;
+  if (method.includes("mpesa")) return `M-Pesa · ${transactionId}`;
   if (method.includes("cash") || method.includes("manual")) return "Cash / Manual";
   return payment.payment_method;
 }
@@ -263,6 +287,7 @@ function EditUserDialog({
   const [username, setUsername] = useState(user.username ?? user.pppoe_username ?? "");
   const [planId, setPlanId] = useState(String(user.plan_id ?? ""));
   const [routerId, setRouterId] = useState(String(user.router_id ?? ""));
+  const [expiresAt, setExpiresAt] = useState(() => toDateTimeLocal(user.expires_at));
   const [saving, setSaving] = useState(false);
   const inputStyle: React.CSSProperties = {
     width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
@@ -271,6 +296,7 @@ function EditUserDialog({
   };
   const submit = async () => {
     if (!name.trim() || !username.trim()) return;
+    if (expiresAt && !fromDateTimeLocal(expiresAt)) return;
     setSaving(true);
     try {
       await onSave({
@@ -279,6 +305,7 @@ function EditUserDialog({
         ...(user.type === "pppoe" ? { pppoe_username: username.trim() } : { username: username.trim() }),
         plan_id: planId ? Number(planId) : null,
         router_id: routerId ? Number(routerId) : null,
+        expires_at: fromDateTimeLocal(expiresAt),
       });
       onClose();
     } finally {
@@ -307,6 +334,16 @@ function EditUserDialog({
             <option value="">Unassigned</option>
             {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
           </select></label>
+          <label style={{ gridColumn: "1 / -1" }}>
+            Expiry date and time
+            <input
+              style={inputStyle}
+              type="datetime-local"
+              value={expiresAt}
+              onChange={event => setExpiresAt(event.target.value)}
+            />
+            <span className="prepaid-help">Use the local date and time shown on this admin panel. Leave blank only for an account with no expiry.</span>
+          </label>
         </div>
         <div className="prepaid-modal-actions">
           <button type="button" onClick={onClose} className="prepaid-secondary-button">Cancel</button>
@@ -825,8 +862,8 @@ export default function PrepaidUsers() {
                 <th style={TH}>Password</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
-                <th style={TH}>Created</th>
-                <th style={TH}>Expires</th>
+                <th style={TH}>Created (date &amp; time)</th>
+                <th style={TH}>Expires (date &amp; time)</th>
                 <th style={TH}>Method</th>
                 <th style={TH}>Router</th>
                 <th style={TH}>Service status</th>
@@ -890,10 +927,14 @@ export default function PrepaidUsers() {
                         <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)", whiteSpace: "nowrap" }}>{plan?.name || "No plan"}</div>
                         <div style={{ fontSize: "0.7rem", color: "var(--isp-accent)", fontWeight: 700, marginTop: 3 }}>{plan ? `${plan.price.toFixed(2)} · ${plan.speed_down}/${plan.speed_up} Mbps` : "—"}</div>
                       </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }}>{fmtDate(user.created_at)}</td>
+                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
+                        <div>{fmtDateOnly(user.created_at)}</div>
+                        <div style={{ color: "var(--isp-text-sub)", fontSize: "0.64rem", marginTop: 2 }}>{fmtTimeOnly(user.created_at)}</div>
+                      </td>
                       <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                        <span style={{ fontSize: "0.72rem", fontWeight: 600, color: expiring ? "#fbbf24" : expired ? "#f87171" : "var(--isp-text-muted)" }}>
-                          {fmtDate(user.expires_at)}
+                        <span title={fmtDate(user.expires_at)} style={{ fontSize: "0.72rem", fontWeight: 600, color: expiring ? "#fbbf24" : expired ? "#f87171" : "var(--isp-text-muted)" }}>
+                          <div>{fmtDateOnly(user.expires_at)}</div>
+                          <div style={{ color: "var(--isp-text-sub)", fontSize: "0.64rem", marginTop: 2 }}>{fmtTimeOnly(user.expires_at)}</div>
                         </span>
                         {expiring && !expired && <div style={{ fontSize: "0.6rem", color: "#fbbf24", fontWeight: 700 }}>Expiring soon</div>}
                       </td>

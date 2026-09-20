@@ -20,6 +20,7 @@ import {
   updatePPPSecret,
   addHotspotUser,
   updateHotspotUser,
+  ensureHotspotUserProfile,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
@@ -46,6 +47,8 @@ interface SbPlan {
   plan_type: string;
   validity_days: number;
   router_id: number | null;
+  speed_down: number | null;
+  speed_up: number | null;
 }
 
 interface SbRouter {
@@ -220,6 +223,13 @@ function calcExpiry(validityDays: number): string {
   return d.toISOString();
 }
 
+function hotspotRateLimit(plan: SbPlan): string | undefined {
+  const down = Number(plan.speed_down);
+  const up = Number(plan.speed_up);
+  if (!Number.isFinite(down) || !Number.isFinite(up) || down <= 0 || up <= 0) return undefined;
+  return `${up}M/${down}M`;
+}
+
 /* ── Log webhook event (best-effort — table may not exist yet) ───────────── */
 async function logEvent(payload: Record<string, unknown>): Promise<void> {
   try {
@@ -274,7 +284,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity_days,router_id,speed_down,speed_up&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -338,16 +348,22 @@ export async function autoProvision(opts: {
       }
     } else {
       /* Hotspot */
+      const profile = `ochola-plan-${plan.id}`;
+      await ensureHotspotUserProfile(creds, {
+        name: profile,
+        sharedUsers: 1,
+        rateLimit: hotspotRateLimit(plan),
+      });
       try {
-        await updateHotspotUser(creds, username, { disabled: false, comment });
+        await updateHotspotUser(creds, username, { disabled: false, profile, comment });
         action = "enabled";
       } catch {
         try {
-          await addHotspotUser(creds, { name: username, password, profile: plan.name, comment });
+          await addHotspotUser(creds, { name: username, password, profile, comment });
           action = "created";
         } catch (e2) {
           logger.warn({ err: (e2 as Error).message }, "[provision] Hotspot add failed, trying update again");
-          await updateHotspotUser(creds, username, { disabled: false });
+          await updateHotspotUser(creds, username, { disabled: false, profile });
           action = "renewed";
         }
       }
@@ -413,6 +429,7 @@ async function recordTransaction(
     plan_id:        plan.id,
     amount,
     payment_method: paymentMethod,
+    ...(paymentMethod.toLowerCase().includes("mpesa") ? { mpesa_receipt: reference } : {}),
     reference,
     status:         "completed",
     notes:          `Auto-provisioned via webhook — Plan: ${plan.name}`,
