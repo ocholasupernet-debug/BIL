@@ -36,6 +36,7 @@ import { prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifi
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -101,6 +102,9 @@ function hotspotRouterCredentials(row: HotspotRouterRow): RouterCredentials {
     port: 8728,
     username: row.router_username || "admin",
     password: row.router_secret || "",
+    alternateUsernames: managementIp && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [ROUTER_MANAGEMENT_API_USERNAME]
+      : undefined,
     useSSL: false,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
@@ -1448,6 +1452,47 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const expiryBase = reusableCustomer && Number.isFinite(existingExpiry) ? Math.max(now, existingExpiry) : now;
   const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
 
+  const customerFields = {
+    admin_id: adminId,
+    name: requestedDeviceName || `Hotspot ${paymentPhone}`,
+    phone: paymentPhone,
+    username: hotspotUsername,
+    password: hotspotPassword,
+    plan_id: plan.id,
+    type: "hotspot",
+    mac_address: mac,
+    ip_address: routerAddress || null,
+    status: "active",
+    expires_at: expiresAt.toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  let customer: { id: number } | undefined;
+  try {
+    /*
+     * Persist the paid account before touching RouterOS. The router/API can be
+     * temporarily unavailable after payment; keeping the customer and linking
+     * the transaction makes the same checkout or receipt retryable.
+     */
+    const customerRows = reusableCustomer
+      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
+      : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
+    customer = customerRows[0] as { id: number } | undefined;
+    if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");
+
+    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
+      customer_id: customer.id,
+      plan_id: plan.id,
+      notes: `M-Pesa payment verified; prepaid hotspot account saved and awaiting router access on ${routerRow.name}.`,
+    });
+  } catch (error) {
+    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] prepaid account persistence failed");
+    res.status(503).json({
+      ok: false,
+      error: "Payment is confirmed, but the prepaid account could not be saved. Please retry connection.",
+    });
+    return;
+  }
+
   try {
     const hotspotProfile = `ochola-plan-${plan.id}`;
     await ensureHotspotUserProfile(credentials, {
@@ -1509,26 +1554,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       });
     }
 
-    const customerFields = {
-      admin_id: adminId,
-      name: requestedDeviceName || `Hotspot ${paymentPhone}`,
-      phone: paymentPhone,
-      username: hotspotUsername,
-      password: hotspotPassword,
-      plan_id: plan.id,
-      type: "hotspot",
-      mac_address: mac,
-      ip_address: routerAddress || null,
-      status: "active",
-      expires_at: expiresAt.toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    const customerRows = reusableCustomer
-      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
-      : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
-    const customer = customerRows[0] as { id?: number } | undefined;
-    if (!customer) throw new Error("The paid hotspot customer account could not be saved.");
-
      await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       customer_id: customer.id,
       plan_id: plan.id,
@@ -1544,7 +1569,10 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
   } catch (error) {
     logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] binding failed");
-    res.status(503).json({ ok: false, error: "Payment is confirmed, but the hotspot router could not be updated. Please retry connection." });
+    res.status(503).json({
+      ok: false,
+      error: "Payment is confirmed and the prepaid account was saved, but the hotspot router could not be updated. Keep this page open and retry connection.",
+    });
   }
 });
 

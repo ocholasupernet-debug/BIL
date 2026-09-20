@@ -28,6 +28,8 @@ export interface RouterCredentials {
   port: number;
   username: string;
   password: string;
+  /** Additional usernames using the same stored password during installer migration. */
+  alternateUsernames?: string[];
   /** Use API-SSL (TLS). Auto-enabled when port === 8729. */
   useSSL?: boolean;
   /**
@@ -299,6 +301,10 @@ async function connectWithRetry(
   if (hosts.length === 0) {
     throw new Error("No host or bridge IP configured for this router");
   }
+  const usernames = Array.from(new Set([
+    creds.username,
+    ...(creds.alternateUsernames ?? []),
+  ].map(username => username.trim()).filter(Boolean)));
 
   /* VPN tunnel IPs (10.8.x.x) are always reachable from the VPS server.
      Public/WAN IPs are often firewalled against direct API access.
@@ -352,29 +358,34 @@ async function connectWithRetry(
 
       logger.debug({ host: label, port: creds.port, latencyMs: probe.latencyMs }, "Port open");
 
-      /* ── Step 2: RouterOS API login ── */
-      const conn = makeConn(connectionHost, { ...creds, host: connectionHost, port: connectionPort });
-      try {
-        logger.debug({ host: label, attempt }, "RouterOS API connect");
-        await withTimeout(conn.connect(), connectMs);
-        logger.debug({ host: label, attempt }, "RouterOS API connected");
-        return {
-          conn,
-          connectedHost: host,
-          probe,
-          closeForward: forward ? () => forward!.close() : undefined,
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ host: label, attempt, err: msg }, "RouterOS API connect failed");
-        lastErr = new Error(
-          `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} ` +
-          `but RouterOS API login failed (attempt ${attempt}/${MAX_RETRIES}): ${msg}. ` +
-          `Check the API username and password, and that the API service is enabled.`
-        );
-        try { conn.close(); } catch { /* ignore */ }
-        await forward?.close();
+      /* ── Step 2: RouterOS API login ──
+         Self Install creates the stable management account, while older rows
+         may still store the router-name username. Try both over the same
+         already-verified tunnel before declaring the router offline. */
+      for (const username of usernames) {
+        const conn = makeConn(connectionHost, { ...creds, username, host: connectionHost, port: connectionPort });
+        try {
+          logger.debug({ host: label, username, attempt }, "RouterOS API connect");
+          await withTimeout(conn.connect(), connectMs);
+          logger.debug({ host: label, username, attempt }, "RouterOS API connected");
+          return {
+            conn,
+            connectedHost: host,
+            probe,
+            closeForward: forward ? () => forward!.close() : undefined,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ host: label, username, attempt, err: msg }, "RouterOS API connect failed");
+          lastErr = new Error(
+            `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} ` +
+            `but RouterOS API login failed for ${username} (attempt ${attempt}/${MAX_RETRIES}): ${msg}. ` +
+            `Check the API username and password, and that the API service is enabled.`
+          );
+          try { conn.close(); } catch { /* ignore */ }
+        }
       }
+      await forward?.close();
     }
 
     /* Exponential backoff between full retry rounds */
