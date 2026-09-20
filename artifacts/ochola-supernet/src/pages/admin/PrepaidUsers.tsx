@@ -60,18 +60,14 @@ function normalizePhone(phone?: string | null) {
 function purchaseUsername(user: Customer) {
   const actual = user.pppoe_username || user.username;
   if (actual) return actual;
-  const created = new Date(user.created_at);
-  const time = Number.isNaN(created.getTime())
-    ? "0000"
-    : `${String(created.getHours()).padStart(2, "0")}${String(created.getMinutes()).padStart(2, "0")}`;
-  return `${time}-${normalizePhone(user.phone) || user.id}`;
+  return `user-${user.id}`;
 }
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
-  const reference = payment.reference || payment.mpesa_receipt || String(payment.id);
-  if (method.includes("till")) return `mpesatillStk-${reference}`;
-  if (method.includes("mpesa")) return `M-Pesa STK-${reference}`;
+  const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
+  if (method.includes("till")) return `M-Pesa Till · ${transactionId}`;
+  if (method.includes("mpesa")) return `M-Pesa · ${transactionId}`;
   if (method.includes("cash") || method.includes("manual")) return "Cash / Manual";
   return payment.payment_method;
 }

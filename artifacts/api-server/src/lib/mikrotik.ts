@@ -1926,6 +1926,33 @@ export async function addHotspotUserProfile(
   });
 }
 
+/**
+ * Create or update a tenant-owned hotspot profile. Paid users should never
+ * inherit an existing profile with a broader rate limit just because a plan
+ * happens to share its display name with that profile.
+ */
+export async function ensureHotspotUserProfile(
+  creds: RouterCredentials,
+  opts: { name: string; sharedUsers?: number; rateLimit?: string },
+): Promise<void> {
+  try {
+    await updateHotspotUserProfile(creds, opts.name, {
+      sharedUsers: opts.sharedUsers,
+      rateLimit: opts.rateLimit,
+    });
+  } catch {
+    try {
+      await addHotspotUserProfile(creds, opts);
+    } catch {
+      /* A concurrent request may have created it between update and add. */
+      await updateHotspotUserProfile(creds, opts.name, {
+        sharedUsers: opts.sharedUsers,
+        rateLimit: opts.rateLimit,
+      });
+    }
+  }
+}
+
 export async function updateHotspotUserProfile(
   creds: RouterCredentials,
   name: string,

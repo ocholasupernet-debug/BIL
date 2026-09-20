@@ -308,6 +308,7 @@
         <div>
           <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa Confirmation SMS</label>
           <textarea id="mpesaMsg" rows="4" placeholder="Paste your full M-Pesa SMS — e.g. QHJ3X1Y3ZA Confirmed. Ksh20.00 paid to OCHOLASUPERNET…" class="inp inp-green"></textarea>
+          <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
         <button onclick="submitMpesa()" class="btn btn-green btn-full" style="margin-top:.25rem">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
@@ -1036,12 +1037,31 @@ function resetVoucher(){
 function submitMpesa(){
   var msg=document.getElementById("mpesaMsg").value.trim();
   if(!msg)return;
-  /* Post to billing API */
-   fetch(apiUrl("/api/mpesa/verify"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg})})
-    .catch(function(){})
-    .finally(function(){
+   var errorEl=document.getElementById("mpesaMsgError");
+   if(errorEl){errorEl.style.display="none";errorEl.textContent="";}
+   fetch(apiUrl("/api/mpesa/verify"),{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+       message:msg,
+       adminId:PORTAL_ADMIN_ID,
+       ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+     })
+   })
+    .then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
+    .then(function(result){
+      if(!result.ok||!result.data||!result.data.ok)throw new Error(result.data&&result.data.error||"The M-Pesa payment could not be verified.");
+      if(!applyPaidHotspotCredentials(result.data.credentials))throw new Error("The payment was verified, but hotspot credentials were not returned.");
       document.getElementById("mpesaMsgWrap").style.display="none";
       document.getElementById("mpesaMsgSuccess").style.display="block";
+      scrollToLogin();
+    })
+    .catch(function(error){
+      if(errorEl){
+        errorEl.textContent=error&&error.message?error.message:"The M-Pesa message could not be verified.";
+        errorEl.style.display="block";
+      }
     });
 }
 

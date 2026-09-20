@@ -20,6 +20,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
   addHotspotIpBinding,
   addHotspotUser,
+  ensureHotspotUserProfile,
   resolveHotspotClientMac,
   scheduleHotspotUserExpiry,
   updateHotspotUser,
@@ -283,6 +284,25 @@ function readDeviceName(value: unknown): string {
     : "";
 }
 
+function hotspotRateLimit(speedDown: unknown, speedUp: unknown): string | undefined {
+  const down = Number(speedDown);
+  const up = Number(speedUp);
+  if (!Number.isFinite(down) || !Number.isFinite(up) || down <= 0 || up <= 0) return undefined;
+  return `${up}M/${down}M`;
+}
+
+function randomHotspotUsername(): string {
+  return `hs_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
+function extractMpesaReceipt(message: unknown): string {
+  if (typeof message !== "string") return "";
+  const text = message.trim();
+  const match = text.match(/\b([A-Z][A-Z0-9]{8,11})\s+Confirmed\b/i)
+    ?? text.match(/\b(?:transaction|receipt|code)\s*(?:number|id|no\.?)?\s*[:#-]?\s*([A-Z][A-Z0-9]{8,11})\b/i);
+  return match?.[1]?.toUpperCase() ?? "";
+}
+
 function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
   const key = `${req.ip}:${adminId}:${phone}`;
   const now = Date.now();
@@ -457,6 +477,13 @@ export async function processMpesaCallback(
     logger.warn("[mpesa/callback] Missing CheckoutRequestID — ignoring");
     return false;
   }
+  const callbackMetadata = callback.CallbackMetadata as
+    | { Item?: Array<{ Name?: string; Value?: unknown }> }
+    | undefined;
+  const callbackItems = callbackMetadata?.Item ?? [];
+  const mpesaReceipt = String(
+    callbackItems.find(item => item.Name === "MpesaReceiptNumber")?.Value ?? "",
+  ).trim().toUpperCase();
 
   const pendingRows = await dependencies.selectPending(
     `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,plan_id,amount,payment_method,payment_phone,mac_address&limit=1`,
@@ -476,6 +503,17 @@ export async function processMpesaCallback(
   }
 
   const isSuccessful = verification.resultCode === 0;
+  if (isSuccessful && mpesaReceipt) {
+    try {
+      await sbUpdate(
+        "isp_transactions",
+        `id=eq.${transaction.id}&status=eq.pending`,
+        { mpesa_receipt: mpesaReceipt },
+      );
+    } catch (error) {
+      logger.warn({ err: error, checkoutId }, "[mpesa/callback] Could not save the verified M-Pesa receipt");
+    }
+  }
   let rollbackPppoeAccess: (() => Promise<void>) | undefined;
   if (isSuccessful && transaction.admin_id && transaction.customer_id && transaction.plan_id) {
     const access = await dependencies.reactivatePppoeAccess({
@@ -1285,9 +1323,11 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     name: string;
     type: string;
     router_id: number | null;
+    speed_down: number | null;
+    speed_up: number | null;
   }>(
     "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id&limit=1`,
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up&limit=1`,
   );
   const plan = plans[0];
   if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot") {
@@ -1346,12 +1386,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-  /*
-   * A paid hotspot account is one database customer plus one RouterOS user.
-   * Reuse a still-active generated account for a renewal, otherwise create a
-   * phone-based username with the Nairobi purchase time suffix requested by
-   * the portal (for example 254791941974-4:43).
-   */
+   /*
+    * A paid hotspot account is one database customer plus one RouterOS user.
+    * Reuse an active randomly generated account for a renewal, otherwise
+    * allocate a new random username. Usernames must not disclose the phone
+    * number or purchase time.
+    */
   const existingCustomers = await sbSelect<{
     id: number;
     username: string | null;
@@ -1363,27 +1403,25 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     `admin_id=eq.${adminId}&type=eq.hotspot&phone=eq.${encodeURIComponent(paymentPhone)}&select=id,username,password,status,expires_at&order=id.desc&limit=20`,
   );
   const now = Date.now();
-  const generatedPrefix = `${paymentPhone}-`;
   const reusableCustomer = existingCustomers.find((customer) => {
     const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
     return customer.status === "active" &&
       Number.isFinite(expiresAt) &&
       expiresAt > now &&
-      typeof customer.username === "string" &&
-      customer.username.startsWith(generatedPrefix);
+       typeof customer.username === "string" &&
+       /^hs_[A-Za-z0-9]{12,20}$/.test(customer.username);
   });
 
-  const purchaseTime = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Africa/Nairobi",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date());
-  const purchaseHour = Number(purchaseTime.find(part => part.type === "hour")?.value ?? 0);
-  const purchaseMinute = purchaseTime.find(part => part.type === "minute")?.value ?? "00";
-  let hotspotUsername = reusableCustomer?.username ?? `${paymentPhone}-${purchaseHour}:${purchaseMinute}`;
-  if (!reusableCustomer && existingCustomers.some(customer => customer.username === hotspotUsername)) {
-    hotspotUsername = `${hotspotUsername}-${transaction.id}`;
+   let hotspotUsername = reusableCustomer?.username ?? randomHotspotUsername();
+   if (!reusableCustomer) {
+     for (let attempt = 0; attempt < 5; attempt += 1) {
+       const collision = await sbSelect<{ id: number }>(
+         "isp_customers",
+         `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(hotspotUsername)}&select=id&limit=1`,
+       );
+       if (!collision[0]) break;
+       hotspotUsername = randomHotspotUsername();
+     }
   }
   const hotspotPassword = "12345";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
@@ -1391,6 +1429,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
 
   try {
+     const hotspotProfile = `ochola-plan-${plan.id}`;
+     await ensureHotspotUserProfile(credentials, {
+       name: hotspotProfile,
+       sharedUsers: 1,
+       rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up),
+     });
     await addHotspotIpBinding(credentials, {
       macAddress: mac,
       comment: `OcholaSupernet paid ${checkoutId}`,
@@ -1399,7 +1443,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     try {
       await updateHotspotUser(credentials, hotspotUsername, {
         password: hotspotPassword,
-        profile: plan.name,
+         profile: hotspotProfile,
         disabled: false,
         comment: `OcholaSupernet paid ${checkoutId}`,
       });
@@ -1407,7 +1451,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       await addHotspotUser(credentials, {
         name: hotspotUsername,
         password: hotspotPassword,
-        profile: plan.name,
+         profile: hotspotProfile,
         comment: `OcholaSupernet paid ${checkoutId}`,
       });
     }
@@ -1456,11 +1500,168 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * POST /api/mpesa/verify
- * Public SMS-based confirmation is disabled. Live payments must be confirmed
- * by Safaricom's STK Query path in the callback handler.
+ * Reconnect an already verified hotspot payment from the customer's M-Pesa
+ * confirmation SMS. The SMS is only a lookup key: access is granted only when
+ * its receipt matches a completed server-side transaction.
  * ═══════════════════════════════════════════════════════════════════════════ */
-router.post("/mpesa/verify", (_req: Request, res: Response): void => {
-  res.status(404).json({ ok: false, error: "This endpoint is not available." });
+router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> => {
+  const adminId = Number(req.body?.adminId);
+  const receipt = extractMpesaReceipt(req.body?.message);
+  const requestedMac = readMacAddress(req.body?.mac_address);
+  const clientIp = readClientIp(req.body?.client_ip);
+
+  if (!Number.isSafeInteger(adminId) || adminId < 1 || !receipt || requestedMac.invalid) {
+    res.status(400).json({ ok: false, error: "Paste a valid M-Pesa confirmation message and open this page from the ISP network." });
+    return;
+  }
+  if (!await isActiveIspAdmin(adminId)) {
+    res.status(404).json({ ok: false, error: "This ISP account is not active." });
+    return;
+  }
+
+  type VerifiedTransaction = {
+    id: number;
+    admin_id: number;
+    customer_id: number | null;
+    plan_id: number | null;
+    payment_phone: string | null;
+    mac_address: string | null;
+    mpesa_receipt: string | null;
+    status: string;
+  };
+  let transactions = await sbSelect<VerifiedTransaction>(
+    "isp_transactions",
+    `admin_id=eq.${adminId}&payment_method=eq.mpesa&status=in.(completed,paid,success)&mpesa_receipt=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+  );
+  if (!transactions[0]) {
+    /* Legacy webhook provisioning stored the receipt in reference. */
+    transactions = await sbSelect<VerifiedTransaction>(
+      "isp_transactions",
+      `admin_id=eq.${adminId}&payment_method=eq.mpesa&status=in.(completed,paid,success)&reference=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+    );
+  }
+  const transaction = transactions[0];
+  if (!transaction?.customer_id || !transaction.plan_id) {
+    res.status(404).json({ ok: false, error: "That M-Pesa payment has not been assigned to a hotspot account yet." });
+    return;
+  }
+
+  const customers = await sbSelect<{
+    id: number;
+    username: string | null;
+    password: string | null;
+    name: string | null;
+    mac_address: string | null;
+    status: string;
+    expires_at: string | null;
+  }>(
+    "isp_customers",
+    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,mac_address,status,expires_at&limit=1`,
+  );
+  const customer = customers[0];
+  if (!customer?.username || !customer.password) {
+    res.status(409).json({ ok: false, error: "The verified payment does not have hotspot credentials yet." });
+    return;
+  }
+  const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : 0;
+  if (customer.status !== "active" || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    res.status(409).json({ ok: false, error: "This hotspot package has expired. Purchase a new package to reconnect." });
+    return;
+  }
+
+  const plans = await sbSelect<{
+    id: number;
+    name: string;
+    type: string;
+    router_id: number | null;
+    speed_down: number | null;
+    speed_up: number | null;
+  }>(
+    "isp_plans",
+    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up&limit=1`,
+  );
+  const plan = plans[0];
+  if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot" || !plan.router_id) {
+    res.status(409).json({ ok: false, error: "The verified payment is not attached to an active hotspot package." });
+    return;
+  }
+
+  const routers = await sbSelect<{
+    id: number;
+    name: string;
+    host: string;
+    bridge_ip: string | null;
+    vpn_ip: string | null;
+    router_username: string | null;
+    router_secret: string | null;
+  }>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  );
+  const routerRow = routers[0];
+  if (!routerRow || (!routerRow.host && !routerRow.bridge_ip && !routerRow.vpn_ip)) {
+    res.status(503).json({ ok: false, error: "The hotspot router is not reachable from the ISP server." });
+    return;
+  }
+
+  const transactionMac = normaliseMacAddress(transaction.mac_address || customer.mac_address);
+  let mac = requestedMac.value || transactionMac;
+  if (requestedMac.value && transactionMac && requestedMac.value !== transactionMac) {
+    res.status(400).json({ ok: false, error: "This M-Pesa payment belongs to a different device." });
+    return;
+  }
+  const credentials = hotspotRouterCredentials(routerRow);
+  if (!mac && clientIp) {
+    mac = await resolveHotspotClientMac(credentials, clientIp).catch(() => null) ?? "";
+  }
+  if (!mac) {
+    res.status(400).json({ ok: false, error: "The router could not identify the device to reconnect." });
+    return;
+  }
+
+  const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
+  const hotspotProfile = `ochola-plan-${plan.id}`;
+  try {
+    await ensureHotspotUserProfile(credentials, {
+      name: hotspotProfile,
+      sharedUsers: 1,
+      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up),
+    });
+    await addHotspotIpBinding(credentials, {
+      macAddress: mac,
+      comment: `OcholaSupernet SMS reconnect ${receipt}`,
+      expiresInSeconds,
+    });
+    try {
+      await updateHotspotUser(credentials, customer.username, {
+        password: customer.password,
+        profile: hotspotProfile,
+        disabled: false,
+        comment: `OcholaSupernet SMS reconnect ${receipt}`,
+      });
+    } catch {
+      await addHotspotUser(credentials, {
+        name: customer.username,
+        password: customer.password,
+        profile: hotspotProfile,
+        comment: `OcholaSupernet SMS reconnect ${receipt}`,
+      });
+    }
+    await scheduleHotspotUserExpiry(credentials, {
+      name: customer.username,
+      expiresInSeconds,
+    });
+    res.json({
+      ok: true,
+      transaction_id: transaction.id,
+      router: routerRow.name,
+      credentials: { username: customer.username, password: customer.password },
+      expires_at: customer.expires_at,
+    });
+  } catch (error) {
+    logger.error({ err: error, receipt, routerId: routerRow.id }, "[mpesa/verify] hotspot reconnect failed");
+    res.status(503).json({ ok: false, error: "The payment was verified, but the hotspot router could not reconnect this device. Please try again." });
+  }
 });
 
 export default router;
