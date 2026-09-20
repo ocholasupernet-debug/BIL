@@ -1599,6 +1599,53 @@ export async function addHotspotUser(
   });
 }
 
+/**
+ * Disable a paid hotspot user at the end of the package validity window.
+ * RouterOS hotspot users do not have a wall-clock expiry field, so use a
+ * one-shot scheduler and disconnect an active session when it fires.
+ */
+export async function scheduleHotspotUserExpiry(
+  creds: RouterCredentials,
+  opts: { name: string; expiresInSeconds: number },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive hotspot user duration is required.");
+    }
+
+    const clockRows = (await withTimeout(
+      conn.write(["/system/clock/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
+
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = `ochola-user-${opts.name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+    const expiryScript =
+      `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
+      `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet hotspot user expiry",
+    );
+    await withTimeout(conn.write(schedulerCommand), ms);
+  });
+}
+
 export async function removeHotspotUser(creds: RouterCredentials, name: string): Promise<void> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
