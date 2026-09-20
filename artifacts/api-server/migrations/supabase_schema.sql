@@ -123,6 +123,8 @@ create table if not exists isp_plans (
   type           text not null default 'hotspot',   -- hotspot | pppoe | static
   speed_down     numeric(10,2) not null default 10, -- Mbps
   speed_up       numeric(10,2) not null default 10, -- Mbps
+  speed_down_unit text not null default 'Mbps',
+  speed_up_unit   text not null default 'Mbps',
   price          numeric(12,2) not null default 0,
   validity       integer not null default 30,
   validity_unit  text not null default 'days',

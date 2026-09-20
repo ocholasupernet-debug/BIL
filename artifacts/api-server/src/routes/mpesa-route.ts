@@ -11,7 +11,7 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
-import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
@@ -1356,7 +1356,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-  const plans = await sbSelect<{
+  let plans: Array<{
     id: number;
     name: string;
     type: string;
@@ -1366,10 +1366,17 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
-  }>(
-    "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
-  );
+  }>;
+  try {
+    plans = await sbSelectStrict(
+      "isp_plans",
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+    );
+  } catch (error) {
+    logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
+    res.status(503).json({ ok: false, error: "The hotspot plan details are temporarily unavailable while the database is being updated. Try connecting again shortly." });
+    return;
+  }
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") {
     res.status(409).json({ ok: false, error: "The paid plan is not configured as a hotspot plan." });
@@ -1677,7 +1684,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const plans = await sbSelect<{
+  let plans: Array<{
     id: number;
     name: string;
     type: string;
@@ -1687,10 +1694,17 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
-  }>(
-    "isp_plans",
-    `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
-  );
+  }>;
+  try {
+    plans = await sbSelectStrict(
+      "isp_plans",
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+    );
+  } catch (error) {
+    logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
+    res.status(503).json({ ok: false, error: "The hotspot plan details are temporarily unavailable while the database is being updated. Try again shortly." });
+    return;
+  }
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "hotspot" || !plan.router_id) {
     res.status(409).json({ ok: false, error: "The verified payment is not attached to an active hotspot package." });
