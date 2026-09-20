@@ -184,7 +184,7 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
             style={inp}
             value={host}
             onChange={e => setHost(e.target.value)}
-            placeholder="192.168.88.1"
+            placeholder="192.168.180.1"
             onFocus={e => (e.target.style.borderColor = "var(--isp-accent)")}
             onBlur={e  => (e.target.style.borderColor = "rgba(255,255,255,0.1)")}
           />

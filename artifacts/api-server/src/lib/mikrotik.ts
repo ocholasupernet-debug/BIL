@@ -447,6 +447,231 @@ export async function disableGeneratedHotspot(
 }
 
 /**
+ * Reconcile the installed service resources to the current shared-bridge
+ * contract. The generated Hotspot remains disabled during this operation so
+ * it cannot interrupt the management WLAN again.
+ */
+export async function reconcileGeneratedServiceConfiguration(
+  creds: RouterCredentials,
+  routerId: number,
+): Promise<{ bridgeName: string; hotspotNetwork: string; pppoeInterface: string }> {
+  const tag = `ochola-services-${routerId}`;
+  const hotspotName = `${tag}-hotspot`;
+  const hotspotPool = `${tag}-hotspot-pool`;
+  const hotspotProfile = `${tag}-hotspot-profile`;
+  const dhcpServer = `${tag}-dhcp`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const pppoeServiceName = `${tag}-pppoe`;
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
+  const hotspotPoolRange = "192.168.180.10-192.168.183.254";
+  const pppoeGateway = "192.168.99.1";
+  const pppoePoolRange = "192.168.99.10-192.168.99.254";
+
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,interface,disabled",
+    `?name=${hotspotName}`,
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : [])
+    .find(row => row.name === hotspotName);
+  const bridgeName = String(hotspot?.interface || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The generated Hotspot has no valid bridge interface.");
+  }
+
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=name",
+    `?name=${bridgeName}`,
+  ]);
+  if (!(Array.isArray(bridgeRows) ? bridgeRows : []).some(row => row.name === bridgeName)) {
+    throw new Error(`The required service bridge "${bridgeName}" was not found on the router.`);
+  }
+
+  const addressRows = await runRouterCommand(creds, [
+    "/ip/address/print",
+    "=.proplist=.id,address,interface,comment",
+  ]);
+  for (const row of (Array.isArray(addressRows) ? addressRows : [])
+    .filter(item => item.comment === `${tag} hotspot gateway`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/address/remove", `=.id=${row[".id"]}`]);
+  }
+  if (!(Array.isArray(addressRows) ? addressRows : [])
+    .some(row => row.address === `${hotspotGateway}/22` && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/ip/address/add",
+      `=address=${hotspotGateway}/22`,
+      `=interface=${bridgeName}`,
+      `=comment=${tag} hotspot gateway`,
+    ]);
+  }
+
+  const poolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name",
+    `?name=${hotspotPool}`,
+  ]);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool);
+  if (pool?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pool[".id"]}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${hotspotPool}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`,
+    ]);
+  }
+
+  const dhcpNetworkRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/print",
+    "=.proplist=.id,address,comment",
+  ]);
+  for (const row of (Array.isArray(dhcpNetworkRows) ? dhcpNetworkRows : [])
+    .filter(item => item.comment === `${tag} Hotspot DHCP network`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/dhcp-server/network/remove", `=.id=${row[".id"]}`]);
+  }
+  await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/add",
+    `=address=${hotspotNetwork}`,
+    `=gateway=${hotspotGateway}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    `=comment=${tag} Hotspot DHCP network`,
+  ]);
+
+  const dhcpRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/print",
+    "=.proplist=.id,name",
+    `?name=${dhcpServer}`,
+  ]);
+  const dhcp = (Array.isArray(dhcpRows) ? dhcpRows : []).find(row => row.name === dhcpServer);
+  if (dhcp?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/set",
+      `=.id=${dhcp[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no",
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/add",
+      `=name=${dhcpServer}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no",
+    ]);
+  }
+
+  const profileRows = await runRouterCommand(creds, [
+    "/ip/hotspot/profile/print",
+    "=.proplist=.id,name",
+    `?name=${hotspotProfile}`,
+  ]);
+  const profile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile);
+  const profileFields = [
+    `=hotspot-address=${hotspotGateway}`,
+    "=html-directory=hotspot",
+    "=login-by=http-chap,http-pap,cookie",
+  ];
+  if (profile?.[".id"]) {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/set", `=.id=${profile[".id"]}`, ...profileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, ...profileFields]);
+  }
+  if (hotspot?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${hotspot[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/add",
+      `=name=${hotspotName}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=yes",
+    ]);
+  }
+
+  const pppoePoolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name",
+    `?name=${pppoePool}`,
+  ]);
+  const pppoePoolRow = (Array.isArray(pppoePoolRows) ? pppoePoolRows : []).find(row => row.name === pppoePool);
+  if (pppoePoolRow?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pppoePoolRow[".id"]}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${pppoePool}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`,
+    ]);
+  }
+  const pppoeProfileRows = await runRouterCommand(creds, [
+    "/ppp/profile/print",
+    "=.proplist=.id,name",
+    `?name=${pppoeProfile}`,
+  ]);
+  const pppoeProfileRow = (Array.isArray(pppoeProfileRows) ? pppoeProfileRows : [])
+    .find(row => row.name === pppoeProfile);
+  const pppoeProfileFields = [
+    `=local-address=${pppoeGateway}`,
+    `=remote-address=${pppoePool}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    "=only-one=yes",
+    "=use-encryption=yes",
+    "=change-tcp-mss=yes",
+  ];
+  if (pppoeProfileRow?.[".id"]) {
+    await runRouterCommand(creds, ["/ppp/profile/set", `=.id=${pppoeProfileRow[".id"]}`, ...pppoeProfileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ppp/profile/add", `=name=${pppoeProfile}`, ...pppoeProfileFields]);
+  }
+  const pppoeRows = await runRouterCommand(creds, [
+    "/interface/pppoe-server/server/print",
+    "=.proplist=.id,service-name",
+    `?service-name=${pppoeServiceName}`,
+  ]);
+  const pppoe = (Array.isArray(pppoeRows) ? pppoeRows : []).find(row => row["service-name"] === pppoeServiceName);
+  const pppoeFields = [
+    `=interface=${bridgeName}`,
+    `=default-profile=${pppoeProfile}`,
+    "=one-session-per-host=yes",
+    "=disabled=no",
+  ];
+  if (pppoe?.[".id"]) {
+    await runRouterCommand(creds, ["/interface/pppoe-server/server/set", `=.id=${pppoe[".id"]}`, ...pppoeFields]);
+  } else {
+    await runRouterCommand(creds, [
+      "/interface/pppoe-server/server/add",
+      `=service-name=${pppoeServiceName}`,
+      ...pppoeFields,
+    ]);
+  }
+
+  return { bridgeName, hotspotNetwork, pppoeInterface: bridgeName };
+}
+
+/**
  * Repair the tagged service-network policy without enabling or disabling the
  * Hotspot server. This is used by the emergency website recovery flow when a
  * router received the service bridge but not the matching firewall/DNS/NAT
@@ -613,7 +838,7 @@ export async function repairGeneratedServiceNetworking(
       }
     };
     for (const [comment, source] of [
-      [`${tag} Hotspot masquerade`, "192.168.88.0/24"],
+      [`${tag} Hotspot masquerade`, "192.168.180.0/22"],
       [`${tag} PPPoE masquerade`, "192.168.99.0/24"],
     ] as const) {
       await removeTaggedNat(comment);
@@ -2419,7 +2644,7 @@ export interface VpnSetupOptions {
   vpnPassword?: string;
   /** IP pool CIDR for VPN tunnel addresses (default: 192.168.89.0/24) */
   tunnelNetwork?: string;
-  /** Router's LAN network — VPN clients get access to this (default: 192.168.88.0/24) */
+  /** Router's LAN network — VPN clients get access to this (default: 192.168.180.0/22) */
   lanNetwork?: string;
   /** Router ID for comments/labelling */
   routerId?: number;
@@ -2445,7 +2670,7 @@ export function generateVpnSetupScript(opts: VpnSetupOptions): string {
     vpnUsername  = "admin",
     vpnPassword  = "ochola",
     tunnelNetwork = "192.168.89",
-    lanNetwork   = "192.168.88.0/24",
+    lanNetwork   = "192.168.180.0/22",
     routerId,
   } = opts;
 
@@ -2569,7 +2794,7 @@ export interface OvpnClientOptions {
   vpnPassword?: string;
   /** Expected VPN tunnel IP the router will assign to this client */
   tunnelClientIp?: string;
-  /** Router's LAN network to route through VPN (default: 192.168.88.0/24) */
+  /** Router's LAN network to route through VPN (default: 192.168.180.0/22) */
   lanNetwork?: string;
   /** API port(s) to reach through the tunnel (informational, in comment) */
   apiPorts?: string;
@@ -2591,12 +2816,12 @@ export function generateOvpnClientConfig(opts: OvpnClientOptions): string {
     vpnUsername    = "admin",
     vpnPassword    = "ochola",
     tunnelClientIp = "192.168.89.2",
-    lanNetwork     = "192.168.88.0/24",
+    lanNetwork     = "192.168.180.0/22",
     apiPorts       = "8728, 8729",
     routeAll       = false,
   } = opts;
 
-  /* LAN route: e.g. "192.168.88.0 255.255.255.0" */
+  /* LAN route: e.g. "192.168.180.0 255.255.252.0" */
   const [lanBase, lanPrefix] = lanNetwork.split("/");
   const lanMask = prefixToMask(parseInt(lanPrefix ?? "24", 10));
 
@@ -2712,7 +2937,7 @@ export interface RouterAsClientOptions {
   tunnelRouterIp?: string;
   /** VPS tunnel IP (gateway end, default "10.8.5.1") */
   tunnelVpsIp?: string;
-  /** Router LAN network for routing rules (default "192.168.88.0/24") */
+  /** Router LAN network for routing rules (default "192.168.180.0/22") */
   lanNetwork?: string;
   /** Router ID for comment labels */
   routerId?: number;
@@ -2920,7 +3145,7 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     backendRegistrationUrl,
     tunnelRouterIp,
     tunnelVpsIp     = "10.8.5.1",
-    lanNetwork      = "192.168.88.0/24",
+    lanNetwork      = "192.168.180.0/22",
     routerId,
     routerOsMajor = 6,
     autoDetectRouterOsMajor = false,
@@ -4018,7 +4243,7 @@ export function generateServiceSetupScript(
   const routerTag = options.routerId == null ? "router" : String(options.routerId);
   const tag = `ochola-services-${routerTag}`;
   const bridgeName = validateRouterOsResourceName(
-    options.bridgeName ?? `ochola-hotspot-bridge-${routerTag}`,
+    options.bridgeName ?? "hotspot-bridge",
     "Service bridge name",
   );
   const bridgePorts = Array.from(new Set((options.bridgePorts ?? [])
@@ -4032,8 +4257,8 @@ export function generateServiceSetupScript(
   const hotspotProfile = `${tag}-hotspot-profile`;
   const hotspotServer = `${tag}-hotspot`;
   const dhcpServer = `${tag}-dhcp`;
-  const hotspotGateway = "192.168.88.1";
-  const hotspotNetwork = "192.168.88.0/24";
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
   const pppoeGateway = "192.168.99.1";
   const pppoeNetwork = "192.168.99.0/24";
   const portalFileUrls = options.portalFileUrls
@@ -4165,8 +4390,8 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 3/7 - service gateways starting."
 :do {
-    :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
-        :do { /ip address add address=${routerOsString(`${hotspotGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
+    :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/22`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(`${hotspotGateway}/22`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
             :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
             :error $serviceError
         }
@@ -4191,10 +4416,10 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :put "${tag}: SERVICE STEP 4/7 - Hotspot DHCP, profile, and server starting."
 :do {
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
-        /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
     }
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
-        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
     }
     :if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
         /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}

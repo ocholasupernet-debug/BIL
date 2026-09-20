@@ -504,7 +504,7 @@ function RouterForm({
               value={form.bridge_ip}
               onChange={e => set("bridge_ip", e.target.value)}
               style={{ ...inp, fontSize: "0.8rem" }}
-              placeholder="e.g. 192.168.88.1"
+               placeholder="e.g. 192.168.180.1"
             />
             <p style={{ fontSize: 10, color: "var(--isp-text-muted)", margin: "5px 0 0", lineHeight: 1.5 }}>
               Local customer-network address on the hotspot bridge. This is not a VPN tunnel address.
