@@ -43,6 +43,7 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /SERVICE STEP 7\/7 - customer NAT starting/);
   assert.match(script, /servicessetup\.rsc finished with failed service steps/);
   assert.match(script, /Fix the listed failures and rerun servicessetup\.rsc/);
+  assert.doesNotMatch(script, /pppoe-server server (?:add|set)[^\n]*comment=/);
 });
 
 test("service setup rejects unsafe bridge names and preserves foreign bridge ports", () => {

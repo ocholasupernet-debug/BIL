@@ -4030,9 +4030,9 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
     }
     :if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
-        /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+        /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
     } else={
-        /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+        /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
     }
 } on-error={
     :set serviceStepFailed true
