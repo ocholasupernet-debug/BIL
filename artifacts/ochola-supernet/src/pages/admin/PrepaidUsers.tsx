@@ -818,10 +818,11 @@ export default function PrepaidUsers() {
 
         {/* ── Table ── */}
         <div className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1640, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1720, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={TH}>Username</th>
+                <th style={TH}>Password</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
                 <th style={TH}>Created</th>
@@ -839,7 +840,7 @@ export default function PrepaidUsers() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
+                  <td colSpan={14} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
                       <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "var(--isp-accent)" }} /> Loading users…
                     </div>
@@ -847,7 +848,7 @@ export default function PrepaidUsers() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
+                  <td colSpan={14} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
                     {search || typeFilter || statusTab !== "all"
                       ? "No users match this filter."
                       : "No prepaid users yet. Add customers from the Customers section."}
@@ -878,6 +879,11 @@ export default function PrepaidUsers() {
                             <div style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{user.phone || user.name || "—"}</div>
                           </div>
                         </div>
+                      </td>
+                      <td style={{ ...TD, whiteSpace: "nowrap" }}>
+                        <span style={{ fontFamily: "monospace", fontSize: "0.78rem", fontWeight: 700, color: user.password ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
+                          {user.password || "—"}
+                        </span>
                       </td>
                       <td style={TD}><TypeBadge type={user.type} /></td>
                       <td style={TD}>
@@ -989,6 +995,7 @@ export default function PrepaidUsers() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
               {[
                 { icon: <Users size={13} />,       label: "Username",   value: detailUser.pppoe_username || detailUser.username || "—" },
+                { icon: <Power size={13} />,       label: "Password",   value: detailUser.password || "—" },
                 { icon: <Phone size={13} />,       label: "Phone",      value: detailUser.phone || "—" },
                 { icon: <Mail  size={13} />,       label: "Email",      value: detailUser.email || "—" },
                 { icon: <Server size={13} />,      label: "IP Address", value: detailUser.ip_address || "—" },

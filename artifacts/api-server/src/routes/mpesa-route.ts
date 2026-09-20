@@ -11,7 +11,7 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
-import { sbDelete, sbInsert, sbRpc, sbSelect, sbUpdate, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
@@ -1362,13 +1362,13 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       expires_at: expiresAt.toISOString(),
       updated_at: new Date().toISOString(),
     };
-    const customerRows = reusableCustomer
-      ? await sbUpdate("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
-      : await sbInsert("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
+     const customerRows = reusableCustomer
+       ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
+       : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
     const customer = customerRows[0] as { id?: number } | undefined;
     if (!customer) throw new Error("The paid hotspot customer account could not be saved.");
 
-    await sbUpdate("isp_transactions", `id=eq.${transaction.id}`, {
+     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       customer_id: customer.id,
       plan_id: plan.id,
       notes: `M-Pesa payment verified; hotspot credentials assigned and MAC access granted on ${routerRow.name}.`,
