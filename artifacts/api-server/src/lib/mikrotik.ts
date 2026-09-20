@@ -2993,8 +2993,11 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 :put "${tag}: Management OpenVPN client interface is present and disabled until CA trust succeeds."`;
 
   const caFileName = `${safeCaCertificateName}.crt`;
-  const caBuildFileName = `${safeCaCertificateName}-bootstrap.rsc`;
+  const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
+  const caBuildFileName = `${caBuildBaseName}.txt`;
   const httpsCaFileName = `${safeCaCertificateName}-https-root.crt`;
+  const httpsCaBuildBaseName = `${safeCaCertificateName}-https-root`;
+  const httpsCaBuildFileName = `${httpsCaBuildBaseName}.txt`;
   const publicHttpsCaCommonName = certificateCommonName(ISRG_ROOT_X1_PEM);
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
@@ -3024,7 +3027,8 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
         :set ocholaCaPhase "create embedded CA file"
 ${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        ")}
         :do {
-            /file add name="${caBuildFileName}"
+            /file print file="${caBuildBaseName}"
+            :delay 1s
             /file set [find name="${caBuildFileName}"] contents=$ocholaExpectedCa
         } on-error={
             :set ocholaCaImportError $error
@@ -3081,9 +3085,11 @@ ${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        
     :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
 ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
         :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
+        :do { /file remove [find name="${httpsCaBuildFileName}"] } on-error={}
         :do {
-            /file add name="${httpsCaFileName}"
-            /file set [find name="${httpsCaFileName}"] contents=$ocholaHttpsCa
+            /file print file="${httpsCaBuildBaseName}"
+            :delay 1s
+            /file set [find name="${httpsCaBuildFileName}"] contents=$ocholaHttpsCa
         } on-error={
             :set ocholaCaImportError $error
         }
@@ -3091,7 +3097,7 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
             :error ("public HTTPS CA file creation failed: " . $ocholaCaImportError)
         }
         :do {
-            /certificate import file-name="${httpsCaFileName}" passphrase=""
+            /certificate import file-name="${httpsCaBuildFileName}" passphrase=""
         } on-error={
             :set ocholaCaImportError $error
         }
@@ -3113,6 +3119,7 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
     :do { /file remove [find name="${caFileName}"] } on-error={}
     :do { /file remove [find name="${caBuildFileName}"] } on-error={}
     :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
+    :do { /file remove [find name="${httpsCaBuildFileName}"] } on-error={}
     :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
         :error "management VPN CA was not imported"
     }
