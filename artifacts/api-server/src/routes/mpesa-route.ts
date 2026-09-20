@@ -38,6 +38,7 @@ import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
+import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 
 const router: IRouter = Router();
 
@@ -709,9 +710,13 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id&limit=1`,
   );
   const plan = plans[0];
-  const serviceType = String(plan?.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
+  const serviceType = normalizePlanServiceType(plan?.type);
   if (plan && serviceType !== requestedService) {
     res.status(409).json({ ok: false, error: "The selected package is for a different service. Refresh and try again." });
+    return;
+  }
+  if (serviceType === "other") {
+    res.status(409).json({ ok: false, error: "The selected package is not configured for a supported internet service." });
     return;
   }
   if (plan && Number.isSafeInteger(deviceRouterId) && deviceRouterId > 0 && plan.router_id !== deviceRouterId) {
@@ -1095,9 +1100,13 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       res.status(404).json({ ok: false, error: "The selected package is not available for payment." });
       return;
     }
-    const serviceType = String(plan.type || "hotspot").toLowerCase() === "pppoe" ? "pppoe" : "hotspot";
+    const serviceType = normalizePlanServiceType(plan.type);
     if (service_type && service_type !== serviceType) {
       res.status(400).json({ ok: false, error: "The package service type does not match the selected package." });
+      return;
+    }
+    if (serviceType === "other") {
+      res.status(409).json({ ok: false, error: "The selected package is not configured for a supported internet service." });
       return;
     }
     if (intent && (intent.serviceType ?? "hotspot") !== serviceType) {
@@ -1356,7 +1365,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
-  if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot") {
+  if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") {
     res.status(409).json({ ok: false, error: "The paid plan is not configured as a hotspot plan." });
     return;
   }
@@ -1677,7 +1686,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
   );
   const plan = plans[0];
-  if (!plan || String(plan.type ?? "hotspot").toLowerCase() !== "hotspot" || !plan.router_id) {
+  if (!plan || normalizePlanServiceType(plan.type) !== "hotspot" || !plan.router_id) {
     res.status(409).json({ ok: false, error: "The verified payment is not attached to an active hotspot package." });
     return;
   }
