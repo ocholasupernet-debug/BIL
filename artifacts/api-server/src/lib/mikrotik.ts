@@ -3870,11 +3870,17 @@ export function generateServiceSetupScript(
 
 :global serviceError
 :set serviceError ""
+:local serviceFailures ""
+:local serviceStepFailed false
 :put "${tag}: starting Hotspot and PPPoE service setup."
+:put "${tag}: service steps: 1 portal files; 2 bridge; 3 gateways; 4 Hotspot; 5 walled garden; 6 PPPoE; 7 NAT."
 
 # 1. Install the default RouterOS Hotspot files only when they are absent.
 #    Existing tenant-branded files are never replaced by this bootstrap.
-:do { /file make-dir dir-name="hotspot" } on-error={}
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 1/7 - portal files starting."
+:do {
+    :do { /file make-dir dir-name="hotspot" } on-error={}
 ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0) do={
     :do { /tool fetch url=${routerOsString(portalFileUrls.login)} dst-path="hotspot/login.html" mode=https check-certificate=yes } on-error={
         :set serviceError ("${tag}: default Hotspot login.html could not be downloaded: " . $error)
@@ -3893,88 +3899,154 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         :error $serviceError
     }
 }` : `:put "${tag}: no default portal sources were supplied; existing Hotspot files were left unchanged."`}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 1/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 1/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 1/7 complete - portal files ready." }
 
 # 2. Create the shared service bridge without taking ports away from another bridge.
-:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
-    :do {
-        /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} service bridge`)}
-    } on-error={
-        :set serviceError ("${tag}: service bridge creation failed: " . $error)
+ :set serviceStepFailed false
+:put "${tag}: SERVICE STEP 2/7 - service bridge starting."
+:do {
+    :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+        :do {
+            /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} service bridge`)}
+        } on-error={
+            :set serviceError ("${tag}: service bridge creation failed: " . $error)
+            :error $serviceError
+        }
+    }
+    ${bridgePortSetup}
+    :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+        :set serviceError "${tag}: service bridge was not verified."
         :error $serviceError
     }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 2/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 2/7 FAILED: " . $serviceStepError)
 }
-${bridgePortSetup}
-:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
-    :set serviceError "${tag}: service bridge was not verified."
-    :error $serviceError
-}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 2/7 complete - service bridge and selected ports ready." }
 
 # 3. Add the Hotspot and PPPoE gateway addresses to the service bridge.
-:if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
-    :do { /ip address add address=${routerOsString(`${hotspotGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
-        :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
-        :error $serviceError
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 3/7 - service gateways starting."
+:do {
+    :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(`${hotspotGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
+            :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
+            :error $serviceError
+        }
     }
-}
-:if ([:len [/ip address find where address=${routerOsString(`${pppoeGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
-    :do { /ip address add address=${routerOsString(`${pppoeGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
-        :set serviceError ("${tag}: PPPoE gateway creation failed: " . $error)
-        :error $serviceError
+    :if ([:len [/ip address find where address=${routerOsString(`${pppoeGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(`${pppoeGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
+            :set serviceError ("${tag}: PPPoE gateway creation failed: " . $error)
+            :error $serviceError
+        }
     }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 3/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 3/7 FAILED: " . $serviceStepError)
 }
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 3/7 complete - Hotspot and PPPoE gateways ready." }
 
 # 4. Hotspot DHCP pool, network, server, and profile.
-:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
-    /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 4/7 - Hotspot DHCP, profile, and server starting."
+:do {
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
+        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+    }
+    :if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
+        /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+    } else={
+        /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+    }
+    :if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
+        /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    } else={
+        /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    }
+    :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
+        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+    } else={
+        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+    }
+    :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
+        /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    } else={
+        /ip hotspot set [find where name=${routerOsString(hotspotServer)}] interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 4/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 4/7 FAILED: " . $serviceStepError)
 }
-:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
-    /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.88.10-192.168.88.254 comment=${routerOsString(`${tag} Hotspot pool`)}
-}
-:if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
-    /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
-} else={
-    /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
-}
-:if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
-    /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
-} else={
-    /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
-}
-:if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
-    /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
-} else={
-    /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
-}
-:if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
-    /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
-} else={
-    /ip hotspot set [find where name=${routerOsString(hotspotServer)}] interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
-}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 4/7 complete - Hotspot service ready." }
 
 # 5. Only this installation's walled-garden entries are replaced.
-/ip hotspot walled-garden ip
-:do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
-${walledGardenSetup}
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 5/7 - walled garden starting."
+:do {
+    /ip hotspot walled-garden ip
+    :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
+    ${walledGardenSetup}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 5/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 5/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 5/7 complete - walled garden ready." }
 
 # 6. PPPoE pool, profile, and server on the same service bridge.
-:if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
-    /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 6/7 - PPPoE starting."
+:do {
+    :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
+        /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
+        /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+    }
+    :if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
+        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+    } else={
+        /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+    }
+    :if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
+        /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+    } else={
+        /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 6/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 6/7 FAILED: " . $serviceStepError)
 }
-:if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
-    /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
-}
-:if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
-    /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
-} else={
-    /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
-}
-:if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
-    /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
-} else={
-    /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} PPPoE server`)}
-}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 6/7 complete - PPPoE service ready." }
 
 # 7. Customer NAT for both service networks, only when the standard WAN list exists.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 7/7 - customer NAT starting."
+:do {
 :local serviceWanLists [/interface list find where name="WAN"]
 :if ([:len $serviceWanLists] > 0) do={
     :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
@@ -3988,9 +4060,22 @@ ${walledGardenSetup}
 } else={
     :put "${tag}: WAN interface list is absent; customer NAT was not changed."
 }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: " . $serviceStepError . "\n")
+    :put ("${tag}: SERVICE STEP 7/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 7/7 complete - customer NAT ready or safely preserved." }
 
-:if ([:len $serviceError] > 0) do={ :error $serviceError }
-:put "${tag}: servicessetup.rsc complete - Hotspot files, bridge, walled garden, Hotspot, PPPoE, and service NAT are ready."
+:if ([:len $serviceFailures] > 0) do={
+    :put "${tag}: servicessetup.rsc finished with failed service steps:"
+    :put $serviceFailures
+    :put "${tag}: Fix the listed failures and rerun servicessetup.rsc; completed resources are reconciled safely."
+} else={
+    :put "${tag}: servicessetup.rsc complete - all seven service steps succeeded."
+}
 `;
 }
 

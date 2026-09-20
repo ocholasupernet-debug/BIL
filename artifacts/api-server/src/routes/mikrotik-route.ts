@@ -55,7 +55,6 @@ import {
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
-import { buildSelfInstallStepCommand } from "../lib/self-install-step-command.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 
@@ -553,6 +552,12 @@ router.get("/router/:id/files", async (req, res): Promise<void> => {
 
   try {
     const result = await fetchRouterFiles(found.creds);
+    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
+:delay 2s
+/import "${fileName}"
+/file remove "${fileName}"
+`;
+
     res.json({
       routerId: id,
       routerName: found.row.name,
@@ -1515,13 +1520,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure the router network engine",
           fileName: networkFileName,
           description: "Apply the tagged, retry-safe firewall and NAT rules before creating the management tunnel.",
-          command: buildSelfInstallStepCommand({
-            routerId: id,
-            stepId: "network",
-            stepOrder: 1,
-            sourceUrl: networkSourceUrl,
-            fileName: networkFileName,
-          }),
+          command: stepCommand(networkSourceUrl, networkFileName),
         },
         {
           id: "vpn",
@@ -1529,13 +1528,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure the management VPN and API",
           fileName: vpnFileName,
           description: "After Step 1 completes, install CA trust, create the management VPN/API access, and register the router.",
-          command: buildSelfInstallStepCommand({
-            routerId: id,
-            stepId: "vpn",
-            stepOrder: 2,
-            sourceUrl: vpnSourceUrl,
-            fileName: vpnFileName,
-          }),
+          command: stepCommand(vpnSourceUrl, vpnFileName),
         },
         {
           id: "services",
@@ -1543,14 +1536,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure Hotspot and PPPoE services",
           fileName: serviceFileName,
           description: `After Step 2 completes, create ${serviceBridgeName}, Hotspot DHCP/profile/server, the portal walled garden, PPPoE, and customer NAT.`,
-          command: buildSelfInstallStepCommand({
-            routerId: id,
-            stepId: "services",
-            stepOrder: 3,
-            sourceUrl: serviceSourceUrl,
-            fileName: serviceFileName,
-            verified: true,
-          }),
+          command: stepCommand(serviceSourceUrl, serviceFileName, true),
         },
       ],
     });
