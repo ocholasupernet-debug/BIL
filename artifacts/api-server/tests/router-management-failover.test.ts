@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { generateRouterManagementVpnScript } from "../src/lib/mikrotik.js";
 
+const syncRouteSource = readFileSync(new URL("../src/routes/sync-route.ts", import.meta.url), "utf8");
 const baseOptions = {
   vpsPublicIp: "vpn.example.test",
   vpnPort: 1196,
@@ -70,4 +72,10 @@ test("Self Install imports the trust anchor and enables RouterOS 7 verification 
     script,
     /^\s*\/interface ovpn-client set .*verify-server-certificate=yes$/m,
   );
+});
+
+test("registration verifies the dedicated management API account before legacy credentials", () => {
+  assert.match(syncRouteSource, /ROUTER_MANAGEMENT_API_USERNAME/);
+  assert.match(syncRouteSource, /verifyManagementApi\(bridgeIp, candidate\.username, candidate\.password\)/);
+  assert.match(syncRouteSource, /existingRouter\.router_username !== ROUTER_MANAGEMENT_API_USERNAME/);
 });

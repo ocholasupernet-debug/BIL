@@ -4,7 +4,10 @@ import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect } from "../lib/supabase-client.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
-import { routerManagementBackupIp } from "../lib/router-management-vpn.js";
+import {
+  ROUTER_MANAGEMENT_API_USERNAME,
+  routerManagementBackupIp,
+} from "../lib/router-management-vpn.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 
 const router: IRouter = Router();
@@ -2263,17 +2266,35 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       return;
     }
     if (bridgeIp && isRouterManagementVpnIp(bridgeIp)) {
-      try {
-        await verifyManagementApi(
-          bridgeIp,
-          existingRouter.router_username ?? "admin",
-          existingRouter.router_secret ?? "",
-        );
-      } catch (error) {
+      const apiCandidates = [
+        {
+          username: ROUTER_MANAGEMENT_API_USERNAME,
+          password: existingRouter.router_secret ?? "",
+        },
+        ...(existingRouter.router_username
+          && existingRouter.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+          ? [{
+              username: existingRouter.router_username,
+              password: existingRouter.router_secret ?? "",
+            }]
+          : []),
+      ];
+      let apiVerified = false;
+      let apiVerificationError: unknown = null;
+      for (const candidate of apiCandidates) {
+        try {
+          await verifyManagementApi(bridgeIp, candidate.username, candidate.password);
+          apiVerified = true;
+          break;
+        } catch (error) {
+          apiVerificationError = error;
+        }
+      }
+      if (!apiVerified) {
         res.status(503).json({
           ok: false,
           ts,
-          error: `management tunnel registered, but RouterOS API verification failed: ${error instanceof Error ? error.message : String(error)}`,
+          error: `management tunnel registered, but RouterOS API verification failed: ${apiVerificationError instanceof Error ? apiVerificationError.message : String(apiVerificationError)}`,
         });
         return;
       }
