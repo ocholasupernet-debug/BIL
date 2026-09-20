@@ -1435,8 +1435,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
   /*
    * A paid hotspot account is one database customer plus one RouterOS user.
-   * Keep the RouterOS identifier stable and readable: phone + last two MAC
-   * octets, for example 254798088650-11:5F.
+   * Keep the RouterOS identifier stable and readable. Reused paid devices keep
+   * their existing account; every new account receives the payment id suffix
+   * so the username can never collide with another customer.
    */
   const existingCustomers = await sbSelect<{
     id: number;
@@ -1464,7 +1465,8 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     ? existingCustomers[0]
     : undefined);
 
-  const hotspotUsername = prepaidHotspotUsername(paymentPhone, mac);
+   const hotspotUsername = reusableCustomer?.username?.trim()
+     || prepaidHotspotUsername(paymentPhone, mac, transaction.id);
   if (!hotspotUsername) {
     res.status(409).json({ ok: false, error: "The payment does not include enough phone and device information for a hotspot username." });
     return;

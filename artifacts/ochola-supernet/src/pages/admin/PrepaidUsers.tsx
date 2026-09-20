@@ -34,6 +34,7 @@ interface Payment {
   payment_method: string;
   reference: string | null;
   mpesa_receipt?: string | null;
+  notes?: string | null;
   status: string;
   created_at: string;
 }
@@ -87,8 +88,9 @@ function normalizePhone(phone?: string | null) {
   return (phone ?? "").replace(/\D/g, "");
 }
 function purchaseUsername(user: Customer) {
-  const actual = user.pppoe_username || user.username;
-  if (String(user.type ?? "").toLowerCase() === "hotspot" && user.phone && user.mac_address) {
+  const type = String(user.type ?? "").toLowerCase();
+  const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
+  if (!actual && type === "hotspot" && user.phone && user.mac_address) {
     const phoneDigits = user.phone.replace(/\D/g, "");
     const phone = phoneDigits.startsWith("0") && phoneDigits.length === 10
       ? `254${phoneDigits.slice(1)}`
@@ -107,10 +109,13 @@ function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
   const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
-  if (method.includes("till")) return `M-Pesa Till · ${transactionId}`;
-  if (method.includes("mpesa")) return `M-Pesa · ${transactionId}`;
-  if (method.includes("cash") || method.includes("manual")) return "Cash / Manual";
-  return payment.payment_method;
+  const notes = (payment.notes ?? "").toLowerCase();
+  if (method.includes("till") || notes.includes("till")) return `MpesatillStk-${transactionId}`;
+  if (method.includes("paybill") || notes.includes("paybill")) return `MpesapaybillStk-${transactionId}`;
+  if (method.includes("bank") || notes.includes("bank")) return `BankStk-${transactionId}`;
+  if (method.includes("mpesa")) return `MpesaStk-${transactionId}`;
+  if (method.includes("cash") || method.includes("manual")) return `Cash-${transactionId}`;
+  return `${payment.payment_method}-${transactionId}`;
 }
 function formatData(mb?: number | null) {
   if (mb === null || mb === undefined || !Number.isFinite(Number(mb))) return "—";
@@ -231,7 +236,7 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
   if (!customerIds.length) return [];
   const { data, error } = await supabase
     .from("isp_transactions")
-    .select("id,customer_id,amount,payment_method,reference,mpesa_receipt,status,created_at")
+    .select("id,customer_id,amount,payment_method,reference,mpesa_receipt,notes,status,created_at")
     .eq("admin_id", ADMIN_ID)
     .in("customer_id", customerIds)
     .in("status", ["completed", "paid", "success"])
@@ -835,12 +840,10 @@ export default function PrepaidUsers() {
 
         {/* ── Table ── */}
         <div className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
-           <table style={{ width: "100%", minWidth: 1800, borderCollapse: "collapse" }}>
+             <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={TH}>Username</th>
-                 <th style={TH}>Phone</th>
-                <th style={TH}>Password</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
                 <th style={TH}>Created (date &amp; time)</th>
@@ -858,7 +861,7 @@ export default function PrepaidUsers() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={15} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
+                   <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
                       <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "var(--isp-accent)" }} /> Loading users…
                     </div>
@@ -866,7 +869,7 @@ export default function PrepaidUsers() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={15} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
+                   <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
                     {search || typeFilter || statusTab !== "all"
                       ? "No users match this filter."
                       : "No prepaid users yet. Add customers from the Customers section."}
@@ -894,18 +897,9 @@ export default function PrepaidUsers() {
                           {username}
                         </span>
                       </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontFamily: "monospace", fontSize: "0.74rem" }}>
-                        {user.phone || "—"}
-                      </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                        <span style={{ fontFamily: "monospace", fontSize: "0.78rem", fontWeight: 700, color: user.password ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
-                          {user.password || "—"}
-                        </span>
-                      </td>
                       <td style={TD}><TypeBadge type={user.type} /></td>
                       <td style={TD}>
                         <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)", whiteSpace: "nowrap" }}>{plan?.name || "No plan"}</div>
-                        <div style={{ fontSize: "0.7rem", color: "var(--isp-accent)", fontWeight: 700, marginTop: 3 }}>{plan ? `${plan.price.toFixed(2)} · ${plan.speed_down}/${plan.speed_up} Mbps` : "—"}</div>
                       </td>
                       <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
                         <div>{fmtDateOnly(user.created_at)}</div>
@@ -943,10 +937,11 @@ export default function PrepaidUsers() {
                       <td style={TD}><PresenceBadge online={online} /></td>
                       <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.7rem" }}>{online ? "Just now" : fmtDate(user.last_seen)}</td>
                       <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                        <span style={{ fontWeight: 700 }}>{formatData(user.data_used_mb)}</span>
-                        {user.data_used_mb !== null && user.data_used_mb !== undefined && <div style={{ fontSize: "0.6rem", color: "var(--isp-text-sub)" }}>from router record</div>}
+                         <span style={{ fontWeight: 700 }}>{formatData(user.data_used_mb)}</span>
                       </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }}>{fup === null ? "Unlimited" : formatData(fup)}</td>
+                       <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem", fontWeight: 800, color: fup !== null && Number(fup) > 0 ? "#4ade80" : "var(--isp-text-muted)" }}>
+                         {fup !== null && Number(fup) > 0 ? "Enabled" : "Disabled"}
+                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
@@ -1016,7 +1011,6 @@ export default function PrepaidUsers() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
               {[
                 { icon: <Users size={13} />,       label: "Username",   value: detailUser.pppoe_username || detailUser.username || "—" },
-                { icon: <Power size={13} />,       label: "Password",   value: detailUser.password || "—" },
                 { icon: <Phone size={13} />,       label: "Phone",      value: detailUser.phone || "—" },
                 { icon: <Mail  size={13} />,       label: "Email",      value: detailUser.email || "—" },
                 { icon: <Server size={13} />,      label: "IP Address", value: detailUser.ip_address || "—" },
