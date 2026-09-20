@@ -23,6 +23,7 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="co-hotspot-bridge-104" address-pool="ochola-services-104-hotspot-pool" disabled=no\n/);
   assert.doesNotMatch(script, /ip dhcp-server (?:add|set)[^\n]*comment=/);
   assert.match(script, /ip hotspot profile add/);
+  assert.match(script, /ip hotspot profile add name="hprofile"/);
   assert.doesNotMatch(script, /ip hotspot profile (?:add|set)[^\n]*address-pool=/);
   assert.doesNotMatch(script, /ip hotspot profile (?:add|set)[^\n]*comment=/);
   assert.match(script, /ip hotspot add/);
@@ -72,4 +73,6 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="hotspot-bridge"/);
   assert.match(script, /pppoe-server server add service-name="ochola-services-104-pppoe" interface="hotspot-bridge"/);
   assert.match(script, /ip hotspot add name="ochola-services-104-hotspot" interface="hotspot-bridge"/);
+  assert.doesNotMatch(script, /interface bridge add name="hotspot-bridge" comment=/);
+  assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
 });

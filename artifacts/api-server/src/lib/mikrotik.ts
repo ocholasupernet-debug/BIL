@@ -458,7 +458,7 @@ export async function reconcileGeneratedServiceConfiguration(
   const tag = `ochola-services-${routerId}`;
   const hotspotName = `${tag}-hotspot`;
   const hotspotPool = `${tag}-hotspot-pool`;
-  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotProfile = "hprofile";
   const dhcpServer = `${tag}-dhcp`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
@@ -483,11 +483,19 @@ export async function reconcileGeneratedServiceConfiguration(
 
   const bridgeRows = await runRouterCommand(creds, [
     "/interface/bridge/print",
-    "=.proplist=name",
+    "=.proplist=.id,name,comment",
     `?name=${bridgeName}`,
   ]);
-  if (!(Array.isArray(bridgeRows) ? bridgeRows : []).some(row => row.name === bridgeName)) {
+  const bridge = (Array.isArray(bridgeRows) ? bridgeRows : []).find(row => row.name === bridgeName);
+  if (!bridge) {
     throw new Error(`The required service bridge "${bridgeName}" was not found on the router.`);
+  }
+  if (bridgeName === "hotspot-bridge" && String(bridge.comment ?? "").trim()) {
+    await runRouterCommand(creds, [
+      "/interface/bridge/set",
+      `=.id=${bridge[".id"]}`,
+      "=comment=",
+    ]);
   }
 
   const addressRows = await runRouterCommand(creds, [
@@ -3378,11 +3386,14 @@ add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=i
 :put "${tag}: STEP 5/10 - Configuring hotspot bridge ${safeBridgeName}."
 /interface bridge
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
-    :do { /interface bridge add name="${safeBridgeName}" comment="${tag} hotspot bridge" } on-error={
+     :do { /interface bridge add name="${safeBridgeName}"${safeBridgeName === "hotspot-bridge" ? "" : ` comment="${tag} hotspot bridge"`} } on-error={
         :set ocholaVpnChildError "${tag}: hotspot bridge creation failed."
         :error $ocholaVpnChildError
     }
-}
+ }
+${safeBridgeName === "hotspot-bridge"
+  ? `/interface bridge set [find where name="${safeBridgeName}"] comment=""`
+  : ""}
 ${safeBridgePorts.map(port => `:put "${tag}: STEP 5/10 - Checking physical port ${port}."
 :if ([:len [/interface find where name="${port}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: physical interface ${port} was not found."
@@ -4254,7 +4265,7 @@ export function generateServiceSetupScript(
   const hotspotPool = `${tag}-hotspot-pool`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
-  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotProfile = "hprofile";
   const hotspotServer = `${tag}-hotspot`;
   const dhcpServer = `${tag}-dhcp`;
   const hotspotGateway = "192.168.180.1";
@@ -4354,12 +4365,15 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :do {
     :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
         :do {
-            /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} service bridge`)}
+            /interface bridge add name=${routerOsString(bridgeName)}${bridgeName === "hotspot-bridge" ? "" : ` comment=${routerOsString(`${tag} service bridge`)}`}
         } on-error={
             :set serviceError ("${tag}: service bridge creation failed: " . $error)
             :error $serviceError
         }
     }
+    ${bridgeName === "hotspot-bridge"
+      ? `/interface bridge set [find where name=${routerOsString(bridgeName)}] comment=""`
+      : ""}
     ${bridgePortSetup}
     :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
         :set serviceError "${tag}: service bridge was not verified."
