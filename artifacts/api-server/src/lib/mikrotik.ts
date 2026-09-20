@@ -447,6 +447,163 @@ export async function disableGeneratedHotspot(
 }
 
 /**
+ * Repair the tagged service-network policy without enabling or disabling the
+ * Hotspot server. This is used by the emergency website recovery flow when a
+ * router received the service bridge but not the matching firewall/DNS/NAT
+ * policy.
+ */
+export async function repairGeneratedServiceNetworking(
+  creds: RouterCredentials,
+  routerId: number,
+  requestedBridgeName?: string,
+): Promise<{
+  bridgeName: string;
+  wanInterfaceListFound: boolean;
+  dnsEnabled: boolean;
+}> {
+  const tag = `ochola-services-${routerId}`;
+  const safeRequestedBridge = String(requestedBridgeName ?? "").trim();
+  if (safeRequestedBridge && !/^[A-Za-z0-9_.-]+$/.test(safeRequestedBridge)) {
+    throw new Error("The service bridge name is not a valid RouterOS resource name.");
+  }
+
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=name,interface",
+    `?name=${tag}-hotspot`,
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : [])
+    .find(row => row.name === `${tag}-hotspot`);
+  const bridgeName = String((hotspot?.interface ?? safeRequestedBridge) || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The router has no valid generated Hotspot bridge name.");
+  }
+
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=name",
+    `?name=${bridgeName}`,
+  ]);
+  if (!(Array.isArray(bridgeRows) ? bridgeRows : []).some(row => row.name === bridgeName)) {
+    throw new Error(`The generated service bridge "${bridgeName}" was not found on the router.`);
+  }
+
+  const interfaceLists = await runRouterCommand(creds, [
+    "/interface/list/print",
+    "=.proplist=name",
+  ]);
+  const listRows = Array.isArray(interfaceLists) ? interfaceLists : [];
+  if (!listRows.some(row => row.name === "LAN")) {
+    await runRouterCommand(creds, ["/interface/list/add", "=name=LAN"]);
+  }
+  const members = await runRouterCommand(creds, [
+    "/interface/list/member/print",
+    "=.proplist=.id,list,interface",
+  ]);
+  if (!(Array.isArray(members) ? members : []).some(row => row.list === "LAN" && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/interface/list/member/add",
+      "=list=LAN",
+      `=interface=${bridgeName}`,
+    ]);
+  }
+
+  await runRouterCommand(creds, ["/ip/dns/set", "=allow-remote-requests=yes"]);
+
+  const filterRows = await runRouterCommand(creds, [
+    "/ip/firewall/filter/print",
+    "=.proplist=.id,comment",
+  ]);
+  const removeTaggedFilters = async (comment: string) => {
+    for (const row of (Array.isArray(filterRows) ? filterRows : []).filter(item => item.comment === comment)) {
+      if (row[".id"]) {
+        await runRouterCommand(creds, ["/ip/firewall/filter/remove", `=.id=${row[".id"]}`]);
+      }
+    }
+  };
+  const addFilter = async (comment: string, fields: string[]) => {
+    await removeTaggedFilters(comment);
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/add",
+      ...fields,
+      `=comment=${comment}`,
+      "=place-before=0",
+    ]);
+  };
+
+  const wanInterfaceListFound = listRows.some(row => row.name === "WAN");
+  if (wanInterfaceListFound) {
+    await addFilter(`${tag} service-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      `=in-interface=${bridgeName}`,
+      "=out-interface-list=WAN",
+      "=connection-state=new,established,related",
+    ]);
+  }
+  await addFilter(`${tag} allow-service-dns-udp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=udp",
+    "=dst-port=53",
+  ]);
+  await addFilter(`${tag} allow-service-dns-tcp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=tcp",
+    "=dst-port=53",
+  ]);
+  if (wanInterfaceListFound) {
+    await addFilter(`${tag} block-wan-dns-udp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=udp",
+      "=dst-port=53",
+    ]);
+    await addFilter(`${tag} block-wan-dns-tcp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=tcp",
+      "=dst-port=53",
+    ]);
+  }
+
+  if (wanInterfaceListFound) {
+    const natRows = await runRouterCommand(creds, [
+      "/ip/firewall/nat/print",
+      "=.proplist=.id,comment",
+    ]);
+    const removeTaggedNat = async (comment: string) => {
+      for (const row of (Array.isArray(natRows) ? natRows : []).filter(item => item.comment === comment)) {
+        if (row[".id"]) {
+          await runRouterCommand(creds, ["/ip/firewall/nat/remove", `=.id=${row[".id"]}`]);
+        }
+      }
+    };
+    for (const [comment, source] of [
+      [`${tag} Hotspot masquerade`, "192.168.88.0/24"],
+      [`${tag} PPPoE masquerade`, "192.168.99.0/24"],
+    ] as const) {
+      await removeTaggedNat(comment);
+      await runRouterCommand(creds, [
+        "/ip/firewall/nat/add",
+        "=chain=srcnat",
+        "=action=masquerade",
+        `=src-address=${source}`,
+        "=out-interface-list=WAN",
+        `=comment=${comment}`,
+      ]);
+    }
+  }
+
+  return { bridgeName, wanInterfaceListFound, dnsEnabled: true };
+}
+
+/**
  * Add or refresh one tenant portal hostname on the router's active hotspot
  * gateway. The gateway is read from the active hotspot profile instead of
  * reusing the management VPN address.
@@ -3955,6 +4112,18 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         :set serviceError "${tag}: service bridge was not verified."
         :error $serviceError
     }
+    :if ([:len [/interface list find where name="LAN"]] = 0) do={
+        :do { /interface list add name="LAN" } on-error={
+            :set serviceError ("${tag}: could not create the LAN interface list: " . $error)
+            :error $serviceError
+        }
+    }
+    :if ([:len [/interface list member find where list="LAN" && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /interface list member add list="LAN" interface=${routerOsString(bridgeName)} } on-error={
+            :set serviceError ("${tag}: could not add the service bridge to the LAN interface list: " . $error)
+            :error $serviceError
+        }
+    }
 } on-error={
     :set serviceStepFailed true
     :local serviceStepError $error
@@ -4078,6 +4247,43 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :put "${tag}: SERVICE STEP 7/7 - customer NAT starting."
 :do {
 :local serviceWanLists [/interface list find where name="WAN"]
+:do { /ip dns set allow-remote-requests=yes } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: router DNS could not be enabled: " . $error . " | ")
+    :put ("${tag}: router DNS could not be enabled: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} service-to-wan`)}] } on-error={}
+:do { /ip firewall filter add chain=forward action=accept in-interface=${routerOsString(bridgeName)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} service-to-wan`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: service-to-WAN forwarding could not be added: " . $error . " | ")
+    :put ("${tag}: service-to-WAN forwarding could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-udp`)}] } on-error={}
+:do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-udp`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: UDP DNS access could not be added: " . $error . " | ")
+    :put ("${tag}: UDP DNS access could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-tcp`)}] } on-error={}
+:do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=tcp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-tcp`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: TCP DNS access could not be added: " . $error . " | ")
+    :put ("${tag}: TCP DNS access could not be added: " . $error)
+}
+:if ([:len $serviceWanLists] > 0) do={
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} block-wan-dns-udp`)}] } on-error={}
+    :do { /ip firewall filter add chain=input action=drop in-interface-list=WAN protocol=udp dst-port=53 comment=${routerOsString(`${tag} block-wan-dns-udp`)} place-before=0 } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: WAN UDP DNS protection could not be added: " . $error . " | ")
+        :put ("${tag}: WAN UDP DNS protection could not be added: " . $error)
+    }
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} block-wan-dns-tcp`)}] } on-error={}
+    :do { /ip firewall filter add chain=input action=drop in-interface-list=WAN protocol=tcp dst-port=53 comment=${routerOsString(`${tag} block-wan-dns-tcp`)} place-before=0 } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: WAN TCP DNS protection could not be added: " . $error . " | ")
+        :put ("${tag}: WAN TCP DNS protection could not be added: " . $error)
+    }
+}
 :if ([:len $serviceWanLists] > 0) do={
     :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
     :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(hotspotNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} Hotspot masquerade`)} } on-error={

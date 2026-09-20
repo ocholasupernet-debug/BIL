@@ -23,6 +23,7 @@ import {
   generateNetworkSetupScript,
   generateServiceSetupScript,
   disableGeneratedHotspot,
+  repairGeneratedServiceNetworking,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -543,16 +544,18 @@ router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, 
   if (!found) { res.status(404).json({ error: "Router not found or not assigned to this administrator" }); return; }
 
   try {
+    const networking = await repairGeneratedServiceNetworking(found.creds, id);
     const result = await disableGeneratedHotspot(found.creds, id);
     logger.warn({ routerId: id, adminId, hotspotName: result.name }, "Generated Hotspot disabled through recovery action");
     res.json({
       ok: true,
       routerId: id,
       routerName: found.row.name,
+      networking,
       ...result,
       message: result.alreadyDisabled
-        ? `The generated Hotspot server "${result.name}" was already disabled.`
-        : `The generated Hotspot server "${result.name}" is now disabled.`,
+        ? `Network policy repaired and the generated Hotspot server "${result.name}" was already disabled.`
+        : `Network policy repaired and the generated Hotspot server "${result.name}" is now disabled.`,
     });
   } catch (err) {
     routerErrorResponse(res, err);
