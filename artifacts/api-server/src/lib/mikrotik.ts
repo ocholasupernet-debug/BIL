@@ -3434,7 +3434,11 @@ ${hasBackupManagementVpn ? `/system scheduler
 # Step 3: Continue after the management tunnel is running.
 ${minimalManagementSetup
   ? `# Core firewall and NAT rules are delivered separately in networksetup.rsc.
-:put "${tag}: STEP 4/10 skipped - core firewall and NAT are in networksetup.rsc."`
+# The management API allow rule is installed here because Step 9 verifies
+# RouterOS API reachability before networksetup.rsc is normally imported.
+:put "${tag}: STEP 4/10 - Preparing management API firewall access."
+${firewallPreparation}
+:put "${tag}: STEP 4/10 complete - management API firewall access ready; core firewall and NAT remain in networksetup.rsc."`
   : `# Allow API access from the validated VPN peer.
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
 :put "${tag}: STEP 4/10 - Applying management firewall rules."
@@ -3511,10 +3515,16 @@ ${minimalManagementSetup
 }
 :local registrationUrl ${routerOsString(safeBackendRegistrationUrl)}
 :set registrationUrl ($registrationUrl . "?ip=" . $liveTunnelIp)
+:local registrationError ""
 :do {
     /tool fetch url=$registrationUrl keep-result=no mode=https check-certificate=yes
 } on-error={
-    :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
+    :do { :set registrationError $error } on-error={}
+    :if ([:len $registrationError] > 0) do={
+        :set ocholaVpnChildError ("${tag}: live tunnel IPv4 was found, but authenticated backend registration failed: " . $registrationError)
+    } else={
+        :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
+    }
     :error $ocholaVpnChildError
 }
 :put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp . " via " . $activeInterface)
