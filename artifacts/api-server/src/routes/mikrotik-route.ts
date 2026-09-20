@@ -1511,6 +1511,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
     const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
+    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
+:delay 2s
+/import "${fileName}"
+/file remove "${fileName}"
+`;
     res.json({
       routerId: id,
       steps: [

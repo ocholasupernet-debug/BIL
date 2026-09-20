@@ -3903,7 +3903,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 1/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 1/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 1/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 1/7 complete - portal files ready." }
@@ -3929,7 +3929,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 2/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 2/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 2/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 2/7 complete - service bridge and selected ports ready." }
@@ -3954,7 +3954,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 3/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 3/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 3/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 3/7 complete - Hotspot and PPPoE gateways ready." }
@@ -3993,7 +3993,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 4/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 4/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 4/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 4/7 complete - Hotspot service ready." }
@@ -4009,7 +4009,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 5/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 5/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 5/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 5/7 complete - walled garden ready." }
@@ -4038,7 +4038,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 6/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 6/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 6/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 6/7 complete - PPPoE service ready." }
@@ -4051,10 +4051,14 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :if ([:len $serviceWanLists] > 0) do={
     :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
     :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(hotspotNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} Hotspot masquerade`)} } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: Hotspot NAT could not be added: " . $error . " | ")
         :put ("${tag}: Hotspot NAT could not be added: " . $error)
     }
     :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} PPPoE masquerade`)}] } on-error={}
     :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} PPPoE masquerade`)} } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE NAT could not be added: " . $error . " | ")
         :put ("${tag}: PPPoE NAT could not be added: " . $error)
     }
 } else={
@@ -4064,7 +4068,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :set serviceStepFailed true
     :local serviceStepError $error
     :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: " . $serviceStepError . "\n")
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: " . $serviceStepError . " | ")
     :put ("${tag}: SERVICE STEP 7/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 7/7 complete - customer NAT ready or safely preserved." }
