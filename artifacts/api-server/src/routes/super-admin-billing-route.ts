@@ -72,7 +72,7 @@ function cleanPlanInput(body: PlanInput, partial = false): Record<string, unknow
   }
   if (!partial || body.validity_unit !== undefined) {
     const unit = typeof body.validity_unit === "string" ? body.validity_unit.trim().toLowerCase() : "";
-    if (!["hours", "days", "weeks", "months"].includes(unit)) return { error: "Validity unit must be hours, days, weeks, or months." };
+     if (!["mins", "hours", "days", "weeks", "months"].includes(unit)) return { error: "Validity unit must be mins, hours, days, weeks, or months." };
     updates.validity_unit = unit;
   }
   if (!partial || body.validity_days !== undefined) {

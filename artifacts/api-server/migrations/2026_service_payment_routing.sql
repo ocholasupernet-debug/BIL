@@ -80,10 +80,17 @@ begin
     update isp_customers as c
        set plan_id = tx.plan_id,
            status = 'active',
-           expires_at = now() + make_interval(days => greatest(coalesce((
-             select p.validity_days from isp_plans as p
+           expires_at = now() + coalesce((
+             select case lower(coalesce(p.validity_unit, 'days'))
+               when 'mins' then make_interval(mins => greatest(coalesce(p.validity, p.validity_days), 1))
+               when 'hours' then make_interval(hours => greatest(coalesce(p.validity, p.validity_days), 1))
+               when 'weeks' then make_interval(days => greatest(coalesce(p.validity, p.validity_days), 1) * 7)
+               when 'months' then make_interval(days => greatest(coalesce(p.validity, p.validity_days), 1) * 30)
+               else make_interval(days => greatest(coalesce(p.validity, p.validity_days), 1))
+             end
+               from isp_plans as p
               where p.id = tx.plan_id and p.admin_id = tx.admin_id
-           ), 1), 1)),
+           ), make_interval(days => 1)),
            updated_at = now()
      where c.id = tx.customer_id
        and c.admin_id = tx.admin_id

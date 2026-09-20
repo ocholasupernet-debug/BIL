@@ -48,7 +48,7 @@ function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Rec
   const sharedUsers = Number(input.sharedUsers ?? 1);
   const speedDown = Number(input.speedDown ?? input.speed ?? 10);
   const speedUp = Number(input.speedUp ?? input.speed ?? 10);
-  const validityUnit = normalizePlanValidityUnit(input.validityUnit);
+  const validityUnit = normalizePlanValidityUnit(input.validityUnit ?? input.validity_unit);
   return {
     name: String(input.name ?? "").trim(),
     type: input.type ?? "hotspot",
@@ -134,6 +134,7 @@ router.post("/plans", async (req, res): Promise<void> => {
     clientCanPurchase,
     portId,
     validityUnit,
+    validity_unit,
   } = req.body;
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
@@ -156,7 +157,7 @@ router.post("/plans", async (req, res): Promise<void> => {
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
     admin_id:     effectiveAdminId,
     ...planWritePayload({
-      name, type, speed, speedDown, speedUp, price, durationDays, validity, validityUnit,
+       name, type, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
       description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
     }, scope),
   });
@@ -206,7 +207,7 @@ router.patch("/plans/:id", async (req, res): Promise<void> => {
     delete updates.validity;
     delete updates.validity_days;
   }
-  if (req.body.validityUnit === undefined) delete updates.validity_unit;
+  if (req.body.validityUnit === undefined && req.body.validity_unit === undefined) delete updates.validity_unit;
   if (req.body.sharedUsers === undefined) delete updates.shared_users;
   if (req.body.dataLimitMb === undefined) delete updates.data_limit_mb;
   if (req.body.isActive === undefined) delete updates.is_active;
