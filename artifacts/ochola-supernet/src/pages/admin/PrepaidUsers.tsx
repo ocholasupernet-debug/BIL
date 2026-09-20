@@ -349,7 +349,7 @@ function EditUserDialog({
           <label>Username<input style={inputStyle} value={username} onChange={event => setUsername(event.target.value)} /></label>
           <label>Plan<select style={inputStyle} value={planId} onChange={event => setPlanId(event.target.value)}>
             <option value="">No plan</option>
-            {plans.filter(plan => !user.type || plan.type === user.type).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price.toFixed(2)}</option>)}
+             {plans.filter(plan => !user.type || String(plan.type).toLowerCase() === String(user.type).toLowerCase()).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price.toFixed(2)}</option>)}
           </select></label>
           <label>Router<select style={inputStyle} value={routerId} onChange={event => setRouterId(event.target.value)}>
             <option value="">Unassigned</option>

@@ -1670,6 +1670,74 @@ function hotspotExpirySchedulerName(name: string): string {
   return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
 }
 
+function hotspotPaidExpirySchedulerName(name: string): string {
+  return `ochola-paid-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function isLegacyPaidHotspotBinding(row: Record<string, string>): boolean {
+  return row.type === "bypassed" &&
+    /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? "");
+}
+
+function sameMacAddress(left: string | undefined, right: string): boolean {
+  const normalize = (value: string | undefined) => String(value ?? "").replace(/[:-]/g, "").toUpperCase();
+  return normalize(left) === normalize(right);
+}
+
+export async function removeHotspotIpBinding(
+  creds: RouterCredentials,
+  opts: { macAddress: string; comment: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let rows = (await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      rows = (await withTimeout(
+        conn.write(["/ip/hotspot/ip-binding/print"]),
+        ms,
+      )) as Record<string, string>[];
+    }
+    const bindings = (Array.isArray(rows) ? rows : [])
+      .filter((row) =>
+        sameMacAddress(row["mac-address"], opts.macAddress) &&
+        (row.comment === opts.comment || isLegacyPaidHotspotBinding(row)),
+      );
+    for (const binding of bindings) {
+      if (binding[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/ip-binding/remove", `=.id=${binding[".id"]}`]),
+          ms,
+        );
+      }
+    }
+
+    const schedulerNames = new Set([
+      hotspotPaidExpirySchedulerName(opts.comment),
+      ...bindings
+        .map((binding) => binding.comment)
+        .filter((comment): comment is string => Boolean(comment))
+        .map(hotspotPaidExpirySchedulerName),
+    ]);
+    for (const schedulerName of schedulerNames) {
+      const schedulers = (await withTimeout(
+        conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+        ms,
+      )) as Record<string, string>[];
+      for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+        if (scheduler[".id"]) {
+          await withTimeout(
+            conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]),
+            ms,
+          );
+        }
+      }
+    }
+  });
+}
+
 export async function removeHotspotUserExpiry(
   creds: RouterCredentials,
   name: string,
@@ -1711,6 +1779,7 @@ export async function scheduleHotspotUserExpiry(
     const expiryScript =
       `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
       `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.name}"] do={/ip hotspot ip-binding remove $id}; ` +
       `:foreach id in=[/queue simple find where name="${hotspotRateQueueName(opts.name)}"] do={/queue simple remove $id}; ` +
       `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = (await withTimeout(
@@ -1748,6 +1817,7 @@ export async function reconcileHotspotUserAccess(
     enabled: boolean;
     limitBytesTotal?: string;
     address?: string | null;
+    macAddress?: string | null;
     rateLimit?: string;
     sharedUsers?: number;
   },
@@ -1790,6 +1860,12 @@ export async function reconcileHotspotUserAccess(
     await disconnectHotspotActiveUser(creds, opts.name).catch(() => {});
     await removeHotspotUserRateQueue(creds, opts.name).catch(() => {});
     await removeHotspotUserExpiry(creds, opts.name).catch(() => {});
+    if (opts.macAddress) {
+      await removeHotspotIpBinding(creds, {
+        macAddress: opts.macAddress,
+        comment: opts.name,
+      });
+    }
     return;
   }
 
@@ -2078,7 +2154,7 @@ export async function addHotspotIpBinding(
     const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
     if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
     const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
-    const schedulerName = `ochola-paid-${opts.comment.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+    const schedulerName = hotspotPaidExpirySchedulerName(opts.comment);
     const queueName = opts.queueName ?? hotspotRateQueueName(opts.comment);
     const queueExpiry = queueName
       ? `:foreach id in=[/queue simple find where name="${queueName}"] do={/queue simple remove $id}; `
@@ -2086,6 +2162,7 @@ export async function addHotspotIpBinding(
     const expiryScript =
       `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; ` +
       `:foreach id in=[/ip hotspot active find where user="${opts.comment}"] do={/ip hotspot active remove $id}; ` +
+      `:foreach id in=[/ip hotspot user find where name="${opts.comment}"] do={/ip hotspot user set $id disabled=yes}; ` +
       queueExpiry +
       `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = (await withTimeout(

@@ -1,10 +1,12 @@
 import { Router, type IRouter } from "express";
 import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
+import { logger } from "../lib/logger.js";
 import {
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
+  removeHotspotIpBinding,
   disconnectPPPActiveByName,
   removeHotspotUser,
   removePPPSecretByName,
@@ -179,6 +181,7 @@ async function reconcileCustomerAccess(
           enabled,
           limitBytesTotal,
           address: address || null,
+          macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
           rateLimit,
           sharedUsers: plan.shared_users ?? 1,
         });
@@ -289,6 +292,13 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   try {
     await reconcileCustomerAccess(current, updates, effectiveAdminId);
   } catch (error) {
+    logger.warn({
+      customerId: Number(id),
+      adminId: effectiveAdminId,
+      planId: updates.plan_id ?? current.plan_id,
+      expiry: updates.expires_at ?? current.expires_at,
+      err: error instanceof Error ? error.message : String(error),
+    }, "[customers] router access reconciliation failed");
     res.status(503).json({
       error: `Router access was not updated, so the customer record was not changed: ${
         error instanceof Error ? error.message : String(error)
