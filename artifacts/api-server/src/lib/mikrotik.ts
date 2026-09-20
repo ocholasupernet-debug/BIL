@@ -3039,8 +3039,18 @@ ${hasBackupManagementVpn ? `remove [find where comment="${tag}-hotspot-to-backup
 add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${backupInterfaceName}" comment="${tag}-hotspot-to-backup-mgmt-nat"` : ""}`
     : "";
   const openVpnOptionalSettings = autoDetectRouterOsMajor
-    ? `# The auto-detected path uses only the portable client properties.
-# Avoid version-specific properties that can fail during RouterOS parsing.`
+    ? `# The auto-detected path keeps RouterOS 6 free of RouterOS 7-only
+# properties. RouterOS parses the verification command at runtime only after
+# the local major-version check has selected RouterOS 7.
+:if ($ocholaRouterOsMajor = "7") do={
+    :do {
+        :local ocholaVerifyServerCertificate [:parse "/interface ovpn-client set [find where name=\\"${interfaceName}\\"] verify-server-certificate=yes"]
+        $ocholaVerifyServerCertificate
+    } on-error={
+        :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable OpenVPN server certificate verification."
+        :error $ocholaVpnChildError
+    }
+}`
     : routerOs7
     ? `# RouterOS 7 path: certificate verification is mandatory.
 :do {
@@ -3054,7 +3064,10 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${ba
   const backupOpenVpnOptionalSettings = hasBackupManagementVpn
     ? autoDetectRouterOsMajor
       ? `:do {
-    /interface ovpn-client set [find where name="${backupInterfaceName}"] verify-server-certificate=yes
+    :if ($ocholaRouterOsMajor = "7") do={
+        :local ocholaVerifyBackupServerCertificate [:parse "/interface ovpn-client set [find where name=\\"${backupInterfaceName}\\"] verify-server-certificate=yes"]
+        $ocholaVerifyBackupServerCertificate
+    }
 } on-error={
     :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable backup OpenVPN server certificate verification."
     :error $ocholaVpnChildError

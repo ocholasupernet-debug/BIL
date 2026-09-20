@@ -46,3 +46,28 @@ test("A primary-only generated client does not install a failover scheduler", ()
   assert.doesNotMatch(script, /interface ovpn-client add name="ocholasupernet-backup"/);
   assert.doesNotMatch(script, /ochola-mgmt-failover/);
 });
+
+test("Self Install imports the trust anchor and enables RouterOS 7 verification safely", () => {
+  const script = generateRouterManagementVpnScript({
+    ...baseOptions,
+    backupVpnPort: 1197,
+    backupVpnUsername: "router-42",
+    backupVpnPassword: "one-time-token",
+    backupTunnelRouterIp: "10.8.6.42",
+    backupTunnelVpsIp: "10.8.6.1",
+  });
+
+  assert.match(script, /common-name="ISRG Root X1"\] trusted=yes/);
+  assert.match(
+    script,
+    /:parse "\/interface ovpn-client set \[find where name=\\"ocholasupernet\\"\] verify-server-certificate=yes"/,
+  );
+  assert.match(
+    script,
+    /:parse "\/interface ovpn-client set \[find where name=\\"ocholasupernet-backup\\"\] verify-server-certificate=yes"/,
+  );
+  assert.doesNotMatch(
+    script,
+    /^\s*\/interface ovpn-client set .*verify-server-certificate=yes$/m,
+  );
+});
