@@ -16,6 +16,7 @@ const PAGE_SIZE = 20;
 /* ══════════════════════════════ Types ══════════════════════════════ */
 interface Plan   {
   id: number; name: string; type: string; price: number; speed_down: number; speed_up: number;
+  speed_down_unit?: string; speed_up_unit?: string;
   validity?: number; validity_days?: number; validity_unit?: string; data_limit_mb?: number | null;
   router_id?: number | null;
 }
@@ -87,6 +88,18 @@ function normalizePhone(phone?: string | null) {
 }
 function purchaseUsername(user: Customer) {
   const actual = user.pppoe_username || user.username;
+  if (String(user.type ?? "").toLowerCase() === "hotspot" && user.phone && user.mac_address) {
+    const phoneDigits = user.phone.replace(/\D/g, "");
+    const phone = phoneDigits.startsWith("0") && phoneDigits.length === 10
+      ? `254${phoneDigits.slice(1)}`
+      : phoneDigits.startsWith("254") && phoneDigits.length === 12
+        ? phoneDigits
+        : phoneDigits.length === 9 && phoneDigits.startsWith("7")
+          ? `254${phoneDigits}`
+          : "";
+    const mac = user.mac_address.replace(/[:-]/g, "").toUpperCase();
+    if (phone && /^[0-9A-F]{12}$/.test(mac)) return `${phone}-${mac.slice(-4, -2)}:${mac.slice(-2)}`;
+  }
   if (actual) return actual;
   return `user-${user.id}`;
 }
@@ -241,13 +254,21 @@ async function syncUsersToRouter(
     adminId: ADMIN_ID,
     routerId: router.id,
     users: users.map(u => ({
-      username:     u.pppoe_username || u.username || "",
+      username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
       password:     u.password || "",
       type:         u.type || "hotspot",
       status:       u.status,
+      plan_id:      u.plan_id || undefined,
       mac_address:  u.mac_address || undefined,
       plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
       ip_address:   u.ip_address || undefined,
+      speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
+      speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
+      speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
+      speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
+      data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
+      shared_users: 1,
+      expires_at:   u.expires_at || undefined,
     })),
   };
   try {
@@ -813,10 +834,11 @@ export default function PrepaidUsers() {
 
         {/* ── Table ── */}
         <div className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 1720, borderCollapse: "collapse" }}>
+           <table style={{ width: "100%", minWidth: 1800, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={TH}>Username</th>
+                 <th style={TH}>Phone</th>
                 <th style={TH}>Password</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
@@ -835,7 +857,7 @@ export default function PrepaidUsers() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={14} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
+                  <td colSpan={15} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
                       <Loader2 size={16} style={{ animation: "spin 1s linear infinite", color: "var(--isp-accent)" }} /> Loading users…
                     </div>
@@ -843,7 +865,7 @@ export default function PrepaidUsers() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={14} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
+                  <td colSpan={15} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
                     {search || typeFilter || statusTab !== "all"
                       ? "No users match this filter."
                       : "No prepaid users yet. Add customers from the Customers section."}
@@ -867,13 +889,12 @@ export default function PrepaidUsers() {
                       style={{ transition: "background 0.1s" }}
                     >
                       <td style={TD}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
-                          <Avt name={user.name} id={user.id} />
-                          <div>
-                            <div style={{ fontWeight: 800, fontSize: "0.78rem", color: "var(--isp-text)", fontFamily: "monospace", whiteSpace: "nowrap" }}>{username}</div>
-                            <div style={{ fontSize: "0.68rem", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{user.phone || user.name || "—"}</div>
-                          </div>
-                        </div>
+                        <span style={{ fontWeight: 800, fontSize: "0.78rem", color: "var(--isp-text)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                          {username}
+                        </span>
+                      </td>
+                      <td style={{ ...TD, whiteSpace: "nowrap", fontFamily: "monospace", fontSize: "0.74rem" }}>
+                        {user.phone || "—"}
                       </td>
                       <td style={{ ...TD, whiteSpace: "nowrap" }}>
                         <span style={{ fontFamily: "monospace", fontSize: "0.78rem", fontWeight: 700, color: user.password ? "var(--isp-text)" : "var(--isp-text-muted)" }}>

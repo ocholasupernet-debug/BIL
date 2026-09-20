@@ -10,6 +10,7 @@ import {
   removePPPSecretByName,
 } from "../lib/mikrotik.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
+import { isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,7 @@ type CustomerRow = {
   admin_id: number;
   name: string | null;
   phone: string | null;
+  mac_address: string | null;
   username: string | null;
   pppoe_username: string | null;
   password: string | null;
@@ -87,7 +89,7 @@ async function reconcileCustomerAccess(
   adminId: number,
 ): Promise<void> {
   const currentName = current.pppoe_username || current.username || "";
-  const nextName = String(
+  let nextName = String(
     updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? currentName,
   ).trim();
   const nextPassword = String(updates.password ?? current.password ?? "");
@@ -109,6 +111,20 @@ async function reconcileCustomerAccess(
       ))[0]
     : undefined;
   const planType = String(plan?.plan_type || plan?.type || nextType).toLowerCase();
+  if (planType === "hotspot") {
+    const generated = prepaidHotspotUsername(
+      updates.phone ?? current.phone,
+      updates.mac_address ?? current.mac_address,
+    );
+    if (generated) {
+      nextName = generated;
+    } else if (!isPrepaidHotspotUsername(nextName)) {
+      throw new Error("A hotspot user needs a valid phone number and device MAC address");
+    }
+    updates.username = nextName;
+  } else if (planType === "pppoe") {
+    updates.pppoe_username = nextName;
+  }
   const enabled = nextStatus === "active" &&
     (!nextExpiry || (Number.isFinite(Date.parse(nextExpiry)) && Date.parse(nextExpiry) > Date.now()));
 
@@ -125,6 +141,13 @@ async function reconcileCustomerAccess(
       const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
         ? String(Math.floor(dataLimitMb * 1_000_000))
         : "0";
+      const address = String(updates.ip_address ?? current.ip_address ?? "").trim();
+      const rateLimit = routerRateLimit(
+        plan.speed_down,
+        plan.speed_up,
+        plan.speed_down_unit ?? "Mbps",
+        plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+      );
 
       if (currentName && currentName !== nextName) {
         if (planType === "pppoe") {
@@ -141,7 +164,7 @@ async function reconcileCustomerAccess(
           name: nextName,
           password: nextPassword,
           profile: plan.name,
-          comment: `OcholaSupernet admin sync — ${nextName}`,
+          comment: nextName,
           expiresAt: nextExpiry,
           enabled,
           remoteAddress: String(updates.ip_address ?? current.ip_address ?? "").trim() || null,
@@ -151,10 +174,13 @@ async function reconcileCustomerAccess(
           name: nextName,
           password: nextPassword,
           profile: profileName(plan),
-          comment: `OcholaSupernet admin sync — ${nextName}`,
+          comment: nextName,
           expiresAt: nextExpiry,
           enabled,
           limitBytesTotal,
+          address: address || null,
+          rateLimit,
+          sharedUsers: plan.shared_users ?? 1,
         });
       }
     }
@@ -219,7 +245,7 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
   const {
     adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id,
-    type, ipAddress, ip_address, username, pppoe_username, status, expiryDate, expires_at,
+    type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
     password, fup_limit_mb,
   } = req.body;
   const effectiveAdminId = Number(adminId || ispId || 1);
@@ -248,6 +274,7 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   if (routerId !== undefined || router_id !== undefined) updates.router_id = routerId ?? router_id;
   if (type       !== undefined) updates.type       = type;
   if (ipAddress !== undefined || ip_address !== undefined) updates.ip_address = ipAddress ?? ip_address;
+  if (mac_address !== undefined) updates.mac_address = mac_address;
   if (username   !== undefined) updates.username   = username;
   if (pppoe_username !== undefined) updates.pppoe_username = pppoe_username;
   if (password   !== undefined) updates.password   = password;

@@ -224,6 +224,7 @@ export default function HotspotLogin() {
               adminId,
               mac_address: deviceMacAddress,
               device_name: deviceName,
+              ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
             }),
           });
           const accessData = await accessResponse.json() as {

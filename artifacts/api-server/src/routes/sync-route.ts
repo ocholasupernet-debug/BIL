@@ -214,9 +214,17 @@ async function bgAutoProbe(
 }
 
 /* ─── Speed → MikroTik rate-limit string ─── */
-function toRateLimit(down: number, up: number, unit: string = "Mbps"): string {
-  const suffix = unit === "Kbps" ? "k" : unit === "Gbps" ? "G" : "M";
-  return `${up}${suffix}/${down}${suffix}`;
+function toRateLimit(
+  down: number,
+  up: number,
+  downUnit: string = "Mbps",
+  upUnit: string = downUnit,
+): string {
+  const suffix = (unit: string): string => {
+    const normalized = unit.toLowerCase();
+    return normalized.startsWith("kb") ? "k" : normalized.startsWith("gb") ? "G" : "M";
+  };
+  return `${up}${suffix(upUnit)}/${down}${suffix(downUnit)}`;
 }
 
 /* ─── Validity → MikroTik session-timeout string (HH:MM:SS, hours may exceed 24) ─── */
@@ -403,7 +411,12 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
 
     for (const plan of plans) {
       const profileName = plan.name.replace(/\s+/g, "-").toLowerCase();
-      const rateLimit   = toRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit || "Mbps");
+      const rateLimit   = toRateLimit(
+        plan.speed_down,
+        plan.speed_up,
+        plan.speed_down_unit || "Mbps",
+        plan.speed_up_unit || plan.speed_down_unit || "Mbps",
+      );
       const sessionTime = toSessionTimeout(plan.validity, plan.validity_unit);
 
       if (plan.type === "pppoe") {
@@ -524,6 +537,15 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
       username: string; password: string;
       type: string;           // "hotspot" | "pppoe" | "static" | "voucher"
       plan_name: string;      // becomes profile name on router
+      plan_id?: number;
+      speed_down?: number;
+      speed_up?: number;
+      speed_down_unit?: string;
+      speed_up_unit?: string;
+      data_limit_mb?: number | null;
+      shared_users?: number;
+      expires_at?: string;
+      status?: string;
       pppoe_username?: string;
       mac_address?: string;
       ip_address?: string;
@@ -572,8 +594,24 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
     let created = 0, updated = 0, skipped = 0;
 
     for (const u of users) {
-      const profileName = u.plan_name ? u.plan_name.replace(/\s+/g, "-").toLowerCase() : "default";
-      const comment     = u.comment || `OcholaNet`;
+      const profileName = u.plan_id
+        ? `ochola-plan-${u.plan_id}`
+        : u.plan_name ? u.plan_name.replace(/\s+/g, "-").toLowerCase() : "default";
+      const comment = u.type === "hotspot" ? u.username : (u.comment || u.username);
+      const expiresAt = u.expires_at ? Date.parse(u.expires_at) : NaN;
+      const enabled = String(u.status ?? "active").toLowerCase() === "active" &&
+        (!Number.isFinite(expiresAt) || expiresAt > Date.now());
+      const rateLimit = Number.isFinite(Number(u.speed_down)) && Number.isFinite(Number(u.speed_up))
+        ? toRateLimit(
+            Number(u.speed_down),
+            Number(u.speed_up),
+            u.speed_down_unit || "Mbps",
+            u.speed_up_unit || u.speed_down_unit || "Mbps",
+          )
+        : undefined;
+      const limitBytesTotal = Number(u.data_limit_mb) > 0
+        ? String(Math.floor(Number(u.data_limit_mb) * 1_000_000))
+        : "0";
 
       if (u.type === "pppoe") {
         /* ── PPPoE secret ── */
@@ -586,6 +624,7 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
             service:  "ppp",
             profile:  profileName,
             comment,
+            disabled:  enabled ? "no" : "yes",
           };
           if (u.ip_address) props["remote-address"] = u.ip_address;
           const action = await upsertByFilter(conn, "/ppp/secret", "name", secretName, props);
@@ -604,9 +643,34 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
             password: u.password || "",
             profile:  profileName,
             comment,
+            disabled:  enabled ? "no" : "yes",
+            "limit-bytes-total": limitBytesTotal,
           };
           if (u.mac_address) props["mac-address"] = u.mac_address;
+          if (u.ip_address) props.address = u.ip_address;
+          if (u.plan_id) {
+            await upsertByFilter(conn, "/ip/hotspot/user/profile", "name", profileName, {
+              name: profileName,
+              "shared-users": String(u.shared_users || 1),
+              ...(rateLimit ? { "rate-limit": rateLimit } : {}),
+            });
+          }
           const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", u.username, props);
+          const userRows = await conn.write([
+            "/ip/hotspot/user/print",
+            `?name=${u.username}`,
+          ]) as Record<string, string>[];
+          for (const userRow of Array.isArray(userRows) ? userRows : []) {
+            if (userRow[".id"]) {
+              await conn.write(["/ip/hotspot/user/reset-counters", `=.id=${userRow[".id"]}`]);
+            }
+          }
+          const activeRows = await conn.write(["/ip/hotspot/active/print", `?user=${u.username}`]) as Record<string, string>[];
+          for (const active of Array.isArray(activeRows) ? activeRows : []) {
+            if (active[".id"]) {
+              await conn.write(["/ip/hotspot/active/remove", `=.id=${active[".id"]}`]);
+            }
+          }
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {
