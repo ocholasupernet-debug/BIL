@@ -92,7 +92,11 @@ async function connectWithFallback(
   } catch (firstErr) {
     const candidates = [
       validVpnIp && validVpnIp !== primary ? validVpnIp : "",
-      validVpnIp && /^10\.8\.5\./.test(validVpnIp) ? routerManagementBackupIp(validVpnIp) : "",
+      validVpnIp && /^10\.8\.[56]\./.test(validVpnIp)
+        ? validVpnIp.startsWith("10.8.5.")
+          ? routerManagementBackupIp(validVpnIp)
+          : validVpnIp.replace(/^10\.8\.6\./, "10.8.5.")
+        : "",
     ].filter((value, index, all) => value && all.indexOf(value) === index);
     let lastError: unknown = firstErr;
     for (const fallback of candidates) {
@@ -936,7 +940,7 @@ router.post("/admin/router/fix-api", async (req, res): Promise<void> => {
     log("✓ API service enabled");
 
     log("Adding firewall rules for the persistent and legacy VPN ranges…");
-    for (const sourceAddress of ["10.8.5.0/24", "10.8.0.0/24"]) {
+    for (const sourceAddress of ["10.8.5.0/24", "10.8.6.0/24", "10.8.0.0/24"]) {
       await conn.write([
         "/ip/firewall/filter/add",
         "=chain=input",
@@ -1148,7 +1152,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
   /* ── Build list of IPs to try in order ──────────────────────
      1. host       (WAN or direct IP stored in Supabase)
      2. bridgeIp   (legacy request field; accepted only when it is the
-                     dedicated 10.8.5.x management VPN IP)
+                     dedicated 10.8.5.x or 10.8.6.x management VPN IP)
      3. vpnIp      (auto-looked up from OpenVPN server status file by WAN IP)
      4. cnVpnIp    (looked up by router VPN certificate CN — fallback when
                     host is empty, e.g. brand-new router whose host was never set)
@@ -1162,7 +1166,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
   /* Require at least one usable address */
   if (!host && !configuredVpnIp && !autoVpnIp && !cnVpnIp) {
-    res.status(400).json({ ok: false, error: "A public host or 10.8.5.x management VPN IP is required" });
+    res.status(400).json({ ok: false, error: "A public host or primary/backup management VPN IP is required" });
     return;
   }
 
@@ -1174,7 +1178,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
       ? ""
       : bridgeIp && bridgeIp === host
         ? `The configured address is a LAN address (${bridgeIp}), not a management VPN address.`
-        : `No 10.8.5.x management VPN address found. Ensure the router-management OpenVPN is running.`;
+        : `No management VPN address found. Ensure the primary or backup router-management OpenVPN is running.`;
     res.json({
       ok: false,
       error: `Router host ${host || "(none)"} is a private LAN address — the server cannot reach it directly. ${detail}`.trim(),
@@ -2208,7 +2212,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     if (bridgeIp) {
       /* This callback reports the management interface. Do not overwrite
          bridge_ip, which is the customer-LAN gateway used by the hotspot. */
-      if (/^10\.8\.5\./.test(bridgeIp)) patch.vpn_ip = bridgeIp;
+      if (isRouterManagementVpnIp(bridgeIp)) patch.vpn_ip = bridgeIp;
       else patch.bridge_ip = bridgeIp;
     }
     /* If the router still has the auto-generated name, rename it to the RouterOS identity */
@@ -2317,7 +2321,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
         `[register] management OpenVPN identity skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (openVpnCredentials && row?.id && bridgeIp && /^10\.8\.5\./.test(bridgeIp)) {
+    if (openVpnCredentials && row?.id && bridgeIp && isRouterManagementVpnIp(bridgeIp)) {
       const liveClient = readVpnClients().find(client =>
         client.cn === openVpnCredentials.username && client.vpnIp === bridgeIp,
       );

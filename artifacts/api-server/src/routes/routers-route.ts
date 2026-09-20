@@ -6,6 +6,7 @@ import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
+import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 
 const router: IRouter = Router();
 
@@ -39,14 +40,15 @@ function discoverVpnIp(
   const clients = readVpnClients();
   const managementIp = (value: string | null | undefined): string | undefined => {
     const ip = value?.trim() ?? "";
-    return /^10\.8\.5\.\d+$/.test(ip) ? ip : undefined;
+    return isRouterManagementVpnIp(ip) ? ip : undefined;
   };
-  /* The persisted management address is authoritative. A live status-file
-     match is useful for older records, but must not replace a configured
-     10.8.5.x address with a legacy/customer tunnel address or LAN gateway. */
-  return managementIp(configuredVpnIp)
-    || managementIp(vpnIpFor(name, clients))
+  /* Prefer the currently connected management client. This lets the backup
+     tunnel become the active API target when the persisted primary address
+     is temporarily offline, while still falling back to the primary address
+     when the VPS status files are unavailable. */
+  return managementIp(vpnIpFor(name, clients))
     || managementIp(vpnIpFor(cleanRouterHost(host), clients))
+    || managementIp(configuredVpnIp)
     || managementIp(configuredIp)
     || undefined;
 }
@@ -95,8 +97,8 @@ type InstallRouter = {
 
 function managementVpnIp(row: InstallRouter): string | null {
   const discovered = vpnIpFor(row.name, readVpnClients());
-  const candidates = [row.vpn_ip, discovered].filter((value): value is string => Boolean(value?.trim()));
-  return candidates.find(value => /^10\.8\.5\.\d+$/.test(value.trim()))?.trim() ?? null;
+  const candidates = [discovered, row.vpn_ip].filter((value): value is string => Boolean(value?.trim()));
+  return candidates.find(value => isRouterManagementVpnIp(value))?.trim() ?? null;
 }
 
 async function probeInstallRouter(row: InstallRouter): Promise<{
@@ -114,7 +116,7 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
       vpnIp: null,
       connected: false,
       via: null,
-      error: "Waiting for the router-management VPN tunnel (10.8.5.x) to connect.",
+      error: "Waiting for the primary or backup router-management VPN tunnel to connect.",
     };
   }
 

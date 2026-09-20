@@ -47,6 +47,7 @@ import { routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import {
   provisionRouterManagementOpenVpn,
+  provisionRouterManagementOpenVpnPair,
 } from "../lib/router-vpn-provisioning.js";
 import {
   readRouterManagementCaCertificate,
@@ -1385,13 +1386,18 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       adminId,
       routerName: found.row.name,
     });
-    const provisioning = await provisionRouterManagementOpenVpn({
+    const provisioning = await provisionRouterManagementOpenVpnPair({
       adminId,
       routerId: id,
       routerName: found.row.name,
       routerIp: tunnelRouterIp,
     });
-    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
+    if (
+      !provisioning.primary.ready
+      || !provisioning.backup.ready
+      || provisioning.primary.endpoint !== vpsIp
+      || provisioning.backup.endpoint !== vpsIp
+    ) {
       res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
       return;
     }
@@ -1433,13 +1439,18 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
-      vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
+      vpnPort: routerManagementVpnPortForRouter(id),
       vpnUsername: openVpnCredentials.username,
       vpnPassword: openVpnCredentials.password,
+      backupVpnPort: routerManagementVpnContract("backup").port,
+      backupVpnUsername: openVpnCredentials.username,
+      backupVpnPassword: openVpnCredentials.password,
       caCertificateUrl,
       managementCaCertificatePem,
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
+      backupTunnelRouterIp: provisioning.backup.assignedIp,
+      backupTunnelVpsIp: routerManagementVpnContract("backup").gateway,
       routerId: id,
       installationMode,
       backendRegistrationUrl,

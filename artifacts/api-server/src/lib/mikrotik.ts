@@ -279,16 +279,20 @@ async function connectWithRetry(
         ? `${creds.host} (⚠ LAN IP — only reachable on local network)`
         : creds.host;
     hosts.push({ host: creds.host, label, isVpn: vpn });
-    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
-      const backupIp = routerManagementBackupIp(creds.host);
-      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
+      const backupIp = creds.host.startsWith("10.8.5.")
+        ? routerManagementBackupIp(creds.host)
+        : creds.host.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
     }
   }
   if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
     hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
-    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
-      const backupIp = routerManagementBackupIp(creds.bridgeIp);
-      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
+      const backupIp = creds.bridgeIp.startsWith("10.8.5.")
+        ? routerManagementBackupIp(creds.bridgeIp)
+        : creds.bridgeIp.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
     }
   }
 
@@ -2503,6 +2507,16 @@ export interface RouterAsClientOptions {
   autoDetectRouterOsMajor?: boolean;
   /** Select the isolated backup management OpenVPN instance. */
   vpnRole?: RouterManagementVpnRole;
+  /** Optional second management client used only when the primary is down. */
+  backupVpnPort?: number;
+  /** Backup OpenVPN username; normally the same per-router credential. */
+  backupVpnUsername?: string;
+  /** Backup OpenVPN password; normally the same per-router credential. */
+  backupVpnPassword?: string;
+  /** Backup management tunnel address assigned by the isolated backup server. */
+  backupTunnelRouterIp?: string;
+  /** Backup management server tunnel address. */
+  backupTunnelVpsIp?: string;
   /** Destructive takeover may replace matching router resources; coexistence never does. */
   installationMode?: "coexist" | "direct" | "takeover";
   /** Optional Self Install bridge that the one-run script creates or reuses. */
@@ -2696,6 +2710,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     routerOsMajor = 6,
     autoDetectRouterOsMajor = false,
     vpnRole = "primary",
+    backupVpnPort,
+    backupVpnUsername,
+    backupVpnPassword,
+    backupTunnelRouterIp,
+    backupTunnelVpsIp = ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
     installationMode = "coexist",
     bridgeName,
     bridgePorts = [],
@@ -2711,6 +2730,35 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
   const port = validateRouterOpenVpnPort(vpnPort);
   const safeVpnUsername = validateRouterOpenVpnCredential(vpnUsername, "username");
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
+  const backupValues = [
+    backupVpnPort,
+    backupVpnUsername,
+    backupVpnPassword,
+    backupTunnelRouterIp,
+  ];
+  const hasBackupManagementVpn = backupValues.some(value => value !== undefined && String(value).trim() !== "");
+  if (hasBackupManagementVpn && backupValues.some(value => value === undefined || String(value).trim() === "")) {
+    throw new Error("Backup management VPN configuration must include port, credentials, and router tunnel IP.");
+  }
+  const safeBackupVpnUsername = hasBackupManagementVpn
+    ? validateRouterOpenVpnCredential(backupVpnUsername ?? "", "backup username")
+    : "";
+  const safeBackupVpnPassword = hasBackupManagementVpn
+    ? validateRouterOpenVpnCredential(backupVpnPassword ?? "", "backup password")
+    : "";
+  const backupPort = hasBackupManagementVpn ? validateRouterOpenVpnPort(backupVpnPort ?? 0) : 0;
+  const safeBackupTunnelRouterIp = hasBackupManagementVpn
+    ? String(backupTunnelRouterIp).trim()
+    : "";
+  if (hasBackupManagementVpn && !/^10\.8\.6\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-3])$/.test(safeBackupTunnelRouterIp)) {
+    throw new Error("Backup management tunnel IP must be a valid host in the isolated 10.8.6.0/24 network.");
+  }
+  const safeBackupTunnelVpsIp = hasBackupManagementVpn
+    ? String(backupTunnelVpsIp).trim()
+    : "";
+  if (hasBackupManagementVpn && safeBackupTunnelVpsIp !== ROUTER_MANAGEMENT_VPN_BACKUP.gateway) {
+    throw new Error("Backup management tunnel gateway must remain 10.8.6.1.");
+  }
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
   const embeddedManagementCa = String(managementCaCertificatePem ?? ISRG_ROOT_X1_PEM).trim();
   if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(embeddedManagementCa)) {
@@ -2757,6 +2805,11 @@ export function generateRouterAsClientScript(opts: RouterAsClientOptions): strin
     : routerId
       ? `${tag} VPS tunnel`
       : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}${roleSuffix}`;
+  const backupInterfaceName = `${interfaceName}-backup`;
+  const backupInterfaceComment = `${interfaceComment}-backup`;
+  const failoverSchedulerName = routerId
+    ? `ochola-mgmt-failover-${routerId}`
+    : "ocholasupernet-mgmt-failover";
   const safeBridgeName = !minimalManagementSetup && bridgeName
     ? validateRouterOsResourceName(bridgeName, "Self Install bridge name")
     : "";
@@ -2838,24 +2891,48 @@ ${safeHotspotAssets.map(asset => `:if ([:len [/file find where name=${routerOsSt
         :error $ocholaVpnChildError
     }
 }
+${hasBackupManagementVpn ? `:local existingBackupOvpnIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+:if ([:len $existingBackupOvpnIds] > 0) do={
+    :local existingBackupOvpnId [:pick $existingBackupOvpnIds 0]
+    :local existingBackupOvpnComment [/interface ovpn-client get $existingBackupOvpnId comment]
+    :if ($existingBackupOvpnComment = "${backupInterfaceComment}") do={
+        :set reuseExistingBackupOvpn true
+        :do { /interface ovpn-client set $existingBackupOvpnId disabled=yes } on-error={
+            :set ocholaVpnChildError "${tag}: could not disable the previous backup management interface."
+            :error $ocholaVpnChildError
+        }
+    } else={
+        :set ocholaVpnChildError "${tag}: coexistence conflict - a foreign ${backupInterfaceName} interface was found; nothing was replaced."
+        :error $ocholaVpnChildError
+    }
+}` : ""}
 ${minimalManagementSetup ? "" : `:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
 }`}`
-    : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
+    : `:do { /system scheduler remove [find where name="${failoverSchedulerName}"] } on-error={}
+:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="ocholasupernet" comment="mainbillingvpn"] } on-error={}
+:do { /interface ovpn-client remove [find where name="${backupInterfaceName}"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence
     ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0 } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
+${hasBackupManagementVpn ? `:if ([:len [/ip firewall filter find where comment="${tag}-backup-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-backup-api-from-vps-tunnel" place-before=0 } on-error={ :set ovpnError "RouterOS rejected the backup coexistence API firewall rule." } }` : ""}
+:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
 :if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." } }
+${hasBackupManagementVpn ? `:if ([:len [/ip firewall filter find where comment="${tag}-backup-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=icmp comment="${tag}-backup-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the backup coexistence ping firewall rule." } }` : ""}
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }`
     : `/ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-api-from-vps-tunnel"]
+add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-backup-api-from-vps-tunnel" place-before=0` : ""}
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
-add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-ping-from-vps-tunnel"]
+add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=icmp comment="${tag}-backup-ping-from-vps-tunnel"` : ""}`;
   const bridgeSetup = safeBridgeName
     ? `# Step 5: Create the requested hotspot bridge and add only the selected ports
 :put "${tag}: STEP 5/10 - Configuring hotspot bridge ${safeBridgeName}."
@@ -2946,13 +3023,20 @@ ${safeApiUsernames.map(username => `:local managementUserIds [/user find where n
     : "";
   const apiNetworks = ["10.8.0.0/24", "10.8.5.0/24", "10.8.6.0/24"];
   const apiNetworkCsv = apiNetworks.join(",");
+  const apiServiceAddresses = hasBackupManagementVpn
+    ? `${tunnelVpsIp}/32,${safeBackupTunnelVpsIp}/32`
+    : `${tunnelVpsIp}/32`;
   const natSetup = safeBridgeName
     ? `# Step 6: Add only the management NAT rules needed for the two interfaces
 /ip firewall nat
 remove [find where comment="${tag}-mgmt-to-hotspot-nat"]
 add chain=srcnat action=masquerade src-address=${tunnelVpsIp}/32 out-interface="${safeBridgeName}" comment="${tag}-mgmt-to-hotspot-nat"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-mgmt-to-hotspot-nat"]
+add chain=srcnat action=masquerade src-address=${safeBackupTunnelVpsIp}/32 out-interface="${safeBridgeName}" comment="${tag}-backup-mgmt-to-hotspot-nat"` : ""}
 remove [find where comment="${tag}-hotspot-to-mgmt-nat"]
-add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"`
+add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-hotspot-to-backup-mgmt-nat"]
+add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${backupInterfaceName}" comment="${tag}-hotspot-to-backup-mgmt-nat"` : ""}`
     : "";
   const openVpnOptionalSettings = autoDetectRouterOsMajor
     ? `# The auto-detected path uses only the portable client properties.
@@ -2967,13 +3051,29 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
 }`
     : `# RouterOS 6 path: keep the client command to the conservative common property set.
 # RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
+  const backupOpenVpnOptionalSettings = hasBackupManagementVpn
+    ? autoDetectRouterOsMajor
+      ? `:do {
+    /interface ovpn-client set [find where name="${backupInterfaceName}"] verify-server-certificate=yes
+} on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable backup OpenVPN server certificate verification."
+    :error $ocholaVpnChildError
+}`
+      : ""
+    : "";
   const openVpnPostCreateSettings = `# Apply optional OpenVPN settings only after the portable client exists.
 :do {
     /interface ovpn-client set [find where name="${interfaceName}"] mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no
 } on-error={
     :set ocholaVpnChildError "${tag}: OpenVPN client options were rejected after interface creation."
     :error $ocholaVpnChildError
-}`;
+}
+${hasBackupManagementVpn ? `:do {
+    /interface ovpn-client set [find where name="${backupInterfaceName}"] mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no
+} on-error={
+    :set ocholaVpnChildError "${tag}: backup OpenVPN client options were rejected after interface creation."
+    :error $ocholaVpnChildError
+}` : ""}`;
   const openVpnPreflight = `# Create the management interface disabled while CA trust is prepared.
 # This makes the requested OVPN interface visible even if the CA bootstrap
 # needs to be repaired and retried.
@@ -2991,6 +3091,24 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     :error $ocholaVpnChildError
 }
 :put "${tag}: Management OpenVPN client interface is present and disabled until CA trust succeeds."`;
+  const backupOpenVpnPreflight = hasBackupManagementVpn
+    ? `# Create the backup client disabled. The failover scheduler enables it only
+# after the primary client is no longer running.
+:put "${tag}: Creating backup management OpenVPN client interface (standby)."
+:if (!$reuseExistingBackupOvpn) do={
+ :do { /interface ovpn-client add name=${routerOsString(backupInterfaceName)} connect-to=${routerOsString(endpoint)} port=${backupPort} user=${routerOsString(safeBackupVpnUsername)} password=${routerOsString(safeBackupVpnPassword)} disabled=yes comment="${backupInterfaceComment}" } on-error={
+    :local routerError ""
+    :do { :set routerError $error } on-error={}
+    :set ovpnError "RouterOS rejected the backup OpenVPN client add command"
+    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+ }
+}
+:if ([:len $ovpnError] > 0) do={
+    :set ocholaVpnChildError ("${tag}: backup OVPN client creation failed: " . $ovpnError)
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Backup management OpenVPN client is present and disabled in primary-first standby mode."`
+    : "";
 
   const caFileName = `${safeCaCertificateName}.crt`;
   const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
@@ -3190,6 +3308,7 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
 :set ocholaVpnChildError ""
 :local ovpnError ""
 :local reuseExistingOvpn false
+${hasBackupManagementVpn ? ":local reuseExistingBackupOvpn false" : ""}
 ${routerOsDetection}
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 :put "${tag}: STEP 2/10 - Preparing management VPN resources."
@@ -3198,18 +3317,60 @@ ${resourcePreparation}
 ${openVpnPreflight}
 ${caBootstrap}
 :put "${tag}: STEP 3/10 - Enabling management OpenVPN client."
+${backupOpenVpnPreflight}
 ${openVpnPostCreateSettings}
 ${openVpnOptionalSettings}
+${backupOpenVpnOptionalSettings}
 :if (!$reuseExistingOvpn) do={
     :do { /interface ovpn-client set [find where name="${interfaceName}"] disabled=no } on-error={
         :set ocholaVpnChildError "${tag}: management OpenVPN client could not be enabled after CA trust succeeded."
         :error $ocholaVpnChildError
     }
 }
+:if (${hasBackupManagementVpn ? "!$reuseExistingBackupOvpn" : "false"}) do={
+    :do { /interface ovpn-client set [find where name="${backupInterfaceName}"] disabled=yes } on-error={
+        :set ocholaVpnChildError "${tag}: backup management OpenVPN client could not remain disabled during primary startup."
+        :error $ocholaVpnChildError
+    }
+}
 :put "${tag}: STEP 3/10 complete - OpenVPN client configured."
 }
 
-:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
+# Keep the backup disconnected during normal operation. The scheduler is
+# independent of this import so it can recover the management path later.
+${hasBackupManagementVpn ? `/system scheduler
+:do { remove [find where name="${failoverSchedulerName}"] } on-error={}
+:do {
+    add name="${failoverSchedulerName}" interval=00:00:15 start-time=startup on-event={
+        :local primaryIds [/interface ovpn-client find where name="${interfaceName}"]
+        :local backupIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+        :local primaryRunning false
+        :if ([:len $primaryIds] > 0) do={
+            :if ([/interface ovpn-client get [:pick $primaryIds 0] running] = true) do={ :set primaryRunning true }
+        }
+        :if ([:len $backupIds] > 0) do={
+            :local backupId [:pick $backupIds 0]
+            :local backupDisabled [/interface ovpn-client get $backupId disabled]
+            :if (!$primaryRunning) do={
+                :if ($backupDisabled = true) do={
+                    :do { /interface ovpn-client set $backupId disabled=no } on-error={}
+                    :log warning "${tag}: primary management VPN is down; backup management VPN enabled."
+                }
+            } else={
+                :if ($backupDisabled = false) do={
+                    :do { /interface ovpn-client set $backupId disabled=yes } on-error={}
+                    :log info "${tag}: primary management VPN restored; backup management VPN disabled."
+                }
+            }
+        }
+    }
+} on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS could not install the management VPN failover scheduler."
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Primary-first management VPN failover scheduler is active."` : ""}
+
+:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the primary tunnel..."
 :local ovpnRunning false
 :for attempt from=1 to=12 do={
     :if (!$ovpnRunning) do={
@@ -3219,11 +3380,29 @@ ${openVpnOptionalSettings}
         }
     }
 }
+:if (!$ovpnRunning && ${hasBackupManagementVpn ? "true" : "false"}) do={
+    :put "${tag}: Primary management VPN did not start; enabling the backup management VPN."
+    :do { /interface ovpn-client set [find where name="${backupInterfaceName}"] disabled=no } on-error={
+        :set ocholaVpnChildError "${tag}: backup management OpenVPN client could not be enabled after primary failure."
+        :error $ocholaVpnChildError
+    }
+    :for attempt from=1 to=12 do={
+        :if (!$ovpnRunning) do={
+            :delay 5s
+            :if ([:len [/interface ovpn-client find where name="${backupInterfaceName}" && running=yes]] > 0) do={
+                :set ovpnRunning true
+            }
+        }
+    }
+}
 :if (!$ovpnRunning) do={
     :put "${tag}: OpenVPN did not reach running=yes before the 60s timeout."
     :put "${tag}: Safe interface diagnostics (credentials are intentionally omitted):"
     :do {
         :local ovpnIds [/interface ovpn-client find where name="${interfaceName}"]
+        :if ([:len $ovpnIds] = 0 && ${hasBackupManagementVpn ? "true" : "false"}) do={
+            :set ovpnIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+        }
         :if ([:len $ovpnIds] > 0) do={
             :local ovpnId [:pick $ovpnIds 0]
             :put ("  name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
@@ -3236,7 +3415,7 @@ ${openVpnOptionalSettings}
     :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session within 60 seconds. Review the safe interface diagnostics and OpenVPN log output above for reachability, TLS, authentication, certificate, or server-readiness errors."
     :error $ocholaVpnChildError
 } else={
-    :put "${tag}: OVPN client is running."
+    :put "${tag}: Management OpenVPN client is running."
 }
 
 # Step 3: Continue after the management tunnel is running.
@@ -3273,19 +3452,26 @@ ${minimalManagementSetup
 
 # Step 7: Ensure API service is enabled and restricted
 /ip service
-:do { /ip service set [find where name="api"] disabled=no address=${tunnelVpsIp}/32 } on-error={
+:do { /ip service set [find where name="api"] disabled=no address=${routerOsString(apiServiceAddresses)} } on-error={
     :set ocholaVpnChildError "${tag}: could not restrict the RouterOS API service to the management VPN peer."
     :error $ocholaVpnChildError
 }
-:do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}`}
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${routerOsString(apiServiceAddresses)} } on-error={}`}
 :put "${tag}: STEP 7/10 complete - RouterOS API service is ready."
 
 # Step 8: Discover and report the live tunnel IPv4
 :put "${tag}: STEP 8/10 - Discovering the live management tunnel address."
-:local ovpnId [/interface ovpn-client find where name="${interfaceName}"]
+:local activeInterface "${interfaceName}"
+:if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] = 0 && ${hasBackupManagementVpn ? "true" : "false"}) do={
+    :if ([:len [/interface ovpn-client find where name="${backupInterfaceName}" && running=yes]] > 0) do={
+        :set activeInterface "${backupInterfaceName}"
+        :put "${tag}: Primary tunnel is down; using the backup management tunnel."
+    }
+}
+:local ovpnId [/interface ovpn-client find where name=$activeInterface]
 :local liveTunnelIp ""
 :if ([:len $ovpnId] > 0) do={
-    :local addressRows [/ip address find where interface="${interfaceName}"]
+    :local addressRows [/ip address find where interface=$activeInterface]
     :foreach addressId in=$addressRows do={
         :local addressValue [/ip address get $addressId address]
         :if ($addressValue ~ "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/") do={
@@ -3297,7 +3483,7 @@ ${minimalManagementSetup
     :set ocholaVpnChildError "${tag}: OpenVPN is running but no valid tunnel IPv4 was assigned."
     :error $ocholaVpnChildError
 }
-:put ("${tag}: STEP 8/10 complete - live tunnel IPv4 is " . $liveTunnelIp . ".")
+:put ("${tag}: STEP 8/10 complete - live tunnel IPv4 is " . $liveTunnelIp . " via " . $activeInterface . ".")
 
 # Step 9: Verify RouterOS API reachability and backend registration
 :put "${tag}: STEP 9/10 - Verifying RouterOS API and registering the live tunnel."
@@ -3318,11 +3504,11 @@ ${minimalManagementSetup
     :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
     :error $ocholaVpnChildError
 }
-:put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp)
+:put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp . " via " . $activeInterface)
 :put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
 :put "${tag}: STEP 9/10 complete - backend registration accepted."
 
-:log info "${tag}: OVPN client running; dynamic tunnel IPv4=\$liveTunnelIp; backend API verification pending"
+:log info ("${tag}: OVPN client running via " . $activeInterface . "; dynamic tunnel IPv4=" . $liveTunnelIp . "; backend API verification pending")
 # Step 10: Hotspot assets
 ${hotspotAssetInstall}
 `;
