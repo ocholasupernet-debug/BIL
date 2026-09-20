@@ -30,6 +30,8 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /ip hotspot add[^\n]*address-pool="ochola-services-104-hotspot-pool"/);
   assert.doesNotMatch(script, /ip hotspot (?:add|set)[^\n]*comment=/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
+  assert.match(script, /SCRIPT 4 optional bandwidth tree starting/);
+  assert.match(script, /no aggregate queue speed was supplied; existing bandwidth policy was preserved/);
   assert.match(script, /interface pppoe-server server add/);
   assert.match(script, /192\.168\.180\.10-192\.168\.183\.254/);
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
@@ -75,4 +77,17 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /ip hotspot add name="ochola-services-104-hotspot" interface="hotspot-bridge"/);
   assert.doesNotMatch(script, /interface bridge add name="hotspot-bridge" comment=/);
   assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
+});
+
+test("service setup adds the optional shared-wire queue tree without changing the walled garden", () => {
+  const script = generateServiceSetupScript({
+    routerId: 104,
+    bridgeName: "co-hotspot-bridge-104",
+    maxPortSpeedMbps: 100,
+    portalHostnames: ["come.isplatty.org"],
+  });
+  assert.match(script, /name="ochola-services-104-root" target="co-hotspot-bridge-104" max-limit="100M\/100M" priority=2\/2/);
+  assert.match(script, /name="ochola-services-104-pppoe" target="192\.168\.99\.0\/24" parent="ochola-services-104-root"[^\\n]*priority=1\/1/);
+  assert.match(script, /name="ochola-services-104-hotspot" target="192\.168\.180\.0\/22" parent="ochola-services-104-root"[^\\n]*priority=8\/8/);
+  assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
 });

@@ -1507,6 +1507,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       routerId: id,
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
+      /* The shared bridge is the single physical service wire. Bandwidth
+         queues remain opt-in until a tenant supplies an aggregate speed. */
+      maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))
+        && Number(req.query.maxPortSpeedMbps) > 0
+        ? Number(req.query.maxPortSpeedMbps)
+        : undefined,
       portalHostnames: [portalHostname],
       portalFileUrls,
     });

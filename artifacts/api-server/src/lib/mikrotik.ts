@@ -4804,6 +4804,12 @@ export interface RouterServiceSetupOptions {
   bridgeName?: string;
   /** Physical interfaces to attach to the service bridge when unassigned. */
   bridgePorts?: string[];
+  /**
+   * Optional aggregate speed for an idempotent parent/child simple-queue
+   * tree. It is intentionally opt-in because most existing routers already
+   * have their own bandwidth policy.
+   */
+  maxPortSpeedMbps?: number;
   /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
   portalHostnames?: string[];
   /** One-time HTTPS sources for the default RouterOS Hotspot files. */
@@ -4833,6 +4839,15 @@ export function generateServiceSetupScript(
   );
   const bridgePorts = Array.from(new Set((options.bridgePorts ?? [])
     .map(port => validateRouterOsResourceName(port, "Service bridge port"))));
+  const maxPortSpeedMbps = options.maxPortSpeedMbps === undefined
+    ? undefined
+    : Number(options.maxPortSpeedMbps);
+  if (
+    maxPortSpeedMbps !== undefined
+    && (!Number.isFinite(maxPortSpeedMbps) || maxPortSpeedMbps <= 0 || maxPortSpeedMbps > 100_000)
+  ) {
+    throw new Error("Service queue speed must be a positive value no greater than 100000 Mbps.");
+  }
   const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
@@ -4877,16 +4892,32 @@ export function generateServiceSetupScript(
     :error $serviceError
 }`).join("\n")
     : `:put "${tag}: no portal hostname was supplied; walled-garden host entries were not added."`;
+  const queueSetup = maxPortSpeedMbps === undefined
+    ? `:put "${tag}: no aggregate queue speed was supplied; existing bandwidth policy was preserved."`
+    : `# Optional, tagged hierarchy for this shared service wire.
+:do { /queue simple remove [find where comment=${routerOsString(`${tag} queue`)}] } on-error={}
+:do { /queue simple add name=${routerOsString(`${tag}-root`)} target=${routerOsString(bridgeName)} max-limit=${routerOsString(`${maxPortSpeedMbps}M/${maxPortSpeedMbps}M`)} priority=2/2 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: aggregate queue could not be created: " . $error)
+    :error $serviceError
+}
+:do { /queue simple add name=${routerOsString(`${tag}-pppoe`)} target=${routerOsString(pppoeNetwork)} parent=${routerOsString(`${tag}-root`)} max-limit=${routerOsString(`${maxPortSpeedMbps}M/${maxPortSpeedMbps}M`)} priority=1/1 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: PPPoE queue could not be created: " . $error)
+    :error $serviceError
+}
+:do { /queue simple add name=${routerOsString(`${tag}-hotspot`)} target=${routerOsString(hotspotNetwork)} parent=${routerOsString(`${tag}-root`)} max-limit=${routerOsString(`${Math.max(1, Math.floor(maxPortSpeedMbps * 0.4))}M/${Math.max(1, Math.floor(maxPortSpeedMbps * 0.4))}M`)} priority=8/8 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: Hotspot queue could not be created: " . $error)
+    :error $serviceError
+}`;
 
   return `# ===============================================================
-# OcholaSupernet - servicessetup.rsc
+# OcholaSupernet - servicessetup.rsc (Script 4)
 # Shared Hotspot and PPPoE service layer
 # Generated  : ${new Date().toISOString()}
 #
 # Run after networksetup.rsc and vpnsetup.rsc.
 # This file owns only OcholaSupernet-tagged service resources:
 #   - service bridge and selected physical ports
-#   - Hotspot gateway, DHCP, pool, profile, and server
+ #   - Hotspot gateway, DHCP, pool, profile, and server
 #   - Hotspot walled garden for the portal/API hostname
 #   - PPPoE gateway, pool, profile, and server
 #   - customer NAT rules for both service networks
@@ -5149,6 +5180,17 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :put ("${tag}: SERVICE STEP 7/7 FAILED: " . $serviceStepError)
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 7/7 complete - customer NAT ready or safely preserved." }
+
+:put "${tag}: SCRIPT 4 optional bandwidth tree starting."
+:do {
+    ${queueSetup}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SCRIPT 4 bandwidth tree: " . $serviceStepError . " | ")
+    :put ("${tag}: SCRIPT 4 bandwidth tree failed: " . $serviceStepError)
+}
 
 :if ([:len $serviceFailures] > 0) do={
     :put "${tag}: servicessetup.rsc finished with failed service steps:"
