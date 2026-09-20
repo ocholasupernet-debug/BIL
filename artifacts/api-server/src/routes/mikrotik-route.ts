@@ -22,6 +22,7 @@ import {
   generateRouterManagementVpnScript,
   generateNetworkSetupScript,
   generateServiceSetupScript,
+  disableGeneratedHotspot,
   fetchRouterFiles,
   runRouterCommand,
   fetchRouterSecurityState,
@@ -530,6 +531,32 @@ router.get("/router/:id/test", requireAdmin(), async (req, res): Promise<void> =
     ...result,
     warnings: [...warnings, ...result.warnings],
   });
+});
+
+/* ─── POST /api/router/:id/hotspot/recovery-disable ─────────────────────── */
+router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (Number.isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) { res.status(403).json({ error: "A valid signed-in ISP account is required." }); return; }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found or not assigned to this administrator" }); return; }
+
+  try {
+    const result = await disableGeneratedHotspot(found.creds, id);
+    logger.warn({ routerId: id, adminId, hotspotName: result.name }, "Generated Hotspot disabled through recovery action");
+    res.json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      ...result,
+      message: result.alreadyDisabled
+        ? `The generated Hotspot server "${result.name}" was already disabled.`
+        : `The generated Hotspot server "${result.name}" is now disabled.`,
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
 });
 
 /* ─── GET /api/router/:id/files ─────────────────────────────────────────── */

@@ -672,8 +672,14 @@ function ManagementTunnelSummary({ routerId }: { routerId: number }) {
 
 /* ══════════════════════ Superadmin router card ═══════════════════ */
 function AdminRouterCard({
-  router, onEdit, onTestDirect,
-}: { router: DbRouter; onEdit: (r: DbRouter) => void; onTestDirect: (id: number) => void }) {
+  router, onEdit, onTestDirect, onDisableHotspot, hotspotRecoveryBusy,
+}: {
+  router: DbRouter;
+  onEdit: (r: DbRouter) => void;
+  onTestDirect: (id: number) => void;
+  onDisableHotspot: (id: number) => void;
+  hotspotRecoveryBusy: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const isOnline = router.status === "online" || router.status === "connected";
 
@@ -718,6 +724,15 @@ function AdminRouterCard({
             title="Run connection test"
             style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", color: "#fbbf24", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700 }}>
             <Zap size={11} /> Test
+          </button>
+          <button
+            onClick={() => onDisableHotspot(router.id)}
+            disabled={hotspotRecoveryBusy}
+            title="Disable the generated Hotspot server and restore normal WLAN web access"
+            style={{ padding: "6px 10px", borderRadius: 7, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171", cursor: hotspotRecoveryBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, opacity: hotspotRecoveryBusy ? 0.7 : 1 }}
+          >
+            {hotspotRecoveryBusy ? <Loader2 size={11} className="animate-spin" /> : <AlertTriangle size={11} />}
+            {hotspotRecoveryBusy ? "Disabling…" : "Disable Hotspot"}
           </button>
           <button onClick={() => onEdit(router)}
             title="Edit credentials"
@@ -813,6 +828,8 @@ export default function RouterAPIConfig() {
   const [editingRouter, setEditingRouter] = useState<DbRouter | null>(null);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
+  const [hotspotRecoveryId, setHotspotRecoveryId] = useState<number | null>(null);
+  const [hotspotRecoveryResults, setHotspotRecoveryResults] = useState<Record<number, { ok: boolean; message: string }>>({});
 
   /* ── Load routers from Supabase ── */
   const { data: routers = [], isLoading } = useQuery<DbRouter[]>({
@@ -851,6 +868,40 @@ export default function RouterAPIConfig() {
     } catch {
       setTestResults(prev => ({ ...prev, [id]: { ok: false, error: "Request failed" } }));
     } finally { setTestingId(null); }
+  }
+
+  async function handleDisableGeneratedHotspot(id: number) {
+    if (!window.confirm(
+      "Disable the generated Hotspot server on this router? This restores normal web access for the affected WLAN but does not delete the bridge, DHCP, PPPoE, users, or files.",
+    )) return;
+    setHotspotRecoveryId(id);
+    setHotspotRecoveryResults(previous => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    try {
+      const token = getAdminApiToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(`/api/router/${id}/hotspot/recovery-disable`, {
+        method: "POST",
+        headers,
+      });
+      const payload = await response.json().catch(() => ({})) as { message?: string; error?: string; detail?: string };
+      if (!response.ok) throw new Error(payload.error || payload.detail || `Recovery failed (${response.status})`);
+      setHotspotRecoveryResults(previous => ({
+        ...previous,
+        [id]: { ok: true, message: payload.message || "The generated Hotspot server is disabled." },
+      }));
+    } catch (error) {
+      setHotspotRecoveryResults(previous => ({
+        ...previous,
+        [id]: { ok: false, message: error instanceof Error ? error.message : "Could not reach the router." },
+      }));
+    } finally {
+      setHotspotRecoveryId(null);
+    }
   }
 
   function afterSave() {
@@ -974,6 +1025,8 @@ export default function RouterAPIConfig() {
                       router={r}
                       onEdit={setEditingRouter}
                       onTestDirect={id => handleTestDirect(id)}
+                      onDisableHotspot={id => void handleDisableGeneratedHotspot(id)}
+                      hotspotRecoveryBusy={hotspotRecoveryId === r.id}
                     />
                     {/* Inline test result */}
                     {testResults[r.id] && (
@@ -995,6 +1048,25 @@ export default function RouterAPIConfig() {
                           <span style={{ color: "#fbbf24", fontSize: 11 }}>⚠ Via VPN</span>
                         )}
                         <button onClick={() => setTestResults(p => { const c = { ...p }; delete c[r.id]; return c; })}
+                          style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 0 }}>
+                          <X size={11} />
+                        </button>
+                      </div>
+                    )}
+                    {hotspotRecoveryResults[r.id] && (
+                      <div style={{
+                        marginTop: 6, borderRadius: 8, padding: "10px 14px",
+                        background: hotspotRecoveryResults[r.id].ok ? "rgba(74,222,128,0.06)" : "rgba(248,113,113,0.06)",
+                        border: `1px solid ${hotspotRecoveryResults[r.id].ok ? "rgba(74,222,128,0.2)" : "rgba(248,113,113,0.2)"}`,
+                        display: "flex", alignItems: "center", gap: 8, fontSize: 12,
+                      }}>
+                        {hotspotRecoveryResults[r.id].ok
+                          ? <CheckCircle2 size={13} style={{ color: "#4ade80" }} />
+                          : <XCircle size={13} style={{ color: "#f87171" }} />}
+                        <span style={{ color: hotspotRecoveryResults[r.id].ok ? "#4ade80" : "#f87171", fontWeight: 700 }}>
+                          {hotspotRecoveryResults[r.id].message}
+                        </span>
+                        <button onClick={() => setHotspotRecoveryResults(previous => { const next = { ...previous }; delete next[r.id]; return next; })}
                           style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 0 }}>
                           <X size={11} />
                         </button>
