@@ -458,7 +458,7 @@ export async function reconcileGeneratedServiceConfiguration(
   const tag = `ochola-services-${routerId}`;
   const hotspotName = `${tag}-hotspot`;
   const hotspotPool = `${tag}-hotspot-pool`;
-  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotProfile = "hprofile";
   const dhcpServer = `${tag}-dhcp`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
@@ -4265,7 +4265,7 @@ export function generateServiceSetupScript(
   const hotspotPool = `${tag}-hotspot-pool`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
-  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotProfile = "hprofile";
   const hotspotServer = `${tag}-hotspot`;
   const dhcpServer = `${tag}-dhcp`;
   const hotspotGateway = "192.168.180.1";
