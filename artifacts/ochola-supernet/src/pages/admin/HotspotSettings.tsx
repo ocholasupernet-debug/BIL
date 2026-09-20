@@ -172,6 +172,7 @@ function validateSettings(settings: HSettings): string | null {
 
 type ExportConfig = {
   adminId: number;
+  routerId: number;
   apiBase: string;
   plans: PortalPlan[];
   ispName: string;
@@ -227,6 +228,9 @@ function renderStaticPlanCards(plans: PortalPlan[]): string {
 function makeExportConfig(settings: HSettings, apiBase: string, plans: PortalPlan[]): ExportConfig {
   return {
     adminId: ADMIN_ID,
+    routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
+      ? Number(settings.routerId)
+      : 0,
     apiBase,
     plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
@@ -277,9 +281,13 @@ export async function buildPortalHtml(settings: HSettings, domain: string): Prom
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
   const apiBase = await resolvePortalApiBase(domain);
+  const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
   try {
-    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot&activeOnly=true&purchasableOnly=true`, {
+    const routerQuery = Number.isSafeInteger(routerId) && routerId > 0
+      ? `&routerId=${encodeURIComponent(String(routerId))}`
+      : "";
+    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}`, {
       cache: "no-store",
     });
     if (plansResponse.ok) {

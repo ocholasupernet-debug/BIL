@@ -1,7 +1,11 @@
 -- Router migration asset ownership. These fields let a migration preserve the
 -- source port and reseller relationship while creating destination records.
 alter table public.isp_plans
-  add column if not exists router_id bigint references public.isp_routers(id) on delete set null;
+  add column if not exists router_id bigint references public.isp_routers(id) on delete set null,
+  add column if not exists port_id bigint references public.isp_reseller_ports(id) on delete set null;
+
+create index if not exists isp_plans_router_id_idx on public.isp_plans(router_id);
+create index if not exists isp_plans_port_id_idx on public.isp_plans(port_id);
 
 alter table public.isp_customers
   add column if not exists router_id bigint references public.isp_routers(id) on delete set null,

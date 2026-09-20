@@ -5,6 +5,69 @@ import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
+type PlanScope = { routerId: number; portId: number | null };
+
+function parseRequiredId(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseOptionalId(value: unknown): number | null {
+  if (value === null || value === undefined || value === "" || value === "null") return null;
+  return parseRequiredId(value);
+}
+
+async function validatePlanScope(adminId: number, routerValue: unknown, portValue: unknown): Promise<PlanScope | null> {
+  const requestedRouterId = parseOptionalId(routerValue);
+  const requestedPortId = parseOptionalId(portValue);
+  if (routerValue !== undefined && routerValue !== null && routerValue !== "" && requestedRouterId === null) return null;
+  if (portValue !== undefined && portValue !== null && portValue !== "" && portValue !== "null" && requestedPortId === null) return null;
+
+  let routerId = requestedRouterId;
+  if (requestedPortId !== null) {
+    const ports = await sbSelect<{ id: number; router_id: number; status: string }>(
+      "isp_reseller_ports",
+      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&select=id,router_id,status&limit=1`,
+    );
+    const port = ports[0];
+    if (!port || port.status === "disabled") return null;
+    if (routerId !== null && port.router_id !== routerId) return null;
+    routerId = port.router_id;
+  }
+  if (routerId === null) return null;
+  const routers = await sbSelect<{ id: number }>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id&limit=1`,
+  );
+  return routers[0] ? { routerId, portId: requestedPortId } : null;
+}
+
+function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Record<string, unknown> {
+  const validity = Number(input.durationDays ?? input.validity ?? 30);
+  const sharedUsers = Number(input.sharedUsers ?? 1);
+  const speedDown = Number(input.speedDown ?? input.speed ?? 10);
+  const speedUp = Number(input.speedUp ?? input.speed ?? 10);
+  const rawValidityUnit = typeof input.validityUnit === "string" ? input.validityUnit.trim().toLowerCase() : "days";
+  const validityUnit = ["mins", "hours", "days", "weeks", "months"].includes(rawValidityUnit) ? rawValidityUnit : "days";
+  return {
+    name: String(input.name ?? "").trim(),
+    type: input.type ?? "hotspot",
+    speed_down: Number.isFinite(speedDown) ? speedDown : 10,
+    speed_up: Number.isFinite(speedUp) ? speedUp : 10,
+    price: Number(input.price),
+    validity: Number.isFinite(validity) ? validity : 30,
+    validity_unit: validityUnit,
+    validity_days: Number.isFinite(validity) ? validity : 30,
+    shared_users: Number.isFinite(sharedUsers) && sharedUsers > 0 ? sharedUsers : 1,
+    router_id: scope.routerId,
+    port_id: scope.portId,
+    data_limit_mb: input.dataLimitMb ?? null,
+    is_active: input.isActive ?? true,
+    client_can_purchase: input.clientCanPurchase ?? true,
+    description: input.description ?? null,
+  };
+}
+
 /*
  * /api/plans — Supabase isp_plans proxy.
  * Query param: adminId or ispId → filters by admin_id.
@@ -30,6 +93,13 @@ router.get("/plans", async (req, res): Promise<void> => {
   const typeFilter = requestedType === "hotspot" || requestedType === "pppoe"
     ? `&type=eq.${requestedType}`
     : "";
+  const requestedRouterId = parseOptionalId(req.query.routerId);
+  const requestedPortId = parseOptionalId(req.query.portId);
+  const scopeFilter = requestedRouterId
+    ? requestedPortId
+      ? `&router_id=eq.${requestedRouterId}&or=(port_id.eq.${requestedPortId},port_id.is.null)`
+      : `&router_id=eq.${requestedRouterId}`
+    : "&router_id=not.is.null";
   const activeOnly = req.query.activeOnly === "true";
   const purchasableOnly = req.query.purchasableOnly === "true";
   const availabilityFilters = [
@@ -37,14 +107,14 @@ router.get("/plans", async (req, res): Promise<void> => {
     purchasableOnly ? "client_can_purchase=is.true" : "",
   ].filter(Boolean).map(filter => `&${filter}`).join("");
   const rows = adminId
-    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
+    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
     : [];
   res.json(rows);
 });
 
 router.post("/plans", async (req, res): Promise<void> => {
   const {
-    adminId = 1,
+    adminId,
     ispId,
     name,
     type,
@@ -60,28 +130,33 @@ router.post("/plans", async (req, res): Promise<void> => {
     dataLimitMb,
     isActive,
     clientCanPurchase,
+    portId,
+    validityUnit,
   } = req.body;
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
     return;
   }
-  const effectiveAdminId = adminId || ispId || 1;
+  if (!Number.isFinite(Number(price)) || Number(price) < 0) {
+    res.status(400).json({ error: "price must be a non-negative number" });
+    return;
+  }
+  const effectiveAdminId = parseRequiredId(adminId ?? ispId);
+  if (effectiveAdminId === null) {
+    res.status(400).json({ error: "A valid ISP account is required." });
+    return;
+  }
+  const scope = await validatePlanScope(effectiveAdminId, routerId, portId);
+  if (!scope) {
+    res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
+    return;
+  }
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
     admin_id:     effectiveAdminId,
-    name,
-    type:         type ?? "hotspot",
-    speed_down:   speedDown ?? speed ?? 10,
-    speed_up:     speedUp   ?? speed ?? 10,
-    price:        Number(price),
-    validity:     durationDays ?? validity ?? 30,
-    validity_unit: "days",
-    validity_days: durationDays ?? validity ?? 30,
-    shared_users:  sharedUsers ?? 1,
-    router_id:     routerId ?? null,
-    data_limit_mb: dataLimitMb ?? null,
-    is_active:     isActive ?? true,
-    client_can_purchase: clientCanPurchase ?? true,
-    description:  description ?? null,
+    ...planWritePayload({
+      name, type, speed, speedDown, speedUp, price, durationDays, validity, validityUnit,
+      description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
+    }, scope),
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }
   void logActivity({ adminId: Number(effectiveAdminId), type: "plan", action: "added", subject: name, details: { price: Number(price), type: type ?? "hotspot" } });
@@ -90,33 +165,131 @@ router.post("/plans", async (req, res): Promise<void> => {
 
 router.patch("/plans/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
-  const { adminId = 1, ispId, name, type, speed, speedDown, speedUp, price, durationDays, validity, description, isActive } = req.body;
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (name        !== undefined) updates.name        = name;
-  if (type        !== undefined) updates.type        = type;
-  if (speedDown   !== undefined) updates.speed_down  = speedDown;
-  if (speedUp     !== undefined) updates.speed_up    = speedUp;
-  if (speed       !== undefined) { updates.speed_down = speed; updates.speed_up = speed; }
-  if (price       !== undefined) updates.price       = Number(price);
-  if (durationDays !== undefined || validity !== undefined) {
-    const d = durationDays ?? validity;
-    updates.validity      = d;
-    updates.validity_days = d;
+  const effectiveAdminId = parseRequiredId(req.body?.adminId ?? req.body?.ispId);
+  if (effectiveAdminId === null) {
+    res.status(400).json({ error: "A valid ISP account is required." });
+    return;
   }
-  if (description !== undefined) updates.description = description;
-  if (isActive    !== undefined) updates.is_active   = isActive;
-  const [row] = await sbUpdate<Record<string, unknown>>("isp_plans", `id=eq.${id}`, updates);
+  const sourceRows = await sbSelect<{ id: number; name: string; router_id: number | null; port_id: number | null }>(
+    "isp_plans",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=id,name,router_id,port_id&limit=1`,
+  );
+  const source = sourceRows[0];
+  if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
+
+  const hasScopeInput = Object.prototype.hasOwnProperty.call(req.body, "routerId")
+    || Object.prototype.hasOwnProperty.call(req.body, "portId");
+  const scope = hasScopeInput
+    ? await validatePlanScope(effectiveAdminId, req.body.routerId, req.body.portId)
+    : source.router_id
+      ? { routerId: source.router_id, portId: source.port_id }
+      : null;
+  if (!scope) {
+    res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {
+    ...planWritePayload(req.body, scope),
+    updated_at: new Date().toISOString(),
+  };
+  if (req.body.name === undefined) delete updates.name;
+  if (req.body.type === undefined) delete updates.type;
+  if (req.body.speedDown === undefined && req.body.speedUp === undefined && req.body.speed === undefined) {
+    delete updates.speed_down;
+    delete updates.speed_up;
+  }
+  if (req.body.price === undefined) delete updates.price;
+  if (req.body.durationDays === undefined && req.body.validity === undefined) {
+    delete updates.validity;
+    delete updates.validity_days;
+  }
+  if (req.body.validityUnit === undefined) delete updates.validity_unit;
+  if (req.body.sharedUsers === undefined) delete updates.shared_users;
+  if (req.body.dataLimitMb === undefined) delete updates.data_limit_mb;
+  if (req.body.isActive === undefined) delete updates.is_active;
+  if (req.body.clientCanPurchase === undefined) delete updates.client_can_purchase;
+  if (req.body.description === undefined) delete updates.description;
+  if (!hasScopeInput) {
+    delete updates.router_id;
+    delete updates.port_id;
+  }
+  const [row] = await sbUpdate<Record<string, unknown>>(
+    "isp_plans",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}`,
+    updates,
+  );
   if (!row) { res.status(404).json({ error: "Plan not found" }); return; }
-  const effectiveAdminId = adminId || ispId || 1;
-  void logActivity({ adminId: Number(effectiveAdminId), type: "plan", action: "updated", subject: String(updates.name ?? id), details: updates });
+  void logActivity({ adminId: effectiveAdminId, type: "plan", action: "updated", subject: String(updates.name ?? id), details: updates });
   res.json(row);
+});
+
+router.post("/plans/:id/copy", async (req, res): Promise<void> => {
+  const sourceId = parseRequiredId(req.params.id);
+  const effectiveAdminId = parseRequiredId(req.body?.adminId ?? req.body?.ispId);
+  if (sourceId === null || effectiveAdminId === null) {
+    res.status(400).json({ error: "A valid source plan and ISP account are required." });
+    return;
+  }
+  const sources = await sbSelect<Record<string, unknown>>(
+    "isp_plans",
+    `id=eq.${sourceId}&admin_id=eq.${effectiveAdminId}&select=*&limit=1`,
+  );
+  const source = sources[0];
+  if (!source) {
+    res.status(404).json({ error: "Source plan not found." });
+    return;
+  }
+  const scope = await validatePlanScope(effectiveAdminId, req.body.targetRouterId, req.body.targetPortId);
+  if (!scope) {
+    res.status(400).json({ error: "Choose a target router, or a target port belonging to that router." });
+    return;
+  }
+  const samePort = source.port_id === null ? scope.portId === null : Number(source.port_id) === scope.portId;
+  if (Number(source.router_id) === scope.routerId && samePort) {
+    res.status(400).json({ error: "Choose a different router or port for the copied plan." });
+    return;
+  }
+  const copyPayload = {
+    admin_id: effectiveAdminId,
+    name: String(req.body.name ?? `${String(source.name ?? "Plan")} (Copy)`).trim(),
+    type: source.type ?? "hotspot",
+    speed_down: source.speed_down ?? 10,
+    speed_up: source.speed_up ?? 10,
+    price: source.price ?? 0,
+    validity: source.validity ?? 30,
+    validity_unit: source.validity_unit ?? "days",
+    validity_days: source.validity_days ?? source.validity ?? 30,
+    shared_users: source.shared_users ?? 1,
+    router_id: scope.routerId,
+    port_id: scope.portId,
+    data_limit_mb: source.data_limit_mb ?? null,
+    is_active: source.is_active ?? true,
+    client_can_purchase: source.client_can_purchase ?? true,
+    description: source.description ?? null,
+  };
+  const [row] = await sbInsert<Record<string, unknown>>("isp_plans", copyPayload);
+  if (!row) {
+    res.status(500).json({ error: "Failed to copy plan." });
+    return;
+  }
+  void logActivity({ adminId: effectiveAdminId, type: "plan", action: "copied", subject: copyPayload.name, details: { sourceId, routerId: scope.routerId, portId: scope.portId } });
+  res.status(201).json(row);
 });
 
 router.delete("/plans/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
-  const rows = await sbSelect<{ name: string; admin_id: number }>("isp_plans", `id=eq.${id}&select=name,admin_id&limit=1`);
+  const effectiveAdminId = parseRequiredId(req.query.adminId ?? req.query.ispId);
+  if (effectiveAdminId === null) {
+    res.status(400).json({ error: "A valid ISP account is required." });
+    return;
+  }
+  const rows = await sbSelect<{ name: string; admin_id: number }>(
+    "isp_plans",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=name,admin_id&limit=1`,
+  );
   const row = rows[0];
-  await sbDelete("isp_plans", `id=eq.${id}`);
+  await sbDelete("isp_plans", `id=eq.${id}&admin_id=eq.${effectiveAdminId}`);
   if (row) void logActivity({ adminId: row.admin_id, type: "plan", action: "deleted", subject: row.name });
   res.sendStatus(204);
 });

@@ -37,6 +37,7 @@ import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } f
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 
@@ -257,6 +258,19 @@ async function isActiveIspAdmin(adminId: number): Promise<boolean> {
     `id=eq.${adminId}&is_active=is.true&select=id&limit=1`,
   );
   return !!rows[0];
+}
+
+async function resolvePortalAdminId(req: Request, requestedAdminId: unknown): Promise<number | null> {
+  const explicitId = Number(requestedAdminId);
+  if (Number.isSafeInteger(explicitId) && explicitId > 0) return explicitId;
+
+  const subdomain = getTenantSubdomainFromRequest(req);
+  if (!subdomain) return null;
+  const admins = await sbSelect<{ id: number }>(
+    "isp_admins",
+    `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&select=id&limit=1`,
+  );
+  return admins[0]?.id && Number.isSafeInteger(admins[0].id) ? admins[0].id : null;
 }
 
 function normaliseKenyanPhone(value: string): string {
@@ -607,9 +621,9 @@ setInterval(() => {
  * identity data needed to choose a TV or streaming device.
  */
 router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promise<void> => {
-  const adminId = Number(req.query.adminId);
-  if (!Number.isSafeInteger(adminId) || adminId < 1) {
-    res.status(400).json({ ok: false, error: "A valid ISP account is required." });
+  const adminId = await resolvePortalAdminId(req, req.query.adminId);
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1) {
+    res.status(400).json({ ok: false, error: "Open this portal from the ISP's assigned hostname or provide its ISP account." });
     return;
   }
   if (!await isActiveIspAdmin(adminId)) {
@@ -669,7 +683,7 @@ router.get("/mpesa/token", (_req: Request, res: Response): void => {
 
 /* Public hotspot checkout gets a short-lived, plan-bound token before STK. */
 router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
+  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
   const deviceName = readDeviceName(req.body?.device_name);
@@ -678,7 +692,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
-  if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
     return;
   }
@@ -1031,8 +1045,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     res.status(400).json({ ok: false, error: "Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF." });
     return;
   }
-  const scopedAdminId = Number(adminId);
-  if (!Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
+  const scopedAdminId = await resolvePortalAdminId(req, adminId);
+  if (scopedAdminId === null || !Number.isSafeInteger(scopedAdminId) || scopedAdminId < 1) {
     res.status(400).json({ ok: false, error: "A valid ISP admin context is required for M-Pesa payments." });
     return;
   }
@@ -1285,12 +1299,12 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
  */
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
-  const adminId = Number(req.body?.adminId);
+  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const requestedDeviceName = readDeviceName(req.body?.device_name);
   const clientIp = readClientIp(req.body?.client_ip);
 
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "A paid checkout and ISP context are required." });
     return;
   }

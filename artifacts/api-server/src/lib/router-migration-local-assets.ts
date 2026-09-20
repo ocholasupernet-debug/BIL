@@ -80,6 +80,7 @@ export async function cloneLocalMigrationAssets(
           ...withoutIdentity(source),
           admin_id: adminId,
           router_id: targetRouterId,
+          port_id: null,
         });
         const id = Number(rows[0]?.id);
         if (!id) throw new Error("A migrated Internet package could not be saved.");

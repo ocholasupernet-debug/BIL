@@ -169,6 +169,7 @@ export interface DbPlan {
   shared_users: number;
   client_can_purchase: boolean;
   router_id: number | null;
+  port_id: number | null;
   active_ip_pool: string | null;
   expired_ip_pool: string | null;
   static_ip_range: string | null;

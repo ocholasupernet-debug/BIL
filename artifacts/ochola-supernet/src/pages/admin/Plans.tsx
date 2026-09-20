@@ -3,11 +3,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
-import { Plus, Wifi, Activity, Edit, Trash, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database, Search } from "lucide-react";
+import { Plus, Wifi, Activity, Edit, Trash, Copy, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database, Search } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
 
 interface DbPool { id: number; name: string; range_start: string; range_end: string; router_id: number | null; }
+interface DbPort { id: number; router_id: number; interface_name: string; status: string; }
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
@@ -38,6 +39,16 @@ async function fetchRouters(): Promise<DbRouter[]> {
     .order("name", { ascending: true });
   if (error) throw error;
   return (data ?? []) as DbRouter[];
+}
+
+async function fetchPorts(): Promise<DbPort[]> {
+  const { data, error } = await supabase
+    .from("isp_reseller_ports")
+    .select("id,router_id,interface_name,status")
+    .eq("admin_id", ADMIN_ID)
+    .order("interface_name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as DbPort[];
 }
 
 async function fetchPools(): Promise<DbPool[]> {
@@ -82,12 +93,13 @@ interface ServicePlanFormProps {
   initialData?: DbPlan | null;
   bandwidths: DbBandwidth[];
   routers: DbRouter[];
+  ports: DbPort[];
   pools: DbPool[];
   onCancel: () => void;
   onSaved: () => void;
 }
 
-function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools, onCancel, onSaved }: ServicePlanFormProps) {
+function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports, pools, onCancel, onSaved }: ServicePlanFormProps) {
   const isEdit   = !!initialData;
   const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
@@ -108,6 +120,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
   const [validity,      setValidity]      = useState(initialData?.validity?.toString() ?? "");
   const [valUnit,       setValUnit]       = useState(initialData?.validity_unit ?? "Days");
   const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
+  const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
   const [activePool,    setActivePool]    = useState(initialData?.active_ip_pool ?? "");
   const [expiredPool,   setExpiredPool]   = useState(initialData?.expired_ip_pool ?? "");
   const [saving,        setSaving]        = useState(false);
@@ -150,31 +163,32 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
             return Math.round(v); // MB
           })()
         : null;
-      const payload = {
-        admin_id:            ADMIN_ID,
-        name,
-        type:                planType,
-        plan_type:           planKind,
-        price:               parseFloat(price) || 0,
-        validity:            parseInt(validity) || 1,
-        validity_unit:       valUnit,
-        validity_days:       parseInt(validity) || 1,
-        speed_down:          speedDown,
-        speed_up:            speedUp,
-        is_active:           status === "enable",
-        client_can_purchase: canBuy === "yes",
-        shared_users:        sharedUsers,
-        bandwidth_id:        bandwidthId ? parseInt(bandwidthId) : null,
-        router_id:           routerId ? parseInt(routerId) : null,
-        active_ip_pool:      activePool || null,
-        expired_ip_pool:     expiredPool || null,
-        data_limit_mb:       dataLimitMb,
-        updated_at:          new Date().toISOString(),
-      };
-
       if (isEdit && initialData) {
-        const { error: err } = await supabase.from("isp_plans").update(payload).eq("id", initialData.id);
-        if (err) throw err;
+        const response = await fetch(`/api/plans/${initialData.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adminId: ADMIN_ID,
+            name,
+            type: planType,
+            speedDown,
+            speedUp,
+            price: parseFloat(price) || 0,
+            validity: parseInt(validity) || 1,
+            validityUnit: valUnit,
+            description: null,
+            sharedUsers,
+            routerId: parseInt(routerId),
+            portId: portId ? parseInt(portId) : null,
+            dataLimitMb,
+            isActive: status === "enable",
+            clientCanPurchase: canBuy === "yes",
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(body?.error ?? `Plan update failed (${response.status}).`);
+        }
       } else {
         /*
          * Create through the API proxy instead of inserting the full UI
@@ -197,6 +211,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
             description: null,
             sharedUsers,
             routerId: routerId ? parseInt(routerId) : null,
+            portId: portId ? parseInt(portId) : null,
             dataLimitMb,
             isActive: status === "enable",
           }),
@@ -367,26 +382,34 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, pools,
         </div>
 
         <div style={ROW}>
-          <span style={LBL_CYAN}>Router</span>
+          <span style={LBL_CYAN}>Scope</span>
           <div style={{ flex: 1 }}>
             {routers.length === 0 ? (
               <div style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(37,99,235,0.05)", border: "1px solid rgba(37,99,235,0.18)", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
-                No routers configured — router assignment is optional.{" "}
+                No routers configured. A plan must be attached to a router before it can be saved.{" "}
                 <a href="/admin/network/self-install" style={{ color: "var(--isp-accent)", textDecoration: "underline" }}>use Self Install</a> anytime later.
               </div>
             ) : (
-              <select style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => setRouterId(e.target.value)}>
-                <option value="">— No specific router (save to DB only) —</option>
-                {routers.map(r => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}{r.model ? ` — ${r.model}` : ""}{r.host ? ` (${r.host})` : ""}
-                    {r.status && r.status !== "online" && r.status !== "connected" ? " [offline]" : ""}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+                <select required style={{ ...SELECT, width: "100%" }} value={routerId} onChange={e => { setRouterId(e.target.value); setPortId(""); }}>
+                  <option value="">Choose a router</option>
+                  {routers.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}{r.model ? ` — ${r.model}` : ""}{r.host ? ` (${r.host})` : ""}
+                      {r.status && r.status !== "online" && r.status !== "connected" ? " [offline]" : ""}
+                    </option>
+                  ))}
+                </select>
+                <select style={{ ...SELECT, width: "100%" }} value={portId} onChange={e => setPortId(e.target.value)} disabled={!routerId}>
+                  <option value="">Router-wide — available on this router</option>
+                  {ports.filter(p => p.router_id === Number(routerId) && p.status !== "disabled").map(p => (
+                    <option key={p.id} value={p.id}>Port only — {p.interface_name}</option>
+                  ))}
+                </select>
+              </div>
             )}
             <p style={HINT}>
-              Router assignment is optional. This plan will be saved to your database immediately — you can sync it to a router at any time using the <strong>Sync to Router</strong> bar, even if the router is currently offline.
+              Every plan is isolated to one router. Choose a port to make it available only on that physical interface; leave the port set to Router-wide to share it across that router's ports.
             </p>
           </div>
         </div>
@@ -546,6 +569,96 @@ function DeleteModal({ name, onConfirm, onCancel, deleting }: { name: string; on
             Cancel
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CopyPlanModal({
+  plan,
+  routers,
+  ports,
+  onCopied,
+  onCancel,
+}: {
+  plan: DbPlan;
+  routers: DbRouter[];
+  ports: DbPort[];
+  onCopied: () => void;
+  onCancel: () => void;
+}) {
+  const [routerId, setRouterId] = useState("");
+  const [portId, setPortId] = useState("");
+  const [name, setName] = useState(`${plan.name} (Copy)`);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const targetPorts = ports.filter((port) => port.router_id === Number(routerId) && port.status !== "disabled");
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/plans/${plan.id}/copy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          name: name.trim(),
+          targetRouterId: Number(routerId),
+          targetPortId: portId ? Number(portId) : null,
+        }),
+      });
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(body?.error ?? `Copy failed (${response.status}).`);
+      onCopied();
+    } catch (copyError: unknown) {
+      setError(copyError instanceof Error ? copyError.message : "Copy failed. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 16 }}>
+      <div style={{ background: "var(--isp-card, #1a2440)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "1.5rem", maxWidth: 500, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 18 }}>
+          <div>
+            <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: 0 }}>Copy plan</h3>
+            <p style={{ color: "var(--isp-text-muted)", fontSize: "0.82rem", lineHeight: 1.5, margin: "6px 0 0" }}>
+              Copy <strong style={{ color: "var(--isp-text)" }}>{plan.name}</strong> to another router or isolated port.
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}><X size={18} /></button>
+        </div>
+        {error && <div style={{ padding: "0.625rem 0.75rem", borderRadius: 8, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#f87171", fontSize: "0.82rem", marginBottom: 12 }}>{error}</div>}
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 700 }}>
+            New plan name
+            <input style={INPUT} value={name} onChange={(event) => setName(event.target.value)} required />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 700 }}>
+            Target router
+            <select required style={{ ...SELECT, width: "100%" }} value={routerId} onChange={(event) => { setRouterId(event.target.value); setPortId(""); }}>
+              <option value="">Choose a router</option>
+              {routers.map((router) => <option key={router.id} value={router.id}>{router.name}{router.model ? ` — ${router.model}` : ""}</option>)}
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 700 }}>
+            Target scope
+            <select style={{ ...SELECT, width: "100%" }} value={portId} onChange={(event) => setPortId(event.target.value)} disabled={!routerId}>
+              <option value="">Router-wide — available on this router</option>
+              {targetPorts.map((port) => <option key={port.id} value={port.id}>Port only — {port.interface_name}</option>)}
+            </select>
+          </label>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, paddingTop: 6 }}>
+            <button type="button" onClick={onCancel} style={{ padding: "0.55rem 1rem", borderRadius: 8, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+            <button type="submit" disabled={saving || !routerId} style={{ padding: "0.55rem 1rem", borderRadius: 8, background: saving ? "rgba(37,99,235,0.6)" : "var(--isp-accent)", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+              {saving && <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
+              {saving ? "Copying…" : "Copy plan"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -782,6 +895,7 @@ export default function Plans() {
   const [activeTab, setActiveTab] = useState(typeParam);
   const [editingPlan,  setEditingPlan]  = useState<DbPlan | null>(null);
   const [deletingPlan, setDeletingPlan] = useState<DbPlan | null>(null);
+  const [copyingPlan,  setCopyingPlan] = useState<DbPlan | null>(null);
   const [showAddForm,  setShowAddForm]  = useState(false);
   const [planSearch, setPlanSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot">("all");
@@ -806,6 +920,12 @@ export default function Plans() {
   const { data: routers = [] } = useQuery({
     queryKey: ["isp_routers_plans", ADMIN_ID],
     queryFn:  fetchRouters,
+  });
+
+  const { data: ports = [] } = useQuery<DbPort[]>({
+    queryKey: ["isp_reseller_ports_plans", ADMIN_ID],
+    queryFn: fetchPorts,
+    staleTime: 30_000,
   });
 
   const { data: pools = [] } = useQuery<DbPool[]>({
@@ -834,8 +954,11 @@ export default function Plans() {
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
-      const { error } = await supabase.from("isp_plans").delete().eq("id", id);
-      if (error) throw error;
+      const response = await fetch(`/api/plans/${id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`, { method: "DELETE" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error ?? `Delete failed (${response.status}).`);
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["isp_plans"] });
@@ -845,6 +968,7 @@ export default function Plans() {
 
   function closeForm() { setShowAddForm(false); setEditingPlan(null); }
   function onSaved()   { qc.invalidateQueries({ queryKey: ["isp_plans"] }); closeForm(); }
+  function onCopied()  { qc.invalidateQueries({ queryKey: ["isp_plans"] }); setCopyingPlan(null); }
 
   return (
     <AdminLayout>
@@ -855,6 +979,15 @@ export default function Plans() {
         <DeleteModal name={deletingPlan.name} deleting={deleteMut.isPending}
           onConfirm={() => deleteMut.mutate(deletingPlan.id)}
           onCancel={() => setDeletingPlan(null)} />
+      )}
+      {copyingPlan && (
+        <CopyPlanModal
+          plan={copyingPlan}
+          routers={routers}
+          ports={ports}
+          onCopied={onCopied}
+          onCancel={() => setCopyingPlan(null)}
+        />
       )}
 
       <div className="plans-page space-y-6">
@@ -971,6 +1104,7 @@ export default function Plans() {
             initialData={editingPlan}
             bandwidths={bandwidths}
             routers={routers}
+            ports={ports}
             pools={pools}
             onCancel={closeForm}
             onSaved={onSaved}
@@ -990,21 +1124,30 @@ export default function Plans() {
             ) : (
               <div className="plans-list" role="table" aria-label={`${TAB_LABELS[activeTab] ?? "Plans"} list`}>
                 <div className="plans-list-header" role="row">
-                  <span>Service</span><span>Plan</span><span>Speed</span><span>Price</span><span>Validity</span><span>Status</span><span className="plans-actions-heading">Actions</span>
+                  <span>Service</span><span>Plan / scope</span><span>Speed</span><span>Price</span><span>Validity</span><span>Status</span><span className="plans-actions-heading">Actions</span>
                 </div>
                 {visiblePlans.map((p) => {
                   const serviceType = p.type === "pppoe" ? "pppoe" : p.type === "hotspot" || p.type === "trials" ? "hotspot" : "other";
                   const serviceLabel = serviceType === "pppoe" ? "PPPoE" : serviceType === "hotspot" ? "Hotspot" : p.type;
                   const speed = p.speed_down === p.speed_up ? `${p.speed_down} Mbps` : `${p.speed_down}/${p.speed_up} Mbps`;
+                  const router = routers.find((item) => item.id === p.router_id);
+                  const port = p.port_id ? ports.find((item) => item.id === p.port_id) : null;
+                  const scopeLabel = port
+                    ? `${router?.name ?? "Router"} · ${port.interface_name}`
+                    : router?.name ?? "Unassigned — assign a router";
                   return (
                     <div className={`plans-row plans-row--${serviceType}`} key={p.id} role="row">
                       <span className={`plans-service-badge plans-service-badge--${serviceType}`}>{serviceLabel}</span>
-                      <span className="plans-row-name" title={p.name}>{p.name}</span>
+                      <span className="plans-row-name" title={p.name}>
+                        <strong>{p.name}</strong>
+                        <small>{scopeLabel}</small>
+                      </span>
                       <span className="plans-row-speed">{speed}</span>
                       <span className="plans-row-price">{getCurrencySymbol()} {Number(p.price ?? 0).toLocaleString()}</span>
                       <span className="plans-row-validity">{planValidity(p)}</span>
                       <span><Badge variant={p.is_active ? "success" : "default"}>{p.is_active ? "Active" : "Inactive"}</Badge></span>
                       <span className="plans-row-actions">
+                        <button type="button" onClick={() => setCopyingPlan(p)} aria-label={`Copy ${p.name}`} title={`Copy ${p.name}`}><Copy size={13} /></button>
                         <button type="button" onClick={() => { setEditingPlan(p); setShowAddForm(false); }} aria-label={`Edit ${p.name}`} title={`Edit ${p.name}`}><Edit size={13} /></button>
                         <button type="button" onClick={() => setDeletingPlan(p)} aria-label={`Delete ${p.name}`} title={`Delete ${p.name}`}><Trash size={13} /></button>
                       </span>

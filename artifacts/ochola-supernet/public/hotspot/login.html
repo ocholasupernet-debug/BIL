@@ -439,7 +439,7 @@ var COLORS=[
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
-var PORTAL_ADMIN_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+ var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
@@ -522,6 +522,7 @@ function applyPortalConfig(data){
     if(publicBase)PORTAL_API_BASE=publicBase;
   }
   if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
+   if(Number.isSafeInteger(Number(data.routerId))&&Number(data.routerId)>0)PORTAL_ROUTER_ID=Number(data.routerId);
   var configuredPlans=normalisePlanList(data.plans);
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
   var name=typeof data.ispName==="string"&&data.ispName.trim()?data.ispName.trim():"$(login-title)";
@@ -631,7 +632,8 @@ function loadPortalTypography(done){
  function refreshPlansFromApi(){
    if(planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
    planRequestInFlight=true;
-   var query=PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
+    var query=(PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"")+
+      (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"");
    var finished=false;
    function finish(data){
      if(finished)return;

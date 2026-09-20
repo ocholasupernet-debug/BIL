@@ -3556,11 +3556,29 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
 [data-theme="dark"] .plans-service-badge--hotspot { color: #6ee7b7; }
 [data-theme="dark"] .plans-service-badge--other { color: #fcd34d; }
 .plans-row-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
   overflow: hidden;
   color: var(--isp-text);
   font-family: var(--font-mono);
   font-size: 0.74rem;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plans-row-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plans-row-name small {
+  overflow: hidden;
+  color: var(--isp-text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.63rem;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
