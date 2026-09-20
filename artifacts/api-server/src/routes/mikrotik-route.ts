@@ -47,6 +47,7 @@ import { routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import {
   provisionRouterManagementOpenVpn,
+  provisionRouterManagementOpenVpnPair,
 } from "../lib/router-vpn-provisioning.js";
 import {
   readRouterManagementCaCertificate,
@@ -54,6 +55,7 @@ import {
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
+import { buildSelfInstallStepCommand } from "../lib/self-install-step-command.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 
@@ -1385,13 +1387,18 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       adminId,
       routerName: found.row.name,
     });
-    const provisioning = await provisionRouterManagementOpenVpn({
+    const provisioning = await provisionRouterManagementOpenVpnPair({
       adminId,
       routerId: id,
       routerName: found.row.name,
       routerIp: tunnelRouterIp,
     });
-    if (!provisioning.ready || provisioning.endpoint !== vpsIp) {
+    if (
+      !provisioning.primary.ready
+      || !provisioning.backup.ready
+      || provisioning.primary.endpoint !== vpsIp
+      || provisioning.backup.endpoint !== vpsIp
+    ) {
       res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
       return;
     }
@@ -1433,13 +1440,18 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
-      vpnPort: provisioning.endpoint ? routerManagementVpnPortForRouter(id) : routerManagementVpnContract("primary").port,
+      vpnPort: routerManagementVpnPortForRouter(id),
       vpnUsername: openVpnCredentials.username,
       vpnPassword: openVpnCredentials.password,
+      backupVpnPort: routerManagementVpnContract("backup").port,
+      backupVpnUsername: openVpnCredentials.username,
+      backupVpnPassword: openVpnCredentials.password,
       caCertificateUrl,
       managementCaCertificatePem,
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
+      backupTunnelRouterIp: provisioning.backup.assignedIp,
+      backupTunnelVpsIp: routerManagementVpnContract("backup").gateway,
       routerId: id,
       installationMode,
       backendRegistrationUrl,
@@ -1494,12 +1506,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
     const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
-:delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
-`;
-
     res.json({
       routerId: id,
       steps: [
@@ -1509,7 +1515,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure the router network engine",
           fileName: networkFileName,
           description: "Apply the tagged, retry-safe firewall and NAT rules before creating the management tunnel.",
-          command: stepCommand(networkSourceUrl, networkFileName),
+          command: buildSelfInstallStepCommand({
+            routerId: id,
+            stepId: "network",
+            stepOrder: 1,
+            sourceUrl: networkSourceUrl,
+            fileName: networkFileName,
+          }),
         },
         {
           id: "vpn",
@@ -1517,7 +1529,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure the management VPN and API",
           fileName: vpnFileName,
           description: "After Step 1 completes, install CA trust, create the management VPN/API access, and register the router.",
-          command: stepCommand(vpnSourceUrl, vpnFileName),
+          command: buildSelfInstallStepCommand({
+            routerId: id,
+            stepId: "vpn",
+            stepOrder: 2,
+            sourceUrl: vpnSourceUrl,
+            fileName: vpnFileName,
+          }),
         },
         {
           id: "services",
@@ -1525,7 +1543,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           title: "Configure Hotspot and PPPoE services",
           fileName: serviceFileName,
           description: `After Step 2 completes, create ${serviceBridgeName}, Hotspot DHCP/profile/server, the portal walled garden, PPPoE, and customer NAT.`,
-          command: stepCommand(serviceSourceUrl, serviceFileName, true),
+          command: buildSelfInstallStepCommand({
+            routerId: id,
+            stepId: "services",
+            stepOrder: 3,
+            sourceUrl: serviceSourceUrl,
+            fileName: serviceFileName,
+            verified: true,
+          }),
         },
       ],
     });
