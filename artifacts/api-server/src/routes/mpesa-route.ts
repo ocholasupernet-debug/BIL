@@ -1328,13 +1328,14 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const transactions = await sbSelect<{
     id: number;
     admin_id: number;
+    customer_id: number | null;
     plan_id: number | null;
     payment_phone: string | null;
     mac_address: string | null;
     status: string;
   }>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,plan_id,payment_phone,mac_address,status&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status&limit=1`,
   );
   const transaction = transactions[0];
 
@@ -1435,11 +1436,13 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
 
   /*
    * A paid hotspot account is one database customer plus one RouterOS user.
-   * Keep the RouterOS identifier readable. Reused paid devices keep their
-   * existing account; every new account receives a random suffix and is checked
-   * against existing usernames before it is saved.
+   * Keep the RouterOS identifier readable. Every new payment receives a new
+   * random username, even when the phone and device are reused. Only a retry
+   * of this same checkout may reuse the customer already linked to its
+   * transaction.
    */
-  const existingCustomers = await sbSelect<{
+   const linkedCustomers = transaction.customer_id
+     ? await sbSelect<{
     id: number;
     username: string | null;
     password: string | null;
@@ -1449,21 +1452,20 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     expires_at: string | null;
   }>(
     "isp_customers",
-    `admin_id=eq.${adminId}&type=eq.hotspot&phone=eq.${encodeURIComponent(paymentPhone)}&select=id,username,password,mac_address,ip_address,status,expires_at&order=id.desc&limit=20`,
-  );
+     `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,expires_at&limit=1`,
+   )
+     : [];
   const now = Date.now();
-  const isReusable = (customer: typeof existingCustomers[number]) => {
+   const isReusable = (customer: typeof linkedCustomers[number]) => {
     const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
     return customer.status === "active" &&
       Number.isFinite(expiresAt) &&
       expiresAt > now &&
       typeof customer.username === "string";
   };
-  const reusableCustomer = existingCustomers.find((customer) =>
-    isReusable(customer) && normaliseMacAddress(customer.mac_address) === mac
-  ) ?? (existingCustomers.length === 1 && !existingCustomers[0].mac_address && isReusable(existingCustomers[0])
-    ? existingCustomers[0]
-    : undefined);
+   const reusableCustomer = linkedCustomers[0] && isReusable(linkedCustomers[0])
+     ? linkedCustomers[0]
+     : undefined;
 
    let hotspotUsername = reusableCustomer?.username?.trim() || "";
    if (!hotspotUsername) {
