@@ -1907,13 +1907,13 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   };
   let transactions = await sbSelect<VerifiedTransaction>(
     "isp_transactions",
-    `admin_id=eq.${adminId}&payment_method=eq.mpesa&status=in.(completed,paid,success)&mpesa_receipt=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+    `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&mpesa_receipt=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
   );
   if (!transactions[0]) {
     /* Legacy webhook provisioning stored the receipt in reference. */
     transactions = await sbSelect<VerifiedTransaction>(
       "isp_transactions",
-      `admin_id=eq.${adminId}&payment_method=eq.mpesa&status=in.(completed,paid,success)&reference=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+      `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&reference=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
     );
   }
   const transaction = transactions[0];
