@@ -13,7 +13,7 @@ interface CompanyInfo {
 
 export default function AdminLogin() {
   const [, setLocation] = useLocation();
-  const [username, setUsername]         = useState("");
+   const [username, setUsername]         = useState("");
   const [password, setPassword]         = useState("");
   const [companySubdomain, setCompanySubdomain] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -47,8 +47,8 @@ export default function AdminLogin() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!username.trim() || !password.trim()) {
-      setError("Please enter your username and password.");
+     if (!username.trim() || !password.trim()) {
+       setError("Please enter your email or username and password.");
       return;
     }
     setIsLoading(true);
@@ -68,14 +68,14 @@ export default function AdminLogin() {
         requiresPasswordSetup?: boolean;
         setupToken?: string;
         error?: string;
-         admin?: { id: number; name?: string; fullname?: string | null; username: string; role?: string; subdomain?: string; area?: string; currency?: string };
+         admin?: { id: number; name?: string; fullname?: string | null; username: string; email?: string | null; role?: string; subdomain?: string; area?: string; currency?: string };
       };
       if (!apiLogin.ok || !apiSession.ok || !apiSession.admin) {
         setError(apiSession.error || "Could not create a secure admin session. Please try again.");
         return;
       }
       const admin = apiSession.admin;
-      if (company && (admin.id !== company.id || admin.username !== username.trim())) {
+      if (company && (admin.id !== company.id || (admin.username !== username.trim() && admin.email !== username.trim().toLowerCase()))) {
         setError("Invalid username or password.");
         return;
       }
@@ -101,7 +101,7 @@ export default function AdminLogin() {
         if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);
         if (admin.area) localStorage.setItem("ochola_admin_country", admin.area);
       } catch {}
-      setLocation("/admin/dashboard");
+       setLocation(admin.role === "reseller" ? "/admin/reseller" : "/admin/dashboard");
     } catch {
       setError("Login failed. Please try again.");
     } finally {
@@ -270,7 +270,7 @@ export default function AdminLogin() {
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
               }}>
-                Username
+                 Email or username
               </label>
               <div style={{ position: "relative" }}>
                 <User size={15} style={{
@@ -281,7 +281,7 @@ export default function AdminLogin() {
                   type="text"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  placeholder="your-username"
+                   placeholder="you@yourcompany.com"
                   autoComplete="username"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
