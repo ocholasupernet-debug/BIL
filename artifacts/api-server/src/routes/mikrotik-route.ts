@@ -59,6 +59,7 @@ import {
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 
@@ -321,6 +322,98 @@ interface SbRouter {
   router_secret: string | null;
   token?: string | null;
   status: string;
+}
+
+type PrepaidPresenceRow = {
+  id: number;
+  username: string | null;
+  pppoe_username: string | null;
+  expires_at: string | null;
+  last_seen: string | null;
+  data_used_mb: number | string | null;
+  data_used_bytes: number | string | null;
+  service_online: boolean | null;
+};
+
+function normalizePrepaidIdentity(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function prepaidIdentityKeys(row: Pick<PrepaidPresenceRow, "username" | "pppoe_username">): string[] {
+  return Array.from(new Set([row.username, row.pppoe_username].map(normalizePrepaidIdentity).filter(Boolean)));
+}
+
+function prepaidLiveUsage(
+  data: Awaited<ReturnType<typeof fetchRouterLiveData>>,
+): Map<string, number> {
+  const usage = new Map<string, number>();
+  const add = (identity: unknown, bytesIn: unknown, bytesOut: unknown): void => {
+    const key = normalizePrepaidIdentity(identity);
+    if (!key) return;
+    const incoming = Number(bytesIn) || 0;
+    const outgoing = Number(bytesOut) || 0;
+    usage.set(key, (usage.get(key) ?? 0) + Math.max(0, incoming) + Math.max(0, outgoing));
+  };
+  data.hotspotUsers.forEach(session => add(session.user, session.bytesIn, session.bytesOut));
+  data.pppoeUsers.forEach(session => add(session.name, session.bytesIn, session.bytesOut));
+  return usage;
+}
+
+async function persistPrepaidLiveState(
+  routerId: number,
+  adminId: number,
+  data: Awaited<ReturnType<typeof fetchRouterLiveData>>,
+): Promise<void> {
+  const routerPlans = await sbSelect<{ id: number }>(
+    "isp_plans",
+    `admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id`,
+  );
+  const planIds = routerPlans.map(plan => plan.id).filter(Number.isSafeInteger);
+  const customerScope = planIds.length > 0
+    ? `&or=(router_id.eq.${routerId},plan_id.in.(${planIds.join(",")}))`
+    : `&router_id=eq.${routerId}`;
+  const customers = await sbSelect<PrepaidPresenceRow>(
+    "isp_customers",
+    `admin_id=eq.${adminId}${customerScope}&select=id,username,pppoe_username,expires_at,last_seen,data_used_mb,data_used_bytes,service_online`,
+  );
+  if (customers.length === 0) return;
+
+  const usage = prepaidLiveUsage(data);
+  const observedAt = data.fetchedAt || new Date().toISOString();
+  const observedAtMs = Date.parse(observedAt);
+  for (const customer of customers) {
+    const sessionBytes = prepaidIdentityKeys(customer)
+      .map(identity => usage.get(identity))
+      .find(value => value !== undefined);
+    const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
+    const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
+    const online = sessionBytes !== undefined && !expired;
+    const payload: Record<string, unknown> = {
+      service_online: online,
+    };
+
+    if (sessionBytes !== undefined) {
+      payload.data_used_bytes = Math.max(0, Math.floor(sessionBytes));
+      payload.data_used_mb = Math.max(0, sessionBytes / 1_000_000);
+    }
+
+    if (online) {
+      /* last_seen is the most recent confirmed online observation. */
+      payload.last_seen = observedAt;
+    } else if (customer.service_online) {
+      /* Record the transition once, rather than moving the offline timestamp
+         every time the admin page polls an already-offline user. */
+      payload.last_seen = expired && Number.isFinite(expiresAtMs)
+        ? new Date(expiresAtMs).toISOString()
+        : observedAt;
+    }
+
+    await sbUpdate(
+      "isp_customers",
+      `id=eq.${customer.id}&admin_id=eq.${adminId}`,
+      payload,
+    );
+  }
 }
 
 /* ─── Build MikroTik credentials from a Supabase row ────────────────────── */
@@ -1514,6 +1607,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         ? Number(req.query.maxPortSpeedMbps)
         : undefined,
       portalHostnames: [portalHostname],
+      paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
       portalFileUrls,
     });
 
@@ -1858,6 +1952,14 @@ router.get("/router/:id/live", async (req, res): Promise<void> => {
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
     const data = await fetchRouterLiveData(found.creds);
+    try {
+      await persistPrepaidLiveState(id, found.row.admin_id, data);
+    } catch (error) {
+      logger.warn(
+        { routerId: id, error: error instanceof Error ? error.message : String(error) },
+        "prepaid live state could not be persisted",
+      );
+    }
     res.json({ routerId: id, ...data });
   } catch (err) {
     routerErrorResponse(res, err);

@@ -239,6 +239,9 @@ export interface DbCustomer {
   mac_address: string | null;
   pppoe_username: string | null;
   data_used_mb: number;
+  data_used_bytes?: number | string | null;
+  service_online?: boolean | null;
+  last_seen?: string | null;
   expires_at: string | null;
   created_at: string;
   updated_at: string;
