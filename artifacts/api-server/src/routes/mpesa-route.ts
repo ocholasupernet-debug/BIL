@@ -21,6 +21,7 @@ import {
   addHotspotIpBinding,
   addHotspotUser,
   ensureHotspotUserProfile,
+  ensureHotspotServerAddressPool,
   resolveHotspotClientMac,
   connectHotspotUser,
   scheduleHotspotUserExpiry,
@@ -40,6 +41,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const router: IRouter = Router();
 
@@ -317,6 +319,62 @@ function hotspotRateLimit(
   speedUpUnit: unknown = speedDownUnit,
 ): string | undefined {
   return routerRateLimit(speedDown, speedUp, speedDownUnit, speedUpUnit);
+}
+
+function hotspotPoolRanges(subnetRange: string | null | undefined, portId: number): string {
+  const match = String(subnetRange ?? "").trim().match(/^(\d+)\.(\d+)\.(\d+)\.0\/24$/);
+  const octets = match ? match.slice(1).map(Number) : [10, 250, (portId % 200) + 1];
+  return `${octets[0]}.${octets[1]}.${octets[2]}.10-${octets[0]}.${octets[1]}.${octets[2]}.254`;
+}
+
+type HotspotPortContext = {
+  id: number;
+  router_id: number;
+  interface_name: string;
+  hotspot_enabled: boolean;
+  subnet_range: string | null;
+  status: string;
+};
+
+async function loadHotspotPortContext(
+  adminId: number,
+  routerId: number,
+  portId: number | null,
+): Promise<HotspotPortContext | null> {
+  if (!portId) return null;
+  const rows = await sbSelect<HotspotPortContext>(
+    "isp_reseller_ports",
+    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id,router_id,interface_name,hotspot_enabled,subnet_range,status&limit=1`,
+  );
+  const port = rows[0];
+  if (!port || port.status === "disabled" || !port.hotspot_enabled) {
+    throw new Error("The selected Hotspot port is not deployed or enabled.");
+  }
+  return port;
+}
+
+async function loadTenantCompanyName(adminId: number): Promise<string | null> {
+  const rows = await sbSelect<{ name: string | null }>(
+    "isp_admins",
+    `id=eq.${adminId}&select=name&limit=1`,
+  );
+  return rows[0]?.name ?? null;
+}
+
+function hotspotPortResources(
+  port: HotspotPortContext,
+  options: { companyName?: string | null; routerName?: string | null } = {},
+): {
+  serverName: string;
+  poolName: string;
+  poolRanges: string;
+} {
+  const resources = portServiceResourceNames(port, options);
+  return {
+    serverName: resources.hotspotServer,
+    poolName: resources.hotspotPool,
+    poolRanges: hotspotPoolRanges(port.subnet_range, port.id),
+  };
 }
 
 function extractMpesaReceipt(message: unknown): string {
@@ -712,9 +770,9 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
-  const plans = await sbSelect<{ id: number; price: number | string; type?: string; router_id: number | null }>(
+  const plans = await sbSelect<{ id: number; price: number | string; type?: string; router_id: number | null; port_id: number | null }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id&limit=1`,
   );
   const plan = plans[0];
   const serviceType = normalizePlanServiceType(plan?.type);
@@ -1363,6 +1421,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     name: string;
     type: string;
     router_id: number | null;
+    port_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
     speed_down_unit: string | null;
@@ -1372,7 +1431,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -1428,6 +1487,41 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
 
   const credentials = hotspotRouterCredentials(routerRow);
+  let hotspotServer: string | undefined;
+  if (plan.port_id) {
+    let port: HotspotPortContext | null;
+    try {
+      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id);
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
+      res.status(409).json({ ok: false, error: "The selected package's Hotspot port is not deployed or enabled yet." });
+      return;
+    }
+    if (!port) {
+      res.status(409).json({ ok: false, error: "The selected package's Hotspot port could not be found." });
+      return;
+    }
+    const resources = hotspotPortResources(port, {
+      companyName: await loadTenantCompanyName(adminId),
+      routerName: routerRow.name,
+    });
+    try {
+      await ensureHotspotServerAddressPool(credentials, {
+        serverName: resources.serverName,
+        poolName: resources.poolName,
+        poolRanges: resources.poolRanges,
+        comment: `${resources.poolName}_hotspot_pool`,
+      });
+      hotspotServer = resources.serverName;
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, router: routerRow.name, portId: plan.port_id, server: resources.serverName, pool: resources.poolName }, "[mpesa/hotspot-mac-access] hotspot server or pool unavailable");
+      res.status(503).json({
+        ok: false,
+        error: `The Hotspot service for this port is not ready on ${routerRow.name}. Deploy the port service, then retry connection.`,
+      });
+      return;
+    }
+  }
   const paymentPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
   if (!/^254\d{9}$/.test(paymentPhone)) {
     res.status(409).json({ ok: false, error: "The paid checkout has no valid Kenyan purchase phone number." });
@@ -1566,6 +1660,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         profile: effectiveProfile,
         disabled: false,
         comment: hotspotUsername,
+        server: hotspotServer,
         address: routerAddress || undefined,
         limitBytesTotal,
       });
@@ -1575,6 +1670,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         password: hotspotPassword,
         profile: effectiveProfile,
         comment: hotspotUsername,
+        server: hotspotServer,
         address: routerAddress || undefined,
         limitBytesTotal,
       });
@@ -1613,6 +1709,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         password: hotspotPassword,
         ip: routerAddress,
         macAddress: mac,
+        server: hotspotServer,
       }).catch((error) => {
         logger.warn({ err: error, username: hotspotUsername }, "[mpesa/hotspot-mac-access] active login deferred");
       });
@@ -1717,6 +1814,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     name: string;
     type: string;
     router_id: number | null;
+    port_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
     speed_down_unit: string | null;
@@ -1726,7 +1824,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
@@ -1764,6 +1862,31 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
   const credentials = hotspotRouterCredentials(routerRow);
+  let hotspotServer: string | undefined;
+  if (plan.port_id) {
+    try {
+      const port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id);
+      if (!port) throw new Error("Hotspot port could not be found.");
+      const resources = hotspotPortResources(port, {
+        companyName: await loadTenantCompanyName(adminId),
+        routerName: routerRow.name,
+      });
+      await ensureHotspotServerAddressPool(credentials, {
+        serverName: resources.serverName,
+        poolName: resources.poolName,
+        poolRanges: resources.poolRanges,
+        comment: `${resources.poolName}_hotspot_pool`,
+      });
+      hotspotServer = resources.serverName;
+    } catch (error) {
+      logger.warn({ err: error, receipt, router: routerRow.name, portId: plan.port_id }, "[mpesa/verify] hotspot port unavailable");
+      res.status(503).json({
+        ok: false,
+        error: "The Hotspot service for this package's port is not ready. Deploy the port service, then try again.",
+      });
+      return;
+    }
+  }
   if (!mac && clientIp) {
     mac = await resolveHotspotClientMac(credentials, clientIp).catch(() => null) ?? "";
   }
@@ -1804,6 +1927,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         profile: hotspotProfile,
         disabled: false,
         comment: customer.username,
+        server: hotspotServer,
         address: clientIp || customer.ip_address || undefined,
         limitBytesTotal,
       });
@@ -1813,6 +1937,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         password: customer.password,
         profile: hotspotProfile,
         comment: customer.username,
+        server: hotspotServer,
         address: clientIp || customer.ip_address || undefined,
         limitBytesTotal,
       });
@@ -1829,6 +1954,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         password: customer.password,
         ip: clientIp || customer.ip_address!,
         macAddress: mac,
+        server: hotspotServer,
       }).catch((error) => {
         logger.warn({ err: error, username: customer.username }, "[mpesa/verify] active login deferred");
       });

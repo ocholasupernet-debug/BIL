@@ -5,6 +5,7 @@ import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
+import { portServiceResourceNames, type PortServiceResourceNames } from "../lib/port-service-resources.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
@@ -86,11 +87,8 @@ type PortServiceNetwork = {
   poolRange: string;
 };
 
-function portServiceNetwork(port: PortServiceRow): PortServiceNetwork {
-  const bridgeName = safeSegment(
-    port.bridge_name ?? `ochola-port-${port.id}`,
-    `ochola-port-${port.id}`,
-  );
+function portServiceNetwork(port: PortServiceRow, resources: PortServiceResourceNames): PortServiceNetwork {
+  const bridgeName = resources.bridgeName;
   const fallbackOctet = (port.id % 200) + 1;
   const rawNetwork = port.subnet_range?.trim() || `10.250.${fallbackOctet}.0/24`;
   const [rawAddress, rawPrefix] = rawNetwork.split("/");
@@ -133,6 +131,39 @@ function validPortalHostname(value: string | undefined): string | null {
 function optionalPortalHostname(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   return validPortalHostname(value);
+}
+
+async function resourceIdentityForPort(port: Pick<PortServiceRow, "admin_id" | "router_id">): Promise<{
+  companyName: string | null;
+  routerName: string | null;
+}> {
+  const [adminRows, routerRows] = await Promise.all([
+    sbSelectStrict<{ name: string | null }>(
+      "isp_admins",
+      `id=eq.${port.admin_id}&select=name&limit=1`,
+    ),
+    sbSelectStrict<{ name: string | null }>(
+      "isp_routers",
+      `id=eq.${port.router_id}&admin_id=eq.${port.admin_id}&select=name&limit=1`,
+    ),
+  ]);
+  return {
+    companyName: adminRows[0]?.name ?? null,
+    routerName: routerRows[0]?.name ?? null,
+  };
+}
+
+function nextAvailableSubnet(rows: Array<{ subnet_range: string | null }>): string {
+  const used = new Set(
+    rows
+      .map((row) => row.subnet_range?.match(/^10\.250\.(\d+)\.0\/24$/)?.[1])
+      .filter((octet): octet is string => Boolean(octet))
+      .map(Number),
+  );
+  for (let octet = 1; octet <= 254; octet += 1) {
+    if (!used.has(octet)) return `10.250.${octet}.0/24`;
+  }
+  throw new Error("No isolated private /24 network remains for this router.");
 }
 
 function portFromLocals(res: { locals: Record<string, unknown> }): PortServiceRow {
@@ -179,42 +210,53 @@ export function buildDualServiceCommands(
   hotspotPath: string | null,
   pppoePath: string | null,
   routerAddress: string,
-  options: { portalHostname?: string; hotspotDnsName?: string | null; pppoeDnsName?: string | null } = {},
+  options: {
+    portalHostname?: string;
+    hotspotDnsName?: string | null;
+    pppoeDnsName?: string | null;
+    companyName?: string | null;
+    routerName?: string | null;
+  } = {},
 ): string[][] {
-  const portName = safeSegment(port.interface_name, `port_${port.id}`);
   if (!/^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(port.interface_name.trim())) {
     throw new Error(`The assigned interface "${port.interface_name}" is not a valid RouterOS interface.`);
   }
-  const network = portServiceNetwork(port);
-  const hotspotProfile = `HS_${portName}`;
-  const pppoeLandingProfile = `PPPOE_ALERT_${portName}`;
-  const pppoeService = `PPPoE_${portName}`;
-  const parentQueue = `RESELLER_ROOT_${portName}`;
+  const resources = portServiceResourceNames(port, options);
+  const portName = resources.portName;
+  const network = portServiceNetwork(port, resources);
+  const hotspotProfile = resources.hotspotProfile;
+  const pppoeLandingProfile = resources.pppoeProfile;
+  const pppoeService = resources.pppoeService;
+  const parentQueue = resources.parentQueue;
   const cap = port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps;
-  const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined);
-  const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined);
+  const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined)
+    ?? `hotspot-${resources.resourceName}.com`;
+  const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined)
+    ?? `pppoe-${resources.resourceName}.com`;
+  const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
   const commands: string[][] = [];
 
   /* A Hotspot server is bound to an interface. Give every assigned port its
      own bridge so two ports on one router can have different captive pages
      and cannot leak users into each other's service network. */
   commands.push(
-    ["/interface/bridge/add", `=name=${network.bridgeName}`, `=comment=OcholaSupernet_${portName}_service_bridge`],
-    ["/interface/bridge/port/add", `=bridge=${network.bridgeName}`, `=interface=${port.interface_name}`, `=comment=OcholaSupernet_${portName}_service_port`],
+    ["/interface/bridge/add", `=name=${network.bridgeName}`, `=comment=${comment("bridge")}`],
+    ["/interface/bridge/port/add", `=bridge=${network.bridgeName}`, `=interface=${port.interface_name}`, `=comment=${comment("port")}`],
   );
 
   if (hotspotPath) {
     commands.push(
-      ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${network.bridgeName}`, `=comment=OcholaSupernet_${portName}_hotspot_gateway`],
-      ["/ip/pool/add", `=name=HS_POOL_${portName}`, `=ranges=${network.poolRange}`, `=comment=OcholaSupernet_${portName}_hotspot_pool`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=OcholaSupernet_${portName}_hotspot_network`],
-      ["/ip/dhcp-server/add", `=name=HS_DHCP_${portName}`, `=interface=${network.bridgeName}`, `=address-pool=HS_POOL_${portName}`, "=disabled=no"],
-      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName ?? ""}`, `=comment=OcholaSupernet_${portName}_hotspot`],
-      ["/ip/hotspot/add", `=name=HS_${portName}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=HS_POOL_${portName}`, "=disabled=no", `=comment=OcholaSupernet_${portName}_hotspot`],
-      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dhcp`],
-      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dns_udp`],
-      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dns_tcp`],
-      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=OcholaSupernet_${portName}_hotspot_nat`],
+      ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${network.bridgeName}`, `=comment=${comment("hotspot_gateway")}`],
+      ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${network.bridgeName}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
+      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`, `=comment=${comment("hotspot_profile")}`],
+      ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no", `=comment=${comment("hotspot")}`],
+      ["/ip/dns/static/add", `=name=${hotspotDnsName}`, `=address=${network.gateway}`, `=comment=${comment("hotspot_dns")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dhcp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dns_udp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dns_tcp")}`],
+      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("hotspot_nat")}`],
     );
     const gardenHostnames = [...new Set([
       validPortalHostname(options.portalHostname),
@@ -225,15 +267,15 @@ export function buildDualServiceCommands(
         "/ip/hotspot/walled-garden/ip/add",
         `=dst-host=${hostname}`,
         "=action=accept",
-        `=comment=OcholaSupernet_${portName}_${index === 0 ? "walled_garden" : "hotspot_dns"}`,
+        `=comment=${comment(index === 0 ? "walled_garden" : "hotspot_dns")}`,
       ]);
     });
   }
   if (hotspotPath || pppoePath) {
     commands.push(
-      ["/ip/firewall/filter/add", "=chain=forward", `=in-interface=${network.bridgeName}`, "=out-interface-list=WAN", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_forward`],
-      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=udp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=OcholaSupernet_${portName}_block_wan_dns_udp`],
-      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=tcp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=OcholaSupernet_${portName}_block_wan_dns_tcp`],
+      ["/ip/firewall/filter/add", "=chain=forward", `=in-interface=${network.bridgeName}`, "=out-interface-list=WAN", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_forward")}`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=udp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_udp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=tcp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_tcp")}`],
     );
   }
   if (hotspotPath || pppoePath) {
@@ -243,27 +285,28 @@ export function buildDualServiceCommands(
       `=target=${network.bridgeName}`,
       `=max-limit=${cap}M/${cap}M`,
       "=priority=2/2",
-      `=comment=OcholaSupernet_${portName}_parent_queue`,
+      `=comment=${comment("parent_queue")}`,
     ]);
   }
   if (pppoePath) {
     commands.push(
-      ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, "=disabled=no", "=one-session-per-host=yes", `=comment=OcholaSupernet_${portName}_pppoe`],
-      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName ?? ""}`, `=comment=OcholaSupernet_${portName}_pppoe_landing`],
-      ["/queue/simple/add", `=name=PPPOE_PREMIUM_${portName}`, `=target=${network.bridgeName}`, `=parent=${parentQueue}`, `=max-limit=${cap}M/${cap}M`, "=priority=1/1", `=comment=OcholaSupernet_${portName}_pppoe_premium`],
-      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=OcholaSupernet_${portName}_pppoe_nat`],
-      ["/ip/firewall/nat/add", "=chain=dstnat", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=80", "=action=dst-nat", `=to-addresses=${network.gateway || routerAddress}`, "=to-ports=80", `=comment=OcholaSupernet_${portName}_pppoe_billing_redirect`],
+      ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, "=disabled=no", "=one-session-per-host=yes", `=comment=${comment("pppoe")}`],
+      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName}`, `=comment=${comment("pppoe_landing")}`],
+      ["/ip/dns/static/add", `=name=${pppoeDnsName}`, `=address=${network.gateway}`, `=comment=${comment("pppoe_dns")}`],
+      ["/queue/simple/add", `=name=PPPOE_PREMIUM_${resources.resourceName}`, `=target=${network.bridgeName}`, `=parent=${parentQueue}`, `=max-limit=${cap}M/${cap}M`, "=priority=1/1", `=comment=${comment("pppoe_premium")}`],
+      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("pppoe_nat")}`],
+      ["/ip/firewall/nat/add", "=chain=dstnat", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=80", "=action=dst-nat", `=to-addresses=${network.gateway || routerAddress}`, "=to-ports=80", `=comment=${comment("pppoe_billing_redirect")}`],
     );
   }
   if (hotspotPath) {
     commands.push([
       "/queue/simple/add",
-      `=name=HOTSPOT_TRANSIT_${portName}`,
+      `=name=HOTSPOT_TRANSIT_${resources.resourceName}`,
       `=target=${network.network}`,
       `=parent=${parentQueue}`,
       `=max-limit=${cap}M/${cap}M`,
       "=priority=8/8",
-      `=comment=OcholaSupernet_${portName}_hotspot_transit`,
+      `=comment=${comment("hotspot_transit")}`,
     ]);
   }
   return commands;
@@ -280,6 +323,7 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     "/ip/pool/add": "name",
     "/ip/dhcp-server/network/add": "address",
     "/ip/dhcp-server/add": "name",
+    "/ip/dns/static/add": "name",
     "/queue/simple/add": "name",
     "/ip/firewall/filter/add": "comment",
     "/ip/hotspot/walled-garden/ip/add": "comment",
@@ -398,9 +442,9 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       res.status(400).json({ ok: false, error: "The service subnet must be a private network ending in .0/24." });
       return;
     }
-    const routerRows = await sbSelectStrict<{ id: number }>(
+    const routerRows = await sbSelectStrict<{ id: number; name: string | null }>(
       "isp_routers",
-      `id=eq.${routerId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+      `id=eq.${routerId}&admin_id=eq.${tenantId}&select=id,name&limit=1`,
     );
     if (!routerRows[0]) {
       res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
@@ -414,16 +458,27 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       res.status(409).json({ ok: false, error: "That physical port is already assigned." });
       return;
     }
+    const hotspotEnabled = req.body?.hotspotEnabled === true;
+    const pppoeEnabled = req.body?.pppoeEnabled === true;
+    const identity = await resourceIdentityForPort({ admin_id: tenantId, router_id: routerId });
+    const defaultResources = portServiceResourceNames({
+      id: 0,
+      router_id: routerId,
+      interface_name: interfaceName,
+    }, {
+      companyName: identity.companyName,
+      routerName: routerRows[0]?.name,
+    });
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
-    const hotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName);
-    const pppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName);
+    const hotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName)
+      ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null);
+    const pppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName)
+      ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null);
     if ((req.body?.hotspotDnsName && !hotspotDnsName) || (req.body?.pppoeDnsName && !pppoeDnsName)) {
       res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
       return;
     }
-    const hotspotEnabled = req.body?.hotspotEnabled === true;
-    const pppoeEnabled = req.body?.pppoeEnabled === true;
     if (hotspotEnabled && !hotspotFolderPath) {
       res.status(400).json({ ok: false, error: "Select an approved Hotspot asset before enabling the Hotspot portal." });
       return;
@@ -435,9 +490,14 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     const bridgeName = safeSegment(
       typeof req.body?.bridgeName === "string" && req.body.bridgeName.trim()
         ? req.body.bridgeName.trim()
-        : `ochola-port-${interfaceName}`,
-      `ochola-port-${interfaceName}`,
+        : defaultResources.bridgeName,
+      defaultResources.bridgeName,
     );
+    const existingPorts = await sbSelectStrict<{ subnet_range: string | null }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${tenantId}&router_id=eq.${routerId}&status=neq.disabled&select=subnet_range`,
+    );
+    const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
     const inserted = await sbInsertStrict<PortServiceRow>("isp_reseller_ports", {
       admin_id: tenantId,
       // The legacy schema requires reseller_id. For ISP-owned multiport services
@@ -454,7 +514,7 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       pppoe_enabled: pppoeEnabled,
       pppoe_folder_path: pppoeFolderPath,
       pppoe_dns_name: pppoeDnsName,
-      subnet_range: subnetRange,
+      subnet_range: savedSubnet,
       bandwidth_cap_mbps: Math.round(cap),
       reseller_bandwidth_cap: Math.round(cap),
       status: "pending",
@@ -470,14 +530,20 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
 router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
   try {
     const port = portFromLocals(res);
+    const identity = await resourceIdentityForPort(port);
+    const defaultResources = portServiceResourceNames(port, identity);
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const hotspotEnabled = req.body?.hotspotEnabled === true;
+    const pppoeEnabled = req.body?.pppoeEnabled === true;
     const hotspotDnsName = req.body?.hotspotDnsName === undefined
-      ? port.hotspot_dns_name
-      : optionalPortalHostname(req.body.hotspotDnsName);
+      ? (port.hotspot_dns_name ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null))
+      : (optionalPortalHostname(req.body.hotspotDnsName)
+        ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null));
     const pppoeDnsName = req.body?.pppoeDnsName === undefined
-      ? port.pppoe_dns_name
-      : optionalPortalHostname(req.body.pppoeDnsName);
+      ? (port.pppoe_dns_name ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null))
+      : (optionalPortalHostname(req.body.pppoeDnsName)
+        ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null));
     if (
       (req.body?.hotspotDnsName && !hotspotDnsName)
       || (req.body?.pppoeDnsName && !pppoeDnsName)
@@ -485,17 +551,22 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
       res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
       return;
     }
-    const hotspotEnabled = req.body?.hotspotEnabled === true;
-    const pppoeEnabled = req.body?.pppoeEnabled === true;
     const bandwidth = req.body?.bandwidthCapMbps === undefined
       ? Number(port.bandwidth_cap_mbps)
       : Number(req.body.bandwidthCapMbps);
     const subnetRange = req.body?.subnetRange === undefined
       ? port.subnet_range
       : normalizeSubnet(req.body.subnetRange);
+    const existingPorts = !subnetRange
+      ? await sbSelectStrict<{ subnet_range: string | null }>(
+        "isp_reseller_ports",
+        `router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range`,
+      )
+      : [];
+    const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
     const bridgeName = req.body?.bridgeName === undefined
-      ? port.bridge_name
-      : safeSegment(String(req.body.bridgeName ?? "").trim(), `ochola-port-${port.id}`);
+      ? (port.bridge_name ?? defaultResources.bridgeName)
+      : safeSegment(String(req.body.bridgeName ?? "").trim(), defaultResources.bridgeName);
     if (!Number.isFinite(bandwidth) || bandwidth <= 0 || bandwidth > 100000) {
       res.status(400).json({ ok: false, error: "Bandwidth must be between 1 and 100,000 Mbps." });
       return;
@@ -524,7 +595,7 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
         pppoe_folder_path: pppoeFolderPath,
         pppoe_dns_name: pppoeDnsName,
         bridge_name: bridgeName,
-        subnet_range: subnetRange,
+        subnet_range: savedSubnet,
         bandwidth_cap_mbps: Math.round(bandwidth),
         reseller_bandwidth_cap: Math.round(bandwidth),
         updated_at: new Date().toISOString(),
@@ -554,31 +625,61 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       res.status(404).json({ ok: false, error: "Router credentials are unavailable for this port." });
       return;
     }
-    const portName = safeSegment(port.interface_name, `port_${port.id}`);
-    const hotspotDestination = hotspotSource ? `flash/hotspot/hs_${portName}/${sourceNameFromPath(hotspotSource)}` : null;
-    const pppoeDestination = pppoeSource ? `flash/hotspot/pppoe_${portName}/${sourceNameFromPath(pppoeSource)}` : null;
-    for (const directory of [`flash/hotspot/hs_${portName}`, `flash/hotspot/pppoe_${portName}`]) {
+    const identity = await resourceIdentityForPort(port);
+    const resources = portServiceResourceNames(port, identity);
+    const peers = !port.subnet_range
+      ? await sbSelectStrict<{ subnet_range: string | null }>(
+        "isp_reseller_ports",
+        `router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range`,
+      )
+      : [];
+    const deploymentPort: PortServiceRow = {
+      ...port,
+      bridge_name: port.bridge_name ?? resources.bridgeName,
+      subnet_range: port.subnet_range ?? nextAvailableSubnet(peers),
+      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? `hotspot-${resources.resourceName}.com` : null),
+      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? `pppoe-${resources.resourceName}.com` : null),
+    };
+    if (
+      deploymentPort.bridge_name !== port.bridge_name
+      || deploymentPort.subnet_range !== port.subnet_range
+      || deploymentPort.hotspot_dns_name !== port.hotspot_dns_name
+      || deploymentPort.pppoe_dns_name !== port.pppoe_dns_name
+    ) {
+      await sbUpdateStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${port.admin_id}`, {
+        bridge_name: deploymentPort.bridge_name,
+        subnet_range: deploymentPort.subnet_range,
+        hotspot_dns_name: deploymentPort.hotspot_dns_name,
+        pppoe_dns_name: deploymentPort.pppoe_dns_name,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    const hotspotDestination = hotspotSource ? `${resources.hotspotDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
+    const pppoeDestination = pppoeSource ? `${resources.pppoeDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
+    for (const directory of [resources.hotspotDirectory, resources.pppoeDirectory]) {
       await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
     }
     if (hotspotSource && hotspotDestination) await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
     if (pppoeSource && pppoeDestination) await deployApprovedSource(found.creds, req, pppoeSource, pppoeDestination);
-    const hotspotPath = hotspotDestination ? `flash/hotspot/hs_${portName}` : null;
-    const pppoePath = pppoeDestination ? `flash/hotspot/pppoe_${portName}` : null;
+    const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
+    const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
     const portalHostname = new URL(requestOrigin(req)).hostname;
     const commands = buildDualServiceCommands(
-      port,
+      deploymentPort,
       hotspotPath,
       pppoePath,
       found.row.bridge_ip || found.row.vpn_ip || "127.0.0.1",
       {
         portalHostname,
-        hotspotDnsName: port.hotspot_dns_name,
-        pppoeDnsName: port.pppoe_dns_name,
+        hotspotDnsName: deploymentPort.hotspot_dns_name,
+        pppoeDnsName: deploymentPort.pppoe_dns_name,
+        companyName: identity.companyName,
+        routerName: identity.routerName,
       },
     );
     for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);
     const scriptPayload = [
-      `# OcholaSupernet dual-service deployment for ${port.interface_name}`,
+      `# ${resources.resourceName} dual-service deployment for ${port.interface_name}`,
       ...commands.map(([path, ...args]) => `${path.replaceAll("/", " ")} ${args.join(" ")}`),
     ].join("\n");
     res.status(201).json({ ok: true, portId: port.id, hotspotDestination, pppoeDestination, scriptPayload });

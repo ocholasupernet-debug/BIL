@@ -92,16 +92,75 @@ function routerRows(payload: RouterOption[] | { routers?: RouterOption[] }): Rou
   return Array.isArray(payload) ? payload : payload.routers ?? [];
 }
 
-function draftFromAssignment(port: PortAssignment): Draft {
+function safeSegment(value: string, fallback: string): string {
+  const segment = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return segment.slice(0, 42) || fallback;
+}
+
+function hostnameSegment(value: string, fallback: string): string {
+  const segment = value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return segment.slice(0, 42) || fallback;
+}
+
+function assetKeyForPort(port: Pick<PortAssignment, "id" | "interface_name">): string {
+  const portName = safeSegment(port.interface_name, `port-${port.id}`).slice(0, 18);
+  return safeSegment(`p${port.id}-${portName}`, `port-${port.id}`).slice(0, 32);
+}
+
+function installedAssetPath(
+  service: "hs" | "pppoe",
+  port: Pick<PortAssignment, "id" | "interface_name"> | null,
+  sourcePath: string,
+): string {
+  if (!port) return "Created automatically in a new per-port directory after saving";
+  const fileName = sourcePath.trim().split("/").pop() || "login.html";
+  return `flash/hotspot/${service}_${assetKeyForPort(port)}/${fileName}`;
+}
+
+function nextAvailableSubnet(assignments: PortAssignment[]): string {
+  const used = new Set(
+    assignments
+      .map((assignment) => assignment.subnet_range?.match(/^10\.250\.(\d+)\.0\/24$/)?.[1])
+      .filter((octet): octet is string => Boolean(octet))
+      .map(Number),
+  );
+  for (let octet = 1; octet <= 254; octet += 1) {
+    if (!used.has(octet)) return `10.250.${octet}.0/24`;
+  }
+  return "10.250.254.0/24";
+}
+
+function autoDraftForPort(router: RouterOption, port: PortOption, assignments: PortAssignment[]): Draft {
+  const portSegment = safeSegment(port.name, "port");
+  const routerSegment = hostnameSegment(router.name, `router-${router.id}`);
+  return {
+    hotspotEnabled: true,
+    hotspotFolderPath: "login.html",
+    hotspotDnsName: "",
+    pppoeEnabled: false,
+    pppoeFolderPath: "login.html",
+    pppoeDnsName: "",
+    bridgeName: `${routerSegment}-bridge-${portSegment}`,
+    subnetRange: nextAvailableSubnet(assignments),
+    bandwidthCapMbps: "30",
+  };
+}
+
+function draftFromAssignment(port: PortAssignment, router: RouterOption, assignments: PortAssignment[]): Draft {
+  const defaults = autoDraftForPort(
+    router,
+    { name: port.interface_name, type: "ether", running: true },
+    assignments.filter((assignment) => assignment.id !== port.id),
+  );
   return {
     hotspotEnabled: port.hotspot_enabled,
     hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
-    hotspotDnsName: port.hotspot_dns_name ?? "",
+    hotspotDnsName: port.hotspot_dns_name ?? defaults.hotspotDnsName,
     pppoeEnabled: port.pppoe_enabled,
     pppoeFolderPath: port.pppoe_folder_path ?? "",
-    pppoeDnsName: port.pppoe_dns_name ?? "",
-    bridgeName: port.bridge_name ?? "",
-    subnetRange: port.subnet_range ?? "",
+    pppoeDnsName: port.pppoe_dns_name ?? defaults.pppoeDnsName,
+    bridgeName: port.bridge_name ?? defaults.bridgeName,
+    subnetRange: port.subnet_range ?? defaults.subnetRange,
     bandwidthCapMbps: String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps ?? 30),
   };
 }
@@ -163,6 +222,10 @@ export default function Multiport() {
     if (!selectedPortKey.startsWith("new:")) return null;
     return portOptions.find((port) => port.name === selectedPortKey.slice("new:".length)) ?? null;
   }, [portOptions, selectedPortKey]);
+  const selectedRouter = useMemo(
+    () => routers.find((router) => String(router.id) === routerId) ?? null,
+    [routerId, routers],
+  );
 
   const loadRouters = async () => {
     setLoading(true);
@@ -216,13 +279,13 @@ export default function Multiport() {
   useEffect(() => {
     if (selectedPortKey) {
       const assignment = assignments.find((port) => `assigned:${port.id}` === selectedPortKey);
-      if (assignment) {
-        setDraft(draftFromAssignment(assignment));
+      if (assignment && selectedRouter) {
+        setDraft(draftFromAssignment(assignment, selectedRouter, assignments));
         return;
       }
       const option = portOptions.find((port) => `new:${port.name}` === selectedPortKey);
-      if (option) {
-        setDraft(defaultDraft());
+      if (option && selectedRouter) {
+        setDraft(autoDraftForPort(selectedRouter, option, assignments));
         return;
       }
     }
@@ -231,7 +294,7 @@ export default function Multiport() {
     if (firstAssignment) setSelectedPortKey(`assigned:${firstAssignment.id}`);
     else if (firstOption) setSelectedPortKey(`new:${firstOption.name}`);
     else setSelectedPortKey("");
-  }, [assignments, portOptions, selectedPortKey]);
+  }, [assignments, portOptions, selectedPortKey, selectedRouter]);
 
   const allPortChoices = useMemo(() => [
     ...assignments.map((port) => ({ key: `assigned:${port.id}`, label: `${port.interface_name} · assigned`, assigned: true })),
@@ -391,15 +454,19 @@ export default function Multiport() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
                 <div>
                   <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 850 }}><EthernetPort size={18} color="var(--isp-accent)" /> Isolated port configuration</div>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>Enable one or both services. The API validates the asset paths and keeps router credentials server-side.</p>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>
+                    {selectedNewPort
+                      ? "Defaults were generated from this router and physical port. Review or change any field before saving and deploying."
+                      : "Enable one or both services. The API validates the asset paths and keeps router credentials server-side."}
+                  </p>
                 </div>
                 {selectedAssignment ? <span style={{ color: statusColor(selectedAssignment.status), fontSize: 12, fontWeight: 850 }}>{selectedAssignment.status}</span> : null}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
-                <Field label="Bridge name" hint="Leave blank to use an isolated OcholaSupernet bridge name.">
-                  <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="ochola-port-ether2" />
+                <Field label="Service / bridge name" hint="Generated per physical port; you can rename it before saving.">
+                  <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
                 </Field>
-                <Field label="Private service subnet" hint="Must be a private .0/24, for example 10.250.12.0/24.">
+                <Field label="Private service subnet" hint="Generated from the next available isolated range. Must remain a private .0/24.">
                   <input style={input} value={draft.subnetRange} onChange={(event) => setDraftValue("subnetRange", event.target.value)} placeholder="10.250.12.0/24" />
                 </Field>
                 <Field label="Bandwidth ceiling (Mbps)" hint="Applied to the isolated parent queue.">
@@ -409,17 +476,23 @@ export default function Multiport() {
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.hotspotEnabled} onChange={(event) => setDraftValue("hotspotEnabled", event.target.checked)} /> Hotspot sign-in</label>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.pppoeEnabled} onChange={(event) => setDraftValue("pppoeEnabled", event.target.checked)} /> PPPoE service</label>
                 </div>
-                <Field label="Hotspot portal asset folder" hint="Use a path approved by the portal asset manager.">
-                  <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="hotspot/portal-a" disabled={!draft.hotspotEnabled} />
+                <Field label="Hotspot portal asset" hint="Choose the approved source asset. It is copied into a new directory dedicated to this port.">
+                  <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.hotspotEnabled} />
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                    Installed copy: {installedAssetPath("hs", selectedAssignment, draft.hotspotFolderPath || "login.html")}
+                  </div>
                 </Field>
-                <Field label="Hotspot DNS name" hint="Optional hostname for this port's Hotspot profile.">
-                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-ether2.example.com" disabled={!draft.hotspotEnabled} />
+                <Field label="Hotspot name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
+                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-company-router-ether2.com" disabled={!draft.hotspotEnabled} />
                 </Field>
-                <Field label="PPPoE landing asset folder" hint="PPPoE uses a landing/status asset, not a captive Hotspot login.">
-                  <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="hotspot/pppoe-a" disabled={!draft.pppoeEnabled} />
+                <Field label="PPPoE landing asset" hint="Choose the approved source asset. It is copied into a separate directory dedicated to this port.">
+                  <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.pppoeEnabled} />
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                    Installed copy: {installedAssetPath("pppoe", selectedAssignment, draft.pppoeFolderPath || "login.html")}
+                  </div>
                 </Field>
-                <Field label="PPPoE DNS name" hint="Optional hostname for this port's PPPoE landing profile.">
-                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-ether2.example.com" disabled={!draft.pppoeEnabled} />
+                <Field label="PPPoE name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
+                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-company-router-ether2.com" disabled={!draft.pppoeEnabled} />
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
