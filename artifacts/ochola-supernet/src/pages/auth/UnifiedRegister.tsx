@@ -60,6 +60,7 @@ export default function UnifiedRegister() {
           email: email.trim().toLowerCase(),
           password,
           role,
+          businessName: subdomainPrefix,
           subdomain_prefix: subdomainPrefix,
         }),
       });
@@ -180,6 +181,7 @@ export default function UnifiedRegister() {
               <input
                 id="register-subdomain"
                 required
+                minLength={3}
                 value={subdomainPrefix}
                 onChange={(event) => setSubdomainPrefix(sanitizeSubdomainPrefix(event.target.value))}
                 autoComplete="organization"
