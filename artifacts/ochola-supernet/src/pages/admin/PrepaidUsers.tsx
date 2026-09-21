@@ -108,11 +108,6 @@ function paymentLabel(payment?: Payment) {
   if (method.includes("cash") || method.includes("manual")) return `Cash-${transactionId}`;
   return `${payment.payment_method}-${transactionId}`;
 }
-function formatData(mb?: number | null) {
-  if (mb === null || mb === undefined || !Number.isFinite(Number(mb))) return "—";
-  const value = Number(mb);
-  return value >= 1024 ? `${(value / 1024).toFixed(2)} GB` : `${value.toFixed(1)} MB`;
-}
 function normalizeLiveIdentity(value?: string | null) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -1025,11 +1020,10 @@ export default function PrepaidUsers() {
                         </span>
                         {expiring && !expired && <div style={{ fontSize: "0.6rem", color: "#fbbf24", fontWeight: 700 }}>Expiring soon</div>}
                       </td>
-                      <td style={{ ...TD, maxWidth: 190 }}>
-                        <span title={paymentLabel(payment)} style={{ display: "block", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.7rem", color: payment ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
+                      <td style={{ ...TD, minWidth: 240, maxWidth: 320 }}>
+                        <span title={paymentLabel(payment)} style={{ display: "block", whiteSpace: "normal", overflowWrap: "anywhere", fontSize: "0.7rem", lineHeight: 1.35, color: payment ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
                           {paymentLabel(payment)}
                         </span>
-                        {payment && <div style={{ fontSize: "0.62rem", color: "var(--isp-text-sub)", marginTop: 2 }}>{formatData(payment.amount)} paid</div>}
                       </td>
                       <td style={TD}>
                         {router ? (
