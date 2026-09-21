@@ -66,3 +66,4 @@
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
 - [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
+- [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.

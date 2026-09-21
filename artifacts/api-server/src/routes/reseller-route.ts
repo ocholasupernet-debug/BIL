@@ -10,7 +10,6 @@ import {
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
-import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import {
   compileResellerActivation,
   compileResellerPaymentNoticeNatComment,
@@ -857,43 +856,116 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
   }
 });
 
-router.put("/reseller/gateway", requireAdmin(), async (req, res): Promise<void> => {
+function cleanGatewayIdentifier(value: unknown, label: string, required: boolean): string {
+  const identifier = typeof value === "string" ? value.trim().slice(0, 120) : "";
+  if (required && !identifier) throw new Error(`${label} is required when this gateway is enabled.`);
+  return identifier;
+}
+
+function resellerPaymentSettings(rows: Array<{
+  gateway_type: string;
+  merchant_identifier: string | null;
+  account_reference: string | null;
+  config_json: unknown;
+  is_active: boolean;
+}>): {
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+} {
+  const readMpesa = () => {
+    const row = rows.find(item => item.gateway_type === "mpesa");
+    const config = row?.config_json && typeof row.config_json === "object" && !Array.isArray(row.config_json)
+      ? row.config_json as Record<string, unknown>
+      : {};
+    return {
+      enabled: row?.is_active === true,
+      merchantIdentifier: row?.merchant_identifier ?? "",
+      accountReference: row?.account_reference ?? "",
+      destinationType: config.destinationType === "till" ? "till" as const : "paybill" as const,
+    };
+  };
+  const readBank = () => {
+    const row = rows.find(item => item.gateway_type === "bank");
+    const config = row?.config_json && typeof row.config_json === "object" && !Array.isArray(row.config_json)
+      ? row.config_json as Record<string, unknown>
+      : {};
+    return {
+      enabled: row?.is_active === true,
+      merchantIdentifier: row?.merchant_identifier ?? "",
+      accountReference: row?.account_reference ?? "",
+      bankName: typeof config.bankName === "string" ? config.bankName : "",
+    };
+  };
+  return { mpesa: readMpesa(), bank: readBank() };
+}
+
+async function saveResellerPaymentSettings(account: { id: number; parent_id: number | null }, body: any) {
+  const mpesa = body?.mpesa && typeof body.mpesa === "object" ? body.mpesa : {};
+  const bank = body?.bank && typeof body.bank === "object" ? body.bank : {};
+  const mpesaEnabled = mpesa.enabled === true;
+  const bankEnabled = bank.enabled === true;
+  const mpesaDestinationType = mpesa.destinationType === "till" ? "till" : "paybill";
+  const mpesaMerchant = cleanGatewayIdentifier(mpesa.merchantIdentifier, "M-Pesa Till / PayBill number", mpesaEnabled);
+  const mpesaAccount = cleanGatewayIdentifier(mpesa.accountReference, "M-Pesa account reference", mpesaEnabled && mpesaDestinationType === "paybill");
+  const bankMerchant = cleanGatewayIdentifier(bank.merchantIdentifier, "Bank merchant number", bankEnabled);
+  const bankAccount = cleanGatewayIdentifier(bank.accountReference, "Bank account number", bankEnabled);
+  const bankName = cleanGatewayIdentifier(bank.bankName, "Bank name", bankEnabled);
+  const now = new Date().toISOString();
+
+  await Promise.all([
+    sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
+      user_id: account.id,
+      gateway_type: "mpesa",
+      merchant_identifier: mpesaMerchant,
+      account_reference: mpesaAccount,
+      config_json: { destinationType: mpesaDestinationType },
+      is_active: mpesaEnabled,
+      updated_at: now,
+    }),
+    sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
+      user_id: account.id,
+      gateway_type: "bank",
+      merchant_identifier: bankMerchant,
+      account_reference: bankAccount,
+      config_json: { bankName },
+      is_active: bankEnabled,
+      updated_at: now,
+    }),
+  ]);
+}
+
+router.get("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
-      res.status(403).json({ ok: false, error: "Only reseller accounts can configure this gateway." });
+      res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment settings." });
       return;
     }
-    const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";
-    const config = req.body?.config;
-    if (!/^[a-z][a-z0-9_-]{1,31}$/.test(gatewayType) || !config || typeof config !== "object" || Array.isArray(config)) {
-      res.status(400).json({ ok: false, error: "A valid gateway type and configuration are required." });
-      return;
-    }
-    const cleanConfig = Object.fromEntries(
-      Object.entries(config as Record<string, unknown>)
-        .filter(([key, value]) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(key) && typeof value === "string")
-        .map(([key, value]) => [key, String(value).slice(0, 500)]),
+    const rows = await sbSelectStrict<{
+      gateway_type: string;
+      merchant_identifier: string | null;
+      account_reference: string | null;
+      config_json: unknown;
+      is_active: boolean;
+    }>(
+      "payment_gateways",
+      `user_id=eq.${account.id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
     );
-    const rows = await sbUpsertStrict("isp_reseller_gateways", "reseller_id,gateway_type", {
-      admin_id: account.parent_id ?? account.id,
-      reseller_id: account.id,
-      gateway_type: gatewayType,
-      config_json: { encrypted: encryptVpnSecret(JSON.stringify(cleanConfig)) },
-      is_active: true,
-      updated_at: new Date().toISOString(),
-    });
-    const paymentGatewayType = gatewayType === "mpesa_paybill" || gatewayType === "mpesa_till_push" ? "mpesa" : gatewayType;
-    if (["stripe", "paypal", "mpesa"].includes(paymentGatewayType)) {
-      await sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
-        user_id: account.id,
-        gateway_type: paymentGatewayType,
-      api_keys_json: JSON.stringify(encryptVpnSecret(JSON.stringify(cleanConfig))),
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      });
+    res.json({ ok: true, settings: resellerPaymentSettings(rows) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load payment settings." });
+  }
+});
+
+router.put("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment settings." });
+      return;
     }
-    res.json({ ok: true, gateway: rows[0] ? { ...rows[0], config_json: undefined } : null });
+    await saveResellerPaymentSettings(account, req.body);
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to save gateway settings." });
   }
