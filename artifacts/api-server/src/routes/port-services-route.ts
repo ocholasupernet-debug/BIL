@@ -329,8 +329,29 @@ export function buildDualServiceCommands(
     });
   }
   if (hotspotPath || pppoePath) {
+    if (hotspotPath) {
+      commands.push([
+        "/ip/firewall/filter/add",
+        "=chain=forward",
+        `=in-interface=${network.bridgeName}`,
+        "=out-interface-list=WAN",
+        "=action=accept",
+        "=hotspot=auth",
+        "=place-before=0",
+        `=comment=${comment("allow_service_forward")}`,
+      ]);
+    } else {
+      commands.push([
+        "/ip/firewall/filter/add",
+        "=chain=forward",
+        `=src-address=${network.network}`,
+        "=out-interface-list=WAN",
+        "=action=accept",
+        "=place-before=0",
+        `=comment=${comment("allow_service_forward")}`,
+      ]);
+    }
     commands.push(
-      ["/ip/firewall/filter/add", "=chain=forward", `=in-interface=${network.bridgeName}`, "=out-interface-list=WAN", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_forward")}`],
       ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=udp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_udp")}`],
       ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=tcp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_tcp")}`],
     );

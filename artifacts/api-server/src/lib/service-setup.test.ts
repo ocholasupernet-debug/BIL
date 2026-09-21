@@ -38,7 +38,9 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /interface pppoe-server server add/);
   assert.match(script, /192\.168\.180\.10-192\.168\.183\.254/);
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
-  assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN/);
+  assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN hotspot=auth/);
+  assert.match(script, /chain=forward action=accept src-address="192\.168\.99\.0\/24" out-interface-list=WAN/);
+  assert.doesNotMatch(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN connection-state=new,established,related comment="ochola-services-104 service-to-wan"/);
   assert.match(script, /ip dns set allow-remote-requests=yes/);
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=udp dst-port=53/);
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=tcp dst-port=53/);
