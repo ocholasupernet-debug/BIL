@@ -69,9 +69,9 @@ import AdminInvoices from "./pages/admin/Invoices";
 import AdminCustomerBalance from "./pages/admin/CustomerBalance";
 import AdminMessageTemplates from "./pages/admin/MessageTemplates";
 import PlatformNotifications from "./pages/admin/PlatformNotifications";
-import AdminRegister from "./pages/admin/AdminRegister";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
+import UnifiedRegister from "./pages/auth/UnifiedRegister";
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
@@ -91,7 +91,7 @@ function SubdomainGuard() {
 
   /* Render platform entry points directly so they never flash blank. */
   const sub = getHostSubdomain();
-  if (sub === "register") return <AdminRegister />;
+   if (sub === "register") return <UnifiedRegister />;
   if (sub === "latex") return <SuperAdminLogin />;
   if (sub) return null;
 
@@ -173,9 +173,11 @@ function Router() {
       <Route path="/portal/hotspot" component={HotspotLogin} />
       <Route path="/portal" component={HotspotLogin} />
       <Route path="/hotspot" component={HotspotLogin} />
-      <Route path="/admin/register" component={AdminRegister} />
+      <Route path="/admin/register" component={UnifiedRegister} />
+      <Route path="/register" component={UnifiedRegister} />
+      <Route path="/auth/register" component={UnifiedRegister} />
       <Route path="/admin/set-password" component={AdminSetPassword} />
-      <Route path="/isp-register"    component={AdminRegister} />
+      <Route path="/isp-register"    component={UnifiedRegister} />
       <Route path="/pppoe-login" component={PPPoELogin} />
       
       {/* Super Admin */}

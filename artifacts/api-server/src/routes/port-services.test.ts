@@ -34,16 +34,18 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   );
   const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
 
-  assert.match(script, /\/interface\/bridge\/add =name=ochola-port-12/);
-  assert.match(script, /\/interface\/bridge\/port\/add =bridge=ochola-port-12 =interface=ether2/);
-  assert.match(script, /\/ip\/hotspot\/add =name=HS_ether2 =interface=ochola-port-12/);
+  assert.match(script, /\/interface\/bridge\/add =name=router-3-ether2-bridge/);
+  assert.match(script, /\/interface\/bridge\/port\/add =bridge=router-3-ether2-bridge =interface=ether2/);
+  assert.match(script, /\/ip\/hotspot\/add =name=HS_router-3-ether2 =interface=router-3-ether2-bridge/);
   assert.match(script, /html-directory=flash\/hotspot\/hs_ether2/);
-  assert.match(script, /\/interface\/pppoe-server\/server\/add =service-name=PPPoE_ether2 =interface=ochola-port-12/);
+  assert.match(script, /\/interface\/pppoe-server\/server\/add =service-name=PPPoE_router-3-ether2 =interface=router-3-ether2-bridge/);
   assert.match(script, /dst-host=come\.isplatty\.org/);
+  assert.match(script, /dst-host=api\.safaricom\.co\.ke/);
+  assert.match(script, /comment=[^ \n]*payment_walled_garden/);
   assert.match(script, /address=192\.168\.30\.1\/24/);
-  assert.match(script, /target=192\.168\.30\.0\/24 =parent=RESELLER_ROOT_ether2/);
-  assert.match(script, /\/ip\/firewall\/filter\/add =chain=input =in-interface=ochola-port-12 =protocol=udp =dst-port=53/);
-  assert.match(script, /\/ip\/firewall\/filter\/add =chain=forward =in-interface=ochola-port-12 =out-interface-list=WAN =action=accept/);
+  assert.match(script, /target=192\.168\.30\.0\/24 =parent=SERVICE_ROOT_router-3-ether2/);
+  assert.match(script, /\/ip\/firewall\/filter\/add =chain=input =in-interface=router-3-ether2-bridge =protocol=udp =dst-port=53/);
+  assert.match(script, /\/ip\/firewall\/filter\/add =chain=forward =in-interface=router-3-ether2-bridge =out-interface-list=WAN =action=accept/);
   assert.match(script, /block_wan_dns_tcp/);
   assert.doesNotMatch(script, /interface=ether2 =profile=HS_ether2/);
 });
@@ -62,8 +64,8 @@ test("port service profiles accept independent DNS names and allow the Hotspot n
   );
   const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
 
-  assert.match(script, /name=HS_ether2.*dns-name=hotspot-ether2\.example\.com/);
-  assert.match(script, /name=PPPOE_ALERT_ether2.*dns-name=pppoe-ether2\.example\.com/);
+  assert.match(script, /name=HS_PROFILE_router-3-ether2.*dns-name=hotspot-ether2\.example\.com/);
+  assert.match(script, /name=PPPOE_ALERT_router-3-ether2.*dns-name=pppoe-ether2\.example\.com/);
   assert.match(script, /dst-host=hotspot-ether2\.example\.com/);
 });
 
@@ -89,9 +91,9 @@ test("different assigned ports receive different service identities", () => {
   const firstScript = first.flat().join(" ");
   const secondScript = second.flat().join(" ");
 
-  assert.match(firstScript, /ochola-port-12/);
-  assert.match(secondScript, /ochola-port-13/);
-  assert.match(firstScript, /HS_ether2/);
-  assert.match(secondScript, /HS_ether3/);
+  assert.match(firstScript, /router-3-ether2/);
+  assert.match(secondScript, /router-3-ether3/);
+  assert.match(firstScript, /HS_router-3-ether2/);
+  assert.match(secondScript, /HS_router-3-ether3/);
   assert.notEqual(firstScript, secondScript);
 });

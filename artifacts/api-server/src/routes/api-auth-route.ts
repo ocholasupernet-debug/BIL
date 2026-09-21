@@ -11,6 +11,7 @@ import {
 } from "../lib/api-auth.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import { registerAccount } from "../controllers/auth-controller.js";
 
 const router: IRouter = Router();
 
@@ -28,13 +29,16 @@ function sendInvalidCredentials(res: Response): void {
   }, 400);
 }
 
-router.post("/auth/admin/login", async (req: Request, res: Response): Promise<void> => {
-  const { username, password, api_key, subdomain } = req.body as {
-    username?: string; password?: string; api_key?: string; subdomain?: string;
-  };
+router.post("/auth/register", registerAccount);
 
-  if (!username || !password) {
-    res.status(400).json({ ok: false, error: "username and password are required" });
+router.post("/auth/admin/login", async (req: Request, res: Response): Promise<void> => {
+  const { username, email, password, api_key, subdomain } = req.body as {
+    username?: string; email?: string; password?: string; api_key?: string; subdomain?: string;
+  };
+  const identity = (typeof username === "string" ? username : email ?? "").trim();
+
+  if (!identity || !password) {
+    res.status(400).json({ ok: false, error: "email or username and password are required" });
     return;
   }
   if (!apiTokenSigningConfigured) {
@@ -43,7 +47,7 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
   }
 
   if (
-    username.trim() === SA_USERNAME &&
+    identity === SA_USERNAME &&
     password === SA_PASSWORD &&
     (!api_key || api_key.trim() === SA_API_KEY)
   ) {
@@ -72,7 +76,7 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
   const tenantId = tenantRows[0]?.id;
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_admins",
-    `username=eq.${encodeURIComponent(username.trim())}&select=id,name,username,password,fullname,role,is_active,subdomain,parent_id,company_name,earnings_balance,area,currency,must_change_password&limit=100`,
+    `or=(username.eq.${encodeURIComponent(identity)},email.eq.${encodeURIComponent(identity)})&select=id,name,username,password,fullname,email,role,is_active,subdomain,parent_id,company_name,earnings_balance,area,currency,must_change_password&limit=100`,
   );
   const admin = tenantId
     ? rows.find((row) => Number(row.id) === tenantId || Number(row.parent_id) === tenantId)
@@ -90,7 +94,17 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
   }
 
   const token = generateToken("a", String(admin.id));
-  res.json({ ok: true, token, admin: safe });
+  res.json({
+    ok: true,
+    token,
+    admin: safe,
+    tenant: {
+      id: admin.id,
+      subdomain: admin.subdomain ?? tenantSubdomain,
+      role: admin.role,
+      parentId: admin.parent_id ?? null,
+    },
+  });
 });
 
 router.post("/auth/admin/set-password", async (req: Request, res: Response): Promise<void> => {
