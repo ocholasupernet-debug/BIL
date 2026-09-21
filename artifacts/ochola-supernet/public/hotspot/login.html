@@ -799,6 +799,18 @@ function renderModal(){
    var pass=document.getElementById("loginPass");
    if(user)user.value=hotspotCredentials.username;
    if(pass)pass.value=hotspotCredentials.password;
+    /* A paid session has already passed server-side payment and RouterOS
+       provisioning. Submit the same form a customer would submit manually so
+       the device enters the active Hotspot session instead of stopping at a
+       prefilled login page. */
+    var form=document.getElementById("mikrotikForm");
+    if(form&&user&&pass){
+      window.setTimeout(function(){
+        try{
+          if(typeof doLogin==="function"&&doLogin(form))form.submit();
+        }catch(e){}
+      },150);
+    }
    return true;
  }
  function assignPaidHotspotAccess(checkoutId){

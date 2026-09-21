@@ -428,6 +428,49 @@ export async function runRouterCommand(
 }
 
 /**
+ * Multiport Hotspot servers own their address pool. Reconcile the pool before
+ * creating a paid user so a stale or partially deployed router does not leave
+ * a successful payment with an unusable login.
+ */
+export async function ensureHotspotServerAddressPool(
+  creds: RouterCredentials,
+  opts: { serverName: string; poolName: string; poolRanges: string; comment?: string },
+): Promise<void> {
+  const poolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name,ranges",
+    `?name=${opts.poolName}`,
+  ]);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === opts.poolName);
+  const existingRanges = String(pool?.ranges ?? "").trim();
+  if (!existingRanges) {
+    const poolCommand = pool?.[".id"]
+      ? ["/ip/pool/set", `=.id=${pool[".id"]}`]
+      : ["/ip/pool/add", `=name=${opts.poolName}`];
+    poolCommand.push(`=ranges=${opts.poolRanges}`);
+    if (opts.comment) poolCommand.push(`=comment=${opts.comment}`);
+    await runRouterCommand(creds, poolCommand);
+  }
+
+  const serverRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,address-pool",
+    `?name=${opts.serverName}`,
+  ]);
+  const server = (Array.isArray(serverRows) ? serverRows : []).find(row => row.name === opts.serverName);
+  if (!server?.[".id"]) {
+    throw new Error(`Hotspot server "${opts.serverName}" is not deployed on the router.`);
+  }
+  if (server["address-pool"] !== opts.poolName) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${server[".id"]}`,
+      `=address-pool=${opts.poolName}`,
+    ]);
+  }
+}
+
+/**
  * Emergency recovery for an admin who enabled the generated customer Hotspot
  * on their own management WLAN. Only the generated server for this router is
  * disabled; bridge, DHCP, PPPoE, users, and files are left untouched.
@@ -2054,7 +2097,7 @@ export async function updateHotspotUser(
   name: string,
   fields: {
     password?: string; profile?: string; disabled?: boolean; comment?: string;
-    email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
+    server?: string; email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
   }
 ): Promise<void> {
   return withConn(creds, async (conn) => {
@@ -2067,6 +2110,7 @@ export async function updateHotspotUser(
     if (fields.profile         !== undefined) params.push(`=profile=${fields.profile}`);
     if (fields.disabled        !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
     if (fields.comment         !== undefined) params.push(`=comment=${fields.comment}`);
+    if (fields.server          !== undefined) params.push(`=server=${fields.server}`);
     if (fields.email           !== undefined) params.push(`=email=${fields.email}`);
     if (fields.address         !== undefined) params.push(`=address=${fields.address}`);
     if (fields.limitUptime     !== undefined) params.push(`=limit-uptime=${fields.limitUptime}`);
@@ -2132,17 +2176,19 @@ export async function disconnectHotspotActiveUser(
 
 export async function connectHotspotUser(
   creds: RouterCredentials,
-  opts: { user: string; password: string; ip: string; macAddress: string },
+  opts: { user: string; password: string; ip: string; macAddress: string; server?: string },
 ): Promise<void> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    await withTimeout(conn.write([
+    const command = [
       "/ip/hotspot/active/login",
       `=user=${opts.user}`,
       `=password=${opts.password}`,
       `=ip=${opts.ip}`,
       `=mac-address=${opts.macAddress}`,
-    ]), ms);
+    ];
+    if (opts.server) command.push(`=server=${opts.server}`);
+    await withTimeout(conn.write(command), ms);
   });
 }
 
