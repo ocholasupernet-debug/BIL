@@ -33,20 +33,20 @@ interface DbRouter {
   status: string;
 }
 
-const REQUIRED_POOL_TYPES = ["active", "pppoe", "expired"] as const;
+const REQUIRED_POOL_TYPES = ["hotspot pool", "pppoe", "expired"] as const;
 type RequiredPoolType = typeof REQUIRED_POOL_TYPES[number];
 type RangeField = "start" | "end";
 type RouterPoolForm = Record<RequiredPoolType, { start: string; end: string }>;
 
 const POOL_TYPE_LABELS: Record<RequiredPoolType, { label: string; detail: string; color: string }> = {
-  active:  { label: "Active",  detail: "Connected subscribers", color: "#22c55e" },
-  pppoe:   { label: "PPPoE",   detail: "PPPoE subscriber addresses", color: "var(--isp-accent)" },
-  expired: { label: "Expired", detail: "Recovery / lapsed subscribers", color: "#f59e0b" },
+  "hotspot pool": { label: "Hotspot", detail: "Connected Hotspot subscribers", color: "#22c55e" },
+  pppoe:          { label: "PPPoE",   detail: "PPPoE subscriber addresses", color: "var(--isp-accent)" },
+  expired:        { label: "Expired", detail: "Recovery / lapsed subscribers", color: "#f59e0b" },
 };
 
 function emptyRouterPoolForm(): RouterPoolForm {
   return {
-    active:  { start: "", end: "" },
+    "hotspot pool": { start: "", end: "" },
     pppoe:   { start: "", end: "" },
     expired: { start: "", end: "" },
   };
@@ -57,7 +57,9 @@ function buildRouterPoolForms(routers: DbRouter[], pools: DbPool[]): Record<numb
     const form = emptyRouterPoolForm();
     for (const type of REQUIRED_POOL_TYPES) {
       const pool = pools.find(p =>
-        p.router_id === router.id && p.name.trim().toLowerCase() === type
+          p.router_id === router.id
+          && (p.name.trim().toLowerCase() === type
+            || (type === "hotspot pool" && p.name.trim().toLowerCase() === "active"))
       );
       if (pool) form[type] = { start: pool.range_start, end: pool.range_end };
     }
@@ -280,7 +282,9 @@ export default function IPPool() {
       for (const type of REQUIRED_POOL_TYPES) {
         const range = form[type];
         const existing = pools.find(p =>
-          p.router_id === routerId && p.name.trim().toLowerCase() === type
+          p.router_id === routerId
+          && (p.name.trim().toLowerCase() === type
+            || (type === "hotspot pool" && p.name.trim().toLowerCase() === "active"))
         );
         const payload = {
           name: type,
@@ -527,7 +531,7 @@ export default function IPPool() {
         {showHelp && (
           <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 10, padding: "0.875rem 1rem", fontSize: "0.79rem", color: "#4ade80", lineHeight: 1.75 }}>
             <strong>IP Pool Guide</strong><br />
-            • Every router should have one <code style={{ fontFamily: "monospace" }}>active</code>, <code style={{ fontFamily: "monospace" }}>pppoe</code>, and <code style={{ fontFamily: "monospace" }}>expired</code> pool assignment.<br />
+            • Every router should have one <code style={{ fontFamily: "monospace" }}>hotspot pool</code>, <code style={{ fontFamily: "monospace" }}>pppoe</code>, and <code style={{ fontFamily: "monospace" }}>expired</code> pool assignment.<br />
             • <strong>Active</strong> — connected subscribers. <strong>PPPoE</strong> — PPPoE subscriber addresses. <strong>Expired</strong> — recovery / lapsed subscribers.<br />
             • Save the router card first, then click <strong>Sync All</strong> or <strong>Sync by Router</strong> to push its ranges.
           </div>
@@ -603,7 +607,7 @@ export default function IPPool() {
                   const router = pool.router_id ? routerMap[pool.router_id] : null;
                   /* Color-code by pool name */
                   const nameColor =
-                    pool.name === "active"  ? "#22c55e" :
+                    pool.name.trim().toLowerCase() === "hotspot pool" || pool.name.trim().toLowerCase() === "active" ? "#22c55e" :
                     pool.name === "pppoe"   ? "var(--isp-accent)" :
                     pool.name === "expired" ? "#f59e0b" :
                     "var(--isp-text)";

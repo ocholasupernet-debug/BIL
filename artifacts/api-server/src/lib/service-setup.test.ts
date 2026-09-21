@@ -20,14 +20,14 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /interface bridge port add/);
   assert.match(script, /192\.168\.180\.1\/22/);
   assert.match(script, /ip dhcp-server add/);
-  assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="co-hotspot-bridge-104" address-pool="ochola-services-104-hotspot-pool" disabled=no\n/);
+  assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="co-hotspot-bridge-104" address-pool="hotspot pool" disabled=no\n/);
   assert.doesNotMatch(script, /ip dhcp-server (?:add|set)[^\n]*comment=/);
   assert.match(script, /ip hotspot profile add/);
-  assert.match(script, /ip hotspot profile add name="hprofile"/);
+  assert.match(script, /ip hotspot profile add name="hsprof"/);
   assert.doesNotMatch(script, /ip hotspot profile (?:add|set)[^\n]*address-pool=/);
   assert.doesNotMatch(script, /ip hotspot profile (?:add|set)[^\n]*comment=/);
   assert.match(script, /ip hotspot add/);
-  assert.match(script, /ip hotspot add[^\n]*address-pool="ochola-services-104-hotspot-pool"/);
+  assert.match(script, /ip hotspot add name="hotspot"[^\n]*profile="hsprof" address-pool="hotspot pool"/);
   assert.doesNotMatch(script, /ip hotspot (?:add|set)[^\n]*comment=/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
   assert.match(script, /walled-garden ip add dst-host="api\.safaricom\.co\.ke"/);
@@ -77,7 +77,7 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /ip address add address="192\.168\.180\.1\/22" interface="hotspot-bridge"/);
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="hotspot-bridge"/);
   assert.match(script, /pppoe-server server add service-name="ochola-services-104-pppoe" interface="hotspot-bridge"/);
-  assert.match(script, /ip hotspot add name="ochola-services-104-hotspot" interface="hotspot-bridge"/);
+  assert.match(script, /ip hotspot add name="hotspot" interface="hotspot-bridge"/);
   assert.doesNotMatch(script, /interface bridge add name="hotspot-bridge" comment=/);
   assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
 });

@@ -1,7 +1,7 @@
-import { sbInsertStrict, sbSelectStrict } from "./supabase-client.js";
+import { sbInsertStrict, sbSelectStrict, sbUpdateStrict } from "./supabase-client.js";
 
 type DefaultPool = {
-  name: "active" | "pppoe" | "expired";
+  name: "hotspot pool" | "pppoe" | "expired";
   range_start: string;
   range_end: string;
 };
@@ -20,7 +20,7 @@ function bridgePrefix(bridgeIp: string | null | undefined): string {
 function defaultPools(bridgeIp: string | null | undefined): DefaultPool[] {
   const prefix = bridgePrefix(bridgeIp);
   return [
-    { name: "active",  range_start: `${prefix}.10`,  range_end: `${prefix}.200` },
+    { name: "hotspot pool", range_start: `${prefix}.10`, range_end: `${prefix}.200` },
     { name: "pppoe",   range_start: "10.20.0.10",    range_end: "10.20.0.254" },
     { name: "expired", range_start: `${prefix}.201`, range_end: `${prefix}.254` },
   ];
@@ -37,11 +37,22 @@ export async function ensureDefaultRouterPools(
 ): Promise<void> {
   const now = new Date().toISOString();
   for (const pool of defaultPools(bridgeIp)) {
-    const existing = await sbSelectStrict<Record<string, unknown>>(
+    const existing = await sbSelectStrict<{ id: number; name: string }>(
       "isp_ip_pools",
-      `admin_id=eq.${adminId}&router_id=eq.${routerId}&name=eq.${pool.name}&select=id&limit=1`,
+      `admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id,name&order=id.asc`,
     );
-    if (existing.length > 0) continue;
+    const canonical = existing.find(row => row.name.trim().toLowerCase() === pool.name);
+    if (canonical) continue;
+    const legacyActive = pool.name === "hotspot pool"
+      ? existing.find(row => row.name.trim().toLowerCase() === "active")
+      : undefined;
+    if (legacyActive) {
+      await sbUpdateStrict("isp_ip_pools", `id=eq.${legacyActive.id}&admin_id=eq.${adminId}`, {
+        name: pool.name,
+        updated_at: now,
+      });
+      continue;
+    }
 
     const inserted = await sbInsertStrict<Record<string, unknown>>("isp_ip_pools", {
       admin_id: adminId,
