@@ -2,6 +2,7 @@
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
+- [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use base64 Git blob payloads to preserve exact workspace bytes and verify each returned SHA.
 - [GitHub push path limitations](github-push-paths.md) — Connector writes can be endpoint/path limited; verify the remote tree instead of assuming blob success means a push completed.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Stage contents writes on a temporary branch; workflow files require Actions write permission and may be rejected with 403.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
