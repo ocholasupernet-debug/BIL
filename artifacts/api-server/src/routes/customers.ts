@@ -21,6 +21,8 @@ import {
 } from "../lib/mikrotik.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
 import { isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -78,16 +80,32 @@ function profileName(plan: PlanRow): string {
   return `ochola-plan-${plan.id}`;
 }
 
+function isManagementVpnIp(ip: string | null | undefined): boolean {
+  return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(String(ip ?? "").trim());
+}
+
 function routerCredentials(row: RouterRow) {
-  const host = row.vpn_ip?.trim() || row.host?.trim() || row.bridge_ip?.trim() || "";
+  const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp)?.trim() || "";
+  const vpnClients = readVpnClients();
+  const discoveredManagementIp = vpnIpFor(row.host ?? "", vpnClients)
+    ?? vpnIpFor(row.name ?? "", vpnClients)
+    ?? "";
+  const managementIp = discoveredManagementIp || storedManagementIp;
+  const host = row.host?.trim() || managementIp || "";
   if (!host) throw new Error(`Router '${row.name}' has no reachable management address`);
+  const username = managementIp
+    ? (row.router_username?.trim() || ROUTER_MANAGEMENT_API_USERNAME)
+    : (row.router_username?.trim() || "admin");
   return {
     host,
     port: 8728,
-    username: row.router_username?.trim() || "admin",
+    username,
     password: row.router_secret || "",
     useSSL: false,
-    bridgeIp: row.vpn_ip?.trim() || row.bridge_ip?.trim() || undefined,
+    alternateUsernames: managementIp && username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [ROUTER_MANAGEMENT_API_USERNAME]
+      : undefined,
+    bridgeIp: managementIp && managementIp !== host ? managementIp : undefined,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
   };
@@ -97,7 +115,7 @@ async function reconcileCustomerAccess(
   current: CustomerRow,
   updates: Record<string, unknown>,
   adminId: number,
-): Promise<void> {
+): Promise<{ routerSynced: boolean; routerId: number | null; routerName: string | null }> {
   const currentName = current.pppoe_username || current.username || "";
   let nextName = String(
     updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? currentName,
@@ -139,63 +157,68 @@ async function reconcileCustomerAccess(
   const enabled = nextStatus === "active" &&
     (!nextExpiry || (Number.isFinite(Date.parse(nextExpiry)) && Date.parse(nextExpiry) > Date.now()));
 
+  let routerSynced = false;
+  let syncedRouterId: number | null = null;
+  let syncedRouterName: string | null = null;
   if (nextName && plan) {
     const routerId = nextRouterId ?? plan.router_id;
-    if (routerId) {
-      const router = (await sbSelect<RouterRow>(
-        "isp_routers",
-        `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
-      ))[0];
-      if (!router) throw new Error("The selected router was not found for this ISP account");
-      const creds = routerCredentials(router);
-      const dataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
-      const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
-        ? String(Math.floor(dataLimitMb * 1_000_000))
-        : "0";
-      const address = String(updates.ip_address ?? current.ip_address ?? "").trim();
-      const rateLimit = routerRateLimit(
-        plan.speed_down,
-        plan.speed_up,
-        plan.speed_down_unit ?? "Mbps",
-        plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
-      );
+    if (!routerId) throw new Error("Assign this prepaid user to a router before saving changes");
+    const router = (await sbSelect<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    ))[0];
+    if (!router) throw new Error("The selected router was not found for this ISP account");
+    const creds = routerCredentials(router);
+    const dataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
+    const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
+      ? String(Math.floor(dataLimitMb * 1_000_000))
+      : "0";
+    const address = String(updates.ip_address ?? current.ip_address ?? "").trim();
+    const rateLimit = routerRateLimit(
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit ?? "Mbps",
+      plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+    );
 
-      if (currentName && currentName !== nextName) {
-        if (planType === "pppoe") {
-          await disconnectPPPActiveByName(creds, currentName).catch(() => {});
-          await removePPPSecretByName(creds, currentName).catch(() => {});
-        } else {
-          await disconnectHotspotActiveUser(creds, currentName).catch(() => {});
-          await removeHotspotUser(creds, currentName).catch(() => {});
-        }
-      }
-
+    if (currentName && currentName !== nextName) {
       if (planType === "pppoe") {
-        await reconcilePppoeUserAccess(creds, {
-          name: nextName,
-          password: nextPassword,
-          profile: plan.name,
-          comment: nextName,
-          expiresAt: nextExpiry,
-          enabled,
-          remoteAddress: String(updates.ip_address ?? current.ip_address ?? "").trim() || null,
-        });
-      } else if (planType === "hotspot") {
-        await reconcileHotspotUserAccess(creds, {
-          name: nextName,
-          password: nextPassword,
-          profile: profileName(plan),
-          comment: nextName,
-          expiresAt: nextExpiry,
-          enabled,
-          limitBytesTotal,
-          address: address || null,
-          macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
-          rateLimit,
-          sharedUsers: plan.shared_users ?? 1,
-        });
+        await disconnectPPPActiveByName(creds, currentName).catch(() => {});
+        await removePPPSecretByName(creds, currentName).catch(() => {});
+      } else {
+        await disconnectHotspotActiveUser(creds, currentName).catch(() => {});
+        await removeHotspotUser(creds, currentName).catch(() => {});
       }
     }
+
+    if (planType === "pppoe") {
+      await reconcilePppoeUserAccess(creds, {
+        name: nextName,
+        password: nextPassword,
+        profile: plan.name,
+        comment: nextName,
+        expiresAt: nextExpiry,
+        enabled,
+        remoteAddress: String(updates.ip_address ?? current.ip_address ?? "").trim() || null,
+      });
+    } else if (planType === "hotspot") {
+      await reconcileHotspotUserAccess(creds, {
+        name: nextName,
+        password: nextPassword,
+        profile: profileName(plan),
+        comment: nextName,
+        expiresAt: nextExpiry,
+        enabled,
+        limitBytesTotal,
+        address: address || null,
+        macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
+        rateLimit,
+        sharedUsers: plan.shared_users ?? 1,
+      });
+    }
+    routerSynced = true;
+    syncedRouterId = router.id;
+    syncedRouterName = router.name;
   }
 
   if (nextName && plan) {
@@ -215,6 +238,7 @@ async function reconcileCustomerAccess(
       expiresAt: nextExpiry,
     });
   }
+  return { routerSynced, routerId: syncedRouterId, routerName: syncedRouterName };
 }
 
 /*
@@ -298,8 +322,9 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
     updates.status = Number.isFinite(expiryMs) && expiryMs <= Date.now() ? "expired" : "active";
   }
 
+  let reconciliation: { routerSynced: boolean; routerId: number | null; routerName: string | null };
   try {
-    await reconcileCustomerAccess(current, updates, effectiveAdminId);
+    reconciliation = await reconcileCustomerAccess(current, updates, effectiveAdminId);
   } catch (error) {
     logger.warn({
       customerId: Number(id),
@@ -323,7 +348,7 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   );
   if (!row) { res.status(404).json({ error: "Customer not found" }); return; }
   void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "updated", subject: String(updates.name ?? id), details: updates });
-  res.json(row);
+  res.json({ ...row, mikrotikSynced: reconciliation.routerSynced, syncedRouter: reconciliation.routerName });
 });
 
 /*

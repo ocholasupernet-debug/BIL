@@ -505,6 +505,7 @@ export default function PrepaidUsers() {
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const [actionBusy, setActionBusy] = useState<number | null>(null);
 
   /* Sync state */
@@ -516,6 +517,7 @@ export default function PrepaidUsers() {
 
   async function updateUser(user: Customer, updates: Record<string, unknown>) {
     setActionError("");
+    setActionNotice("");
     setActionBusy(user.id);
     try {
       const response = await fetch(`${API}/api/customers/${user.id}`, {
@@ -523,11 +525,20 @@ export default function PrepaidUsers() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId: ADMIN_ID, ...updates }),
       });
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      const payload = await response.json().catch(() => null) as {
+        error?: string;
+        mikrotikSynced?: boolean;
+        syncedRouter?: string | null;
+      } | null;
       if (!response.ok) {
         throw new Error(payload?.error || "The live router account could not be updated.");
       }
       await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      setActionNotice(
+        payload?.mikrotikSynced
+          ? `Saved and applied to MikroTik${payload.syncedRouter ? ` (${payload.syncedRouter})` : ""}.`
+          : "Saved, but no MikroTik router was updated because this account has no active plan.",
+      );
     } finally {
       setActionBusy(null);
     }
@@ -727,6 +738,12 @@ export default function PrepaidUsers() {
         <div role="alert" style={{ marginBottom: "1rem", padding: "0.7rem 0.9rem", borderRadius: 8, color: "#fca5a5", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.25)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <span>{actionError}</span>
           <button type="button" onClick={() => setActionError("")} style={{ ...iconButton("#f87171"), flexShrink: 0 }} aria-label="Dismiss error"><X size={13} /></button>
+        </div>
+      )}
+      {actionNotice && (
+        <div role="status" style={{ marginBottom: "1rem", padding: "0.7rem 0.9rem", borderRadius: 8, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <span>{actionNotice}</span>
+          <button type="button" onClick={() => setActionNotice("")} style={{ ...iconButton("#16a34a"), flexShrink: 0 }} aria-label="Dismiss update notice"><X size={13} /></button>
         </div>
       )}
       {editingUser && (
