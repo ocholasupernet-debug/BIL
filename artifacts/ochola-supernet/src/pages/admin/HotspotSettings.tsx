@@ -61,6 +61,65 @@ interface HSettings {
   colors: ColorSettings;
 }
 
+type AssignedHotspotPort = {
+  id: number;
+  router_id: number;
+  interface_name: string;
+  bridge_name?: string | null;
+  hotspot_enabled: boolean;
+  hotspot_template_path?: string | null;
+  hotspot_folder_path?: string | null;
+  hotspot_dns_name?: string | null;
+  pppoe_enabled: boolean;
+  pppoe_folder_path?: string | null;
+  pppoe_dns_name?: string | null;
+  subnet_range?: string | null;
+  bandwidth_cap_mbps: number;
+  reseller_bandwidth_cap?: number | null;
+  status: string;
+  provisioning_error?: string | null;
+};
+
+type AssignedHotspotPortDraft = {
+  hotspotEnabled: boolean;
+  hotspotFolderPath: string;
+  hotspotDnsName: string;
+  pppoeEnabled: boolean;
+  pppoeFolderPath: string;
+  pppoeDnsName: string;
+  bridgeName: string;
+  subnetRange: string;
+  bandwidthCapMbps: string;
+};
+
+function adminApiHeaders(): Headers {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  const token = getAdminApiToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  try {
+    const role = localStorage.getItem("ochola_admin_role") || "isp_admin";
+    const tenantId = getSelectedTenantId();
+    if (role === "superadmin" && tenantId) headers.set("X-Impersonated-Admin-Id", String(tenantId));
+  } catch {
+    /* The API still enforces tenant ownership from the signed-in session. */
+  }
+  return headers;
+}
+
+function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspotPortDraft {
+  return {
+    hotspotEnabled: port.hotspot_enabled,
+    hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
+    hotspotDnsName: port.hotspot_dns_name ?? "",
+    pppoeEnabled: port.pppoe_enabled,
+    pppoeFolderPath: port.pppoe_folder_path ?? "",
+    pppoeDnsName: port.pppoe_dns_name ?? "",
+    bridgeName: port.bridge_name ?? "",
+    subnetRange: port.subnet_range ?? "",
+    bandwidthCapMbps: String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps ?? 30),
+  };
+}
+
 const DEFAULT_SETTINGS: HSettings = {
   ispName: "OCHOLASUPERNET",
   freeTrial: "Disable",
@@ -556,6 +615,10 @@ export default function HotspotSettings() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [assignedPorts, setAssignedPorts] = useState<AssignedHotspotPort[]>([]);
+  const [portDrafts, setPortDrafts] = useState<Record<number, AssignedHotspotPortDraft>>({});
+  const [portsLoading, setPortsLoading] = useState(false);
+  const [savingPortId, setSavingPortId] = useState<number | null>(null);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
@@ -574,6 +637,40 @@ export default function HotspotSettings() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
 
+  useEffect(() => {
+    const routerId = Number(settings.routerId);
+    if (!Number.isSafeInteger(routerId) || routerId < 1) {
+      setAssignedPorts([]);
+      setPortDrafts({});
+      return;
+    }
+    let cancelled = false;
+    setPortsLoading(true);
+    fetch(`/api/admin/port-services?routerId=${encodeURIComponent(String(routerId))}`, {
+      headers: adminApiHeaders(),
+      cache: "no-store",
+    })
+      .then(async response => {
+        const data = await response.json() as { ok?: boolean; ports?: AssignedHotspotPort[]; error?: string };
+        if (!response.ok) throw new Error(data.error || "Assigned hotspot ports could not be loaded.");
+        return data.ports ?? [];
+      })
+      .then(ports => {
+        if (cancelled) return;
+        setAssignedPorts(ports);
+        setPortDrafts(Object.fromEntries(ports.map(port => [port.id, draftFromAssignedHotspotPort(port)])));
+      })
+      .catch(error => {
+        if (!cancelled) setNotice({ type: "error", text: error instanceof Error ? error.message : "Assigned hotspot ports could not be loaded." });
+      })
+      .finally(() => {
+        if (!cancelled) setPortsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.routerId]);
+
   const update = <K extends keyof HSettings>(key: K, value: HSettings[K]) => {
     setSettings(previous => ({ ...previous, [key]: value }));
     setNotice(null);
@@ -581,6 +678,47 @@ export default function HotspotSettings() {
   const updateColor = (key: keyof ColorSettings, value: string) => {
     setSettings(previous => ({ ...previous, colors: { ...previous.colors, [key]: value } }));
     setNotice(null);
+  };
+
+  const updateAssignedPort = <K extends keyof AssignedHotspotPortDraft>(portId: number, key: K, value: AssignedHotspotPortDraft[K]) => {
+    setPortDrafts(previous => ({
+      ...previous,
+      [portId]: { ...previous[portId], [key]: value },
+    }));
+    setNotice(null);
+  };
+
+  const saveAssignedPort = async (port: AssignedHotspotPort) => {
+    const draft = portDrafts[port.id];
+    if (!draft) return;
+    setSavingPortId(port.id);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/admin/port-services/${port.id}`, {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({
+          hotspotEnabled: draft.hotspotEnabled,
+          hotspotFolderPath: draft.hotspotFolderPath,
+          hotspotDnsName: draft.hotspotDnsName,
+          pppoeEnabled: draft.pppoeEnabled,
+          pppoeFolderPath: draft.pppoeFolderPath,
+          pppoeDnsName: draft.pppoeDnsName,
+          bridgeName: draft.bridgeName,
+          subnetRange: draft.subnetRange,
+          bandwidthCapMbps: Number(draft.bandwidthCapMbps),
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; port?: AssignedHotspotPort; error?: string };
+      if (!response.ok || !data.port) throw new Error(data.error || "The assigned hotspot port could not be saved.");
+      setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
+      setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
+      setNotice({ type: "success", text: `${port.interface_name} hotspot settings saved. Deploy the port from Multiport to apply RouterOS changes.` });
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
+    } finally {
+      setSavingPortId(null);
+    }
   };
 
   const handleFile = (key: "logoUrl" | "advertUrl", file: File) => {
@@ -939,6 +1077,76 @@ export default function HotspotSettings() {
               <Field label="Logo" help="PNG, JPG, or WebP. The file is embedded in the exported HTML.">
                 <FilePicker label="Choose logo" value={settings.logoUrl} accept=".png,.jpg,.jpeg,.webp" onSelect={file => handleFile("logoUrl", file)} />
               </Field>
+            </Section>
+
+            <Section icon={<Wifi size={16} />} title="Assigned hotspot ports" description="View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22.">
+              {!settings.routerId ? (
+                <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
+              ) : portsLoading ? (
+                <div className="hs-status hs-status-info"><Loader2 size={15} className="animate-spin" /> Loading assigned ports…</div>
+              ) : assignedPorts.length === 0 ? (
+                <div className="hs-status hs-status-info"><Info size={15} /> No physical port services are assigned to this router yet. Use Multiport to assign one.</div>
+              ) : (
+                <div style={{ display: "grid", gap: 14, padding: "14px 0 8px" }}>
+                  {assignedPorts.map(port => {
+                    const draft = portDrafts[port.id];
+                    if (!draft) return null;
+                    const statusColor = port.status === "active" || port.status === "completed"
+                      ? "#86efac"
+                      : port.status === "failed" || port.status === "error"
+                        ? "#fca5a5"
+                        : "#fcd34d";
+                    return (
+                      <div key={port.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 11, padding: 14, background: "var(--isp-input-bg)" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                          <div>
+                            <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".82rem" }}>{port.interface_name}</div>
+                            <div style={{ color: "var(--isp-text-sub)", fontSize: ".67rem", marginTop: 3 }}>Port service #{port.id}{draft.pppoeEnabled ? " · PPPoE enabled" : ""}</div>
+                          </div>
+                          <span style={{ color: statusColor, fontSize: ".68rem", fontWeight: 800, textTransform: "capitalize" }}>{port.status}</span>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 10 }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-text)", fontSize: ".75rem", fontWeight: 700 }}>
+                            <input type="checkbox" checked={draft.hotspotEnabled} onChange={event => updateAssignedPort(port.id, "hotspotEnabled", event.target.checked)} />
+                            Hotspot portal enabled
+                          </label>
+                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                            Portal DNS name
+                            <input className="hs-input" value={draft.hotspotDnsName} onChange={event => updateAssignedPort(port.id, "hotspotDnsName", event.target.value)} placeholder="hotspot.example.com" />
+                          </label>
+                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                            Hotspot asset path
+                            <input className="hs-input" value={draft.hotspotFolderPath} onChange={event => updateAssignedPort(port.id, "hotspotFolderPath", event.target.value)} placeholder="login.html" />
+                          </label>
+                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                            Service bridge
+                            <input className="hs-input" value={draft.bridgeName} onChange={event => updateAssignedPort(port.id, "bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
+                          </label>
+                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                            Private service subnet
+                            <input className="hs-input" value={draft.subnetRange} onChange={event => updateAssignedPort(port.id, "subnetRange", event.target.value)} placeholder="192.168.180.0/24" />
+                          </label>
+                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                            Bandwidth cap (Mbps)
+                            <input className="hs-input" type="number" min="1" max="100000" value={draft.bandwidthCapMbps} onChange={event => updateAssignedPort(port.id, "bandwidthCapMbps", event.target.value)} />
+                          </label>
+                        </div>
+                        {port.provisioning_error && (
+                          <div className="hs-status hs-status-error" style={{ marginTop: 11 }}>
+                            <AlertCircle size={14} /> <span>{port.provisioning_error}</span>
+                          </div>
+                        )}
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                          <button type="button" className="hs-btn hs-btn-primary" onClick={() => void saveAssignedPort(port)} disabled={savingPortId === port.id}>
+                            {savingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            {savingPortId === port.id ? "Saving…" : "Save port changes"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </Section>
 
             <Section icon={<Palette size={16} />} title="Visual system" description="Use a consistent palette across plans, checkout, forms, and support content.">

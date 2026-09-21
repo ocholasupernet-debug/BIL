@@ -90,8 +90,8 @@ type PortServiceNetwork = {
 
 function portServiceNetwork(port: PortServiceRow, resources: PortServiceResourceNames): PortServiceNetwork {
   const bridgeName = resources.bridgeName;
-  const fallbackOctet = (port.id % 200) + 1;
-  const rawNetwork = port.subnet_range?.trim() || `10.250.${fallbackOctet}.0/24`;
+  const fallbackOctet = 180 + ((Math.max(1, port.id) - 1) % 4);
+  const rawNetwork = port.subnet_range?.trim() || `192.168.${fallbackOctet}.0/24`;
   const [rawAddress, rawPrefix] = rawNetwork.split("/");
   const octets = rawAddress?.split(".").map(Number) ?? [];
   const prefix = Number(rawPrefix);
@@ -157,14 +157,21 @@ async function resourceIdentityForPort(port: Pick<PortServiceRow, "admin_id" | "
 function nextAvailableSubnet(rows: Array<{ subnet_range: string | null }>): string {
   const used = new Set(
     rows
-      .map((row) => row.subnet_range?.match(/^10\.250\.(\d+)\.0\/24$/)?.[1])
+      .map((row) => row.subnet_range?.match(/^192\.168\.(18[0-3])\.0\/24$/)?.[1])
       .filter((octet): octet is string => Boolean(octet))
       .map(Number),
   );
-  for (let octet = 1; octet <= 254; octet += 1) {
-    if (!used.has(octet)) return `10.250.${octet}.0/24`;
+  for (let octet = 180; octet <= 183; octet += 1) {
+    if (!used.has(octet)) return `192.168.${octet}.0/24`;
   }
-  throw new Error("No isolated private /24 network remains for this router.");
+  throw new Error("No isolated /24 network remains inside 192.168.180.0/22 for this router.");
+}
+
+function savedSubnetConflict(
+  rows: Array<{ subnet_range: string | null }>,
+  requested: string | null,
+): boolean {
+  return Boolean(requested) && rows.some((row) => row.subnet_range?.trim() === requested);
 }
 
 type PortDnsRow = {
@@ -534,6 +541,10 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       "isp_reseller_ports",
       `admin_id=eq.${tenantId}&router_id=eq.${routerId}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
     );
+    if (savedSubnetConflict(existingPorts, subnetRange)) {
+      res.status(409).json({ ok: false, error: "That service subnet is already assigned to another active port on this router." });
+      return;
+    }
     const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
     const defaultDnsName = nextAvailableCompanyDns(defaultResources.defaultDnsName, existingPorts);
     const sharedDnsName = requestedHotspotDnsName ?? requestedPppoeDnsName ?? defaultDnsName;
@@ -596,14 +607,14 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const subnetRange = req.body?.subnetRange === undefined
       ? port.subnet_range
       : normalizeSubnet(req.body.subnetRange);
-    const needsDefaultDns = (hotspotEnabled && !requestedHotspotDnsName)
-      || (pppoeEnabled && !requestedPppoeDnsName);
-    const existingPorts = !subnetRange || needsDefaultDns
-      ? await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
-        "isp_reseller_ports",
-        `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
-      )
-      : [];
+    const existingPorts = await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
+    );
+    if (savedSubnetConflict(existingPorts, subnetRange)) {
+      res.status(409).json({ ok: false, error: "That service subnet is already assigned to another active port on this router." });
+      return;
+    }
     const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
     const defaultDnsName = nextAvailableCompanyDns(defaultResources.defaultDnsName, existingPorts);
     const sharedDnsName = requestedHotspotDnsName ?? requestedPppoeDnsName ?? defaultDnsName;
