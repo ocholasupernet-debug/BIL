@@ -9,6 +9,7 @@ import {
   Rocket,
   Save,
   ShieldCheck,
+  Unlink2,
   Wifi,
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
@@ -210,6 +211,7 @@ export default function Multiport() {
   const [portsLoading, setPortsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [unassigning, setUnassigning] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -382,6 +384,30 @@ export default function Multiport() {
     }
   };
 
+  const unassign = async () => {
+    if (!selectedAssignment) {
+      setError("Choose an assigned port before unassigning it.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Unassign ${selectedAssignment.interface_name}? This will remove its isolated RouterOS services, firewall/NAT rules, queues, bridge, portal files, and database assignment. Shared router services are not changed.`,
+    );
+    if (!confirmed) return;
+    setError("");
+    setSuccess("");
+    setUnassigning(true);
+    try {
+      await apiJson(`/api/admin/port-services/${selectedAssignment.id}`, { method: "DELETE" });
+      setSelectedPortKey("");
+      setSuccess(`${selectedAssignment.interface_name} was unassigned and its RouterOS resources were removed.`);
+      await loadPorts(routerId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The port could not be unassigned.");
+    } finally {
+      setUnassigning(false);
+    }
+  };
+
   return (
     <AdminLayout>
       <div style={{ maxWidth: 1200, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -502,12 +528,17 @@ export default function Multiport() {
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button type="submit" disabled={saving || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <button type="submit" disabled={saving || unassigning || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} {saving ? "Saving…" : selectedAssignment ? "Save configuration" : "Assign & save port"}
                 </button>
-                <button type="button" onClick={() => void deploy()} disabled={deploying || saving || !selectedAssignment} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "var(--isp-text)", background: "transparent", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <button type="button" onClick={() => void deploy()} disabled={deploying || saving || unassigning || !selectedAssignment} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "var(--isp-text)", background: "transparent", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {deploying ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} {deploying ? "Deploying…" : "Deploy to router"}
                 </button>
+                {selectedAssignment ? (
+                  <button type="button" onClick={() => void unassign()} disabled={saving || deploying || unassigning} style={{ border: "1px solid rgba(220,38,38,.35)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#b91c1c", background: "rgba(220,38,38,.06)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    {unassigning ? <Loader2 size={16} className="animate-spin" /> : <Unlink2 size={16} />} {unassigning ? "Unassigning…" : "Unassign port"}
+                  </button>
+                ) : null}
               </div>
             </form>
 

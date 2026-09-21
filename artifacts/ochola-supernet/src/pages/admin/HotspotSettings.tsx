@@ -14,7 +14,7 @@ import { installHotspotFiles } from "@/lib/router-hotspot-files";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
-  Save, ShieldCheck, Smartphone, Sparkles, Upload, Wifi, X,
+  Save, ShieldCheck, Smartphone, Sparkles, Trash2, Upload, Wifi, X,
 } from "lucide-react";
 
 const ADMIN_ID = getSelectedTenantId() ?? AUTH_ADMIN_ID;
@@ -619,6 +619,7 @@ export default function HotspotSettings() {
   const [portDrafts, setPortDrafts] = useState<Record<number, AssignedHotspotPortDraft>>({});
   const [portsLoading, setPortsLoading] = useState(false);
   const [savingPortId, setSavingPortId] = useState<number | null>(null);
+  const [deletingPortId, setDeletingPortId] = useState<number | null>(null);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
@@ -718,6 +719,34 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
     } finally {
       setSavingPortId(null);
+    }
+  };
+
+  const deleteAssignedPort = async (port: AssignedHotspotPort) => {
+    const confirmed = window.confirm(
+      `Delete the ${port.interface_name} assignment? This will remove its isolated RouterOS services, firewall/NAT rules, queues, bridge, portal files, and database assignment. Shared router services are not changed.`,
+    );
+    if (!confirmed) return;
+    setDeletingPortId(port.id);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/admin/port-services/${port.id}`, {
+        method: "DELETE",
+        headers: adminApiHeaders(),
+      });
+      const data = await response.json() as { ok?: boolean; interfaceName?: string; error?: string };
+      if (!response.ok) throw new Error(data.error || "The assigned hotspot port could not be deleted.");
+      setAssignedPorts(previous => previous.filter(item => item.id !== port.id));
+      setPortDrafts(previous => {
+        const next = { ...previous };
+        delete next[port.id];
+        return next;
+      });
+      setNotice({ type: "success", text: `${data.interfaceName || port.interface_name} was deleted and its RouterOS resources were removed.` });
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be deleted." });
+    } finally {
+      setDeletingPortId(null);
     }
   };
 
@@ -1136,10 +1165,14 @@ export default function HotspotSettings() {
                             <AlertCircle size={14} /> <span>{port.provisioning_error}</span>
                           </div>
                         )}
-                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                          <button type="button" className="hs-btn hs-btn-primary" onClick={() => void saveAssignedPort(port)} disabled={savingPortId === port.id}>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, flexWrap: "wrap", marginTop: 12 }}>
+                          <button type="button" className="hs-btn hs-btn-primary" onClick={() => void saveAssignedPort(port)} disabled={savingPortId === port.id || deletingPortId === port.id}>
                             {savingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                             {savingPortId === port.id ? "Saving…" : "Save port changes"}
+                          </button>
+                          <button type="button" className="hs-btn" onClick={() => void deleteAssignedPort(port)} disabled={savingPortId === port.id || deletingPortId === port.id} style={{ color: "#b91c1c", borderColor: "rgba(220,38,38,.35)", background: "rgba(220,38,38,.06)" }}>
+                            {deletingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            {deletingPortId === port.id ? "Deleting…" : "Delete assignment"}
                           </button>
                         </div>
                       </div>
