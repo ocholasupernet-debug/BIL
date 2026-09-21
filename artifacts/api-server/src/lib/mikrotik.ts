@@ -18,6 +18,13 @@ import {
   routerOsTextVariableWriter,
 } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
+import {
+  legacySharedHotspotResourceNames,
+  SHARED_HOTSPOT_POOL_NAME,
+  SHARED_HOTSPOT_PROFILE_NAME,
+  SHARED_HOTSPOT_SERVER_NAME,
+} from "./shared-hotspot-resources.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -173,6 +180,64 @@ export interface PortProbeResult {
   error?: string;
   /** Human-readable diagnosis — NAT, firewall, refused, DNS, etc. */
   diagnosis?: string;
+}
+
+export type RouterConnectionFailureProfile =
+  | "tcp_timeout"
+  | "bad_credentials"
+  | "offline_vpn_tunnel"
+  | "unknown";
+
+export function classifyRouterConnectionFailure(error: unknown): {
+  profile: RouterConnectionFailureProfile;
+  summary: string;
+  message: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("login failed")
+    || lower.includes("authentication")
+    || lower.includes("bad credentials")
+    || lower.includes("invalid user")
+    || lower.includes("invalid password")
+    || lower.includes("not authorized")
+  ) {
+    return {
+      profile: "bad_credentials",
+      summary: "Bad Credentials handshake",
+      message,
+    };
+  }
+  if (
+    lower.includes("management api forward failed")
+    || lower.includes("openvpn")
+    || lower.includes("tunnel is offline")
+  ) {
+    return {
+      profile: "offline_vpn_tunnel",
+      summary: "Offline VPN tunnel container state",
+      message,
+    };
+  }
+  if (
+    lower.includes("timed out")
+    || lower.includes("timeout")
+    || lower.includes("etimedout")
+    || lower.includes("ehostunreach")
+    || lower.includes("enetunreach")
+    || lower.includes("econnrefused")
+    || lower.includes("not reachable")
+    || lower.includes("port 8728")
+  ) {
+    return {
+      profile: "tcp_timeout",
+      summary: "TCP Timeout (Port 8728 blocked/unreachable)",
+      message,
+    };
+  }
+  return { profile: "unknown", summary: "Unknown RouterOS connection failure", message };
 }
 
 /**
@@ -479,13 +544,14 @@ export async function disableGeneratedHotspot(
   creds: RouterCredentials,
   routerId: number,
 ): Promise<{ name: string; alreadyDisabled: boolean }> {
-  const name = `ochola-services-${routerId}-hotspot`;
+  const legacy = legacySharedHotspotResourceNames(routerId);
   const rows = await runRouterCommand(creds, [
     "/ip/hotspot/print",
     "=.proplist=.id,name,disabled",
-    `?name=${name}`,
   ]);
-  const server = (Array.isArray(rows) ? rows : []).find(row => row.name === name);
+  const server = (Array.isArray(rows) ? rows : []).find(row => row.name === SHARED_HOTSPOT_SERVER_NAME)
+    ?? (Array.isArray(rows) ? rows : []).find(row => row.name === legacy.serverName);
+  const name = server?.name ?? SHARED_HOTSPOT_SERVER_NAME;
   if (!server?.[".id"]) {
     throw new Error(`Generated Hotspot server "${name}" was not found on the router.`);
   }
@@ -510,9 +576,10 @@ export async function reconcileGeneratedServiceConfiguration(
   routerId: number,
 ): Promise<{ bridgeName: string; hotspotNetwork: string; pppoeInterface: string }> {
   const tag = `ochola-services-${routerId}`;
-  const hotspotName = `${tag}-hotspot`;
-  const hotspotPool = `${tag}-hotspot-pool`;
-  const hotspotProfile = "hprofile";
+  const hotspotName = SHARED_HOTSPOT_SERVER_NAME;
+  const hotspotPool = SHARED_HOTSPOT_POOL_NAME;
+  const hotspotProfile = SHARED_HOTSPOT_PROFILE_NAME;
+  const legacy = legacySharedHotspotResourceNames(routerId);
   const dhcpServer = `${tag}-dhcp`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
@@ -526,10 +593,22 @@ export async function reconcileGeneratedServiceConfiguration(
   const hotspotRows = await runRouterCommand(creds, [
     "/ip/hotspot/print",
     "=.proplist=.id,name,interface,disabled",
-    `?name=${hotspotName}`,
   ]);
   const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : [])
-    .find(row => row.name === hotspotName);
+    .find(row => row.name === hotspotName)
+    ?? (Array.isArray(hotspotRows) ? hotspotRows : []).find(row => row.name === legacy.serverName);
+  if (hotspot?.name === legacy.serverName && hotspot[".id"]) {
+    const canonicalServer = (Array.isArray(hotspotRows) ? hotspotRows : [])
+      .find(row => row.name === hotspotName);
+    if (!canonicalServer) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/set",
+        `=.id=${hotspot[".id"]}`,
+        `=name=${hotspotName}`,
+      ]);
+      hotspot.name = hotspotName;
+    }
+  }
   const bridgeName = String(hotspot?.interface || "hotspot-bridge").trim();
   if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
     throw new Error("The generated Hotspot has no valid bridge interface.");
@@ -573,9 +652,20 @@ export async function reconcileGeneratedServiceConfiguration(
   const poolRows = await runRouterCommand(creds, [
     "/ip/pool/print",
     "=.proplist=.id,name",
-    `?name=${hotspotPool}`,
   ]);
-  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool)
+    ?? (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === legacy.poolName);
+  if (pool?.name === legacy.poolName && pool[".id"]) {
+    const canonicalPool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool);
+    if (!canonicalPool) {
+      await runRouterCommand(creds, [
+        "/ip/pool/set",
+        `=.id=${pool[".id"]}`,
+        `=name=${hotspotPool}`,
+      ]);
+      pool.name = hotspotPool;
+    }
+  }
   if (pool?.[".id"]) {
     await runRouterCommand(creds, [
       "/ip/pool/set",
@@ -635,9 +725,20 @@ export async function reconcileGeneratedServiceConfiguration(
   const profileRows = await runRouterCommand(creds, [
     "/ip/hotspot/profile/print",
     "=.proplist=.id,name",
-    `?name=${hotspotProfile}`,
   ]);
-  const profile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile);
+  const profile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile)
+    ?? (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === "hprofile");
+  if (profile?.name === "hprofile" && profile[".id"]) {
+    const canonicalProfile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile);
+    if (!canonicalProfile) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/profile/set",
+        `=.id=${profile[".id"]}`,
+        `=name=${hotspotProfile}`,
+      ]);
+      profile.name = hotspotProfile;
+    }
+  }
   const profileFields = [
     `=hotspot-address=${hotspotGateway}`,
     "=html-directory=hotspot",
@@ -979,7 +1080,9 @@ export async function syncHotspotPortalHostname(
       ]),
       timeoutMs,
     ) as Record<string, string>[];
-    const hotspotServer = hotspotServers.find(row => row.disabled !== "true")?.name ?? "";
+    const hotspotServer = hotspotServers.find(row => row.name === SHARED_HOTSPOT_SERVER_NAME && row.disabled !== "true")?.name
+      ?? hotspotServers.find(row => row.disabled !== "true")?.name
+      ?? "";
     if (!hotspotServer) throw new Error("The router has no enabled hotspot server.");
 
     const walledGardenRows = await withTimeout(
@@ -989,27 +1092,36 @@ export async function syncHotspotPortalHostname(
       ]),
       timeoutMs,
     ) as Record<string, string>[];
-    for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
-      if (
-        row["dst-host"]?.toLowerCase() === hostname.toLowerCase()
-        && row.server === hotspotServer
-        && row[".id"]
-      ) {
-        await withTimeout(
-          conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
-          timeoutMs,
-        );
+    const allowedHostnames = Array.from(new Set([
+      hostname.trim().toLowerCase(),
+      ...PAYMENT_WALLED_GARDEN_HOSTNAMES,
+    ]));
+    for (const allowedHostname of allowedHostnames) {
+      for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
+        if (
+          row["dst-host"]?.toLowerCase() === allowedHostname
+          && row.server === hotspotServer
+          && row[".id"]
+        ) {
+          await withTimeout(
+            conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
+            timeoutMs,
+          );
+        }
       }
+      await withTimeout(
+        conn.write([
+          "/ip/hotspot/walled-garden/ip/add",
+          `=server=${hotspotServer}`,
+          `=dst-host=${allowedHostname}`,
+          "=action=accept",
+          `=comment=${allowedHostname === hostname.trim().toLowerCase()
+            ? `tenant portal ${hostname}`
+            : `payment walled garden ${allowedHostname}`}`,
+        ]),
+        timeoutMs,
+      );
     }
-    await withTimeout(
-      conn.write([
-        "/ip/hotspot/walled-garden/ip/add",
-        `=server=${hotspotServer}`,
-        `=dst-host=${hostname}`,
-        "=action=accept",
-      ]),
-      timeoutMs,
-    );
     return { hostname, hotspotAddress, hotspotServer, connectedHost };
   });
 }
@@ -4858,6 +4970,8 @@ export interface RouterServiceSetupOptions {
   maxPortSpeedMbps?: number;
   /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
   portalHostnames?: string[];
+  /** Payment provider hostnames that unauthenticated Hotspot clients must reach. */
+  paymentHostnames?: string[];
   /** One-time HTTPS sources for the default RouterOS Hotspot files. */
   portalFileUrls?: {
     login: string;
@@ -4897,11 +5011,16 @@ export function generateServiceSetupScript(
   const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
-  const hotspotPool = `${tag}-hotspot-pool`;
+  const paymentHostnames = Array.from(new Set((options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
+    .map(host => String(host).trim().toLowerCase())
+    .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))
+    .filter(host => !portalHostnames.includes(host))));
+  const hotspotPool = SHARED_HOTSPOT_POOL_NAME;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
-  const hotspotProfile = "hprofile";
-  const hotspotServer = `${tag}-hotspot`;
+  const hotspotProfile = SHARED_HOTSPOT_PROFILE_NAME;
+  const hotspotServer = SHARED_HOTSPOT_SERVER_NAME;
+  const legacyHotspot = legacySharedHotspotResourceNames(routerTag);
   const dhcpServer = `${tag}-dhcp`;
   const hotspotGateway = "192.168.180.1";
   const hotspotNetwork = "192.168.180.0/22";
@@ -4930,9 +5049,19 @@ export function generateServiceSetupScript(
     }
 }`).join("\n");
 
-  const walledGardenSetup = portalHostnames.length > 0
-    ? portalHostnames.map(hostname => `:do {
-    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(`${tag} walled garden ${hostname}`)}
+  const walledGardenEntries = [
+    ...portalHostnames.map(hostname => ({
+      hostname,
+      comment: `${tag} walled garden ${hostname}`,
+    })),
+    ...paymentHostnames.map(hostname => ({
+      hostname,
+      comment: `${tag} payment walled garden ${hostname}`,
+    })),
+  ];
+  const walledGardenSetup = walledGardenEntries.length > 0
+    ? walledGardenEntries.map(({ hostname, comment }) => `:do {
+    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(comment)}
 } on-error={
     :set serviceError ("${tag}: could not add walled-garden host ${hostname}: " . $error)
     :error $serviceError
@@ -4964,7 +5093,7 @@ export function generateServiceSetupScript(
 # This file owns only OcholaSupernet-tagged service resources:
 #   - service bridge and selected physical ports
  #   - Hotspot gateway, DHCP, pool, profile, and server
-#   - Hotspot walled garden for the portal/API hostname
+ #   - Hotspot walled garden for the portal/API and payment hostnames
 #   - PPPoE gateway, pool, profile, and server
 #   - customer NAT rules for both service networks
 # Existing foreign bridge memberships and unowned resources are preserved.
@@ -5080,6 +5209,24 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 4/7 - Hotspot DHCP, profile, and server starting."
 :do {
+    # Migrate the previous router-scoped names before applying the canonical
+    # shared service names. Only rename a legacy resource when its canonical
+    # name is not already occupied.
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+        :if ([:len [/ip pool find where name=${routerOsString(legacyHotspot.poolName)}]] > 0) do={
+            /ip pool set [find where name=${routerOsString(legacyHotspot.poolName)}] name=${routerOsString(hotspotPool)}
+        }
+    }
+    :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
+        :if ([:len [/ip hotspot profile find where name="hprofile"]] > 0) do={
+            /ip hotspot profile set [find where name="hprofile"] name=${routerOsString(hotspotProfile)}
+        }
+    }
+    :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
+        :if ([:len [/ip hotspot find where name=${routerOsString(legacyHotspot.serverName)}]] > 0) do={
+            /ip hotspot set [find where name=${routerOsString(legacyHotspot.serverName)}] name=${routerOsString(hotspotServer)}
+        }
+    }
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
         /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
     }
@@ -5121,6 +5268,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :do {
     /ip hotspot walled-garden ip
     :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
+    :do { remove [find where comment~${routerOsString(`${tag} payment walled garden `)}] } on-error={}
     ${walledGardenSetup}
 } on-error={
     :set serviceStepFailed true
