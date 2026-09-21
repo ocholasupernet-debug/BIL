@@ -3,7 +3,7 @@ import { Router, type IRouter, type Request } from "express";
 import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
-import { sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
+import { sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
@@ -46,9 +46,35 @@ function cleanPath(value: unknown): string | null {
   return clean;
 }
 
+function validInterface(value: unknown): value is string {
+  return typeof value === "string"
+    && /^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(value.trim())
+    && value.trim().length <= 64;
+}
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 48) || fallback;
+}
+
+function normalizeSubnet(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return null;
+  const [rawAddress, rawPrefix] = raw.split("/");
+  const octets = rawAddress?.split(".").map(Number) ?? [];
+  const privateNetwork = octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168);
+  if (
+    !privateNetwork
+    || octets.length !== 4
+    || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+    || Number(rawPrefix) !== 24
+    || octets[3] !== 0
+  ) {
+    return null;
+  }
+  return `${octets[0]}.${octets[1]}.${octets[2]}.0/24`;
 }
 
 type PortServiceNetwork = {
@@ -318,6 +344,91 @@ router.get("/admin/port-services", requireAdmin(), async (req, res): Promise<voi
   }
 });
 
+router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await authenticatedAccount(req);
+    const tenantId = await authenticatedTenantAdminId(req);
+    if (!account || !tenantId || account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the signed-in ISP administrator can assign multiport services." });
+      return;
+    }
+    const routerId = Number(req.body?.routerId);
+    const interfaceName = typeof req.body?.interfaceName === "string" ? req.body.interfaceName.trim() : "";
+    const cap = Number(req.body?.bandwidthCapMbps);
+    if (!Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(interfaceName)) {
+      res.status(400).json({ ok: false, error: "Choose a router and a valid physical interface." });
+      return;
+    }
+    if (!Number.isFinite(cap) || cap <= 0 || cap > 100000) {
+      res.status(400).json({ ok: false, error: "Bandwidth must be between 1 and 100,000 Mbps." });
+      return;
+    }
+    const subnetRange = normalizeSubnet(req.body?.subnetRange);
+    if (req.body?.subnetRange && !subnetRange) {
+      res.status(400).json({ ok: false, error: "The service subnet must be a private network ending in .0/24." });
+      return;
+    }
+    const routerRows = await sbSelectStrict<{ id: number }>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+    );
+    if (!routerRows[0]) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    const conflicts = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `router_id=eq.${routerId}&interface_name=eq.${encodeURIComponent(interfaceName)}&status=neq.disabled&select=id&limit=1`,
+    );
+    if (conflicts[0]) {
+      res.status(409).json({ ok: false, error: "That physical port is already assigned." });
+      return;
+    }
+    const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
+    const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const hotspotEnabled = req.body?.hotspotEnabled === true;
+    const pppoeEnabled = req.body?.pppoeEnabled === true;
+    if (hotspotEnabled && !hotspotFolderPath) {
+      res.status(400).json({ ok: false, error: "Select an approved Hotspot asset before enabling the Hotspot portal." });
+      return;
+    }
+    if (pppoeEnabled && !pppoeFolderPath) {
+      res.status(400).json({ ok: false, error: "Select an approved PPPoE landing asset before enabling the PPPoE landing page." });
+      return;
+    }
+    const bridgeName = safeSegment(
+      typeof req.body?.bridgeName === "string" && req.body.bridgeName.trim()
+        ? req.body.bridgeName.trim()
+        : `ochola-port-${interfaceName}`,
+      `ochola-port-${interfaceName}`,
+    );
+    const inserted = await sbInsertStrict<PortServiceRow>("isp_reseller_ports", {
+      admin_id: tenantId,
+      // The legacy schema requires reseller_id. For ISP-owned multiport services
+      // the tenant is the owner and assigned_reseller_id remains null.
+      reseller_id: tenantId,
+      assigned_reseller_id: null,
+      router_id: routerId,
+      interface_name: interfaceName,
+      bridge_name: bridgeName,
+      hotspot_enabled: hotspotEnabled,
+      hotspot_template_path: hotspotFolderPath,
+      hotspot_folder_path: hotspotFolderPath,
+      pppoe_enabled: pppoeEnabled,
+      pppoe_folder_path: pppoeFolderPath,
+      subnet_range: subnetRange,
+      bandwidth_cap_mbps: Math.round(cap),
+      reseller_bandwidth_cap: Math.round(cap),
+      status: "pending",
+      provisioning_error: null,
+      updated_at: new Date().toISOString(),
+    });
+    res.status(201).json({ ok: true, port: inserted[0] ?? null });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the physical port." });
+  }
+});
+
 router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
   try {
     const port = portFromLocals(res);
@@ -325,6 +436,23 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
+    const bandwidth = req.body?.bandwidthCapMbps === undefined
+      ? Number(port.bandwidth_cap_mbps)
+      : Number(req.body.bandwidthCapMbps);
+    const subnetRange = req.body?.subnetRange === undefined
+      ? port.subnet_range
+      : normalizeSubnet(req.body.subnetRange);
+    const bridgeName = req.body?.bridgeName === undefined
+      ? port.bridge_name
+      : safeSegment(String(req.body.bridgeName ?? "").trim(), `ochola-port-${port.id}`);
+    if (!Number.isFinite(bandwidth) || bandwidth <= 0 || bandwidth > 100000) {
+      res.status(400).json({ ok: false, error: "Bandwidth must be between 1 and 100,000 Mbps." });
+      return;
+    }
+    if (req.body?.subnetRange && !subnetRange) {
+      res.status(400).json({ ok: false, error: "The service subnet must be a private network ending in .0/24." });
+      return;
+    }
     if (hotspotEnabled && !hotspotFolderPath) {
       res.status(400).json({ ok: false, error: "Select an approved Hotspot asset before enabling the Hotspot portal." });
       return;
@@ -342,6 +470,10 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
         hotspot_template_path: hotspotFolderPath,
         pppoe_enabled: pppoeEnabled,
         pppoe_folder_path: pppoeFolderPath,
+        bridge_name: bridgeName,
+        subnet_range: subnetRange,
+        bandwidth_cap_mbps: Math.round(bandwidth),
+        reseller_bandwidth_cap: Math.round(bandwidth),
         updated_at: new Date().toISOString(),
       },
     );
