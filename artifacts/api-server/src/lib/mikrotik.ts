@@ -2022,13 +2022,7 @@ export async function reconcileHotspotUserAccess(
     ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
   };
 
-  if (opts.rateLimit !== undefined) {
-    await ensureHotspotUserProfile(creds, {
-      name: opts.profile,
-      sharedUsers: opts.sharedUsers ?? 1,
-      rateLimit: opts.rateLimit,
-    });
-  }
+  await requireHotspotUserProfile(creds, opts.profile);
 
   try {
     await updateHotspotUser(creds, opts.name, fields);
@@ -2548,6 +2542,31 @@ export async function ensureHotspotUserProfile(
       });
     }
   }
+}
+
+/**
+ * Paid-user provisioning must not invent a RouterOS profile. Profiles are
+ * created and maintained only by the explicit admin plan-sync operation.
+ */
+export async function requireHotspotUserProfile(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  const normalizedName = name.trim();
+  if (!normalizedName) throw new Error("The hotspot plan has no RouterOS profile name");
+  await withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/profile/print", `?name=${normalizedName}`]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(rows) || !rows.some(row => row[".id"])) {
+      throw new Error(
+        `Hotspot plan profile '${normalizedName}' does not exist on this router. ` +
+        "Sync the created plan before provisioning paid users.",
+      );
+    }
+  });
 }
 
 export async function updateHotspotUserProfile(

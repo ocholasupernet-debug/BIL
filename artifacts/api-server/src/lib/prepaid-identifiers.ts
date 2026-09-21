@@ -46,6 +46,15 @@ export function isPrepaidHotspotUsername(value: unknown): boolean {
   return typeof value === "string" && /^\d{9,15}-(?:[A-Z0-9]{2}:[A-Z0-9]{2}(?:-[a-zA-Z0-9_-]+)?|[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?)$/i.test(value.trim());
 }
 
+/**
+ * The admin plan sync uses the normalized plan name as the RouterOS hotspot
+ * user profile. Paid-user provisioning must reference that existing profile
+ * instead of inventing an ID-based profile.
+ */
+export function hotspotPlanProfileName(planName: unknown): string {
+  return String(planName ?? "").trim().replace(/\s+/g, "-").toLowerCase();
+}
+
 export function routerRateLimit(
   speedDown: unknown,
   speedUp: unknown,

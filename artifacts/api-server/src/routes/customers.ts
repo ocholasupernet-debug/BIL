@@ -20,7 +20,7 @@ import {
   removePPPSecretByName,
 } from "../lib/mikrotik.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
-import { isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import { hotspotPlanProfileName, isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 
@@ -74,10 +74,6 @@ function asOptionalIso(value: unknown): string | null | undefined {
   const parsed = new Date(String(value));
   if (Number.isNaN(parsed.getTime())) throw new Error("expiryDate must be a valid date and time");
   return parsed.toISOString();
-}
-
-function profileName(plan: PlanRow): string {
-  return `ochola-plan-${plan.id}`;
 }
 
 function isManagementVpnIp(ip: string | null | undefined): boolean {
@@ -205,7 +201,7 @@ async function reconcileCustomerAccess(
       await reconcileHotspotUserAccess(creds, {
         name: nextName,
         password: nextPassword,
-        profile: profileName(plan),
+        profile: hotspotPlanProfileName(plan.name),
         comment: nextName,
         expiresAt: nextExpiry,
         enabled,

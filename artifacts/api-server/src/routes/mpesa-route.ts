@@ -20,7 +20,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
   addHotspotIpBinding,
   addHotspotUser,
-  ensureHotspotUserProfile,
+  requireHotspotUserProfile,
   ensureHotspotServerAddressPool,
   resolveHotspotClientMac,
   connectHotspotUser,
@@ -34,7 +34,7 @@ import {
   classifyRouterConnectionFailure,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
-import { prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { planValiditySeconds } from "../lib/plan-validity.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
@@ -1747,21 +1747,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
 
   try {
-    const hotspotProfile = `ochola-plan-${plan.id}`;
+    const hotspotProfile = hotspotPlanProfileName(plan.name);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
-    let effectiveProfile = hotspotProfile;
-    try {
-      await ensureHotspotUserProfile(credentials, {
-        name: hotspotProfile,
-        sharedUsers: 1,
-        rateLimit,
-      });
-    } catch (error) {
-      /* The built-in default profile still permits credential login if a
-         tenant-specific profile cannot be created on this RouterOS version. */
-      effectiveProfile = "default";
-      logger.warn({ err: error, router: routerRow.name, profile: hotspotProfile }, "[mpesa/hotspot-mac-access] plan profile unavailable; using default profile");
-    }
+    await requireHotspotUserProfile(credentials, hotspotProfile);
     if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
       await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
       await removeHotspotUser(credentials, reusableCustomer.username).catch(() => {});
@@ -1769,7 +1757,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     try {
       await updateHotspotUser(credentials, hotspotUsername, {
         password: hotspotPassword,
-        profile: effectiveProfile,
+        profile: hotspotProfile,
         disabled: false,
         comment: hotspotUsername,
         server: hotspotServer,
@@ -1780,7 +1768,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       await addHotspotUser(credentials, {
         name: hotspotUsername,
         password: hotspotPassword,
-        profile: effectiveProfile,
+        profile: hotspotProfile,
         comment: hotspotUsername,
         server: hotspotServer,
         address: routerAddress || undefined,
@@ -2090,17 +2078,13 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
 
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
-  const hotspotProfile = `ochola-plan-${plan.id}`;
+  const hotspotProfile = hotspotPlanProfileName(plan.name);
   const dataLimitMb = Number(plan.data_limit_mb);
   const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
     ? String(Math.floor(dataLimitMb * 1_000_000))
     : "0";
   try {
-    await ensureHotspotUserProfile(credentials, {
-      name: hotspotProfile,
-      sharedUsers: 1,
-      rateLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
-    });
+    await requireHotspotUserProfile(credentials, hotspotProfile);
     const paidBindingApplied = await addHotspotIpBinding(credentials, {
       macAddress: mac,
       ipAddress: clientIp || undefined,

@@ -22,14 +22,14 @@ import {
   updateHotspotUser,
   resetHotspotUserCounters,
   disconnectHotspotActiveUser,
-  ensureHotspotUserProfile,
+  requireHotspotUserProfile,
   scheduleHotspotUserExpiry,
   schedulePppUserExpiry,
   classifyRouterConnectionFailure,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
-import { prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
+import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
 import { planValiditySeconds } from "./plan-validity.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
@@ -384,16 +384,12 @@ export async function autoProvision(opts: {
       });
     } else {
       /* Hotspot */
-      const profile = `ochola-plan-${plan.id}`;
+      const profile = hotspotPlanProfileName(plan.name);
       const dataLimitMb = Number(plan.data_limit_mb);
       const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
         ? String(Math.floor(dataLimitMb * 1_000_000))
         : "0";
-      await ensureHotspotUserProfile(creds, {
-        name: profile,
-        sharedUsers: 1,
-        rateLimit: hotspotRateLimit(plan),
-      });
+      await requireHotspotUserProfile(creds, profile);
       try {
         await updateHotspotUser(creds, username, {
           disabled: false, profile, comment, limitBytesTotal,
