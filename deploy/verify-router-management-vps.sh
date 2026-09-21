@@ -32,11 +32,30 @@ check() {
 }
 
 check_primary_listener() {
-  ss -lntp | grep -Eq ':(1196)\b'
+  check_listener_port 1196
 }
 
 check_backup_listener() {
-  ss -lntp | grep -Eq ':(1197)\b'
+  check_listener_port 1197
+}
+
+check_listener_port() {
+  local port="$1"
+  local listeners
+  # Parse the local-address column instead of relying on grep's word-boundary
+  # behavior. `ss` may print either 0.0.0.0:PORT or [::]:PORT, and the
+  # process column is not present on every supported iproute2 build.
+  if ! listeners="$(ss -H -lnt 2>/dev/null)"; then
+    echo "ERROR: unable to read TCP listener state with ss." >&2
+    return 1
+  fi
+  if printf '%s\n' "$listeners" |
+    awk -v port="$port" '$4 ~ (":" port "$") { found=1 } END { exit(found ? 0 : 1) }'
+  then
+    return 0
+  fi
+  printf 'TCP listeners reported by ss:\n%s\n' "$listeners" >&2
+  return 1
 }
 
 check_primary_tunnel() {
