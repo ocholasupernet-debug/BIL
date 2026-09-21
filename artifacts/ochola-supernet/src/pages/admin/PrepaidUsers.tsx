@@ -906,7 +906,7 @@ export default function PrepaidUsers() {
         </div>
 
         {/* ── Table ── */}
-        <div id="prepaid-users-table" className="prepaid-table-shell" style={{ overflowX: "auto" }}>
+        <div id="prepaid-users-table" className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
              <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
             <thead>
               <tr>
