@@ -25,34 +25,66 @@ function isUniqueViolation(error: unknown): boolean {
  * `users` table would split login, tenant scoping, and reseller ownership.
  */
 export async function registerAccount(req: Request, res: Response): Promise<void> {
-  const name = cleanText(req.body?.name, 120);
-  const email = cleanText(req.body?.email, 254).toLowerCase();
+  const rawName = req.body?.name;
+  const rawEmail = req.body?.email;
+  const rawPassword = req.body?.password;
+  const rawRole = req.body?.role;
+  // businessName is the public contract; subdomain_prefix remains accepted
+  // for the already-deployed browser client during the contract transition.
+  const rawBusinessName = req.body?.businessName ?? req.body?.subdomain_prefix;
+  if (!rawName || !rawEmail || !rawPassword || !rawRole || !rawBusinessName) {
+    res.status(400).json({
+      success: false,
+      ok: false,
+      message: "All fields (name, email, password, role, businessName) are mandatory.",
+      error: "All fields (name, email, password, role, businessName) are mandatory.",
+    });
+    return;
+  }
+
+  const name = cleanText(rawName, 120);
+  const email = cleanText(rawEmail, 254).toLowerCase();
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   const role = req.body?.role as UnifiedRegistrationRole;
-  const subdomainPrefix = cleanText(req.body?.subdomain_prefix, 63).toLowerCase();
+  const businessName = cleanText(rawBusinessName, 120);
+  const subdomainPrefix = businessName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 63);
 
   if (name.length < 2 || /[\u0000-\u001F\u007F]/.test(name)) {
-    res.status(400).json({ ok: false, error: "Enter a valid full name." });
+    res.status(400).json({ success: false, ok: false, error: "Enter a valid full name." });
     return;
   }
   if (!EMAIL_PATTERN.test(email) || email.length > 254) {
-    res.status(400).json({ ok: false, error: "Enter a valid email address." });
+    res.status(400).json({ success: false, ok: false, error: "Enter a valid email address." });
     return;
   }
   if (password.length < 10 || password.length > 200) {
-    res.status(400).json({ ok: false, error: "Choose a password with at least 10 characters." });
+    res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 10 characters." });
     return;
   }
   if (role !== "isp_admin" && role !== "reseller") {
-    res.status(400).json({ ok: false, error: "Choose an account type." });
+    res.status(400).json({
+      success: false,
+      ok: false,
+      message: "Invalid account role designation profile.",
+      error: "Invalid account role designation profile.",
+    });
     return;
   }
   if (!apiTokenSigningConfigured) {
-    res.status(503).json({ ok: false, error: "Secure account sessions are not configured." });
+    res.status(503).json({ success: false, ok: false, error: "Secure account sessions are not configured." });
+    return;
+  }
+  if (subdomainPrefix.length < 3) {
+    res.status(400).json({
+      success: false,
+      ok: false,
+      message: "Business name must contain at least 3 alphanumeric characters to construct a valid subdomain workspace URL.",
+      error: "Business name must contain at least 3 alphanumeric characters to construct a valid subdomain workspace URL.",
+    });
     return;
   }
   if (!SUBDOMAIN_PREFIX_PATTERN.test(subdomainPrefix) || RESERVED_SUBDOMAINS.has(subdomainPrefix)) {
-    res.status(400).json({ ok: false, error: "Choose a valid alphanumeric subdomain handle." });
+    res.status(400).json({ success: false, ok: false, error: "Choose a valid alphanumeric subdomain handle." });
     return;
   }
 
@@ -66,14 +98,25 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     `subdomain=eq.${encodeURIComponent(subdomainPrefix)}&select=id&limit=1`,
   );
   if (duplicateRows.length > 0) {
-    res.status(400).json({ ok: false, error: "This subdomain handle is already reserved." });
+    const message = `The workspace URL prefix 'https://${subdomainPrefix}.isplatty.org' is already reserved by another provider account.`;
+    res.status(400).json({ success: false, ok: false, message, error: message });
+    return;
+  }
+
+  const duplicateEmailRows = await sbSelectStrict<{ id: number }>(
+    "isp_admins",
+    `email=eq.${encodeURIComponent(email)}&select=id&limit=1`,
+  );
+  if (duplicateEmailRows.length > 0) {
+    const message = "An operator account is already registered utilizing this email address profile.";
+    res.status(400).json({ success: false, ok: false, message, error: message });
     return;
   }
 
   const passwordHash = await hashIspAdminPassword(password);
   const accountPayload = {
-    name: subdomainPrefix,
-    company_name: subdomainPrefix,
+    name,
+    company_name: businessName,
     fullname: name,
     email,
     username: email,
@@ -99,12 +142,14 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     subdomain: string;
     parent_id: number | null;
     earnings_balance: number;
+    company_name: string | null;
   }>;
   try {
     inserted = await sbInsertStrict("isp_admins", accountPayload);
   } catch (error) {
     if (isUniqueViolation(error)) {
-      res.status(400).json({ ok: false, error: "This subdomain handle is already reserved." });
+      const message = `The workspace URL prefix 'https://${subdomainPrefix}.isplatty.org' is already reserved by another provider account.`;
+      res.status(400).json({ success: false, ok: false, message, error: message });
       return;
     }
     throw error;
@@ -125,16 +170,26 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     subdomain: account.subdomain,
     parent_id: account.parent_id ?? null,
     earnings_balance: Number(account.earnings_balance ?? 0),
+    company_name: account.company_name ?? businessName,
   };
   const token = generateToken("a", String(account.id));
+  const assignedUrl = `https://${account.subdomain}.isplatty.org`;
   res.status(201).json({
+    success: true,
     ok: true,
+    message: "Account workspace provisioned successfully.",
     token,
     admin: safeAccount,
     tenant: {
       id: account.id,
       subdomain: account.subdomain,
       role: account.role,
+    },
+    data: {
+      userId: account.id,
+      role: account.role,
+      companyName: businessName,
+      assignedUrl,
     },
   });
 }
