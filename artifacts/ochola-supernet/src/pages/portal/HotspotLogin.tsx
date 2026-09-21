@@ -18,6 +18,11 @@ interface HotspotCredentials {
   username: string;
   password: string;
 }
+interface HotspotSession {
+  status: "active" | "expired";
+  connected: boolean;
+  expiresAt: string | null;
+}
 interface ConnectedDevice {
   name: string;
   macAddress: string;
@@ -43,6 +48,16 @@ function formatValidity(plan: Plan): string {
 function formatSpeed(mbps: number): string {
   if (mbps >= 1000) return `${mbps / 1000}Gbps`;
   return `${mbps}Mbps`;
+}
+
+function formatSessionExpiry(value: string | null): string {
+  if (!value) return "No expiry time recorded";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "Expiry time unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
 }
 
 function normalizeMacAddress(value: string): string {
@@ -213,6 +228,11 @@ export default function HotspotLogin() {
   const [loginError, setLoginError] = useState("");
   const [loginSuccess, setLoginSuccess] = useState(false);
   const [loggedInName, setLoggedInName] = useState("");
+  const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
+  const [troubleshootLoading, setTroubleshootLoading] = useState(false);
+  const [troubleshootMessage, setTroubleshootMessage] = useState("");
+  const [troubleshootAttempts, setTroubleshootAttempts] = useState(0);
+  const troubleshootInFlight = useRef(false);
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
@@ -500,24 +520,108 @@ export default function HotspotLogin() {
     setPayError(null);
   };
 
+  type TroubleshootResult = {
+    connected: boolean;
+    status: "active" | "expired";
+    expiresAt: string | null;
+    retryable: boolean;
+    name: string;
+    error?: string;
+  };
+
+  const attemptHotspotConnection = async (): Promise<TroubleshootResult | null> => {
+    if (!adminId || !loginUsername.trim() || !loginPassword) {
+      setLoginError("Enter your hotspot credentials before checking the connection.");
+      return null;
+    }
+    try {
+      const res = await fetch("/api/customers/hotspot-troubleshoot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId,
+          username: loginUsername.trim(),
+          password: loginPassword,
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+          ...(portalContext.mac ? { mac_address: portalContext.mac } : {}),
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        status?: "active" | "expired";
+        connected?: boolean;
+        retryable?: boolean;
+        expiresAt?: string | null;
+        error?: string;
+        customer?: { name?: string | null };
+      };
+      const result: TroubleshootResult = {
+        connected: data.connected === true,
+        status: data.status === "expired" ? "expired" : "active",
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        retryable: data.retryable === true,
+        name: data.customer?.name || loginUsername.trim(),
+        error: data.error,
+      };
+      if (!res.ok && !data.status) {
+        setLoginError(data.error ?? "Login failed.");
+        return null;
+      }
+      setLoginSession({
+        status: result.status,
+        connected: result.connected,
+        expiresAt: result.expiresAt,
+      });
+      setLoggedInName(result.name);
+      if (result.error && !result.connected) setTroubleshootMessage(result.error);
+      if (result.connected) {
+        const credentials = { username: loginUsername.trim(), password: loginPassword };
+        storeHotspotCredentials(loginCredentialsStorageKey, credentials);
+        setLoginCredentialsLocked(true);
+        setLoginSuccess(true);
+        setLoginError("");
+        setTroubleshootMessage("");
+      }
+      return result;
+    } catch {
+      setLoginError("Could not reach the server. Please try again.");
+      return null;
+    }
+  };
+
+  const handleTroubleshoot = async () => {
+    if (troubleshootInFlight.current) return;
+    troubleshootInFlight.current = true;
+    setTroubleshootLoading(true);
+    setTroubleshootMessage("");
+    setLoginError("");
+    setTroubleshootAttempts(0);
+    try {
+      const maxAttempts = 6;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        setTroubleshootAttempts(attempt);
+        const result = await attemptHotspotConnection();
+        if (!result) break;
+        if (result.connected) break;
+        if (result.status === "expired" || !result.retryable) break;
+        if (attempt < maxAttempts) {
+          setTroubleshootMessage("Your plan is active. Retrying the hotspot connection…");
+          await new Promise(resolve => window.setTimeout(resolve, 1500));
+        } else {
+          setTroubleshootMessage("Your plan is active, but the router did not accept the connection. Try again or contact support.");
+        }
+      }
+    } finally {
+      troubleshootInFlight.current = false;
+      setTroubleshootLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(""); setLoginLoading(true);
     try {
-      const res = await fetch("/api/customers/hotspot-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(adminId ? { adminId } : {}), username: loginUsername, password: loginPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) setLoginError(data.error ?? "Login failed");
-      else {
-        const credentials = { username: loginUsername.trim(), password: loginPassword };
-        storeHotspotCredentials(loginCredentialsStorageKey, credentials);
-        setLoginCredentialsLocked(true);
-        setLoggedInName(data.customer?.name || credentials.username);
-        setLoginSuccess(true);
-      }
+      await attemptHotspotConnection();
     } catch { setLoginError("Could not reach the server. Please try again."); }
     finally { setLoginLoading(false); }
   };
@@ -1401,14 +1505,58 @@ export default function HotspotLogin() {
                         <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                       </div>
                       <h3>Welcome, {loggedInName}!</h3>
-                      <p style={{ marginBottom: 24 }}>You're now connected to the network.</p>
+                      <p style={{ marginBottom: 8 }}>You're now connected to the network.</p>
+                      {loginSession && (
+                        <p style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
+                          Plan expires {formatSessionExpiry(loginSession.expiresAt)}
+                        </p>
+                      )}
                       <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                        onClick={() => { setLoginSuccess(false); setLoginError(""); }}>
+                        onClick={() => { setLoginSuccess(false); setLoginSession(null); setLoginError(""); }}>
                         Sign Out
                       </button>
                     </div>
                   ) : (
                     <>
+                      {loginSession && (
+                        <div
+                          role="status"
+                          style={{
+                            padding: 14,
+                            marginBottom: 16,
+                            borderRadius: 12,
+                            background: loginSession.status === "expired" ? "rgba(245,158,11,0.08)" : "rgba(34,197,94,0.08)",
+                            border: `1px solid ${loginSession.status === "expired" ? "rgba(245,158,11,0.2)" : "rgba(34,197,94,0.2)"}`,
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                            {loginSession.status === "expired"
+                              ? <AlertCircle size={16} color="#fbbf24" />
+                              : <CheckCircle2 size={16} color="#4ade80" />}
+                            <strong style={{ color: loginSession.status === "expired" ? "#fbbf24" : "#86efac", fontSize: 13 }}>
+                              {loginSession.status === "expired" ? "Session expired" : "Plan active"}
+                            </strong>
+                          </div>
+                          <p style={{ margin: 0, color: "rgba(255,255,255,0.58)", fontSize: 12, lineHeight: 1.5 }}>
+                            {loginSession.status === "expired"
+                              ? `Your hotspot session expired ${formatSessionExpiry(loginSession.expiresAt)}. Renew a package to reconnect.`
+                              : `Your plan expires ${formatSessionExpiry(loginSession.expiresAt)}.`}
+                          </p>
+                          {loginSession.status === "active" && (
+                            <button
+                              type="button"
+                              className="hp-btn"
+                              style={{ marginTop: 12, background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff", boxShadow: "0 4px 15px rgba(22,163,74,.25)" }}
+                              onClick={handleTroubleshoot}
+                              disabled={troubleshootLoading}
+                            >
+                              {troubleshootLoading
+                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Connecting…</>
+                                : <><Wifi size={15} /> Login now</>}
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <form onSubmit={handleLogin}>
                         {loginError && (
                           <div className="hp-error">
@@ -1452,6 +1600,25 @@ export default function HotspotLogin() {
                           )}
                         </button>
                       </form>
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          disabled={troubleshootLoading || loginLoading}
+                          className="hp-btn hp-btn-ghost"
+                          onClick={handleTroubleshoot}
+                        >
+                          {troubleshootLoading ? (
+                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Troubleshooting connection {troubleshootAttempts}/6…</>
+                          ) : (
+                            <><AlertCircle size={16} /> Troubleshoot connection</>
+                          )}
+                        </button>
+                        {troubleshootMessage && (
+                          <p role="status" style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
+                            {troubleshootMessage}
+                          </p>
+                        )}
+                      </div>
                       <div style={{ marginTop: 24, paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                           <Shield size={15} color="var(--isp-accent)" />

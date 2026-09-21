@@ -16,6 +16,8 @@ import {
   DASHBOARD_COLOR_PRESETS,
   DASHBOARD_LAYOUT_OPTIONS,
   DASHBOARD_SHAPE_OPTIONS,
+  PORTAL_BACKGROUND_OPTIONS,
+  PORTAL_PACKAGE_SHAPE_OPTIONS,
   type DashboardPreferences,
 } from "@/lib/dashboard-preferences";
 import {
@@ -1175,6 +1177,56 @@ function DashboardBuilderTab() {
                     title={preset.name}
                     onClick={() => updateDraft({ accentColor: preset.value })}
                   />
+                ))}
+              </div>
+            </div>
+
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Captive portal background</p>
+                  <span>Choose the background treatment customers see on the hotspot login page.</span>
+                </div>
+              </div>
+              <div className="dashboard-color-presets">
+                {PORTAL_BACKGROUND_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`dashboard-color-swatch${draft.portalBackground === option.value ? " dashboard-color-swatch--selected" : ""}`}
+                    style={{ background: option.gradient }}
+                    aria-label={`Use ${option.label} portal background`}
+                    aria-pressed={draft.portalBackground === option.value}
+                    title={`${option.label}: ${option.description}`}
+                    onClick={() => updateDraft({ portalBackground: option.value })}
+                  />
+                ))}
+              </div>
+              <p style={{ margin: "8px 0 0", fontSize: "0.7rem", color: C.muted }}>
+                {PORTAL_BACKGROUND_OPTIONS.find(option => option.value === draft.portalBackground)?.label} · {PORTAL_BACKGROUND_OPTIONS.find(option => option.value === draft.portalBackground)?.description}
+              </p>
+            </div>
+
+            <div className="dashboard-builder-control-group">
+              <div className="dashboard-builder-control-heading">
+                <div>
+                  <p>Package card shape</p>
+                  <span>Choose the silhouette used for hotspot packages on the customer login page.</span>
+                </div>
+              </div>
+              <div className="dashboard-builder-options dashboard-builder-shape-options">
+                {PORTAL_PACKAGE_SHAPE_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`dashboard-builder-option${draft.portalPackageShape === option.value ? " dashboard-builder-option--selected" : ""}`}
+                    aria-pressed={draft.portalPackageShape === option.value}
+                    onClick={() => updateDraft({ portalPackageShape: option.value })}
+                  >
+                    <span className={`dashboard-option-shape dashboard-option-shape--${option.value}`} />
+                    <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                    {draft.portalPackageShape === option.value && <Check size={15} aria-hidden="true" />}
+                  </button>
                 ))}
               </div>
             </div>

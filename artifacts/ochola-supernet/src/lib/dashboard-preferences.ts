@@ -23,14 +23,51 @@ export interface DashboardPreferences {
   layout: DashboardLayout;
   cardShape: DashboardCardShape;
   hideAmounts: boolean;
+  portalBackground: PortalBackground;
+  portalPackageShape: PortalPackageShape;
 }
+
+export type PortalBackground = "midnight" | "ocean" | "aurora" | "forest" | "sunset" | "sand";
+export type PortalPackageShape = "rounded" | "soft-square" | "compact" | "square" | "circle" | "pill" | "hexagon" | "octagon" | "squircle";
 
 export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   accentColor: "#d96835",
   layout: "balanced",
   cardShape: "rounded",
   hideAmounts: false,
+  portalBackground: "midnight",
+  portalPackageShape: "rounded",
 };
+
+export const PORTAL_BACKGROUND_OPTIONS: Array<{
+  value: PortalBackground;
+  label: string;
+  description: string;
+  gradient: string;
+}> = [
+  { value: "midnight", label: "Midnight", description: "Deep violet night", gradient: "linear-gradient(135deg,#0d0415,#1a0735)" },
+  { value: "ocean", label: "Ocean", description: "Cool blue depth", gradient: "linear-gradient(135deg,#031526,#075985)" },
+  { value: "aurora", label: "Aurora", description: "Violet and teal glow", gradient: "linear-gradient(135deg,#071827,#164e63,#312e81)" },
+  { value: "forest", label: "Forest", description: "Deep green calm", gradient: "linear-gradient(135deg,#04150d,#14532d)" },
+  { value: "sunset", label: "Sunset", description: "Warm plum and rose", gradient: "linear-gradient(135deg,#210914,#7f1d3b)" },
+  { value: "sand", label: "Sand", description: "Warm dusk neutrals", gradient: "linear-gradient(135deg,#21180d,#713f12)" },
+];
+
+export const PORTAL_PACKAGE_SHAPE_OPTIONS: Array<{
+  value: PortalPackageShape;
+  label: string;
+  description: string;
+}> = [
+  { value: "rounded", label: "Rounded", description: "Friendly corners" },
+  { value: "soft-square", label: "Soft square", description: "Structured corners" },
+  { value: "compact", label: "Compact", description: "Tight corner radius" },
+  { value: "square", label: "Square", description: "Right-angle cards" },
+  { value: "circle", label: "Circle", description: "Bold circular silhouette" },
+  { value: "pill", label: "Pill", description: "Long smooth corners" },
+  { value: "hexagon", label: "Hexagon", description: "Technical six-sided card" },
+  { value: "octagon", label: "Octagon", description: "Eight angled sides" },
+  { value: "squircle", label: "Squircle", description: "Balanced square and circle" },
+];
 
 export const DASHBOARD_COLOR_PRESETS = [
   { name: "Signal orange", value: "#d96835" },
@@ -105,5 +142,11 @@ export function normalizeDashboardPreferences(
     hideAmounts: typeof input?.hideAmounts === "boolean"
       ? input.hideAmounts
       : DEFAULT_DASHBOARD_PREFERENCES.hideAmounts,
+    portalBackground: PORTAL_BACKGROUND_OPTIONS.some(option => option.value === input?.portalBackground)
+      ? input!.portalBackground as PortalBackground
+      : DEFAULT_DASHBOARD_PREFERENCES.portalBackground,
+    portalPackageShape: PORTAL_PACKAGE_SHAPE_OPTIONS.some(option => option.value === input?.portalPackageShape)
+      ? input!.portalPackageShape as PortalPackageShape
+      : DEFAULT_DASHBOARD_PREFERENCES.portalPackageShape,
   };
 }

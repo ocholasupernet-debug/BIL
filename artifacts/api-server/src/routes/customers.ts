@@ -14,6 +14,8 @@ import {
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
+  fetchHotspotUsers,
+  connectHotspotUser,
   removeHotspotIpBinding,
   disconnectPPPActiveByName,
   removeHotspotUser,
@@ -386,7 +388,183 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   }
   // Return customer without exposing password
   const { password: _pw, ...safe } = customer;
-  res.json({ ok: true, customer: safe });
+  res.json({
+    ok: true,
+    customer: safe,
+    session: {
+      status: "active",
+      connected: false,
+      expiresAt: typeof customer.expires_at === "string" ? customer.expires_at : null,
+    },
+  });
+});
+
+function normalisePortalMac(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/[:-]/g, "").toUpperCase();
+  return /^[0-9A-F]{12}$/.test(raw) ? raw.match(/.{2}/g)!.join(":") : "";
+}
+
+function normalisePortalIp(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw)) return "";
+  const octets = raw.split(".").map(Number);
+  return octets.every(octet => octet >= 0 && octet <= 255) ? raw : "";
+}
+
+/*
+ * POST /api/customers/hotspot-troubleshoot
+ *
+ * The browser may request this endpoint repeatedly, but each request performs
+ * only one bounded RouterOS check/login attempt. Router credentials remain
+ * server-side and the response contains only the customer's session state.
+ */
+router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> => {
+  const adminId = Number(req.body?.adminId);
+  const username = String(req.body?.username ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  const requestedIp = normalisePortalIp(req.body?.client_ip);
+  const requestedMac = normalisePortalMac(req.body?.mac_address);
+
+  if (!Number.isSafeInteger(adminId) || adminId < 1 || !username || !password) {
+    res.status(400).json({ ok: false, error: "ISP context, username, and password are required." });
+    return;
+  }
+
+  const customer = (await sbSelect<CustomerRow>(
+    "isp_customers",
+    `admin_id=eq.${adminId}&username=eq.${encodeURIComponent(username)}&type=eq.hotspot&select=*&limit=1`,
+  ))[0];
+  if (!customer || customer.password !== password) {
+    res.status(401).json({ ok: false, error: "Invalid username or password." });
+    return;
+  }
+
+  const expiresAt = customer.expires_at;
+  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
+  const activeStatus = customer.status === "active" || customer.status === "payment_cleared_router_pending";
+  const hasActivePlan = activeStatus && Boolean(customer.plan_id) &&
+    (!Number.isFinite(expiresAtMs) || expiresAtMs > Date.now());
+  if (!hasActivePlan) {
+    res.json({
+      ok: true,
+      status: "expired",
+      connected: false,
+      retryable: false,
+      expiresAt,
+      customer: { name: customer.name, username: customer.username },
+    });
+    return;
+  }
+
+  const plan = customer.plan_id
+    ? (await sbSelect<PlanRow>(
+        "isp_plans",
+        `id=eq.${customer.plan_id}&admin_id=eq.${adminId}&select=id,router_id&limit=1`,
+      ))[0]
+    : undefined;
+  const routerId = customer.router_id ?? plan?.router_id ?? null;
+  if (!routerId) {
+    res.json({
+      ok: true,
+      status: "active",
+      connected: false,
+      retryable: false,
+      expiresAt,
+      error: "Your plan is active, but it has not been linked to a hotspot router yet.",
+      customer: { name: customer.name, username: customer.username },
+    });
+    return;
+  }
+
+  const routerRow = (await sbSelect<RouterRow>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  ))[0];
+  if (!routerRow) {
+    res.json({
+      ok: true,
+      status: "active",
+      connected: false,
+      retryable: false,
+      expiresAt,
+      error: "Your plan is active, but its hotspot router could not be found.",
+      customer: { name: customer.name, username: customer.username },
+    });
+    return;
+  }
+
+  let creds: ReturnType<typeof routerCredentials>;
+  try {
+    creds = routerCredentials(routerRow);
+  } catch (error) {
+    res.json({
+      ok: true,
+      status: "active",
+      connected: false,
+      retryable: false,
+      expiresAt,
+      error: error instanceof Error ? error.message : "The hotspot router is not ready.",
+      customer: { name: customer.name, username: customer.username },
+    });
+    return;
+  }
+
+  try {
+    const activeUsers = await fetchHotspotUsers(creds);
+    const connected = activeUsers.some(user => user.user === username);
+    if (connected) {
+      res.json({
+        ok: true,
+        status: "active",
+        connected: true,
+        retryable: false,
+        expiresAt,
+        customer: { name: customer.name, username: customer.username },
+      });
+      return;
+    }
+
+    const ip = requestedIp || normalisePortalIp(customer.ip_address);
+    const macAddress = requestedMac || normalisePortalMac(customer.mac_address);
+    if (!ip || !macAddress) {
+      res.json({
+        ok: true,
+        status: "active",
+        connected: false,
+        retryable: false,
+        expiresAt,
+        error: "The hotspot could not identify this device. Reopen the Wi-Fi sign-in page and try again.",
+        customer: { name: customer.name, username: customer.username },
+      });
+      return;
+    }
+
+    await connectHotspotUser(creds, {
+      user: username,
+      password,
+      ip,
+      macAddress,
+    });
+    res.json({
+      ok: true,
+      status: "active",
+      connected: true,
+      retryable: false,
+      expiresAt,
+      customer: { name: customer.name, username: customer.username },
+    });
+  } catch (error) {
+    logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-troubleshoot] router connection attempt failed");
+    res.status(503).json({
+      ok: false,
+      status: "active",
+      connected: false,
+      retryable: true,
+      expiresAt,
+      error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
+      customer: { name: customer.name, username: customer.username },
+    });
+  }
 });
 
 router.delete("/customers/:id", async (req, res): Promise<void> => {

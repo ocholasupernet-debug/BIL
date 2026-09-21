@@ -59,6 +59,14 @@
     .sec-body{padding:2rem}
 
     .plan-card{display:flex;flex-direction:column;border-radius:1.125rem;overflow:hidden;cursor:pointer;transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+    .plan-card.package-shape-soft-square{border-radius:.625rem!important}
+    .plan-card.package-shape-compact{border-radius:.3rem!important}
+    .plan-card.package-shape-square{border-radius:0!important}
+    .plan-card.package-shape-circle{border-radius:50%!important;aspect-ratio:1/1}
+    .plan-card.package-shape-pill{border-radius:9999px!important}
+    .plan-card.package-shape-hexagon{clip-path:polygon(8% 0,92% 0,100% 50%,92% 100%,8% 100%,0 50%)}
+    .plan-card.package-shape-octagon{clip-path:polygon(15% 0,85% 0,100% 15%,100% 85%,85% 100%,15% 100%,0 85%,0 15%)}
+    .plan-card.package-shape-squircle{border-radius:28%!important}
     .plan-card:hover{transform:translateY(-8px) scale(1.025)}
 
     .wa-btn{position:fixed;bottom:1.5rem;right:1.5rem;z-index:60;width:54px;height:54px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(37,211,102,.45);transition:transform .2s,box-shadow .2s}
@@ -229,6 +237,10 @@
             <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
             Click Here To Connect
           </button>
+          <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:.65rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.78);box-shadow:none">
+            Troubleshoot connection
+          </button>
+          <div id="portalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
         </div>
       </form>
     </div>
@@ -429,13 +441,14 @@ var COLORS=[
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
- var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+  var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+  var portalTroubleshootBusy=false, portalTroubleshootAttempts=0;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
-var PORTAL_ACCENT="#d96835";
+ var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded";
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 
 function normaliseMac(value){
@@ -471,6 +484,27 @@ function safePublicApiBase(value){
     return url.origin;
   }catch(e){return "";}
 }
+function normalisePortalBackground(value){
+  var allowed=["midnight","ocean","aurora","forest","sunset","sand"];
+  return allowed.indexOf(String(value||""))>=0?String(value):"midnight";
+}
+function normalisePortalPackageShape(value){
+  var allowed=["rounded","soft-square","compact","square","circle","pill","hexagon","octagon","squircle"];
+  return allowed.indexOf(String(value||""))>=0?String(value):"rounded";
+}
+function applyPortalBackground(value){
+  var backgrounds={
+    midnight:"radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%)",
+    ocean:"radial-gradient(ellipse 120% 80% at 50% -10%,#075985 0%,#031526 55%)",
+    aurora:"radial-gradient(ellipse 120% 80% at 50% -10%,#312e81 0%,#071827 58%)",
+    forest:"radial-gradient(ellipse 120% 80% at 50% -10%,#14532d 0%,#04150d 58%)",
+    sunset:"radial-gradient(ellipse 120% 80% at 50% -10%,#7f1d3b 0%,#210914 58%)",
+    sand:"radial-gradient(ellipse 120% 80% at 50% -10%,#713f12 0%,#21180d 58%)"
+  };
+  PORTAL_BACKGROUND=normalisePortalBackground(value);
+  document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
+  document.body.style.background=backgrounds[PORTAL_BACKGROUND];
+}
 function normalisePlanList(value){
   if(!Array.isArray(value))return [];
   return value.map(function(p){
@@ -505,6 +539,9 @@ function applyPortalConfig(data){
     var lowerBackground=typeof colors.bgColor2==="string"&&/^#[0-9a-f]{6}$/i.test(colors.bgColor2)?colors.bgColor2:colors.bgColor;
     document.body.style.background="radial-gradient(ellipse 120% 80% at 50% -10%,"+lowerBackground+" 0%,"+colors.bgColor+" 55%)";
   }
+  applyPortalBackground(data.portalBackground);
+  PORTAL_PACKAGE_SHAPE=normalisePortalPackageShape(data.portalPackageShape);
+  document.body.setAttribute("data-package-shape",PORTAL_PACKAGE_SHAPE);
   if(typeof colors.cardColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.cardColor))document.querySelectorAll(".sec-card").forEach(function(element){element.style.background=colors.cardColor;});
   if(typeof colors.inputBgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.inputBgColor))document.querySelectorAll(".inp").forEach(function(element){element.style.background=colors.inputBgColor;});
   if(typeof data.apiBase==="string"){
@@ -676,7 +713,7 @@ function renderPlans(){
   if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No plans available</div>';return;}
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
-    return '<div class="plan-card" style="border:1px solid '+c.from+'22"'+
+     return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" style="border:1px solid '+c.from+'22"'+
       ' onmouseover="this.style.boxShadow=\'0 16px 48px '+c.glow+'30,0 0 0 1px '+c.from+'40\'"'+
       ' onmouseout="this.style.boxShadow=\'0 8px 32px rgba(0,0,0,.4)\'">'+
       '<div style="padding:1.5rem 1rem 1.25rem;text-align:center;flex:1;background:linear-gradient(160deg,'+c.from+'18,'+c.to+'2c);border-top:2px solid '+c.from+'44">'+
@@ -1001,6 +1038,107 @@ window.sendStk=sendStk;
 
 function scrollToLogin(){document.getElementById("loginSection").scrollIntoView({behavior:"smooth"});}
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
+function formatPortalExpiry(value){
+  if(!value)return "No expiry time recorded";
+  var timestamp=Date.parse(value);
+  if(!isFinite(timestamp))return "Expiry time unavailable";
+  try{return new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"short"}).format(timestamp);}
+  catch(e){return new Date(timestamp).toLocaleString();}
+}
+function setPortalSessionStatus(status,expiresAt,message){
+  var element=document.getElementById("portalSessionStatus");
+  if(!element)return;
+  var expired=status==="expired";
+  element.style.display="block";
+  element.style.background=expired?"rgba(245,158,11,.08)":"rgba(34,197,94,.08)";
+  element.style.border="1px solid "+(expired?"rgba(245,158,11,.22)":"rgba(34,197,94,.22)");
+  element.style.color=expired?"#fbbf24":"#86efac";
+  element.innerHTML="<strong>"+(expired?"Session expired":"Plan active")+"</strong><br>"+
+    "<span style=\"color:rgba(255,255,255,.62)\">"+(expired?"Your hotspot session expired ":"Your plan expires ")+formatPortalExpiry(expiresAt)+"."+((message||"")?" "+escapePortalText(message):"")+"</span>";
+}
+function setPortalTroubleshootButton(label,disabled,green){
+  var button=document.getElementById("troubleshootBtn");
+  if(!button)return;
+  button.disabled=Boolean(disabled);
+  button.textContent=label;
+  button.style.background=green?"linear-gradient(135deg,#16a34a,#059669)":"rgba(255,255,255,.08)";
+  button.style.borderColor=green?"rgba(74,222,128,.35)":"rgba(255,255,255,.14)";
+  button.style.color="#fff";
+  button.style.opacity=disabled?".7":"1";
+}
+function submitRouterLogin(){
+  var form=document.getElementById("mikrotikForm");
+  if(!form)return;
+  if(doLogin(form))form.submit();
+}
+function troubleshootConnection(){
+  if(portalTroubleshootBusy)return;
+  var user=document.getElementById("loginUser"), pass=document.getElementById("loginPass");
+  var username=user&&user.value?user.value.trim():"";
+  var password=pass&&pass.value?pass.value:"";
+  var status=document.getElementById("portalSessionStatus");
+  if(!username||!password){
+    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="Enter your username and password before troubleshooting the connection.";}
+    return;
+  }
+  if(PORTAL_ADMIN_ID<1){
+    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="This hotspot is missing its ISP context. Reopen the sign-in page and try again.";}
+    return;
+  }
+  portalTroubleshootBusy=true; portalTroubleshootAttempts=0;
+  setPortalTroubleshootButton("Checking connection…",true,false);
+  function attempt(){
+    portalTroubleshootAttempts++;
+    setPortalTroubleshootButton("Troubleshooting connection ("+portalTroubleshootAttempts+"/6)…",true,false);
+    fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        adminId:PORTAL_ADMIN_ID,
+        username:username,
+        password:password,
+        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+      })
+    }).then(function(response){
+      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
+    }).then(function(result){
+      var data=result.data||{};
+      if(data.status==="expired"){
+        setPortalSessionStatus("expired",data.expiresAt,"Renew a package to reconnect.");
+        portalTroubleshootBusy=false;
+        setPortalTroubleshootButton("Troubleshoot connection",false,false);
+        return;
+      }
+      if(!result.ok&&!data.retryable){
+        setPortalSessionStatus("active",data.expiresAt,data.error||"The account could not be checked.");
+        portalTroubleshootBusy=false;
+        setPortalTroubleshootButton("Troubleshoot connection",false,false);
+        return;
+      }
+      setPortalSessionStatus("active",data.expiresAt,data.connected?"":"Your plan is active. We are trying the hotspot router again.");
+      if(data.connected){
+        portalTroubleshootBusy=false;
+        setPortalTroubleshootButton("Login now",false,true);
+        window.setTimeout(submitRouterLogin,120);
+        return;
+      }
+      if(data.retryable&&portalTroubleshootAttempts<6){
+        window.setTimeout(attempt,1500);
+        return;
+      }
+      portalTroubleshootBusy=false;
+      setPortalTroubleshootButton("Login now",false,true);
+      if(data.error)setPortalSessionStatus("active",data.expiresAt,data.error);
+    }).catch(function(){
+      if(portalTroubleshootAttempts<6){window.setTimeout(attempt,1500);return;}
+      portalTroubleshootBusy=false;
+      setPortalTroubleshootButton("Troubleshoot connection",false,false);
+      if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="Could not reach the connection service. Try again shortly.";}
+    });
+  }
+  attempt();
+}
 function applyCredentialsFromHash(){
   var hash=(window.location.hash||"").replace(/^#/,"");
   if(!hash)return;
