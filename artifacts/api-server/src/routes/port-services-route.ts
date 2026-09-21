@@ -166,6 +166,26 @@ function nextAvailableSubnet(rows: Array<{ subnet_range: string | null }>): stri
   throw new Error("No isolated private /24 network remains for this router.");
 }
 
+type PortDnsRow = {
+  id?: number;
+  hotspot_dns_name: string | null;
+  pppoe_dns_name: string | null;
+};
+
+function nextAvailableCompanyDns(baseName: string, rows: PortDnsRow[]): string {
+  const used = new Set(
+    rows.flatMap((row) => [row.hotspot_dns_name, row.pppoe_dns_name])
+      .filter((name): name is string => Boolean(name))
+      .map((name) => name.toLowerCase()),
+  );
+  if (!used.has(baseName.toLowerCase())) return baseName;
+  for (let suffix = 2; suffix <= 999; suffix += 1) {
+    const candidate = baseName.replace(/\.com$/i, `-${suffix}.com`);
+    if (!used.has(candidate.toLowerCase())) return candidate;
+  }
+  throw new Error("No short company DNS name remains for this router.");
+}
+
 function portFromLocals(res: { locals: Record<string, unknown> }): PortServiceRow {
   return res.locals.resellerPort as PortServiceRow;
 }
@@ -230,9 +250,9 @@ export function buildDualServiceCommands(
   const parentQueue = resources.parentQueue;
   const cap = port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined)
-    ?? `hotspot-${resources.resourceName}.com`;
+    ?? resources.defaultDnsName;
   const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined)
-    ?? `pppoe-${resources.resourceName}.com`;
+    ?? resources.defaultDnsName;
   const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
   const commands: string[][] = [];
 
@@ -471,11 +491,9 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     });
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
-    const hotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName)
-      ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null);
-    const pppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName)
-      ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null);
-    if ((req.body?.hotspotDnsName && !hotspotDnsName) || (req.body?.pppoeDnsName && !pppoeDnsName)) {
+    const requestedHotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName);
+    const requestedPppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName);
+    if ((req.body?.hotspotDnsName && !requestedHotspotDnsName) || (req.body?.pppoeDnsName && !requestedPppoeDnsName)) {
       res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
       return;
     }
@@ -493,11 +511,15 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
         : defaultResources.bridgeName,
       defaultResources.bridgeName,
     );
-    const existingPorts = await sbSelectStrict<{ subnet_range: string | null }>(
+    const existingPorts = await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
       "isp_reseller_ports",
-      `admin_id=eq.${tenantId}&router_id=eq.${routerId}&status=neq.disabled&select=subnet_range`,
+      `admin_id=eq.${tenantId}&router_id=eq.${routerId}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
     );
     const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
+    const defaultDnsName = nextAvailableCompanyDns(defaultResources.defaultDnsName, existingPorts);
+    const sharedDnsName = requestedHotspotDnsName ?? requestedPppoeDnsName ?? defaultDnsName;
+    const hotspotDnsName = hotspotEnabled ? (requestedHotspotDnsName ?? sharedDnsName) : requestedHotspotDnsName;
+    const pppoeDnsName = pppoeEnabled ? (requestedPppoeDnsName ?? sharedDnsName) : requestedPppoeDnsName;
     const inserted = await sbInsertStrict<PortServiceRow>("isp_reseller_ports", {
       admin_id: tenantId,
       // The legacy schema requires reseller_id. For ISP-owned multiport services
