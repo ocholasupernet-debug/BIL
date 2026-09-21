@@ -175,6 +175,64 @@ export interface PortProbeResult {
   diagnosis?: string;
 }
 
+export type RouterConnectionFailureProfile =
+  | "tcp_timeout"
+  | "bad_credentials"
+  | "offline_vpn_tunnel"
+  | "unknown";
+
+export function classifyRouterConnectionFailure(error: unknown): {
+  profile: RouterConnectionFailureProfile;
+  summary: string;
+  message: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("login failed")
+    || lower.includes("authentication")
+    || lower.includes("bad credentials")
+    || lower.includes("invalid user")
+    || lower.includes("invalid password")
+    || lower.includes("not authorized")
+  ) {
+    return {
+      profile: "bad_credentials",
+      summary: "Bad Credentials handshake",
+      message,
+    };
+  }
+  if (
+    lower.includes("management api forward failed")
+    || lower.includes("openvpn")
+    || lower.includes("tunnel is offline")
+  ) {
+    return {
+      profile: "offline_vpn_tunnel",
+      summary: "Offline VPN tunnel container state",
+      message,
+    };
+  }
+  if (
+    lower.includes("timed out")
+    || lower.includes("timeout")
+    || lower.includes("etimedout")
+    || lower.includes("ehostunreach")
+    || lower.includes("enetunreach")
+    || lower.includes("econnrefused")
+    || lower.includes("not reachable")
+    || lower.includes("port 8728")
+  ) {
+    return {
+      profile: "tcp_timeout",
+      summary: "TCP Timeout (Port 8728 blocked/unreachable)",
+      message,
+    };
+  }
+  return { profile: "unknown", summary: "Unknown RouterOS connection failure", message };
+}
+
 /**
  * Probes whether a TCP port is open and reachable from this VPS.
  * This is a raw socket connect — it does NOT speak the RouterOS API protocol.

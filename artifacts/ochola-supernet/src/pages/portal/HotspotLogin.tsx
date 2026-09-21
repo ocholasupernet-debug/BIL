@@ -222,7 +222,7 @@ export default function HotspotLogin() {
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
-  const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string): Promise<boolean> => {
+  const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string, retryRouter = false): Promise<boolean> => {
     setAccessRetrying(true);
     try {
       const accessResponse = await fetch("/api/mpesa/hotspot-mac-access", {
@@ -230,6 +230,7 @@ export default function HotspotLogin() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           checkout_id: activeCheckoutId,
+          ...(retryRouter ? { retry: true } : {}),
           ...(adminId ? { adminId } : {}),
           mac_address: deviceMacAddress,
           device_name: deviceName,
@@ -1062,7 +1063,7 @@ export default function HotspotLogin() {
                           onClick={() => {
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
-                            else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId); }
+                            else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId, true); }
                           }}>
                           {accessReady ? "Continue online" : accessRetrying ? "Retrying connection…" : "Retry connection"}
                         </button>

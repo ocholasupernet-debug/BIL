@@ -31,6 +31,7 @@ import {
   ensureHotspotUserRateQueue,
   updateHotspotUser,
   fetchHotspotConnectedDevices,
+  classifyRouterConnectionFailure,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
@@ -90,30 +91,81 @@ function isManagementVpnIp(ip: string | null | undefined): boolean {
  * normal MikroTik routes. The hotspot gateway (for example 10.254.x.1) is
  * reachable by the customer, but it is never a RouterOS API endpoint.
  */
-function hotspotRouterCredentials(row: HotspotRouterRow): RouterCredentials {
+function hotspotRouterCredentials(
+  row: HotspotRouterRow,
+  options: { forceManagementVpn?: boolean } = {},
+): RouterCredentials {
   const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp) ?? "";
-  let discoveredManagementIp = "";
-  if (!storedManagementIp) {
-    const vpnClients = readVpnClients();
-    discoveredManagementIp =
-      vpnIpFor(row.host ?? "", vpnClients) ??
-      vpnIpFor(row.name ?? "", vpnClients) ??
-      "";
+  const vpnClients = options.forceManagementVpn || !storedManagementIp ? readVpnClients() : [];
+  const discoveredManagementIp = vpnIpFor(row.host ?? "", vpnClients)
+    ?? vpnIpFor(row.name ?? "", vpnClients)
+    ?? "";
+  if (options.forceManagementVpn && storedManagementIp && !discoveredManagementIp) {
+    throw new Error(
+      `OpenVPN management tunnel is offline for ${row.name ?? "the router"}; ` +
+      "no active router-management VPN client was found.",
+    );
   }
-  const managementIp = storedManagementIp || discoveredManagementIp;
+  const managementIp = discoveredManagementIp || storedManagementIp;
   return {
     host: managementIp || row.host?.trim() || "",
-    bridgeIp: managementIp && row.host?.trim() !== managementIp ? managementIp : undefined,
+    bridgeIp: discoveredManagementIp || (managementIp && row.host?.trim() !== managementIp ? managementIp : undefined),
     port: 8728,
-    username: row.router_username || "admin",
+    username: managementIp ? ROUTER_MANAGEMENT_API_USERNAME : row.router_username || "admin",
     password: row.router_secret || "",
-    alternateUsernames: managementIp && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
-      ? [ROUTER_MANAGEMENT_API_USERNAME]
+    alternateUsernames: managementIp && row.router_username && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [row.router_username]
       : undefined,
     useSSL: false,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
   };
+}
+
+function logRouterConnectionFailure(
+  error: unknown,
+  context: Record<string, unknown>,
+  message: string,
+): { profile: ReturnType<typeof classifyRouterConnectionFailure>["profile"]; userMessage: string } {
+  const diagnosis = classifyRouterConnectionFailure(error);
+  logger.error(
+    {
+      ...context,
+      failureProfile: diagnosis.profile,
+      failureSummary: diagnosis.summary,
+      failureMessage: diagnosis.message,
+    },
+    message,
+  );
+  return {
+    profile: diagnosis.profile,
+    userMessage: diagnosis.summary,
+  };
+}
+
+async function markPaymentClearedRouterPending(opts: {
+  transactionId: number;
+  adminId: number;
+  customerId: number;
+  routerName?: string | null;
+  failureMessage: string;
+}): Promise<void> {
+  const note = `Payment cleared; RouterOS account activation is pending on ${opts.routerName || "the router"}. ${opts.failureMessage}`.slice(0, 500);
+  await Promise.all([
+    sbUpdateStrict(
+      "isp_customers",
+      `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}`,
+      {
+        status: "payment_cleared_router_pending",
+        updated_at: new Date().toISOString(),
+      },
+    ),
+    sbUpdateStrict(
+      "isp_transactions",
+      `id=eq.${opts.transactionId}&admin_id=eq.${opts.adminId}`,
+      { notes: note },
+    ),
+  ]);
 }
 
 interface BankStkPushConfig {
@@ -599,6 +651,7 @@ export async function processMpesaCallback(
     }
   }
   let rollbackPppoeAccess: (() => Promise<void>) | undefined;
+  let routerPendingFailure: string | undefined;
   if (isSuccessful && transaction.admin_id && transaction.customer_id && transaction.plan_id) {
     const access = await dependencies.reactivatePppoeAccess({
       adminId: transaction.admin_id,
@@ -607,8 +660,17 @@ export async function processMpesaCallback(
       reference: checkoutId,
     });
     if (!access.ok && !access.skipped) {
-      logger.warn({ checkoutId, error: access.error }, "[mpesa/callback] PPPoE access restore is pending");
-      return false;
+      const diagnosis = logRouterConnectionFailure(
+        access.error ?? "RouterOS PPPoE activation failed.",
+        {
+          checkoutId,
+          adminId: transaction.admin_id,
+          customerId: transaction.customer_id,
+          planId: transaction.plan_id,
+        },
+        "[mpesa/callback] RouterOS activation deferred after payment",
+      );
+      routerPendingFailure = `${diagnosis.userMessage} Retry the account setup after the router-management VPN is online.`;
     }
     rollbackPppoeAccess = access.rollback;
   }
@@ -618,7 +680,9 @@ export async function processMpesaCallback(
       p_transaction_id: transaction.id,
       p_status: isSuccessful ? "completed" : "failed",
       p_note: isSuccessful
-        ? "M-Pesa payment verified by Daraja."
+        ? routerPendingFailure
+          ? `M-Pesa payment verified by Daraja; RouterOS activation pending. ${routerPendingFailure}`
+          : "M-Pesa payment verified by Daraja."
         : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
     });
   } catch (error) {
@@ -633,6 +697,22 @@ export async function processMpesaCallback(
   if (!settlement?.settled) {
     logger.info({ checkoutId }, "[mpesa/callback] Callback replay ignored after state transition");
     return false;
+  }
+
+  if (isSuccessful && routerPendingFailure && transaction.admin_id && transaction.customer_id) {
+    try {
+      await markPaymentClearedRouterPending({
+        transactionId: transaction.id,
+        adminId: transaction.admin_id,
+        customerId: transaction.customer_id,
+        failureMessage: routerPendingFailure,
+      });
+    } catch (error) {
+      logger.error(
+        { err: error, checkoutId, transactionId: transaction.id, customerId: transaction.customer_id },
+        "[mpesa/callback] Could not persist payment_cleared_router_pending status",
+      );
+    }
   }
 
   if (isSuccessful && settlement.payment_method === "mpesa_registration") {
@@ -1375,6 +1455,7 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
  */
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
+  const forceRouterRetry = req.body?.retry === true;
   const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const requestedDeviceName = readDeviceName(req.body?.device_name);
@@ -1488,7 +1569,36 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-  const credentials = hotspotRouterCredentials(routerRow);
+  let credentialRouterRow = routerRow;
+  if (forceRouterRetry) {
+    const refreshedRouters = await sbSelect<typeof routerRow>(
+      "isp_routers",
+      `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    credentialRouterRow = refreshedRouters[0] ?? routerRow;
+  }
+  let credentials: RouterCredentials;
+  try {
+    credentials = hotspotRouterCredentials(credentialRouterRow, {
+      forceManagementVpn: forceRouterRetry,
+    });
+  } catch (error) {
+    const diagnosis = logRouterConnectionFailure(
+      error,
+      {
+        checkoutId,
+        routerId: credentialRouterRow.id,
+        router: credentialRouterRow.name,
+        retry: forceRouterRetry,
+      },
+      "[mpesa/hotspot-mac-access] RouterOS retry preflight failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: `${diagnosis.userMessage} Keep this page open and retry account setup when the router is online.`,
+    });
+    return;
+  }
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     let port: HotspotPortContext | null;
@@ -1537,7 +1647,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
    * of this same checkout may reuse the customer already linked to its
    * transaction.
    */
-   const linkedCustomers = transaction.customer_id
+  const linkedCustomers = transaction.customer_id
      ? await sbSelect<{
     id: number;
     username: string | null;
@@ -1554,7 +1664,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const now = Date.now();
    const isReusable = (customer: typeof linkedCustomers[number]) => {
     const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
-    return customer.status === "active" &&
+    return (customer.status === "active" || customer.status === "payment_cleared_router_pending") &&
       Number.isFinite(expiresAt) &&
       expiresAt > now &&
       typeof customer.username === "string";
@@ -1731,10 +1841,35 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       expires_at: expiresAt.toISOString(),
     });
   } catch (error) {
-    logger.error({ err: error, checkoutId, routerId: routerRow.id, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] hotspot user update failed");
+    const diagnosis = logRouterConnectionFailure(
+      error,
+      {
+        checkoutId,
+        routerId: credentialRouterRow.id,
+        router: credentialRouterRow.name,
+        username: hotspotUsername,
+        mac,
+        retry: forceRouterRetry,
+      },
+      "[mpesa/hotspot-mac-access] hotspot user activation deferred",
+    );
+    try {
+      await markPaymentClearedRouterPending({
+        transactionId: transaction.id,
+        adminId,
+        customerId: customer.id,
+        routerName: credentialRouterRow.name,
+        failureMessage: diagnosis.userMessage,
+      });
+    } catch (stateError) {
+      logger.error(
+        { err: stateError, checkoutId, transactionId: transaction.id, customerId: customer.id },
+        "[mpesa/hotspot-mac-access] Could not persist payment_cleared_router_pending status",
+      );
+    }
     res.status(503).json({
       ok: false,
-      error: "Payment is confirmed and the prepaid account was saved, but the hotspot router could not be updated. Keep this page open and retry connection.",
+      error: `Payment is confirmed and the prepaid account is saved, but RouterOS activation is pending. ${diagnosis.userMessage} Retry Account Setup to try again.`,
     });
   }
 });
@@ -1806,7 +1941,11 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
   const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : 0;
-  if (customer.status !== "active" || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+  if (
+    (customer.status !== "active" && customer.status !== "payment_cleared_router_pending")
+    || !Number.isFinite(expiresAtMs)
+    || expiresAtMs <= Date.now()
+  ) {
     res.status(409).json({ ok: false, error: "This hotspot package has expired. Purchase a new package to reconnect." });
     return;
   }
@@ -1863,7 +2002,29 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     res.status(400).json({ ok: false, error: "This M-Pesa payment belongs to a different device." });
     return;
   }
-  const credentials = hotspotRouterCredentials(routerRow);
+  let credentials: RouterCredentials;
+  try {
+    credentials = hotspotRouterCredentials(routerRow, { forceManagementVpn: true });
+  } catch (error) {
+    const diagnosis = logRouterConnectionFailure(
+      error,
+      { receipt, routerId: routerRow.id, router: routerRow.name, retry: true },
+      "[mpesa/verify] RouterOS reconnect preflight failed",
+    );
+    try {
+      await markPaymentClearedRouterPending({
+        transactionId: transaction.id,
+        adminId,
+        customerId: customer.id,
+        routerName: routerRow.name,
+        failureMessage: diagnosis.userMessage,
+      });
+    } catch (stateError) {
+      logger.error({ err: stateError, receipt, transactionId: transaction.id, customerId: customer.id }, "[mpesa/verify] Could not persist payment_cleared_router_pending status");
+    }
+    res.status(503).json({ ok: false, error: `Payment is confirmed, but RouterOS reconnect is pending. ${diagnosis.userMessage} Try again when the router is online.` });
+    return;
+  }
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     try {
@@ -1881,10 +2042,23 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       });
       hotspotServer = resources.serverName;
     } catch (error) {
-      logger.warn({ err: error, receipt, router: routerRow.name, portId: plan.port_id }, "[mpesa/verify] hotspot port unavailable");
+      const diagnosis = logRouterConnectionFailure(
+        error,
+        { receipt, routerId: routerRow.id, router: routerRow.name, portId: plan.port_id, retry: true },
+        "[mpesa/verify] Hotspot port setup deferred",
+      );
+      await markPaymentClearedRouterPending({
+        transactionId: transaction.id,
+        adminId,
+        customerId: customer.id,
+        routerName: routerRow.name,
+        failureMessage: diagnosis.userMessage,
+      }).catch(stateError => {
+        logger.error({ err: stateError, receipt, transactionId: transaction.id, customerId: customer.id }, "[mpesa/verify] Could not persist payment_cleared_router_pending status");
+      });
       res.status(503).json({
         ok: false,
-        error: "The Hotspot service for this package's port is not ready. Deploy the port service, then try again.",
+        error: `Payment is confirmed, but RouterOS reconnect is pending. ${diagnosis.userMessage} Try again when the router is online.`,
       });
       return;
     }
@@ -1961,6 +2135,11 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         logger.warn({ err: error, username: customer.username }, "[mpesa/verify] active login deferred");
       });
     }
+    await sbUpdateStrict(
+      "isp_customers",
+      `id=eq.${customer.id}&admin_id=eq.${adminId}`,
+      { status: "active", updated_at: new Date().toISOString() },
+    );
     res.json({
       ok: true,
       transaction_id: transaction.id,
@@ -1969,8 +2148,28 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       expires_at: customer.expires_at,
     });
   } catch (error) {
-    logger.error({ err: error, receipt, routerId: routerRow.id }, "[mpesa/verify] hotspot reconnect failed");
-    res.status(503).json({ ok: false, error: "The payment was verified, but the hotspot router could not reconnect this device. Please try again." });
+    const diagnosis = logRouterConnectionFailure(
+      error,
+      {
+        receipt,
+        routerId: routerRow.id,
+        router: routerRow.name,
+        username: customer.username,
+        mac,
+        retry: true,
+      },
+      "[mpesa/verify] hotspot reconnect deferred",
+    );
+    await markPaymentClearedRouterPending({
+      transactionId: transaction.id,
+      adminId,
+      customerId: customer.id,
+      routerName: routerRow.name,
+      failureMessage: diagnosis.userMessage,
+    }).catch(stateError => {
+      logger.error({ err: stateError, receipt, transactionId: transaction.id, customerId: customer.id }, "[mpesa/verify] Could not persist payment_cleared_router_pending status");
+    });
+    res.status(503).json({ ok: false, error: `Payment is confirmed, but RouterOS reconnect is pending. ${diagnosis.userMessage} Try again when the router is online.` });
   }
 });
 

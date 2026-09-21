@@ -25,6 +25,7 @@ import {
   ensureHotspotUserProfile,
   scheduleHotspotUserExpiry,
   schedulePppUserExpiry,
+  classifyRouterConnectionFailure,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
@@ -191,7 +192,17 @@ export async function reactivatePppoeAccess(opts: {
     return { ok: true, routerName: router.name, username, rollback };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.warn({ err: message, customerId: opts.customerId, planId: opts.planId }, "[provision] PPPoE renewal access restore failed");
+    const diagnosis = classifyRouterConnectionFailure(error);
+    logger.warn(
+      {
+        err: message,
+        failureProfile: diagnosis.profile,
+        failureSummary: diagnosis.summary,
+        customerId: opts.customerId,
+        planId: opts.planId,
+      },
+      "[provision] PPPoE renewal access restore failed",
+    );
     return { ok: false, error: `Router PPPoE access could not be restored: ${message}` };
   }
 }

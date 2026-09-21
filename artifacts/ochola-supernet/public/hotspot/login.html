@@ -813,12 +813,13 @@ function renderModal(){
     }
    return true;
  }
- function assignPaidHotspotAccess(checkoutId){
+  function assignPaidHotspotAccess(checkoutId,forceRouterRetry){
    return fetch(apiUrl("/api/mpesa/hotspot-mac-access"),{
      method:"POST",
      headers:{"Content-Type":"application/json"},
      body:JSON.stringify({
        checkout_id:checkoutId,
+        ...(forceRouterRetry?{retry:true}:{}),
        adminId:PORTAL_ADMIN_ID,
        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
         ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{}),
@@ -836,7 +837,7 @@ function renderModal(){
  function retryPaidHotspotAccess(){
    if(!paidCheckoutId)return;
    stkError=""; stkState="provisioning"; renderModal();
-   assignPaidHotspotAccess(paidCheckoutId).then(function(){
+    assignPaidHotspotAccess(paidCheckoutId,true).then(function(){
      stkState="confirmed"; renderModal();
    }).catch(function(error){
      stkError=error&&error.message?error.message:"The hotspot account could not be updated yet.";
