@@ -558,17 +558,15 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
-    const hotspotDnsName = req.body?.hotspotDnsName === undefined
-      ? (port.hotspot_dns_name ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null))
-      : (optionalPortalHostname(req.body.hotspotDnsName)
-        ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null));
-    const pppoeDnsName = req.body?.pppoeDnsName === undefined
-      ? (port.pppoe_dns_name ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null))
-      : (optionalPortalHostname(req.body.pppoeDnsName)
-        ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null));
+    const requestedHotspotDnsName = req.body?.hotspotDnsName === undefined
+      ? port.hotspot_dns_name
+      : optionalPortalHostname(req.body.hotspotDnsName);
+    const requestedPppoeDnsName = req.body?.pppoeDnsName === undefined
+      ? port.pppoe_dns_name
+      : optionalPortalHostname(req.body.pppoeDnsName);
     if (
-      (req.body?.hotspotDnsName && !hotspotDnsName)
-      || (req.body?.pppoeDnsName && !pppoeDnsName)
+      (req.body?.hotspotDnsName && !requestedHotspotDnsName)
+      || (req.body?.pppoeDnsName && !requestedPppoeDnsName)
     ) {
       res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
       return;
@@ -579,13 +577,19 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const subnetRange = req.body?.subnetRange === undefined
       ? port.subnet_range
       : normalizeSubnet(req.body.subnetRange);
-    const existingPorts = !subnetRange
-      ? await sbSelectStrict<{ subnet_range: string | null }>(
+    const needsDefaultDns = (hotspotEnabled && !requestedHotspotDnsName)
+      || (pppoeEnabled && !requestedPppoeDnsName);
+    const existingPorts = !subnetRange || needsDefaultDns
+      ? await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
         "isp_reseller_ports",
-        `router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range`,
+        `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
       )
       : [];
     const savedSubnet = subnetRange ?? nextAvailableSubnet(existingPorts);
+    const defaultDnsName = nextAvailableCompanyDns(defaultResources.defaultDnsName, existingPorts);
+    const sharedDnsName = requestedHotspotDnsName ?? requestedPppoeDnsName ?? defaultDnsName;
+    const hotspotDnsName = hotspotEnabled ? (requestedHotspotDnsName ?? sharedDnsName) : requestedHotspotDnsName;
+    const pppoeDnsName = pppoeEnabled ? (requestedPppoeDnsName ?? sharedDnsName) : requestedPppoeDnsName;
     const bridgeName = req.body?.bridgeName === undefined
       ? (port.bridge_name ?? defaultResources.bridgeName)
       : safeSegment(String(req.body.bridgeName ?? "").trim(), defaultResources.bridgeName);
@@ -649,18 +653,22 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
     }
     const identity = await resourceIdentityForPort(port);
     const resources = portServiceResourceNames(port, identity);
-    const peers = !port.subnet_range
-      ? await sbSelectStrict<{ subnet_range: string | null }>(
+    const needsDefaultDns = (port.hotspot_enabled && !port.hotspot_dns_name)
+      || (port.pppoe_enabled && !port.pppoe_dns_name);
+    const peers = !port.subnet_range || needsDefaultDns
+      ? await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
         "isp_reseller_ports",
-        `router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range`,
+        `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
       )
       : [];
+    const defaultDnsName = nextAvailableCompanyDns(resources.defaultDnsName, peers);
+    const sharedDnsName = port.hotspot_dns_name ?? port.pppoe_dns_name ?? defaultDnsName;
     const deploymentPort: PortServiceRow = {
       ...port,
       bridge_name: port.bridge_name ?? resources.bridgeName,
       subnet_range: port.subnet_range ?? nextAvailableSubnet(peers),
-      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? `hotspot-${resources.resourceName}.com` : null),
-      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? `pppoe-${resources.resourceName}.com` : null),
+      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? sharedDnsName : null),
+      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? sharedDnsName : null),
     };
     if (
       deploymentPort.bridge_name !== port.bridge_name

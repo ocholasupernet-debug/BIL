@@ -476,23 +476,29 @@ export default function Multiport() {
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.hotspotEnabled} onChange={(event) => setDraftValue("hotspotEnabled", event.target.checked)} /> Hotspot sign-in</label>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.pppoeEnabled} onChange={(event) => setDraftValue("pppoeEnabled", event.target.checked)} /> PPPoE service</label>
                 </div>
-                <Field label="Hotspot portal asset" hint="Choose the approved source asset. It is copied into a new directory dedicated to this port.">
+                <Field label="Hotspot approved source" hint="Choose the approved source asset that will be copied to this port.">
                   <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.hotspotEnabled} />
-                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                    Installed copy: {installedAssetPath("hs", selectedAssignment, draft.hotspotFolderPath || "login.html")}
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>
+                    Hotspot RouterOS portal asset
+                  </div>
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>
+                    {installedAssetPath("hs", selectedAssignment, draft.hotspotFolderPath || "login.html")}
                   </div>
                 </Field>
-                <Field label="Hotspot name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
-                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-company-router-ether2.com" disabled={!draft.hotspotEnabled} />
+                <Field label="Hotspot name / DNS" hint="Defaults to the short company.com name; later ports receive a short numeric suffix if needed.">
+                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="come.com" disabled={!draft.hotspotEnabled} />
                 </Field>
-                <Field label="PPPoE landing asset" hint="Choose the approved source asset. It is copied into a separate directory dedicated to this port.">
+                <Field label="PPPoE approved source" hint="Choose the approved source asset that will be copied to this port.">
                   <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.pppoeEnabled} />
-                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                    Installed copy: {installedAssetPath("pppoe", selectedAssignment, draft.pppoeFolderPath || "login.html")}
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>
+                    PPPoE RouterOS portal asset
+                  </div>
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>
+                    {installedAssetPath("pppoe", selectedAssignment, draft.pppoeFolderPath || "login.html")}
                   </div>
                 </Field>
-                <Field label="PPPoE name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
-                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-company-router-ether2.com" disabled={!draft.pppoeEnabled} />
+                <Field label="PPPoE name / DNS" hint="Defaults to the short company.com name; later ports receive a short numeric suffix if needed.">
+                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="come.com" disabled={!draft.pppoeEnabled} />
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
