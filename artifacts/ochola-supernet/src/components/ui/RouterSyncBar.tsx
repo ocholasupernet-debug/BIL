@@ -5,6 +5,7 @@ import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
   ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check,
 } from "lucide-react";
+import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 
 interface DbRouterMin {
   id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null; status: string;
@@ -99,8 +100,8 @@ function SyncFailedActions({
   async function handleAutoFix() {
     setFixing(true); setFixResult(null); setRebootResult(null);
     try {
-      const res  = await fetch("/api/admin/router/fix-api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json() as { ok: boolean; logs: string[]; canConnect?: boolean; error?: string };
+      const res  = await fetch(apiUrl("/api/admin/router/fix-api"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; canConnect?: boolean; error?: string }>(res);
       setFixResult({ ok: data.ok, logs: data.logs ?? [], canConnect: data.canConnect });
     } catch (e) {
       setFixResult({ ok: false, logs: [`❌ ${String(e)}`], canConnect: false });
@@ -110,8 +111,8 @@ function SyncFailedActions({
   async function handleReboot() {
     setRebooting(true); setRebootResult(null); setFixResult(null);
     try {
-      const res  = await fetch("/api/admin/router/reboot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json() as { ok: boolean; message?: string; error?: string };
+      const res  = await fetch(apiUrl("/api/admin/router/reboot"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await parseJsonResponse<{ ok: boolean; message?: string; error?: string }>(res);
       setRebootResult({ ok: data.ok, message: data.ok ? (data.message ?? "Reboot command sent") : (data.error ?? "Failed") });
     } catch (e) {
       setRebootResult({ ok: false, message: String(e) });
@@ -354,9 +355,21 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         password: selectedRouter.router_secret   || "",
         ...buildPayload(selectedRouter),
       };
-      const res  = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const data = await res.json() as { ok: boolean; logs: string[]; error?: string };
-      setResult(data);
+      const res  = await fetch(apiUrl(endpoint), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
+      if (!res.ok) {
+        setResult({
+          ok: false,
+          logs: data.logs ?? [],
+          error: data.error || `Sync failed (HTTP ${res.status}).`,
+        });
+        return;
+      }
+      setResult({
+        ok: data.ok === true && res.ok,
+        logs: data.logs ?? [],
+        error: data.ok === true && res.ok ? undefined : (data.error || `Sync failed (HTTP ${res.status}).`),
+      });
     } catch (err) {
       setResult({ ok: false, logs: [], error: String(err) });
     } finally {

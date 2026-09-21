@@ -9,17 +9,9 @@ import {
   X, Phone, Mail, CalendarDays, Server, Edit3, PlusCircle,
   Power, Trash2, MoreHorizontal, Database, Save,
 } from "lucide-react";
+import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 
-const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 const PAGE_SIZE = 20;
-
-function apiUrl(path: string): string {
-  if (!API_BASE) return path;
-  if (API_BASE.endsWith("/api") && path.startsWith("/api/")) {
-    return `${API_BASE}${path.slice("/api".length)}`;
-  }
-  return `${API_BASE}${path}`;
-}
 
 /* ══════════════════════════════ Types ══════════════════════════════ */
 interface Plan   {
@@ -297,17 +289,7 @@ async function syncUsersToRouter(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const responseText = await res.text();
-    let data: { ok: boolean; error?: string; logs?: string[] };
-    try {
-      data = JSON.parse(responseText) as { ok: boolean; error?: string; logs?: string[] };
-    } catch {
-      const preview = responseText.replace(/\s+/g, " ").trim().slice(0, 120);
-      throw new Error(
-        `The sync service returned HTML instead of JSON (HTTP ${res.status}).`
-        + (preview ? ` Check the API address. Response: ${preview}` : ""),
-      );
-    }
+    const data = await parseJsonResponse<{ ok: boolean; error?: string; logs?: string[] }>(res);
     (data.logs ?? []).forEach((l: string) => log(l));
     if (!res.ok) {
       throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
