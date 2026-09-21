@@ -14,6 +14,15 @@ type Assignment = {
 };
 type Sale = { id: number; reseller_port_id: number; client_reference: string; client_ip: string; amount: number; gateway_type: string; payment_reference: string; status: string; created_at: string };
 type ResellerResponse = { ok: boolean; account: { name: string; company_name?: string; username: string } | null; ports: Assignment[]; gateways: { gateway_type: string; is_active: boolean }[]; sales: Sale[]; error?: string };
+type ResellerPaymentSettings = {
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+};
+
+const emptyPaymentSettings: ResellerPaymentSettings = {
+  mpesa: { enabled: false, merchantIdentifier: "", accountReference: "", destinationType: "paybill" },
+  bank: { enabled: false, merchantIdentifier: "", accountReference: "", bankName: "" },
+};
 
 function authHeaders(): HeadersInit {
   const token = getAdminApiToken();
@@ -160,6 +169,9 @@ function AdminResellerManagement() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
+        <a href="/admin/network/carrier-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "start", width: "fit-content", padding: "10px 13px", borderRadius: 9, background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 800 }}>
+          Open carrier link approvals
+        </a>
         <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={submit} style={cardStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", marginBottom: 20 }}>
@@ -251,30 +263,37 @@ function AdminResellerManagement() {
 
 function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
-  const [gatewayType, setGatewayType] = useState("mpesa");
-  const [gatewayConfig, setGatewayConfig] = useState({
-    merchantId: "", consumerKey: "", consumerSecret: "", passkey: "",
-    destinationType: "paybill", destination: "", accountReference: "",
-  });
+  const [paymentSettings, setPaymentSettings] = useState<ResellerPaymentSettings>(emptyPaymentSettings);
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
-    try { setData(await apiJson<ResellerResponse>("/api/reseller/me")); }
+    try {
+      const [dashboard, settings] = await Promise.all([
+        apiJson<ResellerResponse>("/api/reseller/me"),
+        apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings"),
+      ]);
+      setData(dashboard);
+      setPaymentSettings(settings.settings ?? emptyPaymentSettings);
+    }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load your reseller dashboard."); }
   };
   useEffect(() => { void load(); }, []);
   const totalRevenue = useMemo(() => (data?.sales ?? []).filter((sale) => sale.status === "completed").reduce((sum, sale) => sum + Number(sale.amount), 0), [data]);
   const saveGateway = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(""); setSuccess("");
-    try { await apiJson("/api/reseller/gateway", { method: "PUT", body: JSON.stringify({ gatewayType, config: gatewayConfig }) }); setSuccess("Gateway settings saved securely."); await load(); }
+    try {
+      await apiJson("/api/reseller/payment-settings", { method: "PUT", body: JSON.stringify(paymentSettings) });
+      setSuccess("Payment settings saved.");
+      await load();
+    }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to save gateway settings."); } finally { setSaving(false); }
   };
   const provisionClient = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(""); setSuccess("");
-    try { await apiJson("/api/reseller/checkout", { method: "POST", body: JSON.stringify({ ...checkout, portId: Number(checkout.portId), amount: Number(checkout.amount), maxLimitMbps: checkout.maxLimitMbps ? Number(checkout.maxLimitMbps) : undefined, gatewayType }) }); setSuccess("Payment recorded and client queue provisioned."); setCheckout((current) => ({ ...current, clientReference: "", clientIp: "", paymentReference: "" })); await load(); }
+    try { await apiJson("/api/reseller/checkout", { method: "POST", body: JSON.stringify({ ...checkout, portId: Number(checkout.portId), amount: Number(checkout.amount), maxLimitMbps: checkout.maxLimitMbps ? Number(checkout.maxLimitMbps) : undefined, gatewayType: "mpesa" }) }); setSuccess("Payment recorded and client queue provisioned."); setCheckout((current) => ({ ...current, clientReference: "", clientIp: "", paymentReference: "" })); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Client queue provisioning failed."); } finally { setSaving(false); }
   };
   const port = data?.ports?.[0];
@@ -303,21 +322,35 @@ function ResellerDashboard() {
         </div>
         <div className="reseller-forms-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,.85fr) minmax(0,1.15fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={saveGateway} style={cardStyle}>
-            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><LockKeyhole size={18} color="var(--isp-accent)" /> Independent payment gateway</div>
-             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>These credentials are encrypted server-side and used only when a client plan is attached to your active wholesale link.</p>
-            <div style={{ display: "grid", gap: 13, marginTop: 17 }}>
-               <Field label="Gateway"><select style={inputStyle} value={gatewayType} onChange={(e) => setGatewayType(e.target.value)}><option value="mpesa">M-Pesa</option><option value="stripe">Stripe</option><option value="paypal">PayPal</option></select></Field>
-               {gatewayType === "mpesa" ? <>
-                 <Field label="Business shortcode"><input required style={inputStyle} value={gatewayConfig.merchantId} onChange={(e) => setGatewayConfig({ ...gatewayConfig, merchantId: e.target.value })} placeholder="Shortcode used for STK credentials" /></Field>
-                 <Field label="Consumer key"><input required type="password" style={inputStyle} value={gatewayConfig.consumerKey} onChange={(e) => setGatewayConfig({ ...gatewayConfig, consumerKey: e.target.value })} /></Field>
-                 <Field label="Consumer secret"><input required type="password" style={inputStyle} value={gatewayConfig.consumerSecret} onChange={(e) => setGatewayConfig({ ...gatewayConfig, consumerSecret: e.target.value })} /></Field>
-                 <Field label="STK passkey"><input required type="password" style={inputStyle} value={gatewayConfig.passkey} onChange={(e) => setGatewayConfig({ ...gatewayConfig, passkey: e.target.value })} /></Field>
-                 <Field label="Destination type"><select style={inputStyle} value={gatewayConfig.destinationType} onChange={(e) => setGatewayConfig({ ...gatewayConfig, destinationType: e.target.value })}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
-                 <Field label={gatewayConfig.destinationType === "till" ? "Till number" : "PayBill number"}><input required style={inputStyle} value={gatewayConfig.destination} onChange={(e) => setGatewayConfig({ ...gatewayConfig, destination: e.target.value })} /></Field>
-                 {gatewayConfig.destinationType === "paybill" ? <Field label="Account reference (optional)"><input style={inputStyle} value={gatewayConfig.accountReference} onChange={(e) => setGatewayConfig({ ...gatewayConfig, accountReference: e.target.value })} /></Field> : null}
-               </> : <Field label="Merchant / account id"><input required style={inputStyle} value={gatewayConfig.merchantId} onChange={(e) => setGatewayConfig({ ...gatewayConfig, merchantId: e.target.value })} /></Field>}
-            </div>
-            <button disabled={saving} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Save size={16} /> Save gateway</button>
+             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><LockKeyhole size={18} color="var(--isp-accent)" /> Payment settings</div>
+             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 15 }}>Choose where your client payments should be attributed. Only destination identifiers are stored here.</p>
+             <div style={{ display: "grid", gap: 12 }}>
+               <div style={{ border: "1px solid var(--isp-border)", borderRadius: 9, padding: 13 }}>
+                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                   <div><div style={{ color: "var(--isp-text)", fontWeight: 800 }}>M-Pesa</div><div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 3 }}>Uses the global Super Admin Daraja bridge.</div></div>
+                   <label style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: 12, fontWeight: 750 }}><input type="checkbox" checked={paymentSettings.mpesa.enabled} onChange={(e) => setPaymentSettings((current) => ({ ...current, mpesa: { ...current.mpesa, enabled: e.target.checked } }))} /> Enabled</label>
+                 </div>
+                 <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                   <Field label="Destination type"><select style={inputStyle} value={paymentSettings.mpesa.destinationType} onChange={(e) => setPaymentSettings((current) => ({ ...current, mpesa: { ...current.mpesa, destinationType: e.target.value === "till" ? "till" : "paybill" } }))}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
+                   <Field label={paymentSettings.mpesa.destinationType === "till" ? "Till number" : "PayBill number"}><input style={inputStyle} value={paymentSettings.mpesa.merchantIdentifier} onChange={(e) => setPaymentSettings((current) => ({ ...current, mpesa: { ...current.mpesa, merchantIdentifier: e.target.value } }))} placeholder={paymentSettings.mpesa.destinationType === "till" ? "e.g. 1234567" : "e.g. 123456"} /></Field>
+                   {paymentSettings.mpesa.destinationType === "paybill" ? <Field label="Account reference"><input required={paymentSettings.mpesa.enabled} style={inputStyle} value={paymentSettings.mpesa.accountReference} onChange={(e) => setPaymentSettings((current) => ({ ...current, mpesa: { ...current.mpesa, accountReference: e.target.value } }))} placeholder="Reseller account reference" /></Field> : null}
+                 </div>
+                 <div style={{ marginTop: 10, color: "#9a3412", fontSize: 11, lineHeight: 1.45 }}>Do not enter Consumer Key, Consumer Secret, passkey, or callback credentials here. They are managed centrally by Super Admin.</div>
+               </div>
+               <div style={{ border: "1px solid var(--isp-border)", borderRadius: 9, padding: 13 }}>
+                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                   <div><div style={{ color: "var(--isp-text)", fontWeight: 800 }}>Bank</div><div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 3 }}>Save the receiving account for bank settlement records.</div></div>
+                   <label style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: 12, fontWeight: 750 }}><input type="checkbox" checked={paymentSettings.bank.enabled} onChange={(e) => setPaymentSettings((current) => ({ ...current, bank: { ...current.bank, enabled: e.target.checked } }))} /> Enabled</label>
+                 </div>
+                 <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                   <Field label="Bank name"><input style={inputStyle} value={paymentSettings.bank.bankName} onChange={(e) => setPaymentSettings((current) => ({ ...current, bank: { ...current.bank, bankName: e.target.value } }))} placeholder="e.g. KCB" /></Field>
+                   <Field label="Merchant / business number"><input style={inputStyle} value={paymentSettings.bank.merchantIdentifier} onChange={(e) => setPaymentSettings((current) => ({ ...current, bank: { ...current.bank, merchantIdentifier: e.target.value } }))} /></Field>
+                   <Field label="Account number"><input style={inputStyle} value={paymentSettings.bank.accountReference} onChange={(e) => setPaymentSettings((current) => ({ ...current, bank: { ...current.bank, accountReference: e.target.value } }))} /></Field>
+                 </div>
+                 <div style={{ marginTop: 10, color: "var(--isp-text-muted)", fontSize: 11, lineHeight: 1.45 }}>Bank checkout automation is not connected to the Daraja bridge. Enabling this card stores the destination for future bank settlement workflows.</div>
+               </div>
+             </div>
+             <button disabled={saving} type="submit" style={{ marginTop: 15, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Save size={16} /> Save payment settings</button>
           </form>
           <form onSubmit={provisionClient} style={cardStyle}>
             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Record a paid client session</div>

@@ -10,7 +10,11 @@ import {
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
-import { encryptVpnSecret } from "../lib/vpn-crypto.js";
+import {
+  compileResellerActivation,
+  compileResellerPaymentNoticeNatComment,
+  compileResellerSuspension,
+} from "../services/scriptCompiler.js";
 
 const router: IRouter = Router();
 
@@ -24,6 +28,7 @@ type RouterRow = {
   router_secret: string | null;
   api_port: number;
   api_use_ssl: boolean;
+  ros_version?: string | number | null;
 };
 
 type ResellerPortRow = {
@@ -46,6 +51,17 @@ type ResellerPortRow = {
   status: string;
   provisioning_error: string | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
+};
+
+type ResellerAccountRow = {
+  id: number;
+  name: string;
+  company_name?: string | null;
+  username: string;
+  email?: string | null;
+  status?: string | null;
+  is_active: boolean;
+  created_at: string;
 };
 
 function safeSegment(value: string, fallback: string): string {
@@ -137,7 +153,7 @@ async function currentAccount(req: Request) {
 async function tenantRouter(adminId: number, routerId: number): Promise<RouterRow> {
   const rows = await sbSelectStrict<RouterRow>(
     "isp_routers",
-    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,vpn_ip,router_username,router_secret,api_port,api_use_ssl&limit=1`,
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,vpn_ip,router_username,router_secret,api_port,api_use_ssl,ros_version&limit=1`,
   );
   if (!rows[0]) throw new Error("Router not found for this ISP account.");
   return rows[0];
@@ -165,24 +181,35 @@ async function deployServicesProvisionLayer(
   const queueId = Array.isArray(queueRows)
     ? routerResourceId((queueRows[0] ?? {}) as Record<string, unknown>)
     : "";
-  const maxLimit = `${Math.round(capMbps)}M/${Math.round(capMbps)}M`;
   if (queueId) {
-    await runRouterCommand(creds, [
-      "/queue/simple/set",
-      `=.id=${queueId}`,
-      `=max-limit=${maxLimit}`,
-      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
-    ]);
-  } else {
-    await runRouterCommand(creds, [
-      "/queue/simple/add",
-      `=name=${parentQueue}`,
-      `=target=${port.bridge_name || port.interface_name}`,
-      `=max-limit=${maxLimit}`,
-      `=priority=2/2`,
-      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
-      `=comment=OcholaSupernet_${portSegment}_parent_queue`,
-    ]);
+    await runRouterCommand(creds, ["/queue/simple/remove", `=.id=${queueId}`]);
+  }
+
+  const targetName = port.bridge_name || port.interface_name;
+  const scriptBlock = linkStatus === "active"
+    ? compileResellerActivation(
+      port.interface_name,
+      Math.round(capMbps),
+      router.ros_version,
+      targetName,
+    )
+    : compileResellerSuspension(port.interface_name, router.ros_version, targetName);
+
+  const noticeComment = compileResellerPaymentNoticeNatComment(port.interface_name);
+  const natRows = await runRouterCommand(creds, [
+    "/ip/firewall/nat/print",
+    "=.proplist=.id,comment",
+    `?comment=${noticeComment}`,
+  ]);
+  for (const row of Array.isArray(natRows) ? natRows : []) {
+    const id = routerResourceId(row);
+    if (id) {
+      await runRouterCommand(creds, ["/ip/firewall/nat/remove", `=.id=${id}`]);
+    }
+  }
+
+  for (const command of scriptBlock.commands) {
+    await runRouterCommand(creds, command);
   }
 
   if (port.hotspot_enabled) {
@@ -331,9 +358,9 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const child = await sbSelectStrict<{ id: number }>(
+    const child = await sbSelectStrict<{ id: number; status?: string }>(
       "isp_admins",
-      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,status&limit=1`,
     );
     if (!child[0]) {
       res.status(404).json({ ok: false, error: "The reseller does not belong to this ISP account." });
@@ -371,6 +398,14 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
       },
     );
     if (!updated[0]) throw new Error("The reseller link state could not be saved.");
+    await sbUpdateStrict(
+      "isp_admins",
+      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller`,
+      {
+        status: requestedState === "suspended" ? "suspended_payment_pending" : "active",
+        updated_at: new Date().toISOString(),
+      },
+    );
 
     try {
       await deployServicesProvisionLayer(targetRouter, { ...port, ...updated[0] }, requestedState, cap, requestHostname(req));
@@ -382,6 +417,14 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
         {
           link_status: requestedState === "suspended" ? "suspended" : "pending",
           link_provisioning_error: message.slice(0, 500),
+          updated_at: new Date().toISOString(),
+        },
+      ).catch(() => undefined);
+      await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller`,
+        {
+          status: child[0].status || "active",
           updated_at: new Date().toISOString(),
         },
       ).catch(() => undefined);
@@ -398,6 +441,7 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
         reseller_bandwidth_cap: cap,
         link_provisioning_error: null,
       },
+      resellerStatus: requestedState === "suspended" ? "suspended_payment_pending" : "active",
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update reseller link." });
@@ -406,6 +450,69 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
 
 router.post("/admin/reseller-links", requireAdmin(), updateResellerLink);
 router.post("/admin/approve-reseller-link", requireAdmin(), updateResellerLink);
+
+/**
+ * Carrier-management aliases used by the ISP approval view. Keep these
+ * tenant-scoped and route them through the same ownership and RouterOS
+ * management-VPN path as the existing reseller controls.
+ */
+router.get("/isp/pending-resellers", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot approve reseller links." });
+      return;
+    }
+
+    const [resellers, ports, routers] = await Promise.all([
+      sbSelectStrict<ResellerAccountRow>(
+        "isp_admins",
+        `parent_id=eq.${account.id}&role=eq.reseller&select=id,name,company_name,username,email,status,is_active,created_at&order=created_at.desc`,
+      ),
+      sbSelectStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,link_provisioning_error&order=created_at.desc`,
+      ),
+      sbSelectStrict<{ id: number; name: string; status: string }>(
+        "isp_routers",
+        `admin_id=eq.${account.id}&select=id,name,status&order=name.asc`,
+      ),
+    ]);
+    const pendingStatuses = new Set(["pending", "awaiting_connection", "awaiting_sync", "awaiting_ports"]);
+    const pendingResellers = resellers.filter((reseller) => {
+      const assignedPort = ports.find((port) =>
+        (port.assigned_reseller_id ?? port.reseller_id) === reseller.id,
+      );
+      return pendingStatuses.has(String(reseller.status ?? "").toLowerCase())
+        || !assignedPort
+        || assignedPort.link_status !== "active";
+    });
+    res.json({
+      ok: true,
+      resellers,
+      pendingResellers,
+      ports,
+      routers,
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load pending reseller links." });
+  }
+});
+
+router.post("/isp/toggle-reseller-pipe", requireAdmin(), async (req, res): Promise<void> => {
+  const action = req.body?.action;
+  if (action !== "activate" && action !== "suspend") {
+    res.status(400).json({ ok: false, error: "Action must be activate or suspend." });
+    return;
+  }
+  req.body = {
+    ...req.body,
+    targetPortName: req.body?.portName,
+    linkStatus: action === "activate" ? "active" : "suspended",
+  };
+  await updateResellerLink(req, res);
+});
 
 router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Promise<void> => {
   try {
@@ -749,43 +856,116 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
   }
 });
 
-router.put("/reseller/gateway", requireAdmin(), async (req, res): Promise<void> => {
+function cleanGatewayIdentifier(value: unknown, label: string, required: boolean): string {
+  const identifier = typeof value === "string" ? value.trim().slice(0, 120) : "";
+  if (required && !identifier) throw new Error(`${label} is required when this gateway is enabled.`);
+  return identifier;
+}
+
+function resellerPaymentSettings(rows: Array<{
+  gateway_type: string;
+  merchant_identifier: string | null;
+  account_reference: string | null;
+  config_json: unknown;
+  is_active: boolean;
+}>): {
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+} {
+  const readMpesa = () => {
+    const row = rows.find(item => item.gateway_type === "mpesa");
+    const config = row?.config_json && typeof row.config_json === "object" && !Array.isArray(row.config_json)
+      ? row.config_json as Record<string, unknown>
+      : {};
+    return {
+      enabled: row?.is_active === true,
+      merchantIdentifier: row?.merchant_identifier ?? "",
+      accountReference: row?.account_reference ?? "",
+      destinationType: config.destinationType === "till" ? "till" as const : "paybill" as const,
+    };
+  };
+  const readBank = () => {
+    const row = rows.find(item => item.gateway_type === "bank");
+    const config = row?.config_json && typeof row.config_json === "object" && !Array.isArray(row.config_json)
+      ? row.config_json as Record<string, unknown>
+      : {};
+    return {
+      enabled: row?.is_active === true,
+      merchantIdentifier: row?.merchant_identifier ?? "",
+      accountReference: row?.account_reference ?? "",
+      bankName: typeof config.bankName === "string" ? config.bankName : "",
+    };
+  };
+  return { mpesa: readMpesa(), bank: readBank() };
+}
+
+async function saveResellerPaymentSettings(account: { id: number; parent_id: number | null }, body: any) {
+  const mpesa = body?.mpesa && typeof body.mpesa === "object" ? body.mpesa : {};
+  const bank = body?.bank && typeof body.bank === "object" ? body.bank : {};
+  const mpesaEnabled = mpesa.enabled === true;
+  const bankEnabled = bank.enabled === true;
+  const mpesaDestinationType = mpesa.destinationType === "till" ? "till" : "paybill";
+  const mpesaMerchant = cleanGatewayIdentifier(mpesa.merchantIdentifier, "M-Pesa Till / PayBill number", mpesaEnabled);
+  const mpesaAccount = cleanGatewayIdentifier(mpesa.accountReference, "M-Pesa account reference", mpesaEnabled && mpesaDestinationType === "paybill");
+  const bankMerchant = cleanGatewayIdentifier(bank.merchantIdentifier, "Bank merchant number", bankEnabled);
+  const bankAccount = cleanGatewayIdentifier(bank.accountReference, "Bank account number", bankEnabled);
+  const bankName = cleanGatewayIdentifier(bank.bankName, "Bank name", bankEnabled);
+  const now = new Date().toISOString();
+
+  await Promise.all([
+    sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
+      user_id: account.id,
+      gateway_type: "mpesa",
+      merchant_identifier: mpesaMerchant,
+      account_reference: mpesaAccount,
+      config_json: { destinationType: mpesaDestinationType },
+      is_active: mpesaEnabled,
+      updated_at: now,
+    }),
+    sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
+      user_id: account.id,
+      gateway_type: "bank",
+      merchant_identifier: bankMerchant,
+      account_reference: bankAccount,
+      config_json: { bankName },
+      is_active: bankEnabled,
+      updated_at: now,
+    }),
+  ]);
+}
+
+router.get("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
-      res.status(403).json({ ok: false, error: "Only reseller accounts can configure this gateway." });
+      res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment settings." });
       return;
     }
-    const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";
-    const config = req.body?.config;
-    if (!/^[a-z][a-z0-9_-]{1,31}$/.test(gatewayType) || !config || typeof config !== "object" || Array.isArray(config)) {
-      res.status(400).json({ ok: false, error: "A valid gateway type and configuration are required." });
-      return;
-    }
-    const cleanConfig = Object.fromEntries(
-      Object.entries(config as Record<string, unknown>)
-        .filter(([key, value]) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(key) && typeof value === "string")
-        .map(([key, value]) => [key, String(value).slice(0, 500)]),
+    const rows = await sbSelectStrict<{
+      gateway_type: string;
+      merchant_identifier: string | null;
+      account_reference: string | null;
+      config_json: unknown;
+      is_active: boolean;
+    }>(
+      "payment_gateways",
+      `user_id=eq.${account.id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
     );
-    const rows = await sbUpsertStrict("isp_reseller_gateways", "reseller_id,gateway_type", {
-      admin_id: account.parent_id ?? account.id,
-      reseller_id: account.id,
-      gateway_type: gatewayType,
-      config_json: { encrypted: encryptVpnSecret(JSON.stringify(cleanConfig)) },
-      is_active: true,
-      updated_at: new Date().toISOString(),
-    });
-    const paymentGatewayType = gatewayType === "mpesa_paybill" || gatewayType === "mpesa_till_push" ? "mpesa" : gatewayType;
-    if (["stripe", "paypal", "mpesa"].includes(paymentGatewayType)) {
-      await sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
-        user_id: account.id,
-        gateway_type: paymentGatewayType,
-      api_keys_json: JSON.stringify(encryptVpnSecret(JSON.stringify(cleanConfig))),
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      });
+    res.json({ ok: true, settings: resellerPaymentSettings(rows) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load payment settings." });
+  }
+});
+
+router.put("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment settings." });
+      return;
     }
-    res.json({ ok: true, gateway: rows[0] ? { ...rows[0], config_json: undefined } : null });
+    await saveResellerPaymentSettings(account, req.body);
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to save gateway settings." });
   }
