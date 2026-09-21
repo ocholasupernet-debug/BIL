@@ -1881,12 +1881,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
  * its receipt matches a completed server-side transaction.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
+  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const receipt = extractMpesaReceipt(req.body?.message);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
 
-  if (!Number.isSafeInteger(adminId) || adminId < 1 || !receipt || requestedMac.invalid) {
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !receipt || requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "Paste a valid M-Pesa confirmation message and open this page from the ISP network." });
     return;
   }
@@ -1927,17 +1927,28 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     username: string | null;
     password: string | null;
     name: string | null;
+    phone: string | null;
     mac_address: string | null;
     ip_address: string | null;
     status: string;
     expires_at: string | null;
   }>(
     "isp_customers",
-    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,mac_address,ip_address,status,expires_at&limit=1`,
+    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,phone,mac_address,ip_address,status,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer?.username || !customer.password) {
     res.status(409).json({ ok: false, error: "The verified payment does not have hotspot credentials yet." });
+    return;
+  }
+  const transactionPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
+  const customerPhone = normaliseKenyanPhone(String(customer.phone ?? ""));
+  if (
+    !/^254\d{9}$/.test(transactionPhone) ||
+    !/^254\d{9}$/.test(customerPhone) ||
+    transactionPhone !== customerPhone
+  ) {
+    res.status(409).json({ ok: false, error: "This M-Pesa payment is not attached to the saved prepaid account." });
     return;
   }
   const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : 0;
@@ -1996,9 +2007,16 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const transactionMac = normaliseMacAddress(transaction.mac_address || customer.mac_address);
-  let mac = requestedMac.value || transactionMac;
-  if (requestedMac.value && transactionMac && requestedMac.value !== transactionMac) {
+  const transactionMac = normaliseMacAddress(transaction.mac_address);
+  const customerMac = normaliseMacAddress(customer.mac_address);
+  if (transactionMac && customerMac && transactionMac !== customerMac) {
+    res.status(409).json({ ok: false, error: "This M-Pesa payment is not attached to the saved hotspot device." });
+    return;
+  }
+  const savedMac = transactionMac || customerMac;
+  const transactionMacForResponse = savedMac;
+  let mac = requestedMac.value || transactionMacForResponse;
+  if (requestedMac.value && transactionMacForResponse && requestedMac.value !== transactionMacForResponse) {
     res.status(400).json({ ok: false, error: "This M-Pesa payment belongs to a different device." });
     return;
   }

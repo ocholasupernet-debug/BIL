@@ -60,6 +60,37 @@ function normalizeClientIp(value: string): string {
   return octets.every(octet => octet >= 0 && octet <= 255) ? trimmed : "";
 }
 
+function hotspotLoginStorageKey(adminId: number | null): string {
+  const host = typeof window !== "undefined" ? window.location.host : "portal";
+  return [
+    "ochola_hotspot_login_v1",
+    host,
+    adminId ? String(adminId) : "tenant",
+  ].map(value => encodeURIComponent(value)).join(":");
+}
+
+function readStoredHotspotCredentials(storageKey: string): HotspotCredentials | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "null") as Partial<HotspotCredentials> | null;
+    if (
+      typeof stored?.username === "string" &&
+      stored.username.trim() &&
+      typeof stored.password === "string" &&
+      stored.password
+    ) {
+      return { username: stored.username, password: stored.password };
+    }
+  } catch {}
+  return null;
+}
+
+function storeHotspotCredentials(storageKey: string, credentials: HotspotCredentials): void {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(credentials));
+  } catch {}
+}
+
 const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", light: "#667eea" },
   { bg: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", light: "#f093fb" },
@@ -173,6 +204,18 @@ export default function HotspotLogin() {
     hasTillNumber: boolean;
     paymentGateway: string;
   } | null>(null);
+  const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
+  const storedLoginCredentials = readStoredHotspotCredentials(loginCredentialsStorageKey);
+  const [loginUsername, setLoginUsername] = useState(storedLoginCredentials?.username ?? "");
+  const [loginPassword, setLoginPassword] = useState(storedLoginCredentials?.password ?? "");
+  const [loginCredentialsLocked, setLoginCredentialsLocked] = useState(Boolean(storedLoginCredentials));
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [loginSuccess, setLoginSuccess] = useState(false);
+  const [loggedInName, setLoggedInName] = useState("");
+  const [mpesaMessage, setMpesaMessage] = useState("");
+  const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
+  const [mpesaReconnectError, setMpesaReconnectError] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -248,6 +291,8 @@ export default function HotspotLogin() {
       setHotspotCredentials(accessData.credentials);
       setLoginUsername(accessData.credentials.username);
       setLoginPassword(accessData.credentials.password);
+      storeHotspotCredentials(loginCredentialsStorageKey, accessData.credentials);
+      setLoginCredentialsLocked(true);
       setAccessReady(true);
       setPaymentConfirmed(true);
       setPayError(null);
@@ -261,7 +306,7 @@ export default function HotspotLogin() {
       setAccessRetrying(false);
       bindingInFlight.current = false;
     }
-  }, [adminId, deviceMacAddress, deviceName, portalContext.ip]);
+  }, [adminId, deviceMacAddress, deviceName, loginCredentialsStorageKey, portalContext.ip]);
 
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
@@ -455,16 +500,6 @@ export default function HotspotLogin() {
     setPayError(null);
   };
 
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState("");
-  const [loginSuccess, setLoginSuccess] = useState(false);
-  const [loggedInName, setLoggedInName] = useState("");
-  const [mpesaMessage, setMpesaMessage] = useState("");
-  const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
-  const [mpesaReconnectError, setMpesaReconnectError] = useState("");
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(""); setLoginLoading(true);
@@ -476,7 +511,13 @@ export default function HotspotLogin() {
       });
       const data = await res.json();
       if (!res.ok) setLoginError(data.error ?? "Login failed");
-      else { setLoggedInName(data.customer?.name || loginUsername); setLoginSuccess(true); }
+      else {
+        const credentials = { username: loginUsername.trim(), password: loginPassword };
+        storeHotspotCredentials(loginCredentialsStorageKey, credentials);
+        setLoginCredentialsLocked(true);
+        setLoggedInName(data.customer?.name || credentials.username);
+        setLoginSuccess(true);
+      }
     } catch { setLoginError("Could not reach the server. Please try again."); }
     finally { setLoginLoading(false); }
   };
@@ -494,7 +535,7 @@ export default function HotspotLogin() {
         body: JSON.stringify({
           message,
           ...(adminId ? { adminId } : {}),
-          ...(portalContext.mac ? { mac_address: portalContext.mac } : {}),
+          ...(deviceMacAddress ? { mac_address: deviceMacAddress } : {}),
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
@@ -509,6 +550,8 @@ export default function HotspotLogin() {
       setHotspotCredentials(data.credentials);
       setLoginUsername(data.credentials.username);
       setLoginPassword(data.credentials.password);
+      storeHotspotCredentials(loginCredentialsStorageKey, data.credentials);
+      setLoginCredentialsLocked(true);
       setLoggedInName(data.credentials.username);
       setLoginSuccess(true);
       setAccessReady(true);
@@ -1360,7 +1403,7 @@ export default function HotspotLogin() {
                       <h3>Welcome, {loggedInName}!</h3>
                       <p style={{ marginBottom: 24 }}>You're now connected to the network.</p>
                       <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                        onClick={() => { setLoginSuccess(false); setLoginUsername(""); setLoginPassword(""); }}>
+                        onClick={() => { setLoginSuccess(false); setLoginError(""); }}>
                         Sign Out
                       </button>
                     </div>
@@ -1380,7 +1423,8 @@ export default function HotspotLogin() {
                             <User size={15} className="hp-input-icon" />
                             <input className="hp-input hp-input-left" type="text"
                               placeholder="Enter username" required
-                              value={loginUsername} onChange={e => setLoginUsername(e.target.value)} />
+                              value={loginUsername} readOnly={loginCredentialsLocked}
+                              onChange={e => setLoginUsername(e.target.value)} />
                           </div>
                         </div>
 
@@ -1390,9 +1434,15 @@ export default function HotspotLogin() {
                             <Lock size={15} className="hp-input-icon" />
                             <input className="hp-input hp-input-left" type="password"
                               placeholder="Enter password" required
-                              value={loginPassword} onChange={e => setLoginPassword(e.target.value)} />
+                              value={loginPassword} readOnly={loginCredentialsLocked}
+                              onChange={e => setLoginPassword(e.target.value)} />
                           </div>
                         </div>
+                        <p style={{ color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45, margin: "-2px 0 14px" }}>
+                          {loginCredentialsLocked
+                            ? "These credentials are saved on this device and will change only after a new purchase assigns a new account."
+                            : "Sign in once and this account will stay filled in on this device."}
+                        </p>
 
                         <button type="submit" disabled={loginLoading} className="hp-btn hp-btn-primary">
                           {loginLoading ? (
