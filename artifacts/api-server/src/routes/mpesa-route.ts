@@ -38,6 +38,7 @@ import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit } from 
 import { planValiditySeconds } from "../lib/plan-validity.js";
 import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
+import { syncRadiusCustomer } from "../lib/radius.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
@@ -1510,11 +1511,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
+    shared_users: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -1749,6 +1751,22 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   try {
     const hotspotProfile = hotspotPlanProfileName(plan.name);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
+    const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
+    await syncRadiusCustomer({
+      username: hotspotUsername,
+      password: hotspotPassword,
+      planId: plan.id,
+      planType: "hotspot",
+      enabled: true,
+      sharedUsers,
+      fullname: requestedDeviceName || `Hotspot ${paymentPhone}`,
+      rateDown: plan.speed_down,
+      rateDownUnit: plan.speed_down_unit,
+      rateUp: plan.speed_up,
+      rateUpUnit: plan.speed_up_unit,
+      dataLimitMb,
+      expiresAt: expiresAt.toISOString(),
+    });
     await requireHotspotUserProfile(credentials, hotspotProfile);
     if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
       await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
@@ -1960,11 +1978,12 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
+    shared_users: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
@@ -2084,6 +2103,22 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     ? String(Math.floor(dataLimitMb * 1_000_000))
     : "0";
   try {
+    const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
+    await syncRadiusCustomer({
+      username: customer.username,
+      password: customer.password,
+      planId: plan.id,
+      planType: "hotspot",
+      enabled: true,
+      sharedUsers,
+      fullname: customer.name,
+      rateDown: plan.speed_down,
+      rateDownUnit: plan.speed_down_unit,
+      rateUp: plan.speed_up,
+      rateUpUnit: plan.speed_up_unit,
+      dataLimitMb,
+      expiresAt: customer.expires_at,
+    });
     await requireHotspotUserProfile(credentials, hotspotProfile);
     const paidBindingApplied = await addHotspotIpBinding(credentials, {
       macAddress: mac,

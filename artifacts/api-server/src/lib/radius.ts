@@ -340,6 +340,11 @@ export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<
     "Simultaneous-Use",
     String(opts.planType === "pppoe" ? 1 : Math.max(1, opts.sharedUsers ?? 1)),
   );
+  await upsertRadCheck(
+    opts.username,
+    "Port-Limit",
+    String(opts.planType === "pppoe" ? 1 : Math.max(1, opts.sharedUsers ?? 1)),
+  );
   await setUserGroup(opts.username, `plan_${opts.planId}`);
 
   await deleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
