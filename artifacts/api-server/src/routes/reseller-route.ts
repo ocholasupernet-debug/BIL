@@ -49,6 +49,49 @@ function safeSegment(value: string, fallback: string): string {
   return result.slice(0, 55) || fallback;
 }
 
+function cleanServicePath(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  const clean = value.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(clean) || clean.includes("..")) {
+    throw new Error("The service portal folder contains unsupported characters.");
+  }
+  return clean;
+}
+
+function portServiceNetwork(portId: number, requested: string): {
+  network: string;
+  gateway: string;
+  poolRange: string;
+} {
+  const fallbackOctet = (portId % 200) + 1;
+  const raw = requested.trim() || `10.250.${fallbackOctet}.0/24`;
+  const [rawAddress, rawPrefix] = raw.split("/");
+  const octets = rawAddress?.split(".").map(Number) ?? [];
+  const privateNetwork = octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168);
+  if (
+    !privateNetwork
+    || octets.length !== 4
+    || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+    || Number(rawPrefix) !== 24
+    || octets[3] !== 0
+  ) {
+    throw new Error("The port service subnet must be a private network address ending in .0/24.");
+  }
+  return {
+    network: `${octets[0]}.${octets[1]}.${octets[2]}.0/24`,
+    gateway: `${octets[0]}.${octets[1]}.${octets[2]}.1`,
+    poolRange: `${octets[0]}.${octets[1]}.${octets[2]}.10-${octets[0]}.${octets[1]}.${octets[2]}.254`,
+  };
+}
+
+function requestHostname(req: Request): string {
+  const forwarded = req.headers["x-forwarded-proto"];
+  const protocol = typeof forwarded === "string" ? forwarded.split(",")[0].trim() : req.protocol;
+  return new URL(`${protocol}://${req.get("host")}`).hostname;
+}
+
 function validInterface(value: unknown): value is string {
   return typeof value === "string"
     && /^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(value.trim())
@@ -213,6 +256,7 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       pppoeEnabled,
       subnetRange,
       hotspotTemplatePath,
+      pppoeFolderPath,
     } = req.body as Record<string, unknown>;
     const cleanName = typeof name === "string" ? name.trim() : "";
     const cleanCompany = typeof companyName === "string" ? companyName.trim() : "";
@@ -220,6 +264,7 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
     const cleanEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
     const cleanPassword = typeof password === "string" ? password : "";
     const cleanInterface = typeof interfaceName === "string" ? interfaceName.trim() : "";
+    const requestedSubnet = typeof subnetRange === "string" ? subnetRange.trim() : "";
     const cap = Number(bandwidthCapMbps);
     const routerNumber = Number(routerId);
     if (cleanName.length < 2 || cleanUsername.length < 3 || !/^[a-zA-Z0-9._-]+$/.test(cleanUsername)) {
@@ -234,6 +279,20 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       res.status(400).json({ ok: false, error: "Choose a router, a valid physical interface, and a bandwidth cap." });
       return;
     }
+    const serviceNetwork = portServiceNetwork(routerNumber, requestedSubnet);
+    const servicePortName = safeSegment(cleanInterface, `port_${routerNumber}`);
+    const serviceBridgeName = safeSegment(
+      typeof bridgeName === "string" && bridgeName.trim()
+        ? bridgeName
+        : `ochola-port-${servicePortName}`,
+      `ochola-port-${servicePortName}`,
+    );
+    const hotspotPath = hotspotEnabled === true
+      ? cleanServicePath(hotspotTemplatePath, `hotspot/reseller_${servicePortName}_page`)
+      : null;
+    const pppoePath = pppoeEnabled === true
+      ? cleanServicePath(pppoeFolderPath, `hotspot/pppoe_${servicePortName}_page`)
+      : null;
     const target = await tenantRouter(account.id, routerNumber);
     const conflict = await sbSelectStrict(
       "isp_reseller_ports",
@@ -274,11 +333,13 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
         assigned_reseller_id: resellerId,
       router_id: routerNumber,
       interface_name: cleanInterface,
-      bridge_name: typeof bridgeName === "string" ? bridgeName.trim() || null : null,
+      bridge_name: serviceBridgeName,
       hotspot_enabled: hotspotEnabled === true,
-      hotspot_template_path: typeof hotspotTemplatePath === "string" ? hotspotTemplatePath.trim() || null : null,
+      hotspot_template_path: hotspotPath,
+      hotspot_folder_path: hotspotPath,
       pppoe_enabled: pppoeEnabled === true,
-      subnet_range: typeof subnetRange === "string" ? subnetRange.trim() || null : null,
+      pppoe_folder_path: pppoePath,
+      subnet_range: serviceNetwork.network,
       bandwidth_cap_mbps: Math.round(cap),
         reseller_bandwidth_cap: Math.round(cap),
       status: "pending",
@@ -286,46 +347,133 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
     assignmentId = Number(assignmentRows[0]?.id);
     if (!assignmentId) throw new Error("The reseller port assignment could not be created.");
 
-    const queueName = `RESELLER_ROOT_${safeSegment(cleanInterface, `PORT_${assignmentId}`)}`;
-    await runRouterCommand(routerCredentials(target), [
-      "/queue/simple/add",
-      `=name=${queueName}`,
-      `=target=${cleanInterface}`,
-      `=max-limit=${Math.round(cap)}M/${Math.round(cap)}M`,
-      "=priority=2/2",
-      "=comment=OcholaSupernet reseller port",
+    const creds = routerCredentials(target);
+    const bridgeRows = await runRouterCommand(creds, [
+      "/interface/bridge/print",
+      "=.proplist=name",
+      `?name=${serviceBridgeName}`,
     ]);
-    if (hotspotEnabled === true) {
-      const hotspotProfile = `reseller_${resellerId}_${safeSegment(cleanInterface, `port_${assignmentId}`)}_profile`;
-      const portalDirectory = typeof hotspotTemplatePath === "string" && hotspotTemplatePath.trim()
-        ? hotspotTemplatePath.trim().replace(/^\/+|\/+$/g, "").slice(0, 120)
-        : `hotspot/reseller_${safeSegment(cleanInterface, `port_${assignmentId}`)}_page`;
-      if (!/^[a-zA-Z0-9_./-]+$/.test(portalDirectory)) {
-        throw new Error("The hotspot template path contains unsupported characters.");
-      }
-      await runRouterCommand(routerCredentials(target), [
-        "/ip/hotspot/profile/add",
-        `=name=${hotspotProfile}`,
-        `=html-directory=${portalDirectory}`,
-        "=login-by=http-chap,http-pap",
-        "=comment=OcholaSupernet reseller hotspot profile",
-      ]);
-      await runRouterCommand(routerCredentials(target), [
-        "/ip/hotspot/add",
-        `=name=${safeSegment(`reseller_${resellerId}_${cleanInterface}`, `reseller_${resellerId}`)}`,
-        `=interface=${cleanInterface}`,
-        `=profile=${hotspotProfile}`,
-        "=disabled=no",
-        "=comment=OcholaSupernet reseller hotspot",
+    if (!bridgeRows.some((row) => row.name === serviceBridgeName)) {
+      await runRouterCommand(creds, [
+        "/interface/bridge/add",
+        `=name=${serviceBridgeName}`,
+        `=comment=OcholaSupernet_${servicePortName}_service_bridge`,
       ]);
     }
-    if (pppoeEnabled === true) {
-      await runRouterCommand(routerCredentials(target), [
-        "/interface/pppoe-server/server/add",
-        `=service-name=${safeSegment(`reseller_${resellerId}`, `reseller_${resellerId}`)}`,
+    const bridgePortRows = await runRouterCommand(creds, [
+      "/interface/bridge/port/print",
+      "=.proplist=.id,bridge,interface",
+      `?interface=${cleanInterface}`,
+    ]);
+    const existingBridgePort = bridgePortRows.find((row) => row.interface === cleanInterface);
+    if (existingBridgePort && existingBridgePort.bridge !== serviceBridgeName) {
+      throw new Error(`Interface ${cleanInterface} is already assigned to foreign bridge ${existingBridgePort.bridge}.`);
+    }
+    if (!existingBridgePort) {
+      await runRouterCommand(creds, [
+        "/interface/bridge/port/add",
+        `=bridge=${serviceBridgeName}`,
         `=interface=${cleanInterface}`,
+        `=comment=OcholaSupernet_${servicePortName}_service_port`,
+      ]);
+    }
+
+    const hotspotProfile = `reseller_${resellerId}_${servicePortName}_profile`;
+    const hotspotServer = `reseller_${resellerId}_${servicePortName}`;
+    const parentQueue = `RESELLER_ROOT_${servicePortName}`;
+    if (hotspotPath) {
+      await runRouterCommand(creds, [
+        "/ip/address/add",
+        `=address=${serviceNetwork.gateway}/24`,
+        `=interface=${serviceBridgeName}`,
+        `=comment=OcholaSupernet_${servicePortName}_hotspot_gateway`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/pool/add",
+        `=name=HS_POOL_${servicePortName}`,
+        `=ranges=${serviceNetwork.poolRange}`,
+        `=comment=OcholaSupernet_${servicePortName}_hotspot_pool`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/dhcp-server/network/add",
+        `=address=${serviceNetwork.network}`,
+        `=gateway=${serviceNetwork.gateway}`,
+        `=dns-server=${serviceNetwork.gateway},8.8.8.8`,
+        `=comment=OcholaSupernet_${servicePortName}_hotspot_network`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/dhcp-server/add",
+        `=name=HS_DHCP_${servicePortName}`,
+        `=interface=${serviceBridgeName}`,
+        `=address-pool=HS_POOL_${servicePortName}`,
+        "=disabled=no",
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/hotspot/profile/add",
+        `=name=${hotspotProfile}`,
+        `=hotspot-address=${serviceNetwork.gateway}`,
+        `=html-directory=${hotspotPath}`,
+        "=login-by=http-chap,http-pap",
+        `=comment=OcholaSupernet_${servicePortName}_hotspot_profile`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/hotspot/add",
+        `=name=${hotspotServer}`,
+        `=interface=${serviceBridgeName}`,
+        `=profile=${hotspotProfile}`,
+        `=address-pool=HS_POOL_${servicePortName}`,
+        "=disabled=no",
+        `=comment=OcholaSupernet_${servicePortName}_hotspot`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/hotspot/walled-garden/ip/add",
+        `=dst-host=${requestHostname(req)}`,
+        "=action=accept",
+        `=comment=OcholaSupernet_${servicePortName}_walled_garden`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/firewall/nat/add",
+        "=chain=srcnat",
+        "=action=masquerade",
+        `=src-address=${serviceNetwork.network}`,
+        "=out-interface-list=WAN",
+        `=comment=OcholaSupernet_${servicePortName}_hotspot_nat`,
+      ]);
+    }
+    if (hotspotPath || pppoePath) {
+      await runRouterCommand(creds, [
+        "/queue/simple/add",
+        `=name=${parentQueue}`,
+        `=target=${serviceBridgeName}`,
+        `=max-limit=${Math.round(cap)}M/${Math.round(cap)}M`,
+        "=priority=2/2",
+        `=comment=OcholaSupernet_${servicePortName}_parent_queue`,
+      ]);
+    }
+    if (pppoePath) {
+      await runRouterCommand(creds, [
+        "/interface/pppoe-server/server/add",
+        `=service-name=PPPoE_${servicePortName}`,
+        `=interface=${serviceBridgeName}`,
         "=disabled=no",
         "=one-session-per-host=yes",
+        `=comment=OcholaSupernet_${servicePortName}_pppoe`,
+      ]);
+      await runRouterCommand(creds, [
+        "/ip/hotspot/profile/add",
+        `=name=PPPOE_ALERT_${servicePortName}`,
+        `=html-directory=${pppoePath}`,
+        "=login-by=http-chap,http-pap",
+        `=comment=OcholaSupernet_${servicePortName}_pppoe_landing`,
+      ]);
+      await runRouterCommand(creds, [
+        "/queue/simple/add",
+        `=name=PPPOE_PREMIUM_${servicePortName}`,
+        `=target=${serviceBridgeName}`,
+        `=parent=${parentQueue}`,
+        `=max-limit=${Math.round(cap)}M/${Math.round(cap)}M`,
+        "=priority=1/1",
+        `=comment=OcholaSupernet_${servicePortName}_pppoe_premium`,
       ]);
     }
     const updated = await sbUpdateStrict("isp_reseller_ports", `id=eq.${assignmentId}&admin_id=eq.${account.id}`, {

@@ -75,6 +75,7 @@ function AdminResellerManagement() {
   const [form, setForm] = useState({
     name: "", companyName: "", username: "", email: "", phone: "", password: "",
     interfaceName: "", bandwidthCapMbps: "30", bridgeName: "", subnetRange: "",
+    hotspotTemplatePath: "", pppoeFolderPath: "",
     hotspotEnabled: true, pppoeEnabled: false,
   });
   const [loading, setLoading] = useState(true);
@@ -116,7 +117,7 @@ function AdminResellerManagement() {
     try {
       await apiJson("/api/admin/resellers", { method: "POST", body: JSON.stringify({ ...form, routerId: Number(routerId) }) });
       setSuccess("Reseller account created and the physical port was provisioned.");
-      setForm((current) => ({ ...current, name: "", companyName: "", username: "", email: "", phone: "", password: "", interfaceName: "" }));
+       setForm((current) => ({ ...current, name: "", companyName: "", username: "", email: "", phone: "", password: "", interfaceName: "", hotspotTemplatePath: "", pppoeFolderPath: "" }));
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Provisioning failed."); }
     finally { setSubmitting(false); }
@@ -165,6 +166,8 @@ function AdminResellerManagement() {
                 <Field label="Wholesale bandwidth cap (Mbps)"><input required type="number" min="1" max="100000" style={inputStyle} value={form.bandwidthCapMbps} onChange={(e) => update("bandwidthCapMbps", e.target.value)} /></Field>
                 <Field label="Subnet range (optional)"><input placeholder="192.168.30.0/24" style={inputStyle} value={form.subnetRange} onChange={(e) => update("subnetRange", e.target.value)} /></Field>
                 <Field label="Bridge name (optional)"><input placeholder="bridge-reseller-1" style={inputStyle} value={form.bridgeName} onChange={(e) => update("bridgeName", e.target.value)} /></Field>
+                <Field label="Hotspot page folder (optional)"><input placeholder="hotspot/reseller_port_1" style={inputStyle} value={form.hotspotTemplatePath} onChange={(e) => update("hotspotTemplatePath", e.target.value)} /></Field>
+                <Field label="PPPoE landing folder (optional)"><input placeholder="hotspot/pppoe_port_1" style={inputStyle} value={form.pppoeFolderPath} onChange={(e) => update("pppoeFolderPath", e.target.value)} /></Field>
                 <div style={{ display: "flex", gap: 18, alignItems: "end", paddingBottom: 10 }}>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: "var(--isp-text)" }}><input type="checkbox" checked={form.hotspotEnabled} onChange={(e) => update("hotspotEnabled", e.target.checked)} /> Hotspot</label>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: "var(--isp-text)" }}><input type="checkbox" checked={form.pppoeEnabled} onChange={(e) => update("pppoeEnabled", e.target.checked)} /> PPPoE</label>
