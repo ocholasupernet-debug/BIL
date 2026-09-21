@@ -9,6 +9,8 @@ const DEFAULT_PREFERENCES = {
   layout: "balanced",
   cardShape: "rounded",
   hideAmounts: false,
+  portalBackground: "midnight",
+  portalPackageShape: "rounded",
 } as const;
 
 const LAYOUTS = new Set(["balanced", "focus", "compact"]);
@@ -31,6 +33,8 @@ const CARD_SHAPES = new Set([
   "ticket",
   "squircle",
 ]);
+const PORTAL_BACKGROUNDS = new Set(["midnight", "ocean", "aurora", "forest", "sunset", "sand"]);
+const PORTAL_PACKAGE_SHAPES = new Set(["rounded", "soft-square", "compact", "square", "circle", "pill", "hexagon", "octagon", "squircle"]);
 
 interface DashboardPreferenceRow {
   admin_id: number;
@@ -38,6 +42,8 @@ interface DashboardPreferenceRow {
   layout: string;
   card_shape: string;
   hide_amounts: boolean;
+  portal_background: string;
+  portal_package_shape: string;
 }
 
 function adminId(req: Request): number {
@@ -55,13 +61,17 @@ function normalizePreferences(row?: Partial<DashboardPreferenceRow> | null) {
     layout: typeof row?.layout === "string" && LAYOUTS.has(row.layout) ? row.layout : DEFAULT_PREFERENCES.layout,
     cardShape: typeof row?.card_shape === "string" && CARD_SHAPES.has(row.card_shape) ? row.card_shape : DEFAULT_PREFERENCES.cardShape,
     hideAmounts: typeof row?.hide_amounts === "boolean" ? row.hide_amounts : DEFAULT_PREFERENCES.hideAmounts,
+    portalBackground: typeof row?.portal_background === "string" && PORTAL_BACKGROUNDS.has(row.portal_background)
+      ? row.portal_background : DEFAULT_PREFERENCES.portalBackground,
+    portalPackageShape: typeof row?.portal_package_shape === "string" && PORTAL_PACKAGE_SHAPES.has(row.portal_package_shape)
+      ? row.portal_package_shape : DEFAULT_PREFERENCES.portalPackageShape,
   };
 }
 
 async function readPreferences(id: number) {
   const rows = await sbSelect<DashboardPreferenceRow>(
     "isp_dashboard_preferences",
-    `admin_id=eq.${id}&select=accent_color,layout,card_shape,hide_amounts&limit=1`,
+    `admin_id=eq.${id}&select=accent_color,layout,card_shape,hide_amounts,portal_background,portal_package_shape&limit=1`,
   );
   return normalizePreferences(rows[0]);
 }
@@ -83,7 +93,7 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
     return;
   }
 
-  const { accentColor, layout, cardShape, hideAmounts } = input as Record<string, unknown>;
+  const { accentColor, layout, cardShape, hideAmounts, portalBackground, portalPackageShape } = input as Record<string, unknown>;
   if (typeof accentColor !== "string" || !/^#[0-9a-f]{6}$/i.test(accentColor)) {
     res.status(400).json({ ok: false, error: "Choose a valid six-digit dashboard color." });
     return;
@@ -100,6 +110,14 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
     res.status(400).json({ ok: false, error: "Choose whether financial amounts should be visible." });
     return;
   }
+  if (typeof portalBackground !== "string" || !PORTAL_BACKGROUNDS.has(portalBackground)) {
+    res.status(400).json({ ok: false, error: "Choose a supported captive portal background." });
+    return;
+  }
+  if (typeof portalPackageShape !== "string" || !PORTAL_PACKAGE_SHAPES.has(portalPackageShape)) {
+    res.status(400).json({ ok: false, error: "Choose a supported captive portal package shape." });
+    return;
+  }
 
   try {
     res.set("Cache-Control", "no-store");
@@ -112,6 +130,8 @@ router.put("/admin/dashboard-preferences", requireAdmin(), async (req: Request, 
         layout,
         card_shape: cardShape,
         hide_amounts: hideAmounts,
+        portal_background: portalBackground,
+        portal_package_shape: portalPackageShape,
         updated_at: new Date().toISOString(),
       },
     );

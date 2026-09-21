@@ -81,15 +81,32 @@ async function readTypography(id: number) {
   };
 }
 
-async function readPortalAccent(id: number): Promise<string> {
+const PORTAL_BACKGROUNDS = new Set(["midnight", "ocean", "aurora", "forest", "sunset", "sand"]);
+const PORTAL_PACKAGE_SHAPES = new Set(["rounded", "soft-square", "compact", "square", "circle", "pill", "hexagon", "octagon", "squircle"]);
+
+async function readPortalAppearance(id: number): Promise<{
+  accentColor: string;
+  portalBackground: string;
+  portalPackageShape: string;
+}> {
   try {
-    const rows = await sbSelect<{ accent_color?: string | null }>(
+    const rows = await sbSelect<{
+      accent_color?: string | null;
+      portal_background?: string | null;
+      portal_package_shape?: string | null;
+    }>(
       "isp_dashboard_preferences",
-      `admin_id=eq.${id}&select=accent_color&limit=1`,
+      `admin_id=eq.${id}&select=accent_color,portal_background,portal_package_shape&limit=1`,
     );
-    return normalizeAccent(rows[0]?.accent_color);
+    return {
+      accentColor: normalizeAccent(rows[0]?.accent_color),
+      portalBackground: typeof rows[0]?.portal_background === "string" && PORTAL_BACKGROUNDS.has(rows[0].portal_background)
+        ? rows[0].portal_background : "midnight",
+      portalPackageShape: typeof rows[0]?.portal_package_shape === "string" && PORTAL_PACKAGE_SHAPES.has(rows[0].portal_package_shape)
+        ? rows[0].portal_package_shape : "rounded",
+    };
   } catch {
-    return DEFAULT_PORTAL_ACCENT;
+    return { accentColor: DEFAULT_PORTAL_ACCENT, portalBackground: "midnight", portalPackageShape: "rounded" };
   }
 }
 
@@ -102,12 +119,20 @@ router.get("/public/typography", async (req: Request, res: Response): Promise<vo
     return;
   }
   try {
-    const [result, accentColor] = await Promise.all([
+    const [result, appearance] = await Promise.all([
       readTypography(id),
-      readPortalAccent(id),
+      readPortalAppearance(id),
     ]);
     res.set("Cache-Control", "no-store");
-    res.json({ ok: true, adminId: id, ...result.preferences, accentColor, apiBase: apiBase(req, result.subdomain) });
+    res.json({
+      ok: true,
+      adminId: id,
+      ...result.preferences,
+      accentColor: appearance.accentColor,
+      portalBackground: appearance.portalBackground,
+      portalPackageShape: appearance.portalPackageShape,
+      apiBase: apiBase(req, result.subdomain),
+    });
   } catch {
     res.status(503).json({ ok: false, error: "Typography preferences are temporarily unavailable." });
   }

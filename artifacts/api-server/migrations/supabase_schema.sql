@@ -109,6 +109,10 @@ create table if not exists isp_dashboard_preferences (
   card_shape   text not null default 'rounded'
     check (card_shape in ('rounded', 'soft-square', 'compact', 'square', 'circle', 'star', 'triangle', 'diamond', 'hexagon', 'octagon', 'pill', 'leaf', 'arch', 'bevel', 'notched', 'ticket', 'squircle')),
   hide_amounts boolean not null default false,
+  portal_background text not null default 'midnight'
+    check (portal_background in ('midnight', 'ocean', 'aurora', 'forest', 'sunset', 'sand')),
+  portal_package_shape text not null default 'rounded'
+    check (portal_package_shape in ('rounded', 'soft-square', 'compact', 'square', 'circle', 'pill', 'hexagon', 'octagon', 'squircle')),
   updated_at   timestamptz not null default now()
 );
 alter table isp_dashboard_preferences enable row level security;

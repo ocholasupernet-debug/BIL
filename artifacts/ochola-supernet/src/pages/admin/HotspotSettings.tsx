@@ -257,6 +257,8 @@ type ExportConfig = {
   faqEnabled: boolean;
   faqText: string;
   colors: ColorSettings;
+  portalBackground: string;
+  portalPackageShape: string;
 };
 
 type PortalPlan = {
@@ -267,13 +269,25 @@ type PortalPlan = {
   validity_unit: string;
 };
 
-function renderStaticPlanCards(plans: PortalPlan[]): string {
+const PORTAL_BACKGROUND_KEYS = new Set(["midnight", "ocean", "aurora", "forest", "sunset", "sand"]);
+const PORTAL_PACKAGE_SHAPE_KEYS = new Set(["rounded", "soft-square", "compact", "square", "circle", "pill", "hexagon", "octagon", "squircle"]);
+
+function safePortalBackground(value: unknown): string {
+  return typeof value === "string" && PORTAL_BACKGROUND_KEYS.has(value) ? value : "midnight";
+}
+
+function safePortalPackageShape(value: unknown): string {
+  return typeof value === "string" && PORTAL_PACKAGE_SHAPE_KEYS.has(value) ? value : "rounded";
+}
+
+function renderStaticPlanCards(plans: PortalPlan[], packageShape: string): string {
+  const safeShape = safePortalPackageShape(packageShape);
   return plans.map((plan, index) => {
     const name = escapeHtml(plan.name);
     const unit = escapeHtml(plan.validity_unit);
     const price = Number.isFinite(plan.price) ? String(plan.price) : "0";
     const validity = Number.isFinite(plan.validity) ? String(plan.validity) : "0";
-    return `<div class="plan-card" data-plan-id="${plan.id}" style="border:1px solid rgba(167,139,250,.25);background:rgba(17,25,54,.92);border-radius:1.125rem;overflow:hidden;display:flex;flex-direction:column">
+    return `<div class="plan-card package-shape-${safeShape}" data-plan-id="${plan.id}" style="border:1px solid rgba(167,139,250,.25);background:rgba(17,25,54,.92);overflow:hidden;display:flex;flex-direction:column">
       <div style="padding:1.5rem 1rem 1.25rem;text-align:center;flex:1;background:linear-gradient(160deg,rgba(244,114,182,.1),rgba(124,58,237,.18));border-top:2px solid rgba(167,139,250,.5)">
         <span style="display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;margin-bottom:1rem;background:#4c1d95">${name}</span>
         <div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em"><span style="font-size:.8125rem;font-weight:600;color:#a78bfa">Ksh</span>&nbsp;${price}</div>
@@ -284,7 +298,12 @@ function renderStaticPlanCards(plans: PortalPlan[]): string {
   }).join("");
 }
 
-function makeExportConfig(settings: HSettings, apiBase: string, plans: PortalPlan[]): ExportConfig {
+function makeExportConfig(
+  settings: HSettings,
+  apiBase: string,
+  plans: PortalPlan[],
+  appearance: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+): ExportConfig {
   return {
     adminId: ADMIN_ID,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
@@ -315,31 +334,41 @@ function makeExportConfig(settings: HSettings, apiBase: string, plans: PortalPla
     faqEnabled: settings.faqSection === "Enable",
     faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
     colors: { ...DEFAULT_COLORS, ...settings.colors },
+    portalBackground: safePortalBackground(appearance.portalBackground),
+    portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
   };
 }
 
-async function resolvePortalApiBase(domain: string): Promise<string> {
+async function resolvePortalAppearance(domain: string): Promise<{
+  apiBase: string;
+  portalBackground: string;
+  portalPackageShape: string;
+}> {
   try {
     const response = await fetch(`/api/public/typography?adminId=${encodeURIComponent(String(ADMIN_ID))}`, {
       cache: "no-store",
     });
     if (response.ok) {
-      const data = await response.json() as { apiBase?: unknown };
-      if (typeof data.apiBase === "string" && isValidPublicOrigin(data.apiBase)) {
-        return data.apiBase.replace(/\/$/, "");
-      }
+      const data = await response.json() as { apiBase?: unknown; portalBackground?: unknown; portalPackageShape?: unknown };
+      return {
+        apiBase: typeof data.apiBase === "string" && isValidPublicOrigin(data.apiBase)
+          ? data.apiBase.replace(/\/$/, "")
+          : portalOriginFromBrand(domain),
+        portalBackground: safePortalBackground(data.portalBackground),
+        portalPackageShape: safePortalPackageShape(data.portalPackageShape),
+      };
     }
   } catch {
     /* The tenant-derived public origin below remains deterministic offline. */
   }
-  return portalOriginFromBrand(domain);
+  return { apiBase: portalOriginFromBrand(domain), portalBackground: "midnight", portalPackageShape: "rounded" };
 }
 
 export async function buildPortalHtml(settings: HSettings, domain: string): Promise<string> {
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
-  const apiBase = await resolvePortalApiBase(domain);
+  const appearance = await resolvePortalAppearance(domain);
   const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
   try {
@@ -367,10 +396,10 @@ export async function buildPortalHtml(settings: HSettings, domain: string): Prom
   } catch {
     /* The API fallback remains available when the admin panel is offline. */
   }
-  const config = makeExportConfig(settings, apiBase, plans);
+  const config = makeExportConfig(settings, appearance.apiBase, plans, appearance);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
-  const staticPlanCards = renderStaticPlanCards(plans);
+  const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
   const templateWithStaticPlans = staticPlanCards
     ? template.replace(
       /(<div id="plansGrid"[^>]*>)\s*<div[^>]*>Loading plans…<\/div>\s*(<\/div>)/,
