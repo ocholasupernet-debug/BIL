@@ -230,9 +230,9 @@ export function buildDualServiceCommands(
   const parentQueue = resources.parentQueue;
   const cap = port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined)
-    ?? `hotspot-${resources.resourceName}.lan`;
+    ?? `hotspot-${resources.resourceName}.com`;
   const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined)
-    ?? `pppoe-${resources.resourceName}.lan`;
+    ?? `pppoe-${resources.resourceName}.com`;
   const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
   const commands: string[][] = [];
 
@@ -472,9 +472,9 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
     const hotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName)
-      ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.lan` : null);
+      ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null);
     const pppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName)
-      ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.lan` : null);
+      ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null);
     if ((req.body?.hotspotDnsName && !hotspotDnsName) || (req.body?.pppoeDnsName && !pppoeDnsName)) {
       res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
       return;
@@ -537,13 +537,13 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
     const hotspotDnsName = req.body?.hotspotDnsName === undefined
-      ? (port.hotspot_dns_name ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.lan` : null))
+      ? (port.hotspot_dns_name ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null))
       : (optionalPortalHostname(req.body.hotspotDnsName)
-        ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.lan` : null));
+        ?? (hotspotEnabled ? `hotspot-${defaultResources.resourceName}.com` : null));
     const pppoeDnsName = req.body?.pppoeDnsName === undefined
-      ? (port.pppoe_dns_name ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.lan` : null))
+      ? (port.pppoe_dns_name ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null))
       : (optionalPortalHostname(req.body.pppoeDnsName)
-        ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.lan` : null));
+        ?? (pppoeEnabled ? `pppoe-${defaultResources.resourceName}.com` : null));
     if (
       (req.body?.hotspotDnsName && !hotspotDnsName)
       || (req.body?.pppoeDnsName && !pppoeDnsName)
@@ -637,8 +637,8 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       ...port,
       bridge_name: port.bridge_name ?? resources.bridgeName,
       subnet_range: port.subnet_range ?? nextAvailableSubnet(peers),
-      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? `hotspot-${resources.resourceName}.lan` : null),
-      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? `pppoe-${resources.resourceName}.lan` : null),
+      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? `hotspot-${resources.resourceName}.com` : null),
+      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? `pppoe-${resources.resourceName}.com` : null),
     };
     if (
       deploymentPort.bridge_name !== port.bridge_name
@@ -654,16 +654,15 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
         updated_at: new Date().toISOString(),
       });
     }
-    const portName = resources.portName;
-    const hotspotDestination = hotspotSource ? `flash/hotspot/hs_${portName}/${sourceNameFromPath(hotspotSource)}` : null;
-    const pppoeDestination = pppoeSource ? `flash/hotspot/pppoe_${portName}/${sourceNameFromPath(pppoeSource)}` : null;
-    for (const directory of [`flash/hotspot/hs_${portName}`, `flash/hotspot/pppoe_${portName}`]) {
+    const hotspotDestination = hotspotSource ? `${resources.hotspotDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
+    const pppoeDestination = pppoeSource ? `${resources.pppoeDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
+    for (const directory of [resources.hotspotDirectory, resources.pppoeDirectory]) {
       await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
     }
     if (hotspotSource && hotspotDestination) await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
     if (pppoeSource && pppoeDestination) await deployApprovedSource(found.creds, req, pppoeSource, pppoeDestination);
-    const hotspotPath = hotspotDestination ? `flash/hotspot/hs_${portName}` : null;
-    const pppoePath = pppoeDestination ? `flash/hotspot/pppoe_${portName}` : null;
+    const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
+    const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
     const portalHostname = new URL(requestOrigin(req)).hostname;
     const commands = buildDualServiceCommands(
       deploymentPort,

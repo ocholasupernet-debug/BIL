@@ -102,6 +102,21 @@ function hostnameSegment(value: string, fallback: string): string {
   return segment.slice(0, 42) || fallback;
 }
 
+function assetKeyForPort(port: Pick<PortAssignment, "id" | "interface_name">): string {
+  const portName = safeSegment(port.interface_name, `port-${port.id}`).slice(0, 18);
+  return safeSegment(`p${port.id}-${portName}`, `port-${port.id}`).slice(0, 32);
+}
+
+function installedAssetPath(
+  service: "hs" | "pppoe",
+  port: Pick<PortAssignment, "id" | "interface_name"> | null,
+  sourcePath: string,
+): string {
+  if (!port) return "Created automatically in a new per-port directory after saving";
+  const fileName = sourcePath.trim().split("/").pop() || "login.html";
+  return `flash/hotspot/${service}_${assetKeyForPort(port)}/${fileName}`;
+}
+
 function nextAvailableSubnet(assignments: PortAssignment[]): string {
   const used = new Set(
     assignments
@@ -117,15 +132,14 @@ function nextAvailableSubnet(assignments: PortAssignment[]): string {
 
 function autoDraftForPort(router: RouterOption, port: PortOption, assignments: PortAssignment[]): Draft {
   const portSegment = safeSegment(port.name, "port");
-  const portHostnameSegment = hostnameSegment(port.name, "port");
   const routerSegment = hostnameSegment(router.name, `router-${router.id}`);
   return {
     hotspotEnabled: true,
     hotspotFolderPath: "login.html",
-    hotspotDnsName: `hotspot-${routerSegment}-${portHostnameSegment}.lan`,
+    hotspotDnsName: "",
     pppoeEnabled: false,
     pppoeFolderPath: "login.html",
-    pppoeDnsName: `pppoe-${routerSegment}-${portHostnameSegment}.lan`,
+    pppoeDnsName: "",
     bridgeName: `${routerSegment}-bridge-${portSegment}`,
     subnetRange: nextAvailableSubnet(assignments),
     bandwidthCapMbps: "30",
@@ -462,17 +476,23 @@ export default function Multiport() {
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.hotspotEnabled} onChange={(event) => setDraftValue("hotspotEnabled", event.target.checked)} /> Hotspot sign-in</label>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={draft.pppoeEnabled} onChange={(event) => setDraftValue("pppoeEnabled", event.target.checked)} /> PPPoE service</label>
                 </div>
-                <Field label="Hotspot portal asset" hint="Defaults to the approved login.html asset; replace it with another approved asset if needed.">
+                <Field label="Hotspot portal asset" hint="Choose the approved source asset. It is copied into a new directory dedicated to this port.">
                   <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.hotspotEnabled} />
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                    Installed copy: {installedAssetPath("hs", selectedAssignment, draft.hotspotFolderPath || "login.html")}
+                  </div>
                 </Field>
-                <Field label="Hotspot name / DNS" hint="Generated from the router and port; replace it with your public hostname if needed.">
-                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-router-ether2.lan" disabled={!draft.hotspotEnabled} />
+                <Field label="Hotspot name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
+                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-company-router-ether2.com" disabled={!draft.hotspotEnabled} />
                 </Field>
-                <Field label="PPPoE landing asset" hint="Defaults to the approved login.html asset; PPPoE uses a landing/status page, not a captive Hotspot login.">
+                <Field label="PPPoE landing asset" hint="Choose the approved source asset. It is copied into a separate directory dedicated to this port.">
                   <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.pppoeEnabled} />
+                  <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                    Installed copy: {installedAssetPath("pppoe", selectedAssignment, draft.pppoeFolderPath || "login.html")}
+                  </div>
                 </Field>
-                <Field label="PPPoE name / DNS" hint="Generated from the router and port; replace it with your public hostname if needed.">
-                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-router-ether2.lan" disabled={!draft.pppoeEnabled} />
+                <Field label="PPPoE name / DNS" hint="Defaults to a company/router/port .com name. Replace it with your own hostname if needed.">
+                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-company-router-ether2.com" disabled={!draft.pppoeEnabled} />
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

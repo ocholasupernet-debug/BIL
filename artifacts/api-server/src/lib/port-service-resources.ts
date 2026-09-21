@@ -14,6 +14,9 @@ export type PortServiceResourceNames = {
   identity: string;
   portName: string;
   resourceName: string;
+  assetKey: string;
+  hotspotDirectory: string;
+  pppoeDirectory: string;
   bridgeName: string;
   hotspotPool: string;
   hotspotServer: string;
@@ -43,6 +46,7 @@ export function portServiceResourceNames(
   const identity = resourceSegment([company, router].filter(Boolean).join("-"), router, 28);
   const portName = resourceSegment(port.interface_name, `port-${port.id}`, 18);
   const resourceName = resourceSegment(`${identity}-${portName}`, `router-${port.router_id}-${portName}`, 42);
+  const assetKey = resourceSegment(`p${port.id}-${portName}`, `port-${port.id}`, 32);
   const explicitBridge = (port.bridge_name ?? "")
     .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
@@ -54,6 +58,9 @@ export function portServiceResourceNames(
     identity,
     portName,
     resourceName,
+    assetKey,
+    hotspotDirectory: `flash/hotspot/hs_${assetKey}`,
+    pppoeDirectory: `flash/hotspot/pppoe_${assetKey}`,
     bridgeName,
     hotspotPool: `HS_POOL_${resourceName}`,
     hotspotServer: `HS_${resourceName}`,
