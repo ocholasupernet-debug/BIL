@@ -28,6 +28,8 @@ type PortAssignment = {
   hotspot_folder_path?: string | null;
   pppoe_enabled: boolean;
   pppoe_folder_path?: string | null;
+  hotspot_dns_name?: string | null;
+  pppoe_dns_name?: string | null;
   subnet_range?: string | null;
   bandwidth_cap_mbps: number;
   reseller_bandwidth_cap?: number | null;
@@ -38,8 +40,10 @@ type PortAssignment = {
 type Draft = {
   hotspotEnabled: boolean;
   hotspotFolderPath: string;
+  hotspotDnsName: string;
   pppoeEnabled: boolean;
   pppoeFolderPath: string;
+  pppoeDnsName: string;
   bridgeName: string;
   subnetRange: string;
   bandwidthCapMbps: string;
@@ -92,8 +96,10 @@ function draftFromAssignment(port: PortAssignment): Draft {
   return {
     hotspotEnabled: port.hotspot_enabled,
     hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
+    hotspotDnsName: port.hotspot_dns_name ?? "",
     pppoeEnabled: port.pppoe_enabled,
     pppoeFolderPath: port.pppoe_folder_path ?? "",
+    pppoeDnsName: port.pppoe_dns_name ?? "",
     bridgeName: port.bridge_name ?? "",
     subnetRange: port.subnet_range ?? "",
     bandwidthCapMbps: String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps ?? 30),
@@ -104,8 +110,10 @@ function defaultDraft(): Draft {
   return {
     hotspotEnabled: true,
     hotspotFolderPath: "",
+    hotspotDnsName: "",
     pppoeEnabled: false,
     pppoeFolderPath: "",
+    pppoeDnsName: "",
     bridgeName: "",
     subnetRange: "",
     bandwidthCapMbps: "30",
@@ -255,8 +263,10 @@ export default function Multiport() {
         interfaceName: selectedNewPort?.name,
         hotspotEnabled: draft.hotspotEnabled,
         hotspotFolderPath: draft.hotspotFolderPath,
+         hotspotDnsName: draft.hotspotDnsName,
         pppoeEnabled: draft.pppoeEnabled,
         pppoeFolderPath: draft.pppoeFolderPath,
+         pppoeDnsName: draft.pppoeDnsName,
         bridgeName: draft.bridgeName,
         subnetRange: draft.subnetRange,
         bandwidthCapMbps: Number(draft.bandwidthCapMbps),
@@ -264,9 +274,25 @@ export default function Multiport() {
       const result = selectedAssignment
         ? await apiJson<{ ok: boolean; port: PortAssignment }>(`/api/admin/port-services/${selectedAssignment.id}`, { method: "PUT", body: JSON.stringify(payload) })
         : await apiJson<{ ok: boolean; port: PortAssignment }>("/api/admin/port-services", { method: "POST", body: JSON.stringify(payload) });
-      setSuccess(`Saved ${result.port?.interface_name ?? selectedNewPort?.name ?? "port"} service configuration.`);
+      const savedPortId = result.port?.id ?? selectedAssignment?.id;
+      const savedPortName = result.port?.interface_name ?? selectedNewPort?.name ?? selectedAssignment?.interface_name ?? "port";
+      let deploymentError = "";
+      if (savedPortId && (draft.hotspotEnabled || draft.pppoeEnabled)) {
+        try {
+          await apiJson(`/api/admin/port-services/${savedPortId}/deploy`, { method: "POST", body: JSON.stringify({}) });
+        } catch (cause) {
+          deploymentError = cause instanceof Error ? cause.message : "Router deployment failed.";
+        }
+      }
       await loadPorts(routerId);
-      if (result.port?.id) setSelectedPortKey(`assigned:${result.port.id}`);
+      if (savedPortId) setSelectedPortKey(`assigned:${savedPortId}`);
+      if (deploymentError) {
+        setError(`Saved ${savedPortName}, but the router deployment failed: ${deploymentError}`);
+      } else if (draft.hotspotEnabled || draft.pppoeEnabled) {
+        setSuccess(`Saved and deployed ${savedPortName} service configuration.`);
+      } else {
+        setSuccess(`Saved ${savedPortName} service configuration. Deployment was skipped because both services are disabled.`);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to save the port service.");
     } finally {
@@ -386,8 +412,14 @@ export default function Multiport() {
                 <Field label="Hotspot portal asset folder" hint="Use a path approved by the portal asset manager.">
                   <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="hotspot/portal-a" disabled={!draft.hotspotEnabled} />
                 </Field>
+                <Field label="Hotspot DNS name" hint="Optional hostname for this port's Hotspot profile.">
+                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-ether2.example.com" disabled={!draft.hotspotEnabled} />
+                </Field>
                 <Field label="PPPoE landing asset folder" hint="PPPoE uses a landing/status asset, not a captive Hotspot login.">
                   <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="hotspot/pppoe-a" disabled={!draft.pppoeEnabled} />
+                </Field>
+                <Field label="PPPoE DNS name" hint="Optional hostname for this port's PPPoE landing profile.">
+                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-ether2.example.com" disabled={!draft.pppoeEnabled} />
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

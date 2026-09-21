@@ -65,6 +65,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_reseller_port_provisioning.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_assets.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_master_port_services.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_multiport_service_dns.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_tenant_storage_governance.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_load_balancing.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_manual_vpn_config.sql", import.meta.url)),

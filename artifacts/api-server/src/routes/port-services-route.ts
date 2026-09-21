@@ -21,8 +21,10 @@ type PortServiceRow = {
   hotspot_enabled: boolean;
   hotspot_template_path: string | null;
   hotspot_folder_path: string | null;
+  hotspot_dns_name: string | null;
   pppoe_enabled: boolean;
   pppoe_folder_path: string | null;
+  pppoe_dns_name: string | null;
   reseller_bandwidth_cap: number | null;
   bandwidth_cap_mbps: number;
   subnet_range: string | null;
@@ -118,7 +120,19 @@ function portServiceNetwork(port: PortServiceRow): PortServiceNetwork {
 
 function validPortalHostname(value: string | undefined): string | null {
   const hostname = String(value ?? "").trim().toLowerCase();
-  return /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(hostname) ? hostname : null;
+  if (
+    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(hostname)
+    || hostname.includes("..")
+    || hostname.split(".").some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+  ) {
+    return null;
+  }
+  return hostname;
+}
+
+function optionalPortalHostname(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return validPortalHostname(value);
 }
 
 function portFromLocals(res: { locals: Record<string, unknown> }): PortServiceRow {
@@ -165,7 +179,7 @@ export function buildDualServiceCommands(
   hotspotPath: string | null,
   pppoePath: string | null,
   routerAddress: string,
-  options: { portalHostname?: string } = {},
+  options: { portalHostname?: string; hotspotDnsName?: string | null; pppoeDnsName?: string | null } = {},
 ): string[][] {
   const portName = safeSegment(port.interface_name, `port_${port.id}`);
   if (!/^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(port.interface_name.trim())) {
@@ -177,6 +191,8 @@ export function buildDualServiceCommands(
   const pppoeService = `PPPoE_${portName}`;
   const parentQueue = `RESELLER_ROOT_${portName}`;
   const cap = port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps;
+  const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined);
+  const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined);
   const commands: string[][] = [];
 
   /* A Hotspot server is bound to an interface. Give every assigned port its
@@ -193,19 +209,32 @@ export function buildDualServiceCommands(
       ["/ip/pool/add", `=name=HS_POOL_${portName}`, `=ranges=${network.poolRange}`, `=comment=OcholaSupernet_${portName}_hotspot_pool`],
       ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=OcholaSupernet_${portName}_hotspot_network`],
       ["/ip/dhcp-server/add", `=name=HS_DHCP_${portName}`, `=interface=${network.bridgeName}`, `=address-pool=HS_POOL_${portName}`, "=disabled=no"],
-      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=comment=OcholaSupernet_${portName}_hotspot`],
+      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName ?? ""}`, `=comment=OcholaSupernet_${portName}_hotspot`],
       ["/ip/hotspot/add", `=name=HS_${portName}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=HS_POOL_${portName}`, "=disabled=no", `=comment=OcholaSupernet_${portName}_hotspot`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dhcp`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dns_udp`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_dns_tcp`],
       ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=OcholaSupernet_${portName}_hotspot_nat`],
     );
-    const portalHostname = validPortalHostname(options.portalHostname);
-    if (portalHostname) {
+    const gardenHostnames = [...new Set([
+      validPortalHostname(options.portalHostname),
+      hotspotDnsName,
+    ].filter((hostname): hostname is string => Boolean(hostname)))];
+    gardenHostnames.forEach((hostname, index) => {
       commands.push([
         "/ip/hotspot/walled-garden/ip/add",
-        `=dst-host=${portalHostname}`,
+        `=dst-host=${hostname}`,
         "=action=accept",
-        `=comment=OcholaSupernet_${portName}_walled_garden`,
+        `=comment=OcholaSupernet_${portName}_${index === 0 ? "walled_garden" : "hotspot_dns"}`,
       ]);
-    }
+    });
+  }
+  if (hotspotPath || pppoePath) {
+    commands.push(
+      ["/ip/firewall/filter/add", "=chain=forward", `=in-interface=${network.bridgeName}`, "=out-interface-list=WAN", "=action=accept", "=place-before=0", `=comment=OcholaSupernet_${portName}_allow_service_forward`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=udp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=OcholaSupernet_${portName}_block_wan_dns_udp`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=tcp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=OcholaSupernet_${portName}_block_wan_dns_tcp`],
+    );
   }
   if (hotspotPath || pppoePath) {
     commands.push([
@@ -220,7 +249,7 @@ export function buildDualServiceCommands(
   if (pppoePath) {
     commands.push(
       ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, "=disabled=no", "=one-session-per-host=yes", `=comment=OcholaSupernet_${portName}_pppoe`],
-      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=comment=OcholaSupernet_${portName}_pppoe_landing`],
+      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName ?? ""}`, `=comment=OcholaSupernet_${portName}_pppoe_landing`],
       ["/queue/simple/add", `=name=PPPOE_PREMIUM_${portName}`, `=target=${network.bridgeName}`, `=parent=${parentQueue}`, `=max-limit=${cap}M/${cap}M`, "=priority=1/1", `=comment=OcholaSupernet_${portName}_pppoe_premium`],
       ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=OcholaSupernet_${portName}_pppoe_nat`],
       ["/ip/firewall/nat/add", "=chain=dstnat", `=in-interface=${network.bridgeName}`, "=protocol=tcp", "=dst-port=80", "=action=dst-nat", `=to-addresses=${network.gateway || routerAddress}`, "=to-ports=80", `=comment=OcholaSupernet_${portName}_pppoe_billing_redirect`],
@@ -252,6 +281,7 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     "/ip/dhcp-server/network/add": "address",
     "/ip/dhcp-server/add": "name",
     "/queue/simple/add": "name",
+    "/ip/firewall/filter/add": "comment",
     "/ip/hotspot/walled-garden/ip/add": "comment",
     "/ip/firewall/nat/add": "comment",
   };
@@ -386,6 +416,12 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     }
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const hotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName);
+    const pppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName);
+    if ((req.body?.hotspotDnsName && !hotspotDnsName) || (req.body?.pppoeDnsName && !pppoeDnsName)) {
+      res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
+      return;
+    }
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
     if (hotspotEnabled && !hotspotFolderPath) {
@@ -414,8 +450,10 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       hotspot_enabled: hotspotEnabled,
       hotspot_template_path: hotspotFolderPath,
       hotspot_folder_path: hotspotFolderPath,
+      hotspot_dns_name: hotspotDnsName,
       pppoe_enabled: pppoeEnabled,
       pppoe_folder_path: pppoeFolderPath,
+      pppoe_dns_name: pppoeDnsName,
       subnet_range: subnetRange,
       bandwidth_cap_mbps: Math.round(cap),
       reseller_bandwidth_cap: Math.round(cap),
@@ -434,6 +472,19 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const port = portFromLocals(res);
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const hotspotDnsName = req.body?.hotspotDnsName === undefined
+      ? port.hotspot_dns_name
+      : optionalPortalHostname(req.body.hotspotDnsName);
+    const pppoeDnsName = req.body?.pppoeDnsName === undefined
+      ? port.pppoe_dns_name
+      : optionalPortalHostname(req.body.pppoeDnsName);
+    if (
+      (req.body?.hotspotDnsName && !hotspotDnsName)
+      || (req.body?.pppoeDnsName && !pppoeDnsName)
+    ) {
+      res.status(400).json({ ok: false, error: "DNS names must be valid hostnames without http://, paths, or spaces." });
+      return;
+    }
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
     const bandwidth = req.body?.bandwidthCapMbps === undefined
@@ -468,8 +519,10 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
         hotspot_enabled: hotspotEnabled,
         hotspot_folder_path: hotspotFolderPath,
         hotspot_template_path: hotspotFolderPath,
+        hotspot_dns_name: hotspotDnsName,
         pppoe_enabled: pppoeEnabled,
         pppoe_folder_path: pppoeFolderPath,
+        pppoe_dns_name: pppoeDnsName,
         bridge_name: bridgeName,
         subnet_range: subnetRange,
         bandwidth_cap_mbps: Math.round(bandwidth),
@@ -517,7 +570,11 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       hotspotPath,
       pppoePath,
       found.row.bridge_ip || found.row.vpn_ip || "127.0.0.1",
-      { portalHostname },
+      {
+        portalHostname,
+        hotspotDnsName: port.hotspot_dns_name,
+        pppoeDnsName: port.pppoe_dns_name,
+      },
     );
     for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);
     const scriptPayload = [

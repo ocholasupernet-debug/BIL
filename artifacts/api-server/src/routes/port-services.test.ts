@@ -13,8 +13,10 @@ const port = {
   hotspot_enabled: true,
   hotspot_template_path: "hotspot/portal-a",
   hotspot_folder_path: "hotspot/portal-a",
+    hotspot_dns_name: null,
   pppoe_enabled: true,
   pppoe_folder_path: "hotspot/pppoe-a",
+    pppoe_dns_name: null,
   reseller_bandwidth_cap: 30,
   bandwidth_cap_mbps: 30,
   subnet_range: "192.168.30.0/24",
@@ -40,7 +42,29 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.match(script, /dst-host=come\.isplatty\.org/);
   assert.match(script, /address=192\.168\.30\.1\/24/);
   assert.match(script, /target=192\.168\.30\.0\/24 =parent=RESELLER_ROOT_ether2/);
+  assert.match(script, /\/ip\/firewall\/filter\/add =chain=input =in-interface=ochola-port-12 =protocol=udp =dst-port=53/);
+  assert.match(script, /\/ip\/firewall\/filter\/add =chain=forward =in-interface=ochola-port-12 =out-interface-list=WAN =action=accept/);
+  assert.match(script, /block_wan_dns_tcp/);
   assert.doesNotMatch(script, /interface=ether2 =profile=HS_ether2/);
+});
+
+test("port service profiles accept independent DNS names and allow the Hotspot name", () => {
+  const commands = buildDualServiceCommands(
+    port,
+    "flash/hotspot/hs_ether2",
+    "flash/hotspot/pppoe_ether2",
+    "10.8.5.2",
+    {
+      portalHostname: "come.isplatty.org",
+      hotspotDnsName: "hotspot-ether2.example.com",
+      pppoeDnsName: "pppoe-ether2.example.com",
+    },
+  );
+  const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
+
+  assert.match(script, /name=HS_ether2.*dns-name=hotspot-ether2\.example\.com/);
+  assert.match(script, /name=PPPOE_ALERT_ether2.*dns-name=pppoe-ether2\.example\.com/);
+  assert.match(script, /dst-host=hotspot-ether2\.example\.com/);
 });
 
 test("port services reject non-private or non-/24 networks", () => {
