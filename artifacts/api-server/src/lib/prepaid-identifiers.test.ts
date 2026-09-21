@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  hotspotPlanProfileName,
   isPrepaidHotspotUsername,
   prepaidHotspotUsername,
 } from "./prepaid-identifiers.js";
@@ -20,4 +21,9 @@ test("generates a random-looking suffix when none is supplied", () => {
   const username = prepaidHotspotUsername("0712345678", "AA:BB:CC:DD:EE:FF");
   assert.match(username, /^254712345678-[A-Z0-9]{2}:[A-Z0-9]{2}$/);
   assert.equal(isPrepaidHotspotUsername(username), true);
+});
+
+test("uses the same normalized profile name as plan sync", () => {
+  assert.equal(hotspotPlanProfileName("  Night  10 Mbps "), "night-10-mbps");
+  assert.notEqual(hotspotPlanProfileName("Night 10 Mbps"), "ochola-plan-23");
 });

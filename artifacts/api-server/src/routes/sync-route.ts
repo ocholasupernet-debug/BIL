@@ -9,6 +9,7 @@ import {
   routerManagementBackupIp,
 } from "../lib/router-management-vpn.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
+import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 
 const router: IRouter = Router();
 
@@ -57,6 +58,72 @@ async function upsertByFilter(
   }
   await conn.write([`${path}/add`, ...Object.entries(props).map(([k, v]) => `=${k}=${v}`)]);
   return "created";
+}
+
+async function requireExistingRouterProfile(
+  conn: RouterOSAPI,
+  path: string,
+  name: string,
+): Promise<void> {
+  const list = await conn.write([`${path}/print`, `?name=${name}`]);
+  if (!Array.isArray(list) || !list.some(row => Boolean((row as Record<string, string>)[".id"]))) {
+    throw new Error(
+      `RouterOS profile '${name}' does not exist. Sync the created plan before syncing its users.`,
+    );
+  }
+}
+
+async function cleanupLegacyPlanProfiles(
+  conn: RouterOSAPI,
+  plans: Array<{ id: number; name: string }>,
+  log: (message: string) => void,
+): Promise<void> {
+  const legacyToCurrent = new Map<string, string>(
+    plans
+      .filter(plan => Number.isSafeInteger(Number(plan.id)) && Number(plan.id) > 0)
+      .map(plan => [`ochola-plan-${Number(plan.id)}`, hotspotPlanProfileName(plan.name)] as const),
+  );
+  if (legacyToCurrent.size === 0) return;
+
+  const profiles = await conn.write(["/ip/hotspot/user/profile/print"]) as Record<string, string>[];
+  for (const legacy of Array.isArray(profiles) ? profiles : []) {
+    const legacyName = String(legacy.name ?? "");
+    const currentName = legacyToCurrent.get(legacyName);
+    if (!currentName || currentName === legacyName || !legacy[".id"]) continue;
+
+    const currentRows = await conn.write([
+      "/ip/hotspot/user/profile/print",
+      `?name=${currentName}`,
+    ]) as Record<string, string>[];
+    if (!Array.isArray(currentRows) || !currentRows.some(row => row[".id"])) continue;
+
+    const users = await conn.write([
+      "/ip/hotspot/user/print",
+      `?profile=${legacyName}`,
+    ]) as Record<string, string>[];
+    let migratedUsers = 0;
+    for (const user of Array.isArray(users) ? users : []) {
+      if (!user[".id"]) continue;
+      await conn.write([
+        "/ip/hotspot/user/set",
+        `=.id=${user[".id"]}`,
+        `=profile=${currentName}`,
+      ]);
+      migratedUsers += 1;
+    }
+
+    const remaining = await conn.write([
+      "/ip/hotspot/user/print",
+      `?profile=${legacyName}`,
+    ]) as Record<string, string>[];
+    if (Array.isArray(remaining) && remaining.some(row => row[".id"])) {
+      log(`⚠️ Kept legacy profile '${legacyName}' because RouterOS still reports users on it.`);
+      continue;
+    }
+
+    await conn.write(["/ip/hotspot/user/profile/remove", `=.id=${legacy[".id"]}`]);
+    log(`✓ Replaced legacy profile '${legacyName}' with '${currentName}'${migratedUsers ? ` for ${migratedUsers} user(s)` : ""}`);
+  }
 }
 
 /* ─── Connect helper ─── */
@@ -410,7 +477,7 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
     let created = 0, updated = 0, skipped = 0;
 
     for (const plan of plans) {
-      const profileName = plan.name.replace(/\s+/g, "-").toLowerCase();
+      const profileName = hotspotPlanProfileName(plan.name);
       const rateLimit   = toRateLimit(
         plan.speed_down,
         plan.speed_up,
@@ -455,6 +522,7 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
       }
     }
 
+    await cleanupLegacyPlanProfiles(conn, plans, log);
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} plan profiles`]);
     log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
     conn.close();
@@ -594,21 +662,11 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
     let created = 0, updated = 0, skipped = 0;
 
     for (const u of users) {
-      const profileName = u.plan_id
-        ? `ochola-plan-${u.plan_id}`
-        : u.plan_name ? u.plan_name.replace(/\s+/g, "-").toLowerCase() : "default";
+      const profileName = u.plan_name ? hotspotPlanProfileName(u.plan_name) : "default";
       const comment = u.type === "hotspot" ? u.username : (u.comment || u.username);
       const expiresAt = u.expires_at ? Date.parse(u.expires_at) : NaN;
       const enabled = String(u.status ?? "active").toLowerCase() === "active" &&
         (!Number.isFinite(expiresAt) || expiresAt > Date.now());
-      const rateLimit = Number.isFinite(Number(u.speed_down)) && Number.isFinite(Number(u.speed_up))
-        ? toRateLimit(
-            Number(u.speed_down),
-            Number(u.speed_up),
-            u.speed_down_unit || "Mbps",
-            u.speed_up_unit || u.speed_down_unit || "Mbps",
-          )
-        : undefined;
       const limitBytesTotal = Number(u.data_limit_mb) > 0
         ? String(Math.floor(Number(u.data_limit_mb) * 1_000_000))
         : "0";
@@ -618,6 +676,7 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
         const secretName = u.pppoe_username || u.username;
         log(`▶ PPPoE secret: ${secretName} | profile: ${profileName}`);
         try {
+          await requireExistingRouterProfile(conn, "/ppp/profile", profileName);
           const props: Record<string, string> = {
             name:     secretName,
             password: u.password || "",
@@ -638,6 +697,7 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
         /* ── Hotspot user ── */
         log(`▶ Hotspot user: ${u.username} | profile: ${profileName}`);
         try {
+          await requireExistingRouterProfile(conn, "/ip/hotspot/user/profile", profileName);
           const props: Record<string, string> = {
             name:     u.username,
             password: u.password || "",
@@ -648,13 +708,6 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
           };
           if (u.mac_address) props["mac-address"] = u.mac_address;
           if (u.ip_address) props.address = u.ip_address;
-          if (u.plan_id) {
-            await upsertByFilter(conn, "/ip/hotspot/user/profile", "name", profileName, {
-              name: profileName,
-              "shared-users": String(u.shared_users || 1),
-              ...(rateLimit ? { "rate-limit": rateLimit } : {}),
-            });
-          }
           const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", u.username, props);
           const userRows = await conn.write([
             "/ip/hotspot/user/print",
@@ -794,7 +847,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
       for (const plan of plans) {
         const name = String(plan.name ?? "").trim();
         if (!name) continue;
-        const profileName = name.replace(/\s+/g, "-").toLowerCase();
+        const profileName = hotspotPlanProfileName(name);
         const down = Number(plan.speed_down ?? 10);
         const up = Number(plan.speed_up ?? 10);
         const unit = String(plan.speed_down_unit ?? "Mbps");
