@@ -461,6 +461,9 @@ export default function HotspotLogin() {
   const [loginError, setLoginError] = useState("");
   const [loginSuccess, setLoginSuccess] = useState(false);
   const [loggedInName, setLoggedInName] = useState("");
+  const [mpesaMessage, setMpesaMessage] = useState("");
+  const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
+  const [mpesaReconnectError, setMpesaReconnectError] = useState("");
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -476,6 +479,45 @@ export default function HotspotLogin() {
       else { setLoggedInName(data.customer?.name || loginUsername); setLoginSuccess(true); }
     } catch { setLoginError("Could not reach the server. Please try again."); }
     finally { setLoginLoading(false); }
+  };
+
+  const handleMpesaReconnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const message = mpesaMessage.trim();
+    if (!message) return;
+    setMpesaReconnectError("");
+    setMpesaReconnectLoading(true);
+    try {
+      const res = await fetch("/api/mpesa/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          ...(adminId ? { adminId } : {}),
+          ...(portalContext.mac ? { mac_address: portalContext.mac } : {}),
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        error?: string;
+        credentials?: HotspotCredentials;
+      };
+      if (!res.ok || !data.ok || !data.credentials?.username || !data.credentials.password) {
+        throw new Error(data.error || "That M-Pesa payment could not be matched to a hotspot account.");
+      }
+      setHotspotCredentials(data.credentials);
+      setLoginUsername(data.credentials.username);
+      setLoginPassword(data.credentials.password);
+      setLoggedInName(data.credentials.username);
+      setLoginSuccess(true);
+      setAccessReady(true);
+      setMpesaMessage("");
+    } catch (error) {
+      setMpesaReconnectError(error instanceof Error ? error.message : "Could not reconnect this M-Pesa payment.");
+    } finally {
+      setMpesaReconnectLoading(false);
+    }
   };
 
   const [voucherCode, setVoucherCode] = useState("");
@@ -863,6 +905,7 @@ export default function HotspotLogin() {
         .hp-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; }
         .hp-input-left { padding-left: 42px; }
         .hp-input-phone { padding-left: 62px; }
+        .hp-textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 
         .hp-btn {
           width: 100%; padding: 14px; border: none; border-radius: 12px;
@@ -1322,42 +1365,81 @@ export default function HotspotLogin() {
                       </button>
                     </div>
                   ) : (
-                    <form onSubmit={handleLogin}>
-                      {loginError && (
-                        <div className="hp-error">
-                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                          {loginError}
-                        </div>
-                      )}
-
-                      <div className="hp-input-group">
-                        <label className="hp-label">Username</label>
-                        <div className="hp-input-wrap">
-                          <User size={15} className="hp-input-icon" />
-                          <input className="hp-input hp-input-left" type="text"
-                            placeholder="Enter username" required
-                            value={loginUsername} onChange={e => setLoginUsername(e.target.value)} />
-                        </div>
-                      </div>
-
-                      <div className="hp-input-group">
-                        <label className="hp-label">Password</label>
-                        <div className="hp-input-wrap">
-                          <Lock size={15} className="hp-input-icon" />
-                          <input className="hp-input hp-input-left" type="password"
-                            placeholder="Enter password" required
-                            value={loginPassword} onChange={e => setLoginPassword(e.target.value)} />
-                        </div>
-                      </div>
-
-                      <button type="submit" disabled={loginLoading} className="hp-btn hp-btn-primary">
-                        {loginLoading ? (
-                          <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Connecting...</>
-                        ) : (
-                          <><Wifi size={16} /> Connect</>
+                    <>
+                      <form onSubmit={handleLogin}>
+                        {loginError && (
+                          <div className="hp-error">
+                            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                            {loginError}
+                          </div>
                         )}
-                      </button>
-                    </form>
+
+                        <div className="hp-input-group">
+                          <label className="hp-label">Username</label>
+                          <div className="hp-input-wrap">
+                            <User size={15} className="hp-input-icon" />
+                            <input className="hp-input hp-input-left" type="text"
+                              placeholder="Enter username" required
+                              value={loginUsername} onChange={e => setLoginUsername(e.target.value)} />
+                          </div>
+                        </div>
+
+                        <div className="hp-input-group">
+                          <label className="hp-label">Password</label>
+                          <div className="hp-input-wrap">
+                            <Lock size={15} className="hp-input-icon" />
+                            <input className="hp-input hp-input-left" type="password"
+                              placeholder="Enter password" required
+                              value={loginPassword} onChange={e => setLoginPassword(e.target.value)} />
+                          </div>
+                        </div>
+
+                        <button type="submit" disabled={loginLoading} className="hp-btn hp-btn-primary">
+                          {loginLoading ? (
+                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Connecting...</>
+                          ) : (
+                            <><Wifi size={16} /> Connect</>
+                          )}
+                        </button>
+                      </form>
+                      <div style={{ marginTop: 24, paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <Shield size={15} color="var(--isp-accent)" />
+                          <div className="hp-glass-title">Reconnect with M-Pesa</div>
+                        </div>
+                        <p style={{ color: "rgba(255,255,255,0.42)", fontSize: 12, lineHeight: 1.55, marginBottom: 14 }}>
+                          Paste the full M-Pesa confirmation message. We match its receipt to a verified payment for this ISP before reconnecting your account.
+                        </p>
+                        <form onSubmit={handleMpesaReconnect}>
+                          <div className="hp-input-group">
+                            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+                            <textarea
+                              id="mpesa-reconnect-message"
+                              className="hp-input hp-textarea"
+                              rows={4}
+                              maxLength={1000}
+                              placeholder="e.g. QK12AB34CD Confirmed. Ksh..."
+                              value={mpesaMessage}
+                              onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
+                              required
+                            />
+                          </div>
+                          {mpesaReconnectError && (
+                            <div className="hp-error" role="alert">
+                              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                              {mpesaReconnectError}
+                            </div>
+                          )}
+                          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+                            {mpesaReconnectLoading ? (
+                              <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
+                            ) : (
+                              <><Shield size={16} /> Verify and reconnect</>
+                            )}
+                          </button>
+                        </form>
+                      </div>
+                    </>
                   )}
                 </div>
               </div>

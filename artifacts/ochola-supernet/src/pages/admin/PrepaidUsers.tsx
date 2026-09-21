@@ -32,6 +32,7 @@ interface Customer extends DbCustomer {
 interface Payment {
   id: number;
   customer_id: number | null;
+  plan_id: number | null;
   amount: number;
   payment_method: string;
   reference: string | null;
@@ -247,7 +248,7 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
   if (!customerIds.length) return [];
   const { data, error } = await supabase
     .from("isp_transactions")
-    .select("id,customer_id,amount,payment_method,reference,mpesa_receipt,notes,status,created_at")
+    .select("id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,notes,status,created_at")
     .eq("admin_id", ADMIN_ID)
     .in("customer_id", customerIds)
     .in("status", ["completed", "paid", "success"])
@@ -986,6 +987,10 @@ export default function PrepaidUsers() {
                   const routerId = user.router_id ?? plan?.router_id ?? null;
                   const router = routerId ? routerMap[routerId] : null;
                   const payment = paymentMap[user.id];
+                  const purchasedPlan = payment?.plan_id
+                    ? planMap[payment.plan_id] ?? null
+                    : null;
+                  const displayedPlan = purchasedPlan ?? plan;
                   const username = purchaseUsername(user);
                   const online = customerIsOnline(user, onlineUsers);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
@@ -1005,7 +1010,9 @@ export default function PrepaidUsers() {
                       </td>
                       <td style={TD}><TypeBadge type={user.type} /></td>
                       <td style={TD}>
-                        <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)", whiteSpace: "nowrap" }}>{plan?.name || "No plan"}</div>
+                        <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)", whiteSpace: "nowrap" }}>
+                          {displayedPlan?.name || (payment?.plan_id ? `Plan #${payment.plan_id}` : "No plan")}
+                        </div>
                       </td>
                       <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
                         <div>{fmtDateOnly(user.created_at)}</div>
