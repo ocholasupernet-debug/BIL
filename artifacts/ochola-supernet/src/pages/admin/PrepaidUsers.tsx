@@ -10,8 +10,16 @@ import {
   Power, Trash2, MoreHorizontal, Database, Save,
 } from "lucide-react";
 
-const API      = import.meta.env.VITE_API_BASE ?? "";
+const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 const PAGE_SIZE = 20;
+
+function apiUrl(path: string): string {
+  if (!API_BASE) return path;
+  if (API_BASE.endsWith("/api") && path.startsWith("/api/")) {
+    return `${API_BASE}${path.slice("/api".length)}`;
+  }
+  return `${API_BASE}${path}`;
+}
 
 /* ══════════════════════════════ Types ══════════════════════════════ */
 interface Plan   {
@@ -284,13 +292,26 @@ async function syncUsersToRouter(
     })),
   };
   try {
-    const res  = await fetch(`${API}/api/admin/sync/users`, {
+    const res  = await fetch(apiUrl("/api/admin/sync/users"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json() as { ok: boolean; logs?: string[] };
+    const responseText = await res.text();
+    let data: { ok: boolean; error?: string; logs?: string[] };
+    try {
+      data = JSON.parse(responseText) as { ok: boolean; error?: string; logs?: string[] };
+    } catch {
+      const preview = responseText.replace(/\s+/g, " ").trim().slice(0, 120);
+      throw new Error(
+        `The sync service returned HTML instead of JSON (HTTP ${res.status}).`
+        + (preview ? ` Check the API address. Response: ${preview}` : ""),
+      );
+    }
     (data.logs ?? []).forEach((l: string) => log(l));
+    if (!res.ok) {
+      throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
+    }
     return data.ok;
   } catch (e) {
     log(`  ✗ ${e instanceof Error ? e.message : e}`);
@@ -520,7 +541,7 @@ export default function PrepaidUsers() {
     setActionNotice("");
     setActionBusy(user.id);
     try {
-      const response = await fetch(`${API}/api/customers/${user.id}`, {
+      const response = await fetch(apiUrl(`/api/customers/${user.id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminId: ADMIN_ID, ...updates }),
@@ -548,7 +569,7 @@ export default function PrepaidUsers() {
     if (!window.confirm(`Delete ${purchaseUsername(user)}? This cannot be undone.`)) return;
     try {
       setActionBusy(user.id);
-      const response = await fetch(`${API}/api/customers/${user.id}?adminId=${ADMIN_ID}`, {
+      const response = await fetch(apiUrl(`/api/customers/${user.id}?adminId=${ADMIN_ID}`), {
         method: "DELETE",
       });
       const payload = await response.json().catch(() => null) as { error?: string } | null;
