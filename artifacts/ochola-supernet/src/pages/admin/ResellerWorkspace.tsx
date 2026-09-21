@@ -160,6 +160,9 @@ function AdminResellerManagement() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
+        <a href="/admin/network/carrier-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "start", width: "fit-content", padding: "10px 13px", borderRadius: 9, background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 800 }}>
+          Open carrier link approvals
+        </a>
         <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={submit} style={cardStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", marginBottom: 20 }}>

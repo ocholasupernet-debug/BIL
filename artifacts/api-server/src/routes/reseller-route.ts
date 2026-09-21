@@ -11,6 +11,11 @@ import { hashIspAdminPassword } from "../lib/passwords.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
+import {
+  compileResellerActivation,
+  compileResellerPaymentNoticeNatComment,
+  compileResellerSuspension,
+} from "../services/scriptCompiler.js";
 
 const router: IRouter = Router();
 
@@ -24,6 +29,7 @@ type RouterRow = {
   router_secret: string | null;
   api_port: number;
   api_use_ssl: boolean;
+  ros_version?: string | number | null;
 };
 
 type ResellerPortRow = {
@@ -46,6 +52,17 @@ type ResellerPortRow = {
   status: string;
   provisioning_error: string | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
+};
+
+type ResellerAccountRow = {
+  id: number;
+  name: string;
+  company_name?: string | null;
+  username: string;
+  email?: string | null;
+  status?: string | null;
+  is_active: boolean;
+  created_at: string;
 };
 
 function safeSegment(value: string, fallback: string): string {
@@ -137,7 +154,7 @@ async function currentAccount(req: Request) {
 async function tenantRouter(adminId: number, routerId: number): Promise<RouterRow> {
   const rows = await sbSelectStrict<RouterRow>(
     "isp_routers",
-    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,vpn_ip,router_username,router_secret,api_port,api_use_ssl&limit=1`,
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,vpn_ip,router_username,router_secret,api_port,api_use_ssl,ros_version&limit=1`,
   );
   if (!rows[0]) throw new Error("Router not found for this ISP account.");
   return rows[0];
@@ -165,24 +182,35 @@ async function deployServicesProvisionLayer(
   const queueId = Array.isArray(queueRows)
     ? routerResourceId((queueRows[0] ?? {}) as Record<string, unknown>)
     : "";
-  const maxLimit = `${Math.round(capMbps)}M/${Math.round(capMbps)}M`;
   if (queueId) {
-    await runRouterCommand(creds, [
-      "/queue/simple/set",
-      `=.id=${queueId}`,
-      `=max-limit=${maxLimit}`,
-      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
-    ]);
-  } else {
-    await runRouterCommand(creds, [
-      "/queue/simple/add",
-      `=name=${parentQueue}`,
-      `=target=${port.bridge_name || port.interface_name}`,
-      `=max-limit=${maxLimit}`,
-      `=priority=2/2`,
-      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
-      `=comment=OcholaSupernet_${portSegment}_parent_queue`,
-    ]);
+    await runRouterCommand(creds, ["/queue/simple/remove", `=.id=${queueId}`]);
+  }
+
+  const targetName = port.bridge_name || port.interface_name;
+  const scriptBlock = linkStatus === "active"
+    ? compileResellerActivation(
+      port.interface_name,
+      Math.round(capMbps),
+      router.ros_version,
+      targetName,
+    )
+    : compileResellerSuspension(port.interface_name, router.ros_version, targetName);
+
+  const noticeComment = compileResellerPaymentNoticeNatComment(port.interface_name);
+  const natRows = await runRouterCommand(creds, [
+    "/ip/firewall/nat/print",
+    "=.proplist=.id,comment",
+    `?comment=${noticeComment}`,
+  ]);
+  for (const row of Array.isArray(natRows) ? natRows : []) {
+    const id = routerResourceId(row);
+    if (id) {
+      await runRouterCommand(creds, ["/ip/firewall/nat/remove", `=.id=${id}`]);
+    }
+  }
+
+  for (const command of scriptBlock.commands) {
+    await runRouterCommand(creds, command);
   }
 
   if (port.hotspot_enabled) {
@@ -331,9 +359,9 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const child = await sbSelectStrict<{ id: number }>(
+    const child = await sbSelectStrict<{ id: number; status?: string }>(
       "isp_admins",
-      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,status&limit=1`,
     );
     if (!child[0]) {
       res.status(404).json({ ok: false, error: "The reseller does not belong to this ISP account." });
@@ -371,6 +399,14 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
       },
     );
     if (!updated[0]) throw new Error("The reseller link state could not be saved.");
+    await sbUpdateStrict(
+      "isp_admins",
+      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller`,
+      {
+        status: requestedState === "suspended" ? "suspended_payment_pending" : "active",
+        updated_at: new Date().toISOString(),
+      },
+    );
 
     try {
       await deployServicesProvisionLayer(targetRouter, { ...port, ...updated[0] }, requestedState, cap, requestHostname(req));
@@ -382,6 +418,14 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
         {
           link_status: requestedState === "suspended" ? "suspended" : "pending",
           link_provisioning_error: message.slice(0, 500),
+          updated_at: new Date().toISOString(),
+        },
+      ).catch(() => undefined);
+      await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller`,
+        {
+          status: child[0].status || "active",
           updated_at: new Date().toISOString(),
         },
       ).catch(() => undefined);
@@ -398,6 +442,7 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
         reseller_bandwidth_cap: cap,
         link_provisioning_error: null,
       },
+      resellerStatus: requestedState === "suspended" ? "suspended_payment_pending" : "active",
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update reseller link." });
@@ -406,6 +451,69 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
 
 router.post("/admin/reseller-links", requireAdmin(), updateResellerLink);
 router.post("/admin/approve-reseller-link", requireAdmin(), updateResellerLink);
+
+/**
+ * Carrier-management aliases used by the ISP approval view. Keep these
+ * tenant-scoped and route them through the same ownership and RouterOS
+ * management-VPN path as the existing reseller controls.
+ */
+router.get("/isp/pending-resellers", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot approve reseller links." });
+      return;
+    }
+
+    const [resellers, ports, routers] = await Promise.all([
+      sbSelectStrict<ResellerAccountRow>(
+        "isp_admins",
+        `parent_id=eq.${account.id}&role=eq.reseller&select=id,name,company_name,username,email,status,is_active,created_at&order=created_at.desc`,
+      ),
+      sbSelectStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,link_provisioning_error&order=created_at.desc`,
+      ),
+      sbSelectStrict<{ id: number; name: string; status: string }>(
+        "isp_routers",
+        `admin_id=eq.${account.id}&select=id,name,status&order=name.asc`,
+      ),
+    ]);
+    const pendingStatuses = new Set(["pending", "awaiting_connection", "awaiting_sync", "awaiting_ports"]);
+    const pendingResellers = resellers.filter((reseller) => {
+      const assignedPort = ports.find((port) =>
+        (port.assigned_reseller_id ?? port.reseller_id) === reseller.id,
+      );
+      return pendingStatuses.has(String(reseller.status ?? "").toLowerCase())
+        || !assignedPort
+        || assignedPort.link_status !== "active";
+    });
+    res.json({
+      ok: true,
+      resellers,
+      pendingResellers,
+      ports,
+      routers,
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load pending reseller links." });
+  }
+});
+
+router.post("/isp/toggle-reseller-pipe", requireAdmin(), async (req, res): Promise<void> => {
+  const action = req.body?.action;
+  if (action !== "activate" && action !== "suspend") {
+    res.status(400).json({ ok: false, error: "Action must be activate or suspend." });
+    return;
+  }
+  req.body = {
+    ...req.body,
+    targetPortName: req.body?.portName,
+    linkStatus: action === "activate" ? "active" : "suspended",
+  };
+  await updateResellerLink(req, res);
+});
 
 router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Promise<void> => {
   try {

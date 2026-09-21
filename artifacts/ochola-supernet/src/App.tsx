@@ -71,6 +71,7 @@ import AdminMessageTemplates from "./pages/admin/MessageTemplates";
 import PlatformNotifications from "./pages/admin/PlatformNotifications";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
+import CarrierControls from "./pages/admin/network/CarrierControls";
 import UnifiedRegister from "./pages/auth/UnifiedRegister";
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
@@ -125,6 +126,8 @@ function Router() {
       <Route path="/admin/dashboard" component={AdminDashboard} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
       <Route path="/admin/resellers" component={ResellerWorkspace} />
+      <Route path="/admin/network/carrier-controls" component={CarrierControls} />
+      <Route path="/admin/carrier-controls" component={CarrierControls} />
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
       <Route path="/admin/network/routers"        component={NetworkRouters}       />
