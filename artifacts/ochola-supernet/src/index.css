@@ -1365,7 +1365,7 @@ body, button, input, select, textarea, h1, h2, h3, h4, h5, h6 {
   gap: 18px;
 }
 .dashboard-kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.dashboard-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dashboard-stat-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .dashboard-kpi,
 .dashboard-stat,
 .gateway-strip,
