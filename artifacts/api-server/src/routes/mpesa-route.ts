@@ -323,7 +323,9 @@ function hotspotRateLimit(
 
 function hotspotPoolRanges(subnetRange: string | null | undefined, portId: number): string {
   const match = String(subnetRange ?? "").trim().match(/^(\d+)\.(\d+)\.(\d+)\.0\/24$/);
-  const octets = match ? match.slice(1).map(Number) : [10, 250, (portId % 200) + 1];
+  const octets = match
+    ? match.slice(1).map(Number)
+    : [192, 168, 180 + ((Math.max(1, portId) - 1) % 4)];
   return `${octets[0]}.${octets[1]}.${octets[2]}.10-${octets[0]}.${octets[1]}.${octets[2]}.254`;
 }
 

@@ -120,14 +120,14 @@ function installedAssetPath(
 function nextAvailableSubnet(assignments: PortAssignment[]): string {
   const used = new Set(
     assignments
-      .map((assignment) => assignment.subnet_range?.match(/^10\.250\.(\d+)\.0\/24$/)?.[1])
+      .map((assignment) => assignment.subnet_range?.match(/^192\.168\.(18[0-3])\.0\/24$/)?.[1])
       .filter((octet): octet is string => Boolean(octet))
       .map(Number),
   );
-  for (let octet = 1; octet <= 254; octet += 1) {
-    if (!used.has(octet)) return `10.250.${octet}.0/24`;
+  for (let octet = 180; octet <= 183; octet += 1) {
+    if (!used.has(octet)) return `192.168.${octet}.0/24`;
   }
-  return "10.250.254.0/24";
+  return "";
 }
 
 function autoDraftForPort(router: RouterOption, port: PortOption, assignments: PortAssignment[]): Draft {
@@ -409,7 +409,7 @@ export default function Multiport() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 10 }}>
             {([
               ["shared", "Normal shared service", "Keep the current shared Hotspot and PPPoE service. Manage its common settings from the existing Hotspot Settings and PPPoE Settings pages."],
-              ["multiport", "Multiport isolated service", "Assign physical ports one at a time. Each selected port gets its own bridge, private /24, service names, portal folders, queues, NAT, and walled garden."],
+              ["multiport", "Multiport isolated service", "Assign physical ports one at a time. Each selected port gets its own bridge and non-overlapping /24 carved from 192.168.180.0/22, plus its own services, portal folders, queues, NAT, and walled garden."],
             ] as const).map(([value, title, description]) => (
               <button key={value} type="button" onClick={() => setMode(value)} style={{ textAlign: "left", borderRadius: 10, padding: 14, cursor: "pointer", border: mode === value ? "2px solid var(--isp-accent)" : "1px solid var(--isp-border)", background: mode === value ? "rgba(37,99,235,.08)" : "var(--isp-section)", color: "var(--isp-text)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 9, fontWeight: 850 }}>
@@ -467,7 +467,7 @@ export default function Multiport() {
                   <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
                 </Field>
                 <Field label="Private service subnet" hint="Generated from the next available isolated range. Must remain a private .0/24.">
-                  <input style={input} value={draft.subnetRange} onChange={(event) => setDraftValue("subnetRange", event.target.value)} placeholder="10.250.12.0/24" />
+                  <input style={input} value={draft.subnetRange} onChange={(event) => setDraftValue("subnetRange", event.target.value)} placeholder="192.168.180.0/24" />
                 </Field>
                 <Field label="Bandwidth ceiling (Mbps)" hint="Applied to the isolated parent queue.">
                   <input required min="1" max="100000" type="number" style={input} value={draft.bandwidthCapMbps} onChange={(event) => setDraftValue("bandwidthCapMbps", event.target.value)} />

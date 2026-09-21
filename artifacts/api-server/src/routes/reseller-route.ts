@@ -63,8 +63,8 @@ function portServiceNetwork(portId: number, requested: string): {
   gateway: string;
   poolRange: string;
 } {
-  const fallbackOctet = (portId % 200) + 1;
-  const raw = requested.trim() || `10.250.${fallbackOctet}.0/24`;
+  const fallbackOctet = 180 + ((Math.max(1, portId) - 1) % 4);
+  const raw = requested.trim() || `192.168.${fallbackOctet}.0/24`;
   const [rawAddress, rawPrefix] = raw.split("/");
   const octets = rawAddress?.split(".").map(Number) ?? [];
   const privateNetwork = octets[0] === 10
@@ -84,6 +84,19 @@ function portServiceNetwork(portId: number, requested: string): {
     gateway: `${octets[0]}.${octets[1]}.${octets[2]}.1`,
     poolRange: `${octets[0]}.${octets[1]}.${octets[2]}.10-${octets[0]}.${octets[1]}.${octets[2]}.254`,
   };
+}
+
+function nextAvailablePortSubnet(rows: Array<{ subnet_range: string | null }>): string {
+  const used = new Set(
+    rows
+      .map((row) => row.subnet_range?.match(/^192\.168\.(18[0-3])\.0\/24$/)?.[1])
+      .filter((octet): octet is string => Boolean(octet))
+      .map(Number),
+  );
+  for (let octet = 180; octet <= 183; octet += 1) {
+    if (!used.has(octet)) return `192.168.${octet}.0/24`;
+  }
+  throw new Error("No isolated /24 network remains inside 192.168.180.0/22 for this router.");
 }
 
 function requestHostname(req: Request): string {
@@ -279,7 +292,18 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       res.status(400).json({ ok: false, error: "Choose a router, a valid physical interface, and a bandwidth cap." });
       return;
     }
-    const serviceNetwork = portServiceNetwork(routerNumber, requestedSubnet);
+    const existingNetworkRows = await sbSelectStrict<{ subnet_range: string | null }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${account.id}&router_id=eq.${routerNumber}&status=neq.disabled&select=subnet_range`,
+    );
+    if (requestedSubnet && existingNetworkRows.some((row) => row.subnet_range?.trim() === requestedSubnet)) {
+      res.status(409).json({ ok: false, error: "That service subnet is already assigned to another active port on this router." });
+      return;
+    }
+    const serviceNetwork = portServiceNetwork(
+      routerNumber,
+      requestedSubnet || nextAvailablePortSubnet(existingNetworkRows),
+    );
     const servicePortName = safeSegment(cleanInterface, `port_${routerNumber}`);
     const serviceBridgeName = safeSegment(
       typeof bridgeName === "string" && bridgeName.trim()
