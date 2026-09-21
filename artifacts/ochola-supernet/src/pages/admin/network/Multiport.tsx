@@ -122,26 +122,31 @@ function autoDraftForPort(router: RouterOption, port: PortOption, assignments: P
   return {
     hotspotEnabled: true,
     hotspotFolderPath: "login.html",
-    hotspotDnsName: `hotspot-${routerSegment}-${portHostnameSegment}`,
+    hotspotDnsName: `hotspot-${routerSegment}-${portHostnameSegment}.lan`,
     pppoeEnabled: false,
     pppoeFolderPath: "login.html",
-    pppoeDnsName: `pppoe-${routerSegment}-${portHostnameSegment}`,
-    bridgeName: `ochola-port-${portSegment}`,
+    pppoeDnsName: `pppoe-${routerSegment}-${portHostnameSegment}.lan`,
+    bridgeName: `${routerSegment}-bridge-${portSegment}`,
     subnetRange: nextAvailableSubnet(assignments),
     bandwidthCapMbps: "30",
   };
 }
 
-function draftFromAssignment(port: PortAssignment): Draft {
+function draftFromAssignment(port: PortAssignment, router: RouterOption, assignments: PortAssignment[]): Draft {
+  const defaults = autoDraftForPort(
+    router,
+    { name: port.interface_name, type: "ether", running: true },
+    assignments.filter((assignment) => assignment.id !== port.id),
+  );
   return {
     hotspotEnabled: port.hotspot_enabled,
     hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
-    hotspotDnsName: port.hotspot_dns_name ?? "",
+    hotspotDnsName: port.hotspot_dns_name ?? defaults.hotspotDnsName,
     pppoeEnabled: port.pppoe_enabled,
     pppoeFolderPath: port.pppoe_folder_path ?? "",
-    pppoeDnsName: port.pppoe_dns_name ?? "",
-    bridgeName: port.bridge_name ?? "",
-    subnetRange: port.subnet_range ?? "",
+    pppoeDnsName: port.pppoe_dns_name ?? defaults.pppoeDnsName,
+    bridgeName: port.bridge_name ?? defaults.bridgeName,
+    subnetRange: port.subnet_range ?? defaults.subnetRange,
     bandwidthCapMbps: String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps ?? 30),
   };
 }
@@ -260,8 +265,8 @@ export default function Multiport() {
   useEffect(() => {
     if (selectedPortKey) {
       const assignment = assignments.find((port) => `assigned:${port.id}` === selectedPortKey);
-      if (assignment) {
-        setDraft(draftFromAssignment(assignment));
+      if (assignment && selectedRouter) {
+        setDraft(draftFromAssignment(assignment, selectedRouter, assignments));
         return;
       }
       const option = portOptions.find((port) => `new:${port.name}` === selectedPortKey);
@@ -445,7 +450,7 @@ export default function Multiport() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
                 <Field label="Service / bridge name" hint="Generated per physical port; you can rename it before saving.">
-                  <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="ochola-port-ether2" />
+                  <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
                 </Field>
                 <Field label="Private service subnet" hint="Generated from the next available isolated range. Must remain a private .0/24.">
                   <input style={input} value={draft.subnetRange} onChange={(event) => setDraftValue("subnetRange", event.target.value)} placeholder="10.250.12.0/24" />
@@ -461,13 +466,13 @@ export default function Multiport() {
                   <input style={input} value={draft.hotspotFolderPath} onChange={(event) => setDraftValue("hotspotFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.hotspotEnabled} />
                 </Field>
                 <Field label="Hotspot name / DNS" hint="Generated from the router and port; replace it with your public hostname if needed.">
-                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-router-ether2" disabled={!draft.hotspotEnabled} />
+                  <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="hotspot-router-ether2.lan" disabled={!draft.hotspotEnabled} />
                 </Field>
                 <Field label="PPPoE landing asset" hint="Defaults to the approved login.html asset; PPPoE uses a landing/status page, not a captive Hotspot login.">
                   <input style={input} value={draft.pppoeFolderPath} onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)} placeholder="login.html" disabled={!draft.pppoeEnabled} />
                 </Field>
                 <Field label="PPPoE name / DNS" hint="Generated from the router and port; replace it with your public hostname if needed.">
-                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-router-ether2" disabled={!draft.pppoeEnabled} />
+                  <input style={input} value={draft.pppoeDnsName} onChange={(event) => setDraftValue("pppoeDnsName", event.target.value)} placeholder="pppoe-router-ether2.lan" disabled={!draft.pppoeEnabled} />
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

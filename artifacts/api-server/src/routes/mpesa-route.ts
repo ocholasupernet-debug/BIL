@@ -41,6 +41,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const router: IRouter = Router();
 
@@ -320,11 +321,6 @@ function hotspotRateLimit(
   return routerRateLimit(speedDown, speedUp, speedDownUnit, speedUpUnit);
 }
 
-function hotspotResourceSegment(value: string, fallback: string): string {
-  const segment = value.trim().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
-  return segment.slice(0, 48) || fallback;
-}
-
 function hotspotPoolRanges(subnetRange: string | null | undefined, portId: number): string {
   const match = String(subnetRange ?? "").trim().match(/^(\d+)\.(\d+)\.(\d+)\.0\/24$/);
   const octets = match ? match.slice(1).map(Number) : [10, 250, (portId % 200) + 1];
@@ -357,15 +353,26 @@ async function loadHotspotPortContext(
   return port;
 }
 
-function hotspotPortResources(port: HotspotPortContext): {
+async function loadTenantCompanyName(adminId: number): Promise<string | null> {
+  const rows = await sbSelect<{ name: string | null }>(
+    "isp_admins",
+    `id=eq.${adminId}&select=name&limit=1`,
+  );
+  return rows[0]?.name ?? null;
+}
+
+function hotspotPortResources(
+  port: HotspotPortContext,
+  options: { companyName?: string | null; routerName?: string | null } = {},
+): {
   serverName: string;
   poolName: string;
   poolRanges: string;
 } {
-  const portName = hotspotResourceSegment(port.interface_name, `port_${port.id}`);
+  const resources = portServiceResourceNames(port, options);
   return {
-    serverName: `HS_${portName}`,
-    poolName: `HS_POOL_${portName}`,
+    serverName: resources.hotspotServer,
+    poolName: resources.hotspotPool,
     poolRanges: hotspotPoolRanges(port.subnet_range, port.id),
   };
 }
@@ -1494,13 +1501,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       res.status(409).json({ ok: false, error: "The selected package's Hotspot port could not be found." });
       return;
     }
-    const resources = hotspotPortResources(port);
+    const resources = hotspotPortResources(port, {
+      companyName: await loadTenantCompanyName(adminId),
+      routerName: routerRow.name,
+    });
     try {
       await ensureHotspotServerAddressPool(credentials, {
         serverName: resources.serverName,
         poolName: resources.poolName,
         poolRanges: resources.poolRanges,
-        comment: `OcholaSupernet_${resources.poolName}_hotspot_pool`,
+        comment: `${resources.poolName}_hotspot_pool`,
       });
       hotspotServer = resources.serverName;
     } catch (error) {
@@ -1857,12 +1867,15 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     try {
       const port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id);
       if (!port) throw new Error("Hotspot port could not be found.");
-      const resources = hotspotPortResources(port);
+      const resources = hotspotPortResources(port, {
+        companyName: await loadTenantCompanyName(adminId),
+        routerName: routerRow.name,
+      });
       await ensureHotspotServerAddressPool(credentials, {
         serverName: resources.serverName,
         poolName: resources.poolName,
         poolRanges: resources.poolRanges,
-        comment: `OcholaSupernet_${resources.poolName}_hotspot_pool`,
+        comment: `${resources.poolName}_hotspot_pool`,
       });
       hotspotServer = resources.serverName;
     } catch (error) {
