@@ -4,7 +4,7 @@ import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
-import { sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
+import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { portServiceResourceNames, type PortServiceResourceNames } from "../lib/port-service-resources.js";
 import { getRouterCreds } from "./mikrotik-route.js";
@@ -428,6 +428,152 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
   await runRouterCommand(creds, command);
 }
 
+type RouterResourceRow = Record<string, string>;
+
+async function removeRouterResourceRows(
+  creds: RouterCredentials,
+  printPath: string,
+  proplist: string,
+  matches: (row: RouterResourceRow) => boolean,
+): Promise<void> {
+  const rows = await runRouterCommand(creds, [printPath, `=.proplist=${proplist}`]);
+  const removePath = printPath.replace(/\/print$/, "/remove");
+  for (const row of rows) {
+    if (row[".id"] && matches(row)) {
+      await runRouterCommand(creds, [removePath, `=.id=${row[".id"]}`]);
+    }
+  }
+}
+
+function isPortServiceComment(resources: PortServiceResourceNames, row: RouterResourceRow): boolean {
+  return String(row.comment ?? "").startsWith(`${resources.commentPrefix}_`);
+}
+
+async function removePortServiceFiles(
+  creds: RouterCredentials,
+  resources: PortServiceResourceNames,
+): Promise<void> {
+  const directories = [resources.hotspotDirectory, resources.pppoeDirectory];
+  const rows = await runRouterCommand(creds, ["/file/print", "=.proplist=.id,name"]);
+  const ownedRows = rows
+    .filter(row => row[".id"] && directories.some(directory =>
+      row.name === directory || row.name.startsWith(`${directory}/`),
+    ))
+    .sort((left, right) => right.name.length - left.name.length);
+  for (const row of ownedRows) {
+    await runRouterCommand(creds, ["/file/remove", `=.id=${row[".id"]}`]);
+  }
+}
+
+/**
+ * Remove only the RouterOS resources created for one isolated port service.
+ * The comment prefix is the primary ownership boundary; generated names are
+ * used only for resources whose deployment command did not set a comment.
+ */
+export async function removePortServiceResources(
+  creds: RouterCredentials,
+  port: PortServiceRow,
+  resources: PortServiceResourceNames,
+): Promise<void> {
+  const ownedComment = (row: RouterResourceRow) => isPortServiceComment(resources, row);
+  const exactName = (name: string, requireBridge?: string) => (row: RouterResourceRow) =>
+    row.name === name
+    && (!requireBridge || row.interface === requireBridge)
+    && (ownedComment(row) || !row.comment);
+
+  /* Remove dependants before profiles, pools, and the bridge they reference. */
+  await removeRouterResourceRows(
+    creds,
+    "/interface/pppoe-server/server/print",
+    ".id,service-name,interface,comment",
+    row => row["service-name"] === resources.pppoeService && ownedComment(row),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/hotspot/print",
+    ".id,name,interface,comment",
+    row => row.name === resources.hotspotServer && ownedComment(row),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/dhcp-server/print",
+    ".id,name,interface,comment",
+    exactName(resources.hotspotDhcp, resources.bridgeName),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/queue/simple/print",
+    ".id,name,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/firewall/nat/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/firewall/filter/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/hotspot/walled-garden/ip/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/dns/static/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/hotspot/profile/print",
+    ".id,name,comment",
+    row => [resources.hotspotProfile, resources.pppoeProfile].includes(row.name) && ownedComment(row),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/address/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/dhcp-server/network/print",
+    ".id,comment",
+    ownedComment,
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/ip/pool/print",
+    ".id,name,comment",
+    row => [resources.hotspotPool].includes(row.name) && ownedComment(row),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/interface/bridge/port/print",
+    ".id,bridge,interface,comment",
+    row => row.bridge === resources.bridgeName && ownedComment(row),
+  );
+  await removeRouterResourceRows(
+    creds,
+    "/interface/bridge/print",
+    ".id,name,comment",
+    row => row.name === resources.bridgeName && ownedComment(row),
+  );
+  await removePortServiceFiles(creds, resources);
+
+  logger.info(
+    { portId: port.id, routerId: port.router_id, interfaceName: port.interface_name },
+    "[port-services] removed isolated port resources",
+  );
+}
+
 router.get("/port-service-source/:token", (req, res): void => {
   const entry = sourceEntries.get(String(req.params.token));
   if (!entry || entry.expiresAt < Date.now()) {
@@ -660,6 +806,37 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     res.json({ ok: true, port: updated[0] ?? null });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to save port service bindings." });
+  }
+});
+
+router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
+  const port = portFromLocals(res);
+  try {
+    const found = await getRouterCreds(port.router_id, port.admin_id);
+    if (!found) {
+      const errorMessage = "Router credentials are unavailable. The assignment was kept so cleanup can be retried.";
+      await updatePortProvisioningState(port, "failed", errorMessage);
+      res.status(404).json({ ok: false, error: errorMessage });
+      return;
+    }
+    const identity = await resourceIdentityForPort(port);
+    const resources = portServiceResourceNames(port, identity);
+    await removePortServiceResources(found.creds, port, resources);
+    await sbDeleteStrict(
+      "isp_reseller_ports",
+      `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
+    );
+    res.json({ ok: true, interfaceName: port.interface_name });
+  } catch (error) {
+    const errorMessage = error instanceof Error
+      ? error.message
+      : "The router cleanup failed. The assignment was kept so it can be retried.";
+    try {
+      await updatePortProvisioningState(port, "failed", errorMessage);
+    } catch (stateError) {
+      logger.error({ err: stateError, portId: port.id, cleanupError: errorMessage }, "[port-services] failed to persist cleanup error");
+    }
+    res.status(502).json({ ok: false, error: `Router cleanup failed; the assignment was kept for retry. ${errorMessage}` });
   }
 });
 
