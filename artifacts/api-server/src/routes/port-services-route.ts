@@ -6,6 +6,7 @@ import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../l
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { portServiceResourceNames, type PortServiceResourceNames } from "../lib/port-service-resources.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
@@ -262,6 +263,7 @@ export function buildDualServiceCommands(
     pppoeDnsName?: string | null;
     companyName?: string | null;
     routerName?: string | null;
+    paymentHostnames?: string[];
   } = {},
 ): string[][] {
   if (!/^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(port.interface_name.trim())) {
@@ -307,13 +309,22 @@ export function buildDualServiceCommands(
     const gardenHostnames = [...new Set([
       validPortalHostname(options.portalHostname),
       hotspotDnsName,
+      ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
+        .map(hostname => validPortalHostname(hostname))
+        .filter((hostname): hostname is string => Boolean(hostname)),
     ].filter((hostname): hostname is string => Boolean(hostname)))];
     gardenHostnames.forEach((hostname, index) => {
       commands.push([
         "/ip/hotspot/walled-garden/ip/add",
         `=dst-host=${hostname}`,
         "=action=accept",
-        `=comment=${comment(index === 0 ? "walled_garden" : "hotspot_dns")}`,
+        `=comment=${comment(
+          index === 0
+            ? "walled_garden"
+            : hostname === hotspotDnsName
+              ? "hotspot_dns"
+              : "payment_walled_garden",
+        )}`,
       ]);
     });
   }
@@ -915,6 +926,7 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
         pppoeDnsName: deploymentPort.pppoe_dns_name,
         companyName: identity.companyName,
         routerName: identity.routerName,
+        paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
       },
     );
     for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);

@@ -18,6 +18,7 @@ import {
   routerOsTextVariableWriter,
 } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -1047,27 +1048,36 @@ export async function syncHotspotPortalHostname(
       ]),
       timeoutMs,
     ) as Record<string, string>[];
-    for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
-      if (
-        row["dst-host"]?.toLowerCase() === hostname.toLowerCase()
-        && row.server === hotspotServer
-        && row[".id"]
-      ) {
-        await withTimeout(
-          conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
-          timeoutMs,
-        );
+    const allowedHostnames = Array.from(new Set([
+      hostname.trim().toLowerCase(),
+      ...PAYMENT_WALLED_GARDEN_HOSTNAMES,
+    ]));
+    for (const allowedHostname of allowedHostnames) {
+      for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
+        if (
+          row["dst-host"]?.toLowerCase() === allowedHostname
+          && row.server === hotspotServer
+          && row[".id"]
+        ) {
+          await withTimeout(
+            conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
+            timeoutMs,
+          );
+        }
       }
+      await withTimeout(
+        conn.write([
+          "/ip/hotspot/walled-garden/ip/add",
+          `=server=${hotspotServer}`,
+          `=dst-host=${allowedHostname}`,
+          "=action=accept",
+          `=comment=${allowedHostname === hostname.trim().toLowerCase()
+            ? `tenant portal ${hostname}`
+            : `payment walled garden ${allowedHostname}`}`,
+        ]),
+        timeoutMs,
+      );
     }
-    await withTimeout(
-      conn.write([
-        "/ip/hotspot/walled-garden/ip/add",
-        `=server=${hotspotServer}`,
-        `=dst-host=${hostname}`,
-        "=action=accept",
-      ]),
-      timeoutMs,
-    );
     return { hostname, hotspotAddress, hotspotServer, connectedHost };
   });
 }
@@ -4916,6 +4926,8 @@ export interface RouterServiceSetupOptions {
   maxPortSpeedMbps?: number;
   /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
   portalHostnames?: string[];
+  /** Payment provider hostnames that unauthenticated Hotspot clients must reach. */
+  paymentHostnames?: string[];
   /** One-time HTTPS sources for the default RouterOS Hotspot files. */
   portalFileUrls?: {
     login: string;
@@ -4955,6 +4967,10 @@ export function generateServiceSetupScript(
   const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
+  const paymentHostnames = Array.from(new Set((options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
+    .map(host => String(host).trim().toLowerCase())
+    .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))
+    .filter(host => !portalHostnames.includes(host))));
   const hotspotPool = `${tag}-hotspot-pool`;
   const pppoePool = `${tag}-pppoe-pool`;
   const pppoeProfile = `${tag}-pppoe-profile`;
@@ -4988,9 +5004,19 @@ export function generateServiceSetupScript(
     }
 }`).join("\n");
 
-  const walledGardenSetup = portalHostnames.length > 0
-    ? portalHostnames.map(hostname => `:do {
-    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(`${tag} walled garden ${hostname}`)}
+  const walledGardenEntries = [
+    ...portalHostnames.map(hostname => ({
+      hostname,
+      comment: `${tag} walled garden ${hostname}`,
+    })),
+    ...paymentHostnames.map(hostname => ({
+      hostname,
+      comment: `${tag} payment walled garden ${hostname}`,
+    })),
+  ];
+  const walledGardenSetup = walledGardenEntries.length > 0
+    ? walledGardenEntries.map(({ hostname, comment }) => `:do {
+    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(comment)}
 } on-error={
     :set serviceError ("${tag}: could not add walled-garden host ${hostname}: " . $error)
     :error $serviceError
@@ -5022,7 +5048,7 @@ export function generateServiceSetupScript(
 # This file owns only OcholaSupernet-tagged service resources:
 #   - service bridge and selected physical ports
  #   - Hotspot gateway, DHCP, pool, profile, and server
-#   - Hotspot walled garden for the portal/API hostname
+ #   - Hotspot walled garden for the portal/API and payment hostnames
 #   - PPPoE gateway, pool, profile, and server
 #   - customer NAT rules for both service networks
 # Existing foreign bridge memberships and unowned resources are preserved.
@@ -5179,6 +5205,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :do {
     /ip hotspot walled-garden ip
     :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
+    :do { remove [find where comment~${routerOsString(`${tag} payment walled garden `)}] } on-error={}
     ${walledGardenSetup}
 } on-error={
     :set serviceStepFailed true

@@ -59,6 +59,7 @@ import {
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 
@@ -1514,6 +1515,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         ? Number(req.query.maxPortSpeedMbps)
         : undefined,
       portalHostnames: [portalHostname],
+      paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
       portalFileUrls,
     });
 

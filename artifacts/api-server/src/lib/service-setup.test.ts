@@ -30,6 +30,9 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /ip hotspot add[^\n]*address-pool="ochola-services-104-hotspot-pool"/);
   assert.doesNotMatch(script, /ip hotspot (?:add|set)[^\n]*comment=/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
+  assert.match(script, /walled-garden ip add dst-host="api\.safaricom\.co\.ke"/);
+  assert.match(script, /payment walled garden api\.safaricom\.co\.ke/);
+  assert.match(script, /walled-garden ip add dst-host="checkout\.stripe\.com"/);
   assert.match(script, /SCRIPT 4 optional bandwidth tree starting/);
   assert.match(script, /no aggregate queue speed was supplied; existing bandwidth policy was preserved/);
   assert.match(script, /interface pppoe-server server add/);
