@@ -4990,10 +4990,18 @@ ${apiRules}
 export interface RouterServiceSetupOptions {
   /** Router ID used to namespace every service resource and comment. */
   routerId?: number;
+  /** Brownfield mode uses a separate virtual service plane and never rewrites defaults. */
+  installationMode?: "coexist" | "direct" | "takeover";
   /** Bridge that carries the shared Hotspot and PPPoE services. */
   bridgeName?: string;
   /** Physical interfaces to attach to the service bridge when unassigned. */
   bridgePorts?: string[];
+  /** Port label used to namespace the isolated Coexistence Hotspot and PPPoE resources. */
+  portName?: string;
+  /** Platform RADIUS endpoint used by the isolated Coexistence profiles. */
+  radiusIp?: string;
+  /** Shared secret for the platform RADIUS endpoint. */
+  radiusSecret?: string;
   /**
    * Optional aggregate speed for an idempotent parent/child simple-queue
    * tree. It is intentionally opt-in because most existing routers already
@@ -5012,6 +5020,323 @@ export interface RouterServiceSetupOptions {
   };
 }
 
+function validateCoexistenceRadiusIp(value: string): string {
+  const endpoint = String(value ?? "").trim();
+  if (
+    !endpoint
+    || endpoint.length > 255
+    || !/^[A-Za-z0-9:._-]+$/.test(endpoint)
+  ) {
+    throw new Error("Coexistence RADIUS address must be a hostname or IP address.");
+  }
+  return endpoint;
+}
+
+function validateCoexistenceRadiusSecret(value: string): string {
+  const secret = String(value ?? "");
+  if (!secret || /[\u0000-\u001F\u007F"]/u.test(secret)) {
+    throw new Error("Coexistence RADIUS secret is empty or contains unsafe characters.");
+  }
+  return secret;
+}
+
+/**
+ * Build the Brownfield/Coexistence service plane.
+ *
+ * This is intentionally a separate compiler path from the historical shared
+ * service setup. Coexistence is installed beside another active billing
+ * system, so it must never rename, remove, or update an unowned RouterOS
+ * object. Each mutation is behind a presence/ownership guard and the result
+ * is returned as one complete importable payload.
+ */
+function generateCoexistenceServiceSetupScript(
+  options: RouterServiceSetupOptions,
+): string {
+  const routerTag = options.routerId == null ? "router" : String(options.routerId);
+  const tag = `ochola-coexist-${routerTag}`;
+  const bridgeName = validateRouterOsResourceName(
+    options.bridgeName ?? "br-ochola-coexist",
+    "Coexistence bridge name",
+  );
+  const bridgePorts = Array.from(new Set((options.bridgePorts ?? [])
+    .map(port => validateRouterOsResourceName(port, "Coexistence bridge port"))));
+  const portName = validateRouterOsResourceName(
+    options.portName ?? bridgePorts[0] ?? "service",
+    "Coexistence port name",
+  );
+  const radiusIp = options.radiusIp
+    ? validateCoexistenceRadiusIp(options.radiusIp)
+    : "";
+  const radiusSecret = options.radiusSecret
+    ? validateCoexistenceRadiusSecret(options.radiusSecret)
+    : "";
+  if ((radiusIp && !radiusSecret) || (!radiusIp && radiusSecret)) {
+    throw new Error("Coexistence RADIUS configuration must include both address and secret.");
+  }
+
+  const bridgeComment = `${tag} owned bridge`;
+  const portComment = `${tag} owned port`;
+  const poolComment = `${tag} owned pool`;
+  const dhcpComment = `${tag} owned DHCP network`;
+  const profileComment = `${tag} owned Hotspot profile`;
+  const pppoeProfileComment = `${tag} owned PPPoE profile`;
+  const radiusComment = "Ochola Platform Link - Coexist Mode";
+  const hotspotDirectory = `flash/hotspot/coexist_hs_${portName}`;
+  const hotspotPool = `${tag}-pool`;
+  const dhcpServer = `${tag}-dhcp`;
+  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotServer = `coexist_hs_${portName}`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const pppoeService = `pppoe_ochola_${portName}`;
+  const hotspotGateway = "172.16.99.1/24";
+  const coexistNetwork = "172.16.99.0/24";
+  const poolRange = "172.16.99.10-172.16.99.254";
+
+  const ownedOrConflict = (
+    variableName: string,
+    findPath: string,
+    findClause: string,
+    resourceName: string,
+    comment: string,
+    command: string,
+  ) => `:local ${variableName}Ids [${findPath} find where ${findClause}]
+:if ([:len $${variableName}Ids] = 0) do={
+    ${command}
+} else={
+    :local ${variableName}Id [:pick $${variableName}Ids 0]
+    :local ${variableName}Comment [${findPath} get $${variableName}Id comment]
+    :if ($${variableName}Comment != ${routerOsString(comment)}) do={
+        :set coexistError ("${tag}: foreign resource named " . ${routerOsString(resourceName)} . " was preserved.")
+        :error $coexistError
+    }
+}`;
+
+  /*
+   * Do not use RouterOS `remove [find]` or broad `set [find]` in this branch.
+   * Every add is conditional, and an existing object with the same name must
+   * carry this installation's ownership comment before it can be reconciled.
+   */
+  const blocks: string[] = [];
+
+  blocks.push(`# 1. Isolated coexistence bridge
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :do {
+        /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(bridgeComment)}
+    } on-error={
+        :set coexistError ("${tag}: coexistence bridge creation failed: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :set coexistError "${tag}: coexistence bridge was not verified."
+    :error $coexistError
+}`);
+
+  if (bridgePorts.length > 0) {
+    blocks.push(`# 2. Attach only unassigned mapped ports; foreign bridge membership is never moved
+${bridgePorts.map((port, index) => `:if ([:len [/interface find where name=${routerOsString(port)}]] = 0) do={
+    :set coexistError "${tag}: mapped port ${port} was not found and was not changed."
+    :error $coexistError
+}
+:local coexistPortIds${index} [/interface bridge port find where interface=${routerOsString(port)}]
+:if ([:len $coexistPortIds${index}] = 0) do={
+    :do {
+        /interface bridge port add bridge=${routerOsString(bridgeName)} interface=${routerOsString(port)} comment=${routerOsString(portComment)}
+    } on-error={
+        :set coexistError ("${tag}: mapped port ${port} could not be attached: " . $error)
+        :error $coexistError
+    }
+} else={
+    :local coexistPortId${index} [:pick $coexistPortIds${index} 0]
+    :local coexistPortBridge${index} [/interface bridge port get $coexistPortId${index} bridge]
+    :if ($coexistPortBridge${index} != ${routerOsString(bridgeName)}) do={
+        :set coexistError ("${tag}: mapped port ${port} belongs to foreign bridge " . $coexistPortBridge${index} . "; it was preserved.")
+        :error $coexistError
+    }
+}`).join("\n")}`);
+  }
+
+  blocks.push(`# 3. Isolated gateway and DHCP resources
+:if ([:len [/ip address find where address=${routerOsString(hotspotGateway)}]] = 0) do={
+    :do {
+        /ip address add address=${routerOsString(hotspotGateway)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} gateway`)}
+    } on-error={
+        :set coexistError ("${tag}: isolated gateway creation failed: " . $error)
+        :error $coexistError
+    }
+} else={
+    :if ([:len [/ip address find where address=${routerOsString(hotspotGateway)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :set coexistError "${tag}: 172.16.99.1/24 is already assigned to another interface; it was preserved."
+        :error $coexistError
+    }
+}
+:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+    :do {
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=${routerOsString(poolRange)} comment=${routerOsString(poolComment)}
+    } on-error={
+        :set coexistError ("${tag}: isolated DHCP pool creation failed: " . $error)
+        :error $coexistError
+    }
+} else={
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)} && comment=${routerOsString(poolComment)}]] = 0) do={
+        :set coexistError "${tag}: a foreign DHCP pool already uses the coexistence pool name; it was preserved."
+        :error $coexistError
+    }
+}
+:if ([:len [/ip dhcp-server network find where address=${routerOsString(coexistNetwork)}]] = 0) do={
+    :do {
+        /ip dhcp-server network add address=${routerOsString(coexistNetwork)} gateway=${routerOsString("172.16.99.1")} dns-server=${routerOsString("172.16.99.1")} comment=${routerOsString(dhcpComment)}
+    } on-error={
+        :set coexistError ("${tag}: isolated DHCP network creation failed: " . $error)
+        :error $coexistError
+    }
+}
+${ownedOrConflict(
+  "coexistDhcp",
+  "/ip dhcp-server",
+  `name=${routerOsString(dhcpServer)}`,
+  dhcpServer,
+  dhcpComment,
+  `/ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(dhcpComment)}`,
+)}`);
+
+  blocks.push(`# 4. Isolated Hotspot files, profile, and server
+:if ([:len [/file find where name=${routerOsString(hotspotDirectory)}]] = 0) do={
+    :do { /file make-dir dir-name=${routerOsString(hotspotDirectory)} } on-error={
+        :set coexistError ("${tag}: Hotspot directory creation failed: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/file find where name=${routerOsString(hotspotDirectory)}]] = 0) do={
+    :set coexistError "${tag}: Hotspot directory was not verified."
+    :error $coexistError
+}
+${ownedOrConflict(
+  "coexistHotspotProfile",
+  "/ip hotspot profile",
+  `name=${routerOsString(hotspotProfile)}`,
+  hotspotProfile,
+  profileComment,
+  `/ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString("172.16.99.1")} html-directory=${routerOsString(hotspotDirectory)} login-by=${routerOsString("http-chap,http-pap,cookie")} use-radius=yes comment=${routerOsString(profileComment)}`,
+)}
+${ownedOrConflict(
+  "coexistHotspotServer",
+  "/ip hotspot",
+  `name=${routerOsString(hotspotServer)}`,
+  hotspotServer,
+  `${tag} owned Hotspot server`,
+  `/ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} owned Hotspot server`)}`,
+)}`);
+
+  blocks.push(`# 5. Isolated PPPoE pool, profile, and server
+${ownedOrConflict(
+  "coexistPppoePool",
+  "/ip pool",
+  `name=${routerOsString(pppoePool)}`,
+  pppoePool,
+  `${tag} owned PPPoE pool`,
+  `/ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(poolRange)} comment=${routerOsString(`${tag} owned PPPoE pool`)}`,
+)}
+${ownedOrConflict(
+  "coexistPppoeProfile",
+  "/ppp profile",
+  `name=${routerOsString(pppoeProfile)}`,
+  pppoeProfile,
+  pppoeProfileComment,
+  `/ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString("172.16.99.1")} remote-address=${routerOsString(pppoePool)} use-radius=yes only-one=yes comment=${routerOsString(pppoeProfileComment)}`,
+)}
+${ownedOrConflict(
+  "coexistPppoeServer",
+  "/interface pppoe-server server",
+  `service-name=${routerOsString(pppoeService)}`,
+  pppoeService,
+  `${tag} owned PPPoE server`,
+  `/interface pppoe-server server add service-name=${routerOsString(pppoeService)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} owned PPPoE server`)}`,
+)}`);
+
+  if (radiusIp && radiusSecret) {
+    blocks.push(`# 6. Append the platform RADIUS profile without removing any existing entries
+:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
+    :do {
+        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(radiusIp)} secret=${routerOsString(radiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(radiusComment)}
+    } on-error={
+        :set coexistError ("${tag}: platform RADIUS profile could not be added: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
+    :set coexistError "${tag}: platform RADIUS profile was not verified."
+    :error $coexistError
+}`);
+  } else {
+    blocks.push(`# 6. RADIUS was not changed because no platform address and secret were supplied
+:put "${tag}: platform RADIUS profile skipped; existing RADIUS entries were preserved."`);
+  }
+
+  blocks.push(`# 7. Enable CoA on the RouterOS RADIUS listener, changing only the required fields
+:local coexistRadiusIncomingIds [/radius incoming find]
+:if ([:len $coexistRadiusIncomingIds] > 0) do={
+    :local coexistRadiusIncomingId [:pick $coexistRadiusIncomingIds 0]
+    :if ([/radius incoming get $coexistRadiusIncomingId accept] != true) do={
+        :do { /radius incoming set $coexistRadiusIncomingId accept=yes } on-error={
+            :set coexistError ("${tag}: inbound RADIUS CoA could not be enabled: " . $error)
+            :error $coexistError
+        }
+    }
+    :if ([/radius incoming get $coexistRadiusIncomingId port] != 3799) do={
+        :do { /radius incoming set $coexistRadiusIncomingId port=3799 } on-error={
+            :set coexistError ("${tag}: inbound RADIUS CoA port could not be set to 3799: " . $error)
+            :error $coexistError
+        }
+    }
+}
+:if ([:len [/radius incoming find where accept=yes && port=3799]] = 0) do={
+    :set coexistError "${tag}: inbound RADIUS CoA listener was not verified on UDP 3799."
+    :error $coexistError
+}`);
+
+  blocks.push(`# 8. Scoped forwarding, DNS, and NAT for the isolated virtual plane
+:if ([:len [/interface list find where name="WAN"]] > 0) do={
+    :if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} to-wan`)}]] = 0) do={
+        :do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} to-wan`)} place-before=0 } on-error={
+            :set coexistError ("${tag}: isolated WAN forwarding rule could not be added: " . $error)
+            :error $coexistError
+        }
+    }
+    :if ([:len [/ip firewall nat find where comment=${routerOsString(`${tag} masquerade`)}]] = 0) do={
+        :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} masquerade`)} } on-error={
+            :set coexistError ("${tag}: isolated NAT rule could not be added: " . $error)
+            :error $coexistError
+        }
+    }
+}
+:if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} allow-dns`)}]] = 0) do={
+    :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-dns`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: isolated DNS rule could not be added: " . $error)
+        :error $coexistError
+    }
+}`);
+
+  const renderedBlocks = blocks
+    .map((block, index) => `${block.trim()}${index < blocks.length - 1 ? "\n:delay 2s;" : ""}`)
+    .join("\n\n");
+  return `# ===============================================================
+# OcholaSupernet - Brownfield Coexistence service plane
+# Generated  : ${new Date().toISOString()}
+# This payload is isolated from the existing billing system.
+# It never resets bridges, interfaces, routes, or existing RADIUS entries.
+# Port label : ${portName}
+# Bridge     : ${bridgeName}
+# ===============================================================
+
+:global coexistError
+:set coexistError ""
+${renderedBlocks}
+:put "${tag}: complete isolated coexistence service plane verified."
+`;
+}
+
 /**
  * Generates the shared service layer used by both Hotspot and PPPoE.
  *
@@ -5023,6 +5348,9 @@ export interface RouterServiceSetupOptions {
 export function generateServiceSetupScript(
   options: RouterServiceSetupOptions = {},
 ): string {
+  if (options.installationMode === "coexist") {
+    return generateCoexistenceServiceSetupScript(options);
+  }
   const routerTag = options.routerId == null ? "router" : String(options.routerId);
   const tag = `ochola-services-${routerTag}`;
   const bridgeName = validateRouterOsResourceName(

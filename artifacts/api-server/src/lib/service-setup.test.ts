@@ -96,3 +96,64 @@ test("service setup adds the optional shared-wire queue tree without changing th
   assert.match(script, /name="ochola-services-104-hotspot" target="192\.168\.180\.0\/22" parent="ochola-services-104-root"[^\\n]*priority=8\/8/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
 });
+
+test("coexistence service setup compiles one isolated, delayed payload", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "coexist",
+    routerId: 90,
+    bridgeName: "br-ochola-coexist",
+    bridgePorts: ["ether3"],
+    portName: "ether3",
+    radiusIp: "10.8.5.1",
+    radiusSecret: "radius-test-secret",
+  });
+
+  assert.match(script, /# OcholaSupernet - Brownfield Coexistence service plane/);
+  assert.match(script, /interface bridge find where name="br-ochola-coexist"/);
+  assert.match(script, /interface bridge add name="br-ochola-coexist"/);
+  assert.match(script, /172\.16\.99\.1\/24/);
+  assert.match(script, /172\.16\.99\.10-172\.16\.99\.254/);
+  assert.match(script, /html-directory="flash\/hotspot\/coexist_hs_ether3"/);
+  assert.match(script, /ip hotspot add name="coexist_hs_ether3"/);
+  assert.match(script, /service-name="pppoe_ochola_ether3"/);
+  assert.match(script, /service-name="pppoe_ochola_ether3"/);
+  assert.match(script, /\/radius add service="hotspot,ppp" address="10\.8\.5\.1"/);
+  assert.match(script, /comment="Ochola Platform Link - Coexist Mode"/);
+  assert.match(script, /radius incoming set .*accept=yes/);
+  assert.match(script, /radius incoming set .*port=3799/);
+  assert.match(script, /:delay 2s;/);
+  assert.equal((script.match(/:delay 2s;/g) ?? []).length, 7);
+  assert.equal(script.endsWith("\n"), true);
+});
+
+test("coexistence never removes defaults or moves foreign resources", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "coexist",
+    routerId: 90,
+    bridgePorts: ["ether3"],
+  });
+
+  assert.doesNotMatch(script, /bridge remove|bridge set/);
+  assert.doesNotMatch(script, /\/ip address remove|\/ip route (?:remove|set)/);
+  assert.doesNotMatch(script, /\/radius remove|\/radius incoming remove/);
+  assert.match(script, /belongs to foreign bridge/);
+  assert.match(script, /platform RADIUS profile skipped; existing RADIUS entries were preserved/);
+});
+
+test("coexistence rejects incomplete or unsafe RADIUS configuration", () => {
+  assert.throws(
+    () => generateServiceSetupScript({
+      installationMode: "coexist",
+      radiusIp: "10.8.5.1",
+    }),
+    /must include both address and secret/,
+  );
+  assert.throws(
+    () => generateServiceSetupScript({
+      installationMode: "coexist",
+      radiusIp: "10.8.5.1",
+      radiusSecret: 'unsafe"secret',
+    }),
+    /unsafe characters/,
+  );
+});
