@@ -282,10 +282,6 @@
             <label class="lbl" style="color:rgba(251,191,36,.75)">Voucher Code</label>
             <input id="voucherCode" name="username" type="text" placeholder="e.g. ABCD-1234-EFGH" class="inp inp-amber" style="font-family:monospace;letter-spacing:.08em" oninput="this.value=this.value.toUpperCase()" />
           </div>
-          <div>
-            <label class="lbl" style="color:rgba(251,191,36,.75)">Your Phone Number</label>
-            <input id="voucherPhone" type="tel" placeholder="07XXXXXXXX" class="inp inp-amber" />
-          </div>
           <div id="voucherError" style="display:none;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);color:#fca5a5;font-size:.8125rem;line-height:1.5"></div>
           <button type="submit" class="btn btn-amber btn-full" style="margin-top:.25rem">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"/></svg>
@@ -451,6 +447,8 @@ var EMBEDDED_PLANS=[];
  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
+var ROUTER_CHAP_ID="$(chap-id)";
+var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
  var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded";
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 
@@ -1151,31 +1149,40 @@ function applyCredentialsFromHash(){
   }catch(e){}
 }
 
-/* ── MikroTik login with MD5 hashing ── */
+/* ── MikroTik login ──
+   RouterOS may use HTTP-PAP or HTTP-CHAP. Send the plaintext password for
+   PAP, and the standard challenge response when the router supplies a CHAP
+   challenge. Sending MD5(password) alone is not a valid RouterOS login. */
+function routerLoginPassword(password){
+  var chapId=String(ROUTER_CHAP_ID||"");
+  var challenge=String(ROUTER_CHAP_CHALLENGE||"");
+  var hasChallenge=chapId&&challenge&&chapId!=="$(chap-id)"&&challenge!=="$(chap-challenge)";
+  if(hasChallenge&&typeof MD5==="function")return MD5(chapId+password+challenge);
+  return password;
+}
 function doLogin(form){
   var btn=document.getElementById("loginBtn");
   var pass=document.getElementById("loginPass");
   if(!pass||!pass.value)return false;
   btn.innerHTML=SPINNER+" Connecting…"; btn.style.opacity=".65";
-  if(typeof MD5==="function"){pass.value=MD5(pass.value);}
+  pass.value=routerLoginPassword(pass.value);
   return true;
 }
 
 /* ── Voucher: code is both username and password ── */
 function redeemVoucher(form){
   var code=document.getElementById("voucherCode").value.trim();
-  var phone=document.getElementById("voucherPhone").value.trim();
   var errEl=document.getElementById("voucherError");
   if(!code){errEl.textContent="Please enter your voucher code.";errEl.style.display="block";return false;}
-  if(!phone){errEl.textContent="Please enter your phone number.";errEl.style.display="block";return false;}
   errEl.style.display="none";
-  /* Set password = MD5(code) for MikroTik */
+  /* Voucher codes are RouterOS usernames and passwords. Submit immediately
+     so a successful router/RADIUS authentication logs the user in. */
   var passHidden=document.getElementById("voucherPassHidden");
-  if(passHidden){passHidden.value=typeof MD5==="function"?MD5(code):code;}
+  if(passHidden){passHidden.value=routerLoginPassword(code);}
   return true;
 }
 function resetVoucher(){
-  document.getElementById("voucherCode").value="";document.getElementById("voucherPhone").value="";
+  document.getElementById("voucherCode").value="";
   document.getElementById("voucherFormWrap").style.display="block";document.getElementById("voucherSuccess").style.display="none";
 }
 

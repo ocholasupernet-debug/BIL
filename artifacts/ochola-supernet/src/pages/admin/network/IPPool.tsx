@@ -8,8 +8,8 @@ import {
   Search, Plus, Trash2, Edit2, HelpCircle,
   ChevronDown, Server,
 } from "lucide-react";
+import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 
-const API      = import.meta.env.VITE_API_BASE ?? "";
 const PAGE_SIZE = 15;
 
 /* ── Types ── */
@@ -119,12 +119,16 @@ async function syncRouterPools(
     pools: rPools.map(p => ({ name: p.name, rangeStart: p.range_start, rangeEnd: p.range_end })),
   };
   try {
-    const res  = await fetch(`${API}/api/admin/sync/ip-pools`, {
+    const res  = await fetch(apiUrl("/api/admin/sync/ip-pools"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json() as { ok: boolean; logs: string[] };
+    const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
     (data.logs ?? []).forEach((l: string) => log(l));
+    if (!res.ok) {
+      log(`  ✗ ${data.error || `Sync failed (HTTP ${res.status}).`}`);
+      return false;
+    }
     return data.ok;
   } catch (e) {
     log(`  ✗ ${e instanceof Error ? e.message : e}`);
