@@ -920,6 +920,8 @@ export default function Plans() {
   const [showAddForm,  setShowAddForm]  = useState(false);
   const [planSearch, setPlanSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot">("all");
+  const [routerFilter, setRouterFilter] = useState("all");
+  const [portFilter, setPortFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
   const [sortAscending, setSortAscending] = useState(true);
 
@@ -955,14 +957,24 @@ export default function Plans() {
     staleTime: 30_000,
   });
 
+  const filterPorts = useMemo(
+    () => ports
+      .filter((port) => port.status !== "disabled")
+      .filter((port) => routerFilter === "all" || String(port.router_id) === routerFilter),
+    [ports, routerFilter],
+  );
+
   const visiblePlans = useMemo(() => {
     const query = planSearch.trim().toLowerCase();
     const filtered = plans.filter((plan) => {
       const normalizedType = plan.type === "pppoe" ? "pppoe" : plan.type === "hotspot" || plan.type === "trials" ? "hotspot" : "other";
       const matchesService = serviceFilter === "all" || normalizedType === serviceFilter;
+      const matchesRouter = routerFilter === "all" || String(plan.router_id) === routerFilter;
+      const matchesPort = portFilter === "all"
+        || (portFilter === "router-wide" ? plan.port_id == null : String(plan.port_id) === portFilter);
       const matchesSearch = !query || [plan.name, plan.type, String(plan.speed_down), String(plan.speed_up), String(plan.price)]
         .some((value) => value.toLowerCase().includes(query));
-      return matchesService && matchesSearch;
+      return matchesService && matchesRouter && matchesPort && matchesSearch;
     });
 
     return [...filtered].sort((a, b) => {
@@ -971,7 +983,7 @@ export default function Plans() {
       if (sortBy === "speed") return (Number(a.speed_down ?? 0) - Number(b.speed_down ?? 0)) * direction;
       return a.name.localeCompare(b.name) * direction;
     });
-  }, [planSearch, plans, serviceFilter, sortAscending, sortBy]);
+  }, [planSearch, plans, portFilter, routerFilter, serviceFilter, sortAscending, sortBy]);
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
@@ -1089,6 +1101,31 @@ export default function Plans() {
                 <option value="all">All services</option>
                 <option value="pppoe">PPPoE</option>
                 <option value="hotspot">Hotspot</option>
+              </select>
+            </label>
+            <label className="plans-filter">
+              <span>Router</span>
+              <select
+                value={routerFilter}
+                onChange={(event) => {
+                  setRouterFilter(event.target.value);
+                  setPortFilter("all");
+                }}
+              >
+                <option value="all">All routers</option>
+                {routers.map((router) => (
+                  <option key={router.id} value={String(router.id)}>{router.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="plans-filter">
+              <span>Port</span>
+              <select value={portFilter} onChange={(event) => setPortFilter(event.target.value)}>
+                <option value="all">All ports</option>
+                <option value="router-wide">Router-wide plans</option>
+                {filterPorts.map((port) => (
+                  <option key={port.id} value={String(port.id)}>{port.interface_name}</option>
+                ))}
               </select>
             </label>
             <button
