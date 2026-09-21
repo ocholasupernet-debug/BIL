@@ -3,6 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { useBrand } from "@/context/BrandContext";
+import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
+import {
+  PORTAL_BACKGROUND_OPTIONS,
+  PORTAL_PACKAGE_SHAPE_OPTIONS,
+  type PortalBackground,
+  type PortalPackageShape,
+} from "@/lib/dashboard-preferences";
 import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
@@ -364,11 +371,20 @@ async function resolvePortalAppearance(domain: string): Promise<{
   return { apiBase: portalOriginFromBrand(domain), portalBackground: "midnight", portalPackageShape: "rounded" };
 }
 
-export async function buildPortalHtml(settings: HSettings, domain: string): Promise<string> {
+export async function buildPortalHtml(
+  settings: HSettings,
+  domain: string,
+  appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+): Promise<string> {
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
-  const appearance = await resolvePortalAppearance(domain);
+  const resolvedAppearance = await resolvePortalAppearance(domain);
+  const appearance = {
+    ...resolvedAppearance,
+    portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
+    portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
+  };
   const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
   try {
@@ -465,6 +481,15 @@ const STYLES = `
   .hs-preset:hover { color:var(--isp-text); border-color:var(--isp-accent-border); }
   .hs-swatches { display:flex; gap:3px; }
   .hs-swatches i { display:block; width:11px; height:11px; border-radius:3px; }
+  .hs-choice-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+  .hs-choice { display:flex; align-items:center; gap:10px; min-width:0; padding:9px; border:1px solid var(--isp-border); border-radius:10px; background:var(--isp-input-bg); color:var(--isp-text-muted); text-align:left; cursor:pointer; transition:border-color .15s,background .15s,transform .15s; }
+  .hs-choice:hover { border-color:var(--isp-accent-border); transform:translateY(-1px); }
+  .hs-choice.active { border-color:var(--isp-accent); background:var(--isp-accent-glow); box-shadow:0 0 0 2px var(--isp-accent-glow); }
+  .hs-choice > span:last-child { min-width:0; display:grid; gap:3px; }
+  .hs-choice strong { color:var(--isp-text); font-size:.71rem; font-weight:800; }
+  .hs-choice small { color:var(--isp-text-sub); font-size:.61rem; line-height:1.25; }
+  .hs-choice-preview { display:block; flex:0 0 46px; width:46px; height:34px; border-radius:7px; border:1px solid rgba(255,255,255,.18); }
+  .hs-shape-preview { display:block; flex:0 0 auto; }
   .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
   .hs-side-body { padding:17px 18px 19px; }
   .hs-preview-screen { min-height:270px; overflow:hidden; border-radius:11px; border:1px solid var(--isp-border); background:linear-gradient(145deg,#081018,#122137); position:relative; }
@@ -492,7 +517,7 @@ const STYLES = `
   .hs-modal-close { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; border:1px solid rgba(248,113,113,.25); background:rgba(248,113,113,.08); color:#fca5a5; font:700 .68rem inherit; cursor:pointer; }
   .hs-modal-frame { flex:1; min-height:0; border:0; background:#02090f; }
   @media (max-width: 900px) { .hs-grid { grid-template-columns:1fr; } .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }
-  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
+  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
 `;
 
 function Section({
@@ -602,6 +627,24 @@ function ColorPicker({
   );
 }
 
+function portalShapePreviewStyle(shape: PortalPackageShape): React.CSSProperties {
+  const common: React.CSSProperties = {
+    width: 54,
+    height: 38,
+    background: "linear-gradient(135deg,#8b5cf6,#2563eb)",
+    border: "1px solid rgba(255,255,255,.28)",
+  };
+  if (shape === "soft-square") return { ...common, borderRadius: 10 };
+  if (shape === "compact") return { ...common, borderRadius: 4 };
+  if (shape === "square") return { ...common, borderRadius: 0 };
+  if (shape === "circle") return { ...common, width: 42, height: 42, borderRadius: "50%" };
+  if (shape === "pill") return { ...common, borderRadius: 999 };
+  if (shape === "hexagon") return { ...common, clipPath: "polygon(8% 0,92% 0,100% 50%,92% 100%,8% 100%,0 50%)" };
+  if (shape === "octagon") return { ...common, clipPath: "polygon(15% 0,85% 0,100% 15%,100% 85%,85% 100%,15% 100%,0 85%,0 15%)" };
+  if (shape === "squircle") return { ...common, borderRadius: "28%" };
+  return { ...common, borderRadius: 16 };
+}
+
 function PreviewModal({
   url, loading, onClose,
 }: {
@@ -634,7 +677,15 @@ function PreviewModal({
 
 export default function HotspotSettings() {
   const brand = useBrand();
+  const {
+    preferences,
+    loading: appearanceLoading,
+    saving: appearanceSaving,
+    savePreferences,
+  } = useDashboardPreferences();
   const [settings, setSettings] = useState<HSettings>(loadSettings);
+  const [portalBackground, setPortalBackground] = useState<PortalBackground>(preferences.portalBackground);
+  const [portalPackageShape, setPortalPackageShape] = useState<PortalPackageShape>(preferences.portalPackageShape);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
@@ -649,6 +700,12 @@ export default function HotspotSettings() {
   const [portsLoading, setPortsLoading] = useState(false);
   const [savingPortId, setSavingPortId] = useState<number | null>(null);
   const [deletingPortId, setDeletingPortId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (appearanceSaving) return;
+    setPortalBackground(preferences.portalBackground);
+    setPortalPackageShape(preferences.portalPackageShape);
+  }, [appearanceSaving, preferences.portalBackground, preferences.portalPackageShape]);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
@@ -808,12 +865,17 @@ export default function HotspotSettings() {
     setNotice(null);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      await savePreferences({
+        ...preferences,
+        portalBackground,
+        portalPackageShape,
+      });
       const routerId = Number(settings.routerId);
       const adminId = getSelectedTenantId();
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
       if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
-        const html = await buildPortalHtml(settings, brand.domain);
+        const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape });
         const headers = new Headers({ "Content-Type": "application/json" });
         let token = "";
         let role = "";
@@ -869,7 +931,7 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error });
       return null;
     }
-    return buildPortalHtml(settings, brand.domain);
+    return buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape });
   };
 
   const handleDownload = async () => {
@@ -914,6 +976,11 @@ export default function HotspotSettings() {
     setDeploying(true);
     setNotice(null);
     try {
+      await savePreferences({
+        ...preferences,
+        portalBackground,
+        portalPackageShape,
+      });
       const html = await createExport();
       if (!html) return;
 
@@ -1232,6 +1299,51 @@ export default function HotspotSettings() {
                   </button>
                 ))}
               </div>
+            </Section>
+
+            <Section icon={<Sparkles size={16} />} title="Captive portal appearance" description="Choose the background and package-card shape customers see on the hotspot login page.">
+              {appearanceLoading ? (
+                <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
+              ) : (
+                <>
+                  <Field label="Portal background" help="This controls the main background of the generated hotspot page.">
+                    <div className="hs-choice-grid">
+                      {PORTAL_BACKGROUND_OPTIONS.map(option => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`hs-choice ${portalBackground === option.value ? "active" : ""}`}
+                          onClick={() => { setPortalBackground(option.value); setNotice(null); }}
+                        >
+                          <span className="hs-choice-preview" style={{ background: option.gradient }} />
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                  <Field label="Package card shape" help="This changes the silhouette of each plan card in the customer portal.">
+                    <div className="hs-choice-grid hs-shape-grid">
+                      {PORTAL_PACKAGE_SHAPE_OPTIONS.map(option => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`hs-choice ${portalPackageShape === option.value ? "active" : ""}`}
+                          onClick={() => { setPortalPackageShape(option.value); setNotice(null); }}
+                        >
+                          <span className="hs-shape-preview" style={portalShapePreviewStyle(option.value)} />
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
+                </>
+              )}
             </Section>
 
             <Section icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">

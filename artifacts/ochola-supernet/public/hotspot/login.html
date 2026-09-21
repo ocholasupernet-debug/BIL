@@ -240,6 +240,9 @@
           <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:.65rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.78);box-shadow:none">
             Troubleshoot connection
           </button>
+          <p style="margin:.35rem 0 0;color:rgba(255,255,255,.34);font-size:.72rem;line-height:1.45;text-align:center">
+            This checks the active package for this device using its hotspot MAC address. No username or password is needed.
+          </p>
           <div id="portalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
         </div>
       </form>
@@ -1073,12 +1076,9 @@ function submitRouterLogin(){
 }
 function troubleshootConnection(){
   if(portalTroubleshootBusy)return;
-  var user=document.getElementById("loginUser"), pass=document.getElementById("loginPass");
-  var username=user&&user.value?user.value.trim():"";
-  var password=pass&&pass.value?pass.value:"";
   var status=document.getElementById("portalSessionStatus");
-  if(!username||!password){
-    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="Enter your username and password before troubleshooting the connection.";}
+  if(!DEVICE_MAC){
+    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.";}
     return;
   }
   if(PORTAL_ADMIN_ID<1){
@@ -1095,9 +1095,7 @@ function troubleshootConnection(){
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         adminId:PORTAL_ADMIN_ID,
-        username:username,
-        password:password,
-        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+        mac_address:DEVICE_MAC,
         ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
       })
     }).then(function(response){

@@ -530,8 +530,8 @@ export default function HotspotLogin() {
   };
 
   const attemptHotspotConnection = async (): Promise<TroubleshootResult | null> => {
-    if (!adminId || !loginUsername.trim() || !loginPassword) {
-      setLoginError("Enter your hotspot credentials before checking the connection.");
+    if (!adminId || !portalContext.mac) {
+      setLoginError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
     }
     try {
@@ -540,10 +540,8 @@ export default function HotspotLogin() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           adminId,
-          username: loginUsername.trim(),
-          password: loginPassword,
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
-          ...(portalContext.mac ? { mac_address: portalContext.mac } : {}),
+          mac_address: portalContext.mac,
         }),
       });
       const data = await res.json() as {
@@ -560,7 +558,7 @@ export default function HotspotLogin() {
         status: data.status === "expired" ? "expired" : "active",
         expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
         retryable: data.retryable === true,
-        name: data.customer?.name || loginUsername.trim(),
+        name: data.customer?.name || "your device",
         error: data.error,
       };
       if (!res.ok && !data.status) {
@@ -575,9 +573,6 @@ export default function HotspotLogin() {
       setLoggedInName(result.name);
       if (result.error && !result.connected) setTroubleshootMessage(result.error);
       if (result.connected) {
-        const credentials = { username: loginUsername.trim(), password: loginPassword };
-        storeHotspotCredentials(loginCredentialsStorageKey, credentials);
-        setLoginCredentialsLocked(true);
         setLoginSuccess(true);
         setLoginError("");
         setTroubleshootMessage("");
@@ -1613,6 +1608,9 @@ export default function HotspotLogin() {
                             <><AlertCircle size={16} /> Troubleshoot connection</>
                           )}
                         </button>
+                        <p style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45 }}>
+                          This checks the active package for this device using its hotspot MAC address. No username or password is needed.
+                        </p>
                         {troubleshootMessage && (
                           <p role="status" style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
                             {troubleshootMessage}
