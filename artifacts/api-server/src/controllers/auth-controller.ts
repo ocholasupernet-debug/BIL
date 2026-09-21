@@ -25,6 +25,7 @@ function isUniqueViolation(error: unknown): boolean {
  * `users` table would split login, tenant scoping, and reseller ownership.
  */
 export async function registerAccount(req: Request, res: Response): Promise<void> {
+  try {
   const rawName = req.body?.name;
   const rawEmail = req.body?.email;
   const rawPassword = req.body?.password;
@@ -192,4 +193,15 @@ export async function registerAccount(req: Request, res: Response): Promise<void
       assignedUrl,
     },
   });
+  } catch (error) {
+    console.error("Critical registration pipeline exception crashed:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        ok: false,
+        message: "Internal tracking server authentication deployment transaction error.",
+        error: "Internal tracking server authentication deployment transaction error.",
+      });
+    }
+  }
 }
