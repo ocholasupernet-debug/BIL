@@ -954,6 +954,14 @@ export async function repairGeneratedServiceNetworking(
       "=action=accept",
       `=in-interface=${bridgeName}`,
       egressField,
+      "=hotspot=auth",
+      "=connection-state=new,established,related",
+    ]);
+    await addFilter(`${tag} pppoe-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      "=src-address=192.168.99.0/24",
+      egressField,
       "=connection-state=new,established,related",
     ]);
   }
@@ -4947,12 +4955,17 @@ export function generateNetworkSetupScript(
 ${apiRules}
 
 # Permit ordinary LAN-to-WAN forwarding only when the standard interface
-# lists exist; otherwise leave the router's existing forwarding policy intact.
+# lists exist; Hotspot clients must be authenticated before they can use
+# this path. The non-Hotspot rule keeps ordinary LAN clients working.
 :local ocholaLanLists [/interface list find where name="LAN"]
 :local ocholaWanLists [/interface list find where name="WAN"]
 :if ([:len $ocholaLanLists] > 0 && [:len $ocholaWanLists] > 0) do={
     :do { /ip firewall filter remove [find where comment="${tag}-lan-to-wan"] } on-error={}
-    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN comment="${tag}-lan-to-wan" } on-error={
+    :do { /ip firewall filter remove [find where comment="${tag}-lan-hotspot-auth"] } on-error={}
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN hotspot=auth comment="${tag}-lan-hotspot-auth" } on-error={
+        :put "${tag}: could not add authenticated Hotspot LAN-to-WAN rule."
+    }
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN hotspot=!from-client comment="${tag}-lan-to-wan" } on-error={
         :put "${tag}: could not add LAN-to-WAN forward rule."
     }
 } else={
@@ -5338,10 +5351,16 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
     :put ("${tag}: router DNS could not be enabled: " . $error)
 }
 :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} service-to-wan`)}] } on-error={}
-:do { /ip firewall filter add chain=forward action=accept in-interface=${routerOsString(bridgeName)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} service-to-wan`)} place-before=0 } on-error={
+:do { /ip firewall filter add chain=forward action=accept in-interface=${routerOsString(bridgeName)} out-interface-list=WAN hotspot=auth connection-state=new,established,related comment=${routerOsString(`${tag} service-to-wan`)} place-before=0 } on-error={
     :set serviceStepFailed true
-    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: service-to-WAN forwarding could not be added: " . $error . " | ")
-    :put ("${tag}: service-to-WAN forwarding could not be added: " . $error)
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: authenticated Hotspot forwarding could not be added: " . $error . " | ")
+    :put ("${tag}: authenticated Hotspot forwarding could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} pppoe-to-wan`)}] } on-error={}
+:do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} pppoe-to-wan`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE forwarding could not be added: " . $error . " | ")
+    :put ("${tag}: PPPoE forwarding could not be added: " . $error)
 }
 :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-udp`)}] } on-error={}
 :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-udp`)} place-before=0 } on-error={
