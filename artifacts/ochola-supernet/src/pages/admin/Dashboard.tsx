@@ -387,6 +387,8 @@ export default function Dashboard() {
   const onlineHotspotUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.hotspot ?? 0), 0);
   const onlinePppoeUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.pppoe ?? 0), 0);
   const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
+  const activeUsers = customers.filter((customer) => customer.status === "active").length;
+  const expiredUsers = customers.filter((customer) => customer.status === "expired").length;
   const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineStaticUsers;
   const liveCountLoading = liveCountResults.some((result) => result.isLoading);
 
@@ -497,7 +499,8 @@ export default function Dashboard() {
           <StatMiniCard label="Total online users" value={liveCountLoading && totalOnlineNow === 0 ? "…" : String(totalOnlineNow)} href="/admin/customers" icon={<Users size={16} />} tone="green" />
           <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="accent" />
           <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
-          <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
+           <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
+           <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="green" />
         </section>
 
         <section className="gateway-strip" aria-label="Payment gateway status">
