@@ -62,3 +62,4 @@
 - [Prepaid session enforcement](prepaid-session-enforcement.md) — RouterOS prepaid policy changes require active-session disconnects; schedulers are needed for wall-clock expiry.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
+- [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.

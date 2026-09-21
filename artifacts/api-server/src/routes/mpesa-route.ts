@@ -44,6 +44,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { decryptVpnSecret, type EncryptedSecret } from "../lib/vpn-crypto.js";
 
 const router: IRouter = Router();
 
@@ -307,6 +308,108 @@ async function getAdminPaymentSettings(adminId: number | undefined, serviceType:
     mpesaPaybill: mpesaPaybillConfig(config),
     paymentCollectionMode: mode,
   };
+}
+
+type ResellerPaymentRoute = {
+  resellerId: number;
+  portId: number;
+  paymentGateway: PaymentGateway;
+  settings: MpesaSettings;
+  bankStkPush: BankStkPushConfig;
+  mpesaTillPush: MpesaTillPushConfig;
+  mpesaPaybill: MpesaPaybillConfig;
+};
+
+function encryptedGatewayConfig(value: unknown): Record<string, string> {
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const encrypted = JSON.parse(value) as EncryptedSecret;
+    const clear = decryptVpnSecret(encrypted);
+    const parsed = JSON.parse(clear) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([, field]) => typeof field === "string")
+        .map(([field, fieldValue]) => [field, String(fieldValue).trim()]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function resellerMpesaRoute(
+  config: Record<string, string>,
+  fallback: MpesaSettings,
+): Omit<ResellerPaymentRoute, "resellerId" | "portId"> | null {
+  const gateway = config.gatewayType === "mpesa_till_push" || config.destinationType === "till"
+    ? "mpesa_till_push"
+    : "mpesa_paybill";
+  const settings: MpesaSettings = {
+    ...fallback,
+    consumerKey: config.consumerKey || config.apiKey || "",
+    consumerSecret: config.consumerSecret || config.secret || "",
+    shortcode: config.shortcode || config.merchantId || "",
+    passkey: config.passkey || "",
+    env: config.env === "production" ? "production" : fallback.env,
+  };
+  const mpesaTillPush = {
+    tillNumber: config.tillNumber || config.destination || config.merchantId || "",
+  };
+  const mpesaPaybill = {
+    paybillNumber: config.paybillNumber || config.destination || config.merchantId || "",
+    accountNumber: config.accountNumber || config.accountReference || "",
+  };
+  if (!isMpesaConfigured(settings)) return null;
+  if (gateway === "mpesa_till_push" && !mpesaTillPush.tillNumber) return null;
+  if (gateway === "mpesa_paybill" && !mpesaPaybill.paybillNumber) return null;
+  return {
+    paymentGateway: gateway,
+    settings,
+    bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
+    mpesaTillPush,
+    mpesaPaybill,
+  };
+}
+
+async function getResellerPaymentRoute(
+  adminId: number,
+  planId: number,
+): Promise<ResellerPaymentRoute | null> {
+  const plans = await sbSelectStrict<{ port_id: number | null }>(
+    "isp_plans",
+    `id=eq.${planId}&admin_id=eq.${adminId}&select=port_id&limit=1`,
+  );
+  const portId = Number(plans[0]?.port_id);
+  if (!Number.isSafeInteger(portId) || portId <= 0) return null;
+
+  const ports = await sbSelectStrict<{
+    id: number;
+    assigned_reseller_id: number | null;
+    status: string;
+    link_status: string | null;
+  }>(
+    "isp_reseller_ports",
+    `id=eq.${portId}&admin_id=eq.${adminId}&select=id,assigned_reseller_id,status,link_status&limit=1`,
+  );
+  const port = ports[0];
+  if (!port?.assigned_reseller_id) return null;
+  if (port.status !== "active" || port.link_status !== "active") {
+    throw new Error("This reseller link is not active for checkout.");
+  }
+
+  const gatewayRows = await sbSelectStrict<{ api_keys_json: string | null }>(
+    "payment_gateways",
+    `user_id=eq.${port.assigned_reseller_id}&gateway_type=eq.mpesa&is_active=is.true&select=api_keys_json&limit=1`,
+  );
+  const gatewayConfig = encryptedGatewayConfig(gatewayRows[0]?.api_keys_json);
+  if (!Object.keys(gatewayConfig).length) {
+    throw new Error("The assigned reseller has not configured a complete M-Pesa gateway.");
+  }
+  const fallback = await getMpesaSettings();
+  const route = resellerMpesaRoute(gatewayConfig, fallback);
+  if (!route) {
+    throw new Error("The assigned reseller M-Pesa gateway is incomplete.");
+  }
+  return { resellerId: port.assigned_reseller_id, portId, ...route };
 }
 
 async function isActiveIspAdmin(adminId: number): Promise<boolean> {
@@ -575,7 +678,7 @@ async function reconcileInitiatedStkRequest(
 
 export interface MpesaCallbackDependencies {
   selectPending: (filter: string) => Promise<PendingMpesaTransaction[]>;
-  getSettings: () => Promise<MpesaSettings>;
+  getSettings: (transaction?: PendingMpesaTransaction) => Promise<MpesaSettings>;
   verifyStk: (settings: MpesaSettings, checkoutId: string) => Promise<DarajaStkQuery>;
   reactivatePppoeAccess: (opts: {
     adminId: number;
@@ -596,7 +699,13 @@ export async function processMpesaCallback(
 ): Promise<boolean> {
   const dependencies: MpesaCallbackDependencies = {
     selectPending: filter => sbSelect<PendingMpesaTransaction>("isp_transactions", filter),
-    getSettings: getMpesaSettings,
+    getSettings: async transaction => {
+      if (transaction?.admin_id && transaction.plan_id) {
+        const resellerRoute = await getResellerPaymentRoute(transaction.admin_id, transaction.plan_id);
+        if (resellerRoute) return resellerRoute.settings;
+      }
+      return getMpesaSettings();
+    },
     verifyStk: queryDarajaStkResult,
     reactivatePppoeAccess,
     settle: args => sbRpc<SettlementResult>("settle_verified_mpesa_transaction", args),
@@ -631,7 +740,7 @@ export async function processMpesaCallback(
     return false;
   }
 
-  const settings = await dependencies.getSettings();
+  const settings = await dependencies.getSettings(transaction);
   const verification = await dependencies.verifyStk(settings, checkoutId);
   const callbackResultCode = Number(ResultCode);
   if (!verification.verified || verification.resultCode !== callbackResultCode) {
@@ -890,6 +999,12 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "The selected plan is not available for payment." });
     return;
   }
+  try {
+    await getResellerPaymentRoute(adminId, planId);
+  } catch (error) {
+    res.status(409).json({ ok: false, error: error instanceof Error ? error.message : "The reseller payment link is not active." });
+    return;
+  }
   let resolvedMac = mac.value;
   if (serviceType === "hotspot" && !resolvedMac) {
     if (!clientIp) {
@@ -1024,7 +1139,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
         res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
         return;
       }
-      if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
+       if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
         res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
         return;
       }
@@ -1285,7 +1400,17 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  const cfg = await getMpesaSettings();
+  const globalCfg = await getMpesaSettings();
+  let resellerRoute: ResellerPaymentRoute | null = null;
+  if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
+    try {
+      resellerRoute = await getResellerPaymentRoute(scopedAdminId, requestedPlanId);
+    } catch (error) {
+      res.status(409).json({ ok: false, error: error instanceof Error ? error.message : "The reseller payment link is not active." });
+      return;
+    }
+  }
+  const cfg = resellerRoute?.settings ?? globalCfg;
   if (!isMpesaConfigured(cfg)) {
     logger.warn("[mpesa/stk] M-Pesa credentials not configured — returning 503");
     res.status(503).json({
@@ -1302,7 +1427,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
 
   try {
       const serviceType = intent?.serviceType ?? (service_type === "pppoe" ? "pppoe" : "hotspot");
-      const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId, serviceType);
+       const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = resellerRoute
+         ? resellerRoute
+         : await getAdminPaymentSettings(scopedAdminId, serviceType);
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -1311,7 +1438,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
        return;
      }
-      if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
+       if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || (!resellerRoute && !mpesaPaybill.accountNumber))) {
         res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
         return;
       }

@@ -6,7 +6,6 @@ import {
   sbSelectStrict,
   sbUpdateStrict,
   sbUpsertStrict,
-  sbRpc,
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
@@ -39,6 +38,11 @@ type ResellerPortRow = {
   pppoe_enabled: boolean;
   subnet_range: string | null;
   bandwidth_cap_mbps: number;
+  reseller_bandwidth_cap?: number | null;
+  assigned_reseller_id?: number | null;
+  link_status?: "pending" | "active" | "suspended" | null;
+  vlan_tag?: string | null;
+  link_provisioning_error?: string | null;
   status: string;
   provisioning_error: string | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
@@ -139,6 +143,104 @@ async function tenantRouter(adminId: number, routerId: number): Promise<RouterRo
   return rows[0];
 }
 
+function routerResourceId(row: Record<string, unknown>): string {
+  return typeof row[".id"] === "string" ? row[".id"] : "";
+}
+
+async function deployServicesProvisionLayer(
+  router: RouterRow,
+  port: ResellerPortRow,
+  linkStatus: "active" | "suspended",
+  capMbps: number,
+  warningHostname: string,
+): Promise<void> {
+  const creds = routerCredentials(router);
+  const portSegment = safeSegment(port.interface_name, `PORT_${port.id}`);
+  const parentQueue = `RESELLER_ROOT_${portSegment}`;
+  const queueRows = await runRouterCommand(creds, [
+    "/queue/simple/print",
+    "=.proplist=.id,name,comment",
+    `?name=${parentQueue}`,
+  ]);
+  const queueId = Array.isArray(queueRows)
+    ? routerResourceId((queueRows[0] ?? {}) as Record<string, unknown>)
+    : "";
+  const maxLimit = `${Math.round(capMbps)}M/${Math.round(capMbps)}M`;
+  if (queueId) {
+    await runRouterCommand(creds, [
+      "/queue/simple/set",
+      `=.id=${queueId}`,
+      `=max-limit=${maxLimit}`,
+      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/queue/simple/add",
+      `=name=${parentQueue}`,
+      `=target=${port.bridge_name || port.interface_name}`,
+      `=max-limit=${maxLimit}`,
+      `=priority=2/2`,
+      `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
+      `=comment=OcholaSupernet_${portSegment}_parent_queue`,
+    ]);
+  }
+
+  if (port.hotspot_enabled) {
+    const hotspotName = `reseller_${port.reseller_id}_${portSegment}`;
+    const hotspotRows = await runRouterCommand(creds, [
+      "/ip/hotspot/print",
+      "=.proplist=.id,name",
+      `?name=${hotspotName}`,
+    ]);
+    const hotspotId = Array.isArray(hotspotRows)
+      ? routerResourceId((hotspotRows[0] ?? {}) as Record<string, unknown>)
+      : "";
+    if (hotspotId) {
+      // Keep the Hotspot server available while suspended so the approved
+      // warning/walled-garden page can still be shown to the client.
+      await runRouterCommand(creds, [
+        "/ip/hotspot/set",
+        `=.id=${hotspotId}`,
+        "=disabled=no",
+      ]);
+    }
+    const gardenRows = await runRouterCommand(creds, [
+      "/ip/hotspot/walled-garden/ip/print",
+      "=.proplist=.id,dst-host,comment",
+    ]);
+    const hasWarningGarden = Array.isArray(gardenRows) && gardenRows.some(row =>
+      String((row as Record<string, unknown>).comment ?? "") === `OcholaSupernet_${portSegment}_wholesale_walled_garden`,
+    );
+    if (!hasWarningGarden && warningHostname) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/walled-garden/ip/add",
+        `=dst-host=${warningHostname}`,
+        "=action=accept",
+        `=comment=OcholaSupernet_${portSegment}_wholesale_walled_garden`,
+      ]);
+    }
+  }
+
+  if (port.pppoe_enabled) {
+    const serviceName = `PPPoE_${portSegment}`;
+    const pppoeRows = await runRouterCommand(creds, [
+      "/interface/pppoe-server/server/print",
+      "=.proplist=.id,service-name",
+      `?service-name=${serviceName}`,
+    ]);
+    const pppoeId = Array.isArray(pppoeRows)
+      ? routerResourceId((pppoeRows[0] ?? {}) as Record<string, unknown>)
+      : "";
+    if (pppoeId) {
+      await runRouterCommand(creds, [
+        "/interface/pppoe-server/server/set",
+        `=.id=${pppoeId}`,
+        `=disabled=${linkStatus === "active" ? "no" : "yes"}`,
+      ]);
+    }
+  }
+}
+
 async function ownedPort(req: Request, portId: number): Promise<ResellerPortRow> {
   const account = await currentAccount(req);
   const tier = account.account_tier ?? (account.role === "reseller" ? "reseller" : account.role === "system_admin" ? "system_admin" : "isp_admin");
@@ -193,13 +295,117 @@ router.get("/admin/resellers", requireAdmin(), async (req, res): Promise<void> =
     );
     const ports = await sbSelectStrict(
       "isp_reseller_ports",
-      `admin_id=eq.${account.id}&select=id,reseller_id,router_id,interface_name,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,status,provisioning_error&order=created_at.desc`,
+      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,provisioning_error,link_provisioning_error&order=created_at.desc`,
     );
     res.json({ ok: true, resellers: rows, ports });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load resellers." });
   }
 });
+
+async function updateResellerLink(req: Request, res: Response): Promise<void> {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the ISP administrator can change reseller link state." });
+      return;
+    }
+
+    const resellerId = Number(req.body?.resellerId);
+    const requestedState = req.body?.linkStatus === "suspended" ? "suspended" : "active";
+    const targetPortName = typeof req.body?.targetPortName === "string"
+      ? req.body.targetPortName.trim()
+      : "";
+    const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    const requestedCap = Number(req.body?.maxBandwidthCap);
+    if (!Number.isSafeInteger(resellerId) || resellerId <= 0 || (!targetPortName && !vlanTag)) {
+      res.status(400).json({ ok: false, error: "Provide a reseller and either the target port name or VLAN tag." });
+      return;
+    }
+    if ((targetPortName && !validInterface(targetPortName)) || (vlanTag && !/^[A-Za-z0-9._-]{1,64}$/.test(vlanTag))) {
+      res.status(400).json({ ok: false, error: "The target port name or VLAN tag is invalid." });
+      return;
+    }
+    if (req.body?.maxBandwidthCap !== undefined && (!Number.isSafeInteger(requestedCap) || requestedCap < 1 || requestedCap > 100000)) {
+      res.status(400).json({ ok: false, error: "The maximum bandwidth cap must be between 1 and 100000 Mbps." });
+      return;
+    }
+
+    const child = await sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+    );
+    if (!child[0]) {
+      res.status(404).json({ ok: false, error: "The reseller does not belong to this ISP account." });
+      return;
+    }
+
+    const ports = await sbSelectStrict<ResellerPortRow>(
+      "isp_reseller_ports",
+      `admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}&select=*&limit=100`,
+    );
+    const port = ports.find(row => (targetPortName && row.interface_name === targetPortName) || (vlanTag && row.vlan_tag === vlanTag));
+    if (!port) {
+      res.status(404).json({ ok: false, error: "The requested physical port is not assigned to this reseller." });
+      return;
+    }
+    if (port.status === "disabled") {
+      res.status(409).json({ ok: false, error: "A disabled port must be redeployed before its wholesale link can be activated." });
+      return;
+    }
+
+    const cap = requestedCap || Number(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps);
+    if (!Number.isSafeInteger(cap) || cap < 1 || cap > 100000) {
+      res.status(409).json({ ok: false, error: "This port does not have a valid wholesale bandwidth cap." });
+      return;
+    }
+    const targetRouter = await tenantRouter(account.id, port.router_id);
+    const updated = await sbUpdateStrict<ResellerPortRow>(`isp_reseller_ports`,
+      `id=eq.${port.id}&admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}`,
+      {
+        link_status: requestedState,
+        bandwidth_cap_mbps: cap,
+        reseller_bandwidth_cap: cap,
+        link_provisioning_error: null,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!updated[0]) throw new Error("The reseller link state could not be saved.");
+
+    try {
+      await deployServicesProvisionLayer(targetRouter, { ...port, ...updated[0] }, requestedState, cap, requestHostname(req));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "RouterOS services provisioning failed.";
+      await sbUpdateStrict(
+        "isp_reseller_ports",
+        `id=eq.${port.id}&admin_id=eq.${account.id}`,
+        {
+          link_status: requestedState === "suspended" ? "suspended" : "pending",
+          link_provisioning_error: message.slice(0, 500),
+          updated_at: new Date().toISOString(),
+        },
+      ).catch(() => undefined);
+      res.status(502).json({ ok: false, error: `The database state was saved, but RouterOS did not apply it: ${message}` });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      link: {
+        ...(updated[0] ?? {}),
+        link_status: requestedState,
+        bandwidth_cap_mbps: cap,
+        reseller_bandwidth_cap: cap,
+        link_provisioning_error: null,
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update reseller link." });
+  }
+}
+
+router.post("/admin/reseller-links", requireAdmin(), updateResellerLink);
+router.post("/admin/approve-reseller-link", requireAdmin(), updateResellerLink);
 
 router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Promise<void> => {
   try {
@@ -533,7 +739,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const tenantId = account.parent_id ?? account.id;
     const [users, ports, gateways, sales] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
-      sbSelectStrict("isp_reseller_ports", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,router_id,interface_name,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,status,provisioning_error&limit=50`),
+      sbSelectStrict("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,provisioning_error,link_provisioning_error&limit=50`),
       sbSelectStrict("isp_reseller_gateways", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,is_active,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=50`),
     ]);
@@ -594,8 +800,8 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
     }
     const portId = Number(req.body?.portId);
     const port = await ownedPort(req, portId);
-    if (port.status !== "active") {
-      res.status(409).json({ ok: false, error: "This reseller port is not active." });
+    if (port.status !== "active" || port.link_status !== "active") {
+      res.status(409).json({ ok: false, error: "This reseller link is not active." });
       return;
     }
     const clientReference = typeof req.body?.clientReference === "string" ? req.body.clientReference.trim() : "";
@@ -648,11 +854,6 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
         "=comment=OcholaSupernet reseller checkout",
       ]);
       await sbUpdateStrict("isp_reseller_sales", `id=eq.${saleId}&admin_id=eq.${tenantId}`, { status: "completed" });
-      await sbRpc("add_reseller_earnings", {
-        p_admin_id: tenantId,
-        p_reseller_id: account.id,
-        p_amount: amount,
-      });
       res.status(201).json({ ok: true, saleId, queueName, status: "completed" });
     } catch (error) {
       await sbUpdateStrict("isp_reseller_sales", `id=eq.${saleId}&admin_id=eq.${tenantId}`, { status: "failed" }).catch(() => undefined);

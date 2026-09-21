@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Gauge, LockKeyhole, Plus, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
 
 type RouterOption = { id: number; name: string; status?: string };
 type PortOption = { name: string; type: string; running: boolean; assigned: boolean };
-type Reseller = { id: number; name: string; company_name?: string; username: string; email?: string; is_active: boolean; earnings_balance: number; created_at: string };
+type Reseller = { id: number; name: string; company_name?: string; username: string; email?: string; is_active: boolean; created_at: string };
 type Assignment = {
   id: number; reseller_id?: number; router_id: number; interface_name: string; bridge_name?: string | null;
-  hotspot_enabled: boolean; pppoe_enabled: boolean; subnet_range?: string | null; bandwidth_cap_mbps: number; status: string; provisioning_error?: string | null;
+  assigned_reseller_id?: number | null; vlan_tag?: string | null; hotspot_enabled: boolean; pppoe_enabled: boolean; subnet_range?: string | null;
+  bandwidth_cap_mbps: number; reseller_bandwidth_cap?: number | null; status: string; link_status?: "pending" | "active" | "suspended" | null;
+  provisioning_error?: string | null; link_provisioning_error?: string | null;
 };
 type Sale = { id: number; reseller_port_id: number; client_reference: string; client_ip: string; amount: number; gateway_type: string; payment_reference: string; status: string; created_at: string };
-type ResellerResponse = { ok: boolean; account: { name: string; company_name?: string; username: string; earnings_balance: number } | null; ports: Assignment[]; gateways: { gateway_type: string; is_active: boolean }[]; sales: Sale[]; error?: string };
+type ResellerResponse = { ok: boolean; account: { name: string; company_name?: string; username: string } | null; ports: Assignment[]; gateways: { gateway_type: string; is_active: boolean }[]; sales: Sale[]; error?: string };
 
 function authHeaders(): HeadersInit {
   const token = getAdminApiToken();
@@ -56,7 +58,7 @@ function Notice({ error, success }: { error?: string; success?: string }) {
 
 function statusClass(status?: string): string {
   if (status === "active" || status === "completed" || status === "running") return "isp-badge-green";
-  if (status === "failed" || status === "error") return "isp-badge-red";
+  if (status === "failed" || status === "error" || status === "suspended") return "isp-badge-red";
   if (status === "pending" || status === "provisioning") return "isp-badge-amber";
   return "isp-badge-gray";
 }
@@ -81,6 +83,8 @@ function AdminResellerManagement() {
   const [loading, setLoading] = useState(true);
   const [portsLoading, setPortsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [linkSaving, setLinkSaving] = useState<number | null>(null);
+  const [linkCapDraft, setLinkCapDraft] = useState<Record<number, string>>({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -121,6 +125,29 @@ function AdminResellerManagement() {
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Provisioning failed."); }
     finally { setSubmitting(false); }
+  };
+  const updateLink = async (port: Assignment, linkStatus: "active" | "suspended") => {
+    const resellerId = port.assigned_reseller_id ?? port.reseller_id;
+    if (!resellerId) {
+      setError("This ISP-owned port has no assigned reseller link.");
+      return;
+    }
+    setError(""); setSuccess(""); setLinkSaving(port.id);
+    try {
+      await apiJson("/api/admin/reseller-links", {
+        method: "POST",
+        body: JSON.stringify({
+          resellerId,
+          targetPortName: port.interface_name,
+          maxBandwidthCap: Number(linkCapDraft[port.id] || port.reseller_bandwidth_cap || port.bandwidth_cap_mbps),
+          linkStatus,
+        }),
+      });
+      setSuccess(`${port.interface_name} wholesale link ${linkStatus === "active" ? "activated" : "suspended"} and RouterOS services updated.`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to update the wholesale link.");
+    } finally { setLinkSaving(null); }
   };
 
   return (
@@ -195,12 +222,25 @@ function AdminResellerManagement() {
         </div>
         <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div><div style={{ fontWeight: 800, color: "var(--isp-text)" }}>Resellers and assigned ports</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Tenant-scoped accounts and provisioning state.</div></div>
+             <div><div style={{ fontWeight: 800, color: "var(--isp-text)" }}>Resellers and assigned ports</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Provisioning state is separate from the wholesale payment link. Activate or suspend traffic independently.</div></div>
             <button onClick={() => void load()} style={{ border: "1px solid var(--isp-border)", background: "transparent", color: "var(--isp-text)", borderRadius: 9, padding: 9, cursor: "pointer" }}><RefreshCw size={16} /></button>
           </div>
-          <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Reseller", "Username", "Port", "Cap", "Status", "Wallet"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>
-            {resellers.map((reseller) => { const port = assignments.find((item) => item.reseller_id === reseller.id); return <tr key={reseller.id}><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td><td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td><td style={{ padding: "10px 8px", color: "var(--isp-text)" }}><code className="reseller-mono">{port?.interface_name || "—"}</code></td><td style={{ padding: "10px 8px", color: "var(--isp-text)" }}><code className="reseller-mono">{port ? `${port.bandwidth_cap_mbps} Mbps` : "—"}</code></td><td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{money(reseller.earnings_balance)}</td></tr>; })}
-            {!resellers.length && <tr><td colSpan={6} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No reseller accounts yet.</td></tr>}
+           <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Reseller", "Username", "Port", "Cap", "Provisioning", "Wholesale link", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>
+             {resellers.map((reseller) => {
+               const port = assignments.find((item) => (item.assigned_reseller_id ?? item.reseller_id) === reseller.id);
+               const linkStatus = port?.link_status ?? "pending";
+               const busy = port ? linkSaving === port.id : false;
+               return <tr key={reseller.id}>
+                 <td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td>
+                 <td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td>
+                 <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}><code className="reseller-mono">{port?.interface_name || "—"}</code></td>
+                 <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port ? <div style={{ display: "flex", gap: 5, alignItems: "center" }}><input aria-label={`Maximum bandwidth for ${port.interface_name}`} type="number" min="1" max="100000" value={linkCapDraft[port.id] ?? String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)} onChange={(event) => setLinkCapDraft((current) => ({ ...current, [port.id]: event.target.value }))} style={{ ...inputStyle, width: 86, minHeight: 32, padding: "5px 7px" }} /><span>Mbps</span></div> : "—"}</td>
+                 <td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td>
+                 <td style={{ padding: "10px 8px" }}><StatusBadge status={linkStatus} />{port?.link_provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.link_provisioning_error}</div> : null}</td>
+                 <td style={{ padding: "10px 8px" }}>{port ? <button type="button" disabled={busy || port.status !== "active"} onClick={() => void updateLink(port, linkStatus === "active" ? "suspended" : "active")} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy || port.status !== "active" ? "not-allowed" : "pointer", display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, fontWeight: 750 }}>{linkStatus === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}{busy ? "Saving…" : linkStatus === "active" ? "Suspend" : "Activate"}</button> : "—"}</td>
+               </tr>;
+             })}
+             {!resellers.length && <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No reseller accounts yet.</td></tr>}
           </tbody></table></div>
         </div>
         </div>
@@ -212,7 +252,10 @@ function AdminResellerManagement() {
 function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
   const [gatewayType, setGatewayType] = useState("mpesa");
-  const [gatewayConfig, setGatewayConfig] = useState({ merchantId: "", apiKey: "", secret: "" });
+  const [gatewayConfig, setGatewayConfig] = useState({
+    merchantId: "", consumerKey: "", consumerSecret: "", passkey: "",
+    destinationType: "paybill", destination: "", accountReference: "",
+  });
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -235,6 +278,7 @@ function ResellerDashboard() {
     catch (e) { setError(e instanceof Error ? e.message : "Client queue provisioning failed."); } finally { setSaving(false); }
   };
   const port = data?.ports?.[0];
+  const linkStatus = port?.link_status ?? "pending";
 
   return (
     <AdminLayout>
@@ -247,31 +291,37 @@ function ResellerDashboard() {
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
         <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 12 }}>
-          {[
-            { label: "Earnings balance", value: money(data?.account?.earnings_balance), icon: WalletCards },
-            { label: "Completed revenue", value: money(totalRevenue), icon: Gauge },
-            { label: "Port ceiling", value: port ? `${port.bandwidth_cap_mbps} Mbps` : "Not assigned", icon: RouterIcon },
+             {[
+             { label: "Completed revenue", value: money(totalRevenue), icon: Gauge },
+             { label: "Wholesale link", value: port ? linkStatus : "Not assigned", icon: RouterIcon },
+             { label: "Port ceiling", value: port ? `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps` : "Not assigned", icon: WalletCards },
           ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
         </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>Assigned interface</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>All operations are guarded against ports outside this assignment.</div></div><ShieldCheck color="var(--isp-accent)" /></div>
-           {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[`${port.interface_name} · ${port.status}`, `${port.bandwidth_cap_mbps} Mbps cap`, port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
+           {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[`${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
         </div>
         <div className="reseller-forms-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,.85fr) minmax(0,1.15fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={saveGateway} style={cardStyle}>
             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><LockKeyhole size={18} color="var(--isp-accent)" /> Independent payment gateway</div>
-            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Credentials are accepted by the API and never returned to this dashboard.</p>
+             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>These credentials are encrypted server-side and used only when a client plan is attached to your active wholesale link.</p>
             <div style={{ display: "grid", gap: 13, marginTop: 17 }}>
-              <Field label="Gateway"><select style={inputStyle} value={gatewayType} onChange={(e) => setGatewayType(e.target.value)}><option value="mpesa">M-Pesa</option><option value="stripe">Stripe</option><option value="paypal">PayPal</option></select></Field>
-              <Field label="Merchant / account id"><input style={inputStyle} value={gatewayConfig.merchantId} onChange={(e) => setGatewayConfig({ ...gatewayConfig, merchantId: e.target.value })} /></Field>
-              <Field label="API key"><input type="password" style={inputStyle} value={gatewayConfig.apiKey} onChange={(e) => setGatewayConfig({ ...gatewayConfig, apiKey: e.target.value })} /></Field>
-              <Field label="API secret"><input type="password" style={inputStyle} value={gatewayConfig.secret} onChange={(e) => setGatewayConfig({ ...gatewayConfig, secret: e.target.value })} /></Field>
+               <Field label="Gateway"><select style={inputStyle} value={gatewayType} onChange={(e) => setGatewayType(e.target.value)}><option value="mpesa">M-Pesa</option><option value="stripe">Stripe</option><option value="paypal">PayPal</option></select></Field>
+               {gatewayType === "mpesa" ? <>
+                 <Field label="Business shortcode"><input required style={inputStyle} value={gatewayConfig.merchantId} onChange={(e) => setGatewayConfig({ ...gatewayConfig, merchantId: e.target.value })} placeholder="Shortcode used for STK credentials" /></Field>
+                 <Field label="Consumer key"><input required type="password" style={inputStyle} value={gatewayConfig.consumerKey} onChange={(e) => setGatewayConfig({ ...gatewayConfig, consumerKey: e.target.value })} /></Field>
+                 <Field label="Consumer secret"><input required type="password" style={inputStyle} value={gatewayConfig.consumerSecret} onChange={(e) => setGatewayConfig({ ...gatewayConfig, consumerSecret: e.target.value })} /></Field>
+                 <Field label="STK passkey"><input required type="password" style={inputStyle} value={gatewayConfig.passkey} onChange={(e) => setGatewayConfig({ ...gatewayConfig, passkey: e.target.value })} /></Field>
+                 <Field label="Destination type"><select style={inputStyle} value={gatewayConfig.destinationType} onChange={(e) => setGatewayConfig({ ...gatewayConfig, destinationType: e.target.value })}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
+                 <Field label={gatewayConfig.destinationType === "till" ? "Till number" : "PayBill number"}><input required style={inputStyle} value={gatewayConfig.destination} onChange={(e) => setGatewayConfig({ ...gatewayConfig, destination: e.target.value })} /></Field>
+                 {gatewayConfig.destinationType === "paybill" ? <Field label="Account reference (optional)"><input style={inputStyle} value={gatewayConfig.accountReference} onChange={(e) => setGatewayConfig({ ...gatewayConfig, accountReference: e.target.value })} /></Field> : null}
+               </> : <Field label="Merchant / account id"><input required style={inputStyle} value={gatewayConfig.merchantId} onChange={(e) => setGatewayConfig({ ...gatewayConfig, merchantId: e.target.value })} /></Field>}
             </div>
             <button disabled={saving} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Save size={16} /> Save gateway</button>
           </form>
           <form onSubmit={provisionClient} style={cardStyle}>
             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Record a paid client session</div>
-            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Use this server-side step after the selected gateway confirms payment. It creates a child queue under your port root.</p>
+             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Use this server-side step after the selected gateway confirms payment. It creates a child queue under your port root. Revenue is recorded for reporting without a commission split.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
               <Field label="Assigned port"><select required style={inputStyle} value={checkout.portId || String(port?.id ?? "")} onChange={(e) => setCheckout({ ...checkout, portId: e.target.value })}><option value="">Choose port</option>{data?.ports?.map((item) => <option key={item.id} value={item.id}>{item.interface_name} · {item.status}</option>)}</select></Field>
               <Field label="Client reference"><input required style={inputStyle} value={checkout.clientReference} onChange={(e) => setCheckout({ ...checkout, clientReference: e.target.value })} /></Field>
@@ -280,7 +330,7 @@ function ResellerDashboard() {
               <Field label="Payment reference"><input required style={inputStyle} value={checkout.paymentReference} onChange={(e) => setCheckout({ ...checkout, paymentReference: e.target.value })} /></Field>
               <Field label="Client cap (Mbps)"><input min="1" type="number" placeholder={port ? String(port.bandwidth_cap_mbps) : "5"} style={inputStyle} value={checkout.maxLimitMbps} onChange={(e) => setCheckout({ ...checkout, maxLimitMbps: e.target.value })} /></Field>
             </div>
-            <button disabled={saving || !port} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> Provision client queue</button>
+             <button disabled={saving || !port || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> Provision client queue</button>
           </form>
         </div>
         <div style={cardStyle}>
