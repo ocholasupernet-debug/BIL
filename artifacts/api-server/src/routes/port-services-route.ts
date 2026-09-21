@@ -3,6 +3,7 @@ import { Router, type IRouter, type Request } from "express";
 import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { logger } from "../lib/logger.js";
 import { sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { portServiceResourceNames, type PortServiceResourceNames } from "../lib/port-service-resources.js";
@@ -192,6 +193,24 @@ function portFromLocals(res: { locals: Record<string, unknown> }): PortServiceRo
 
 function activeResellerId(port: PortServiceRow): number | null {
   return port.assigned_reseller_id ?? port.reseller_id;
+}
+
+type PortProvisioningStatus = "pending" | "provisioning" | "active" | "failed";
+
+async function updatePortProvisioningState(
+  port: Pick<PortServiceRow, "id" | "admin_id">,
+  status: PortProvisioningStatus,
+  error: string | null = null,
+): Promise<void> {
+  await sbUpdateStrict(
+    "isp_reseller_ports",
+    `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
+    {
+      status,
+      provisioning_error: error ? error.slice(0, 500) : null,
+      updated_at: new Date().toISOString(),
+    },
+  );
 }
 
 function sourceNameFromPath(path: string): string {
@@ -646,9 +665,12 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       res.status(409).json({ ok: false, error: "Both enabled services must have an approved asset binding." });
       return;
     }
+    await updatePortProvisioningState(port, "provisioning");
     const found = await getRouterCreds(port.router_id, port.admin_id);
     if (!found) {
-      res.status(404).json({ ok: false, error: "Router credentials are unavailable for this port." });
+      const errorMessage = "Router credentials are unavailable for this port.";
+      await updatePortProvisioningState(port, "failed", errorMessage);
+      res.status(404).json({ ok: false, error: errorMessage });
       return;
     }
     const identity = await resourceIdentityForPort(port);
@@ -712,9 +734,19 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       `# ${resources.resourceName} dual-service deployment for ${port.interface_name}`,
       ...commands.map(([path, ...args]) => `${path.replaceAll("/", " ")} ${args.join(" ")}`),
     ].join("\n");
+    await updatePortProvisioningState(port, "active");
     res.status(201).json({ ok: true, portId: port.id, hotspotDestination, pppoeDestination, scriptPayload });
   } catch (error) {
-    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Dual-service deployment failed." });
+    const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";
+    const port = res.locals.resellerPort as PortServiceRow | undefined;
+    if (port) {
+      try {
+        await updatePortProvisioningState(port, "failed", errorMessage);
+      } catch (stateError) {
+        logger.error({ err: stateError, portId: port.id, deploymentError: errorMessage }, "[port-services] failed to persist provisioning error");
+      }
+    }
+    res.status(502).json({ ok: false, error: errorMessage });
   }
 });
 
