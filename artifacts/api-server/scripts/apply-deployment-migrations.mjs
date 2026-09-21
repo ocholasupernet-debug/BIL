@@ -49,6 +49,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_dashboard_shape_options.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_typography.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_prepaid_user_operations.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_prepaid_presence_tracking.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_unique_prepaid_usernames.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_plan_purchase_visibility.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_plan_speed_units.sql", import.meta.url)),

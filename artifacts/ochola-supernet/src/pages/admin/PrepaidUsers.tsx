@@ -25,6 +25,8 @@ interface Router { id: number; name: string; host: string; status: string; bridg
 interface Customer extends DbCustomer {
   router_id?: number | null;
   last_seen?: string | null;
+  data_used_bytes?: number | string | null;
+  service_online?: boolean | null;
   fup_limit_mb?: number | null;
 }
 interface Payment {
@@ -110,7 +112,28 @@ function formatData(mb?: number | null) {
   const value = Number(mb);
   return value >= 1024 ? `${(value / 1024).toFixed(2)} GB` : `${value.toFixed(1)} MB`;
 }
+function normalizeLiveIdentity(value?: string | null) {
+  return String(value ?? "").trim().toLowerCase();
+}
+function formatUsageBytes(bytes: number | null | undefined) {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
+  const value = Math.max(0, bytes);
+  const mb = value / 1_000_000;
+  return `${mb.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} MB`;
+}
+function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
+  const live = [user.username, user.pppoe_username, purchaseUsername(user)]
+    .map(normalizeLiveIdentity)
+    .map(identity => liveUsage.get(identity))
+    .find(value => value !== undefined);
+  if (live !== undefined) return live;
+  const persisted = Number(user.data_used_bytes);
+  if (Number.isFinite(persisted)) return persisted;
+  const mb = Number(user.data_used_mb);
+  return Number.isFinite(mb) ? mb * 1_000_000 : null;
+}
 function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
+  if (isExpired(user.expires_at)) return false;
   return [user.username, user.pppoe_username, purchaseUsername(user)]
     .filter(Boolean)
     .some(value => onlineUsers.has(String(value).toLowerCase()));
@@ -459,6 +482,19 @@ export default function PrepaidUsers() {
     });
     return keys;
   }, [liveQueries]);
+  const liveUsage = useMemo(() => {
+    const usage = new Map<string, number>();
+    const add = (identity?: string, bytesIn?: number, bytesOut?: number) => {
+      const key = normalizeLiveIdentity(identity);
+      if (!key) return;
+      usage.set(key, (usage.get(key) ?? 0) + Math.max(0, Number(bytesIn) || 0) + Math.max(0, Number(bytesOut) || 0));
+    };
+    liveQueries.forEach(query => {
+      query.data?.hotspotUsers?.forEach(user => add(user.user, user.bytesIn, user.bytesOut));
+      query.data?.pppoeUsers?.forEach(user => add(user.name, user.bytesIn, user.bytesOut));
+    });
+    return usage;
+  }, [liveQueries]);
 
   /* ── UI state ── */
   const [search,      setSearch]      = useState("");
@@ -541,8 +577,8 @@ export default function PrepaidUsers() {
   /* ── Stats ── */
   const stats = useMemo(() => ({
     total:     customers.length,
-    active:    customers.filter(c => c.status === "active").length,
-    expired:   customers.filter(c => c.status === "expired").length,
+    active:    customers.filter(c => c.status === "active" && !isExpired(c.expires_at)).length,
+    expired:   customers.filter(c => c.status === "expired" || isExpired(c.expires_at)).length,
     suspended: customers.filter(c => c.status === "suspended").length,
   }), [customers]);
 
@@ -550,6 +586,8 @@ export default function PrepaidUsers() {
   const filtered = useMemo(() => {
     let list = customers;
     if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
+    else if (statusTab === "active") list = list.filter(c => c.status === "active" && !isExpired(c.expires_at));
+    else if (statusTab === "expired") list = list.filter(c => c.status === "expired" || isExpired(c.expires_at));
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
     if (typeFilter)          list = list.filter(c => c.type  === typeFilter);
     if (routerFilter) {
@@ -679,8 +717,8 @@ export default function PrepaidUsers() {
         .prepaid-table-shell{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:6px!important;box-shadow:0 1px 2px rgba(15,23,42,.03)}
         .prepaid-table-shell tbody tr{background:#fff}
         .prepaid-table-shell tbody tr:hover{background:#f8fafc}
-        .prepaid-table-shell tbody tr.prepaid-row-expired{background:#fff7f7}
-        .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:#fef2f2}
+         .prepaid-table-shell tbody tr.prepaid-row-expired{background:#fff8f8;box-shadow:inset 3px 0 0 rgba(248,113,113,.58)}
+         .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:#fff1f1}
         .prepaid-table-shell tbody td{border-right:1px solid #f8fafc}
         .prepaid-username-link{border:0;background:transparent;color:#4a90e2;padding:0;font:800 .78rem monospace;white-space:nowrap;cursor:pointer;text-align:left}
         .prepaid-username-link:hover{text-decoration:underline;color:#2563eb}
@@ -907,7 +945,7 @@ export default function PrepaidUsers() {
 
         {/* ── Table ── */}
         <div id="prepaid-users-table" className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
-             <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
+             <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={TH}>Username</th>
@@ -953,6 +991,8 @@ export default function PrepaidUsers() {
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expiring = isExpiringSoon(user.expires_at);
                   const expired  = isExpired(user.expires_at);
+                  const serviceStatus = expired || user.status === "expired" ? "offline" : online ? "online" : user.status;
+                  const usageBytes = customerUsageBytes(user, liveUsage);
                   return (
                     <tr key={user.id}
                       className={expired || user.status === "expired" ? "prepaid-row-expired" : undefined}
@@ -999,11 +1039,13 @@ export default function PrepaidUsers() {
                           <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>Unassigned</span>
                         )}
                       </td>
-                      <td style={TD}><StatusBadge status={user.status} /></td>
+                      <td style={TD}><StatusBadge status={serviceStatus} /></td>
                       <td style={TD}><PresenceBadge online={online} /></td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.7rem" }}>{online ? "Just now" : fmtDate(user.last_seen)}</td>
+                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.68rem" }}>{online ? "Online" : fmtDate(user.last_seen ?? (expired ? user.expires_at : null))}</td>
                       <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                         <span style={{ fontWeight: 700 }}>{formatData(user.data_used_mb)}</span>
+                         <span style={{ fontWeight: 700, fontSize: "0.68rem" }} title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
+                           {formatUsageBytes(usageBytes)}
+                         </span>
                       </td>
                        <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem", fontWeight: 800, color: fup !== null && Number(fup) > 0 ? "#4ade80" : "var(--isp-text-muted)" }}>
                          {fup !== null && Number(fup) > 0 ? "Enabled" : "Disabled"}
@@ -1083,7 +1125,7 @@ export default function PrepaidUsers() {
                 { icon: <Wifi  size={13} />,       label: "MAC",        value: detailUser.mac_address || "—" },
                 { icon: <CalendarDays size={13} />,label: "Expires",    value: fmtDate(detailUser.expires_at) },
                 { icon: <CalendarDays size={13} />,label: "Created",    value: fmtDate(detailUser.created_at) },
-                { icon: <Network size={13} />,     label: "Data Used",  value: `${(detailUser.data_used_mb ?? 0).toFixed(1)} MB` },
+                { icon: <Network size={13} />,     label: "Data Used",  value: formatUsageBytes(customerUsageBytes(detailUser, liveUsage)) },
               ].map(row => (
                 <div key={row.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "0.625rem 0.75rem" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.65rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.25rem" }}>
