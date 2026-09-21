@@ -116,6 +116,7 @@ const navSections: NavSection[] = [
           { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Files",          href: "/admin/network/files" },
           { name: "Reseller Ports", href: "/admin/resellers" },
+          { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "Multiport",      href: "/admin/network/multiport" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
           { name: "PPP",            href: "/admin/network/ppp" },

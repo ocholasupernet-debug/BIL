@@ -25,6 +25,7 @@ import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
 import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
 import Multiport from "./pages/admin/network/Multiport";
+import NetworkMigration from "./pages/admin/network/Migration";
 import Webhooks from "./pages/admin/Webhooks";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
@@ -136,6 +137,7 @@ function Router() {
       <Route path="/admin/network/api-config"      component={RouterAPIConfig}  />
       <Route path="/admin/network/multiport"       component={Multiport}        />
       <Route path="/admin/multiport"               component={Multiport}        />
+      <Route path="/admin/network/migration"      component={NetworkMigration}  />
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
