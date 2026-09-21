@@ -135,6 +135,7 @@ function Router() {
       <Route path="/admin/network/router-api-config" component={RouterAPIConfig}  />
       <Route path="/admin/network/api-config"      component={RouterAPIConfig}  />
       <Route path="/admin/network/multiport"       component={Multiport}        />
+      <Route path="/admin/multiport"               component={Multiport}        />
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />

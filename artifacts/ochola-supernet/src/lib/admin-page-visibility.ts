@@ -116,6 +116,7 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
   { prefix: "/admin/network/router-api-config", featureKey: "network.router-api-config" },
   { prefix: "/admin/network/api-config", featureKey: "network.router-api-config" },
   { prefix: "/admin/network/multiport", featureKey: "network.multiport" },
+  { prefix: "/admin/multiport", featureKey: "network.multiport" },
   { prefix: "/admin/network/ip-pools", featureKey: "network.ip-pools" },
   { prefix: "/admin/network/ippool", featureKey: "network.ip-pools" },
   { prefix: "/admin/network/bridge-ports", featureKey: "network.bridge-ports" },
