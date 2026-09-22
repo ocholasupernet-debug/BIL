@@ -161,6 +161,11 @@ function validInterface(value: unknown): value is string {
     && value.trim().length <= 64;
 }
 
+function validRouterResourceName(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim());
+}
+
 function routerCredentials(row: RouterRow): RouterCredentials {
   return {
     host: row.vpn_ip?.trim() || row.host,
@@ -178,17 +183,18 @@ function vlanServiceSegment(port: Pick<ResellerPortRow, "reseller_id" | "vlan_ta
   return safeSegment(`RS${port.reseller_id}_VLAN${port.vlan_tag ?? "0"}`, `RS${port.reseller_id}_VLAN`);
 }
 
-function vlanServiceInterfaceName(port: Pick<ResellerPortRow, "reseller_id" | "vlan_tag">): string {
-  return safeSegment(`OCHOLA_RS${port.reseller_id}_VLAN${port.vlan_tag ?? "0"}`, `OCHOLA_RS${port.reseller_id}_VLAN`);
+function vlanServiceInterfaceName(port: Pick<ResellerPortRow, "reseller_id" | "vlan_tag"> & { username?: string | null }): string {
+  const fallback = `OCHOLA_RS${port.reseller_id}_VLAN${port.vlan_tag ?? "0"}`;
+  return safeSegment(port.username?.trim() || fallback, safeSegment(fallback, "OCHOLA_RESELLER_VLAN"));
 }
 
 function vlanServiceResources(port: Pick<ResellerPortRow, "interface_name" | "bridge_name" | "reseller_id" | "vlan_tag">) {
-  const legacyRecord = port.interface_name.startsWith("OCHOLA_RS");
+  const legacyRecord = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
   return {
-    parentBridge: (legacyRecord ? port.bridge_name : port.interface_name) || "",
+    parentBridge: (legacyRecord ? port.interface_name : port.bridge_name) || "",
     vlanInterface: legacyRecord
-      ? port.interface_name
-      : port.bridge_name || vlanServiceInterfaceName(port),
+      ? port.bridge_name || vlanServiceInterfaceName(port)
+      : port.interface_name || vlanServiceInterfaceName(port),
   };
 }
 
@@ -201,7 +207,7 @@ function buildVlanInterfaceScript(
 ): string {
   const resources = vlanServiceResources(port);
   const vlanTag = Number(port.vlan_tag);
-  if (!validInterface(resources.parentBridge) || !validInterface(resources.vlanInterface) || !Number.isSafeInteger(vlanTag) || vlanTag < 1 || vlanTag > 4094) {
+  if (!validInterface(resources.parentBridge) || !validRouterResourceName(resources.vlanInterface) || !Number.isSafeInteger(vlanTag) || vlanTag < 1 || vlanTag > 4094) {
     throw new Error("This VLAN assignment does not have valid RouterOS interface details.");
   }
   return [
@@ -1078,9 +1084,9 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       res.status(404).json({ ok: false, error: "Approve the reseller connection before assigning an ISP router handoff." });
       return;
     }
-    const resellerRows = await sbSelectStrict<{ id: number; parent_id: number | null; role: string; company_name: string | null }>(
+    const resellerRows = await sbSelectStrict<{ id: number; parent_id: number | null; role: string; company_name: string | null; username: string }>(
       "isp_admins",
-      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,parent_id,role,company_name&limit=1`,
+      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,parent_id,role,company_name,username&limit=1`,
     );
     if (!resellerRows[0]) {
       res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
@@ -1145,7 +1151,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       assigned_reseller_id: request.reseller_id,
       router_id: routerId,
       interface_name: handoffMode === "vlan_services"
-        ? vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag })
+        ? vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username })
         : interfaceName,
       vlan_tag: handoffType === "vlan" ? vlanTag : null,
       bridge_name: handoffMode === "vlan_services" ? bridgeName : null,
@@ -1232,7 +1238,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
         checkedAt: now,
       },
       message: handoffMode === "vlan_services"
-        ? `VLAN ${vlanTag} assigned with Hotspot and PPPoE services. Configure VLAN ${vlanTag} on the reseller XPON hotspot bridge.`
+        ? `VLAN ${vlanTag} was pushed directly to the MikroTik with Hotspot and PPPoE services.`
         : link.running
           ? "ISP router handoff assigned and the XPON link is detected."
           : "ISP router handoff assigned. Connect the XPON router, then refresh link status.",
@@ -1264,7 +1270,7 @@ router.get("/admin/reseller-handoffs/:portId/vlan-script", requireAdmin(), async
       return;
     }
     const script = buildVlanInterfaceScript(port);
-    const filename = `${vlanServiceInterfaceName(port).toLowerCase()}-interface.rsc`;
+    const filename = `${vlanServiceResources(port).vlanInterface.toLowerCase()}-interface.rsc`;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(script);
@@ -1301,9 +1307,9 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
       res.status(404).json({ ok: false, error: "Approve the reseller connection before generating its VLAN script." });
       return;
     }
-    const resellerRows = await sbSelectStrict<{ id: number }>(
+    const resellerRows = await sbSelectStrict<{ id: number; username: string }>(
       "isp_admins",
-      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,username&limit=1`,
     );
     if (!resellerRows[0]) {
       res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
@@ -1311,12 +1317,12 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
     }
     await tenantRouter(account.id, routerId);
     const script = buildVlanInterfaceScript({
-      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag }),
+      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username }),
       bridge_name: bridgeName,
       reseller_id: request.reseller_id,
       vlan_tag: vlanTag,
     });
-    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag }).toLowerCase()}-interface.rsc`;
+    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username }).toLowerCase()}-interface.rsc`;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(script);

@@ -139,17 +139,17 @@ function AdminResellerManagement() {
     setLoading(true);
     try {
       const [routerResult, resellerResult, connectionResult] = await Promise.all([
-        apiJson<{ ok: boolean; routers: RouterOption[] }>(`/api/routers?adminId=${ADMIN_ID}`),
+        apiJson<RouterOption[]>(`/api/routers?adminId=${ADMIN_ID}`),
         apiJson<{ ok: boolean; resellers: Reseller[]; ports: Assignment[] }>("/api/admin/resellers"),
         apiJson<{ ok: boolean; requests: ConnectionRequest[]; resellers: Reseller[] }>("/api/isp/reseller-connection-requests")
           .catch(() => ({ ok: true, requests: [], resellers: [] })),
       ]);
-      setRouters(routerResult.routers ?? []);
+       setRouters(routerResult ?? []);
       setResellers(resellerResult.resellers ?? []);
       setConnectionRequests(connectionResult.requests ?? []);
       setRequestResellers(connectionResult.resellers ?? []);
       setAssignments(resellerResult.ports ?? []);
-      if (!routerId && routerResult.routers?.[0]) setRouterId(String(routerResult.routers[0].id));
+       if (!routerId && routerResult?.[0]) setRouterId(String(routerResult[0].id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load reseller management.");
     } finally { setLoading(false); }
@@ -396,7 +396,7 @@ function AdminResellerManagement() {
                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 850 }}><RouterIcon size={18} /> {handoffMode === "vlan_services" ? "Create reseller VLAN service" : "Assign ISP router / XPON internet handoff"}</div>
                 <p style={{ margin: "7px 0 0", color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>
                    {handoffMode === "vlan_services"
-                     ? "This creates the ISP-side VLAN Hotspot and PPPoE service without binding the reseller to a physical hardware port. Download the RouterOS script after assignment if the VLAN interface must be recreated manually."
+                     ? "This pushes the VLAN interface, Hotspot, and PPPoE service directly to the selected MikroTik. The VLAN interface name is the reseller username; a script remains available only as a manual fallback."
                      : "This does not install MikroTik packages or configure the reseller account. The selected ISP router interface supplies the reseller&apos;s internet; connect the XPON router to the assigned port."}
                 </p>
               </div>
@@ -433,12 +433,12 @@ function AdminResellerManagement() {
             </div>
             <div style={{ marginTop: 13, padding: "10px 12px", borderRadius: 8, background: "rgba(245,158,11,.1)", color: "#92400e", fontSize: 12, lineHeight: 1.5 }}>
                {handoffMode === "vlan_services"
-                 ? "The ISP router will create a dedicated VLAN Hotspot and PPPoE service with the locked reseller cap. Configure this VLAN as a tagged WAN/Hotspot bridge on the reseller XPON router."
+                 ? "The selected MikroTik will receive the VLAN interface, Hotspot, and PPPoE service directly with the locked reseller cap."
                  : "Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment."}
             </div>
              <div style={{ display: "flex", flexWrap: "wrap", gap: 9, marginTop: 15 }}>
                {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
-               <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Provisioning…" : handoffMode === "vlan_services" ? "Create VLAN service" : "Assign internet handoff"}</button>
+                <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Pushing to MikroTik…" : handoffMode === "vlan_services" ? "Push VLAN service to MikroTik" : "Assign internet handoff"}</button>
              </div>
           </form>
         )}
