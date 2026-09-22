@@ -84,7 +84,16 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { ...authHeaders(), ...(init?.headers ?? {}) },
   });
-  const body = await response.json() as T & { error?: string };
+  const raw = await response.text();
+  let body: T & { error?: string };
+  try {
+    body = JSON.parse(raw) as T & { error?: string };
+  } catch {
+    const responseKind = raw.trimStart().startsWith("<")
+      ? "The server returned an HTML error page, likely because the long-running router deployment timed out."
+      : "The server returned a non-JSON response.";
+    throw new Error(`API request failed (HTTP ${response.status}). ${responseKind}`);
+  }
   if (!response.ok) throw new Error(body.error || "Request failed.");
   return body;
 }

@@ -114,6 +114,18 @@ function adminApiHeaders(): Headers {
   return headers;
 }
 
+async function parseApiResponse<T>(response: Response, fallback: string): Promise<T & { error?: string }> {
+  const raw = await response.text();
+  try {
+    return JSON.parse(raw) as T & { error?: string };
+  } catch {
+    const responseKind = raw.trimStart().startsWith("<")
+      ? "The server returned an HTML error page, likely because the long-running router deployment timed out."
+      : "The server returned a non-JSON response.";
+    throw new Error(`${fallback} (HTTP ${response.status}). ${responseKind}`);
+  }
+}
+
 function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspotPortDraft {
   return {
     hotspotEnabled: port.hotspot_enabled,
@@ -724,7 +736,7 @@ export default function HotspotSettings() {
     queryKey: ["routers_for_hotspot_settings", adminId],
     queryFn: async () => {
       const response = await fetch("/api/routers", { headers: adminApiHeaders(), cache: "no-store" });
-      const data = await response.json() as DbRouter[] | { error?: string };
+      const data = await parseApiResponse<DbRouter[] | { error?: string }>(response, "Routers could not be loaded.");
       if (!response.ok || !Array.isArray(data)) throw new Error(!Array.isArray(data) && data.error ? data.error : "Routers could not be loaded.");
       return data;
     },
@@ -748,7 +760,7 @@ export default function HotspotSettings() {
       cache: "no-store",
     })
       .then(async response => {
-        const data = await response.json() as { ok?: boolean; ports?: AssignedHotspotPort[]; error?: string };
+        const data = await parseApiResponse<{ ok?: boolean; ports?: AssignedHotspotPort[] }>(response, "Assigned hotspot ports could not be loaded.");
         if (!response.ok) throw new Error(data.error || "Assigned hotspot ports could not be loaded.");
         return data.ports ?? [];
       })
@@ -819,7 +831,7 @@ export default function HotspotSettings() {
           bandwidthCapMbps: Number(draft.bandwidthCapMbps),
         }),
       });
-      const data = await response.json() as { ok?: boolean; port?: AssignedHotspotPort; error?: string };
+      const data = await parseApiResponse<{ ok?: boolean; port?: AssignedHotspotPort }>(response, "The assigned hotspot port could not be saved.");
       if (!response.ok || !data.port) throw new Error(data.error || "The assigned hotspot port could not be saved.");
       if (draft.hotspotEnabled || draft.pppoeEnabled) {
         const deployResponse = await fetch(`/api/admin/port-services/${port.id}/deploy`, {
@@ -827,7 +839,7 @@ export default function HotspotSettings() {
           headers: adminApiHeaders(),
           body: JSON.stringify(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
         });
-        const deployData = await deployResponse.json() as { error?: string };
+        const deployData = await parseApiResponse<{}>(deployResponse, "The assigned hotspot port deployment failed.");
         if (!deployResponse.ok) throw new Error(deployData.error || "The router service deployment failed.");
       }
       setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
@@ -852,7 +864,7 @@ export default function HotspotSettings() {
         method: "DELETE",
         headers: adminApiHeaders(),
       });
-      const data = await response.json() as { ok?: boolean; interfaceName?: string; error?: string };
+      const data = await parseApiResponse<{ ok?: boolean; interfaceName?: string }>(response, "The assigned hotspot port could not be deleted.");
       if (!response.ok) throw new Error(data.error || "The assigned hotspot port could not be deleted.");
       setAssignedPorts(previous => previous.filter(item => item.id !== port.id));
       setPortDrafts(previous => {
