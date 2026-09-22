@@ -55,6 +55,7 @@ import {
 import {
   readRouterManagementCaCertificate,
   ROUTER_MANAGEMENT_API_USERNAME,
+  routerManagementBackupIp,
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
@@ -1525,20 +1526,36 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       adminId,
       routerName: found.row.name,
     });
-    const provisioning = await provisionRouterManagementOpenVpnPair({
-      adminId,
-      routerId: id,
-      routerName: found.row.name,
-      routerIp: tunnelRouterIp,
-    });
-    if (
-      !provisioning.primary.ready
-      || !provisioning.backup.ready
-      || provisioning.primary.endpoint !== vpsIp
-      || provisioning.backup.endpoint !== vpsIp
-    ) {
-      res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
-      return;
+    let provisioningWarning = "";
+    let backupTunnelRouterIp: string;
+    try {
+      const provisioning = await provisionRouterManagementOpenVpnPair({
+        adminId,
+        routerId: id,
+        routerName: found.row.name,
+        routerIp: tunnelRouterIp,
+      });
+      if (
+        !provisioning.primary.ready
+        || !provisioning.backup.ready
+        || provisioning.primary.endpoint !== vpsIp
+        || provisioning.backup.endpoint !== vpsIp
+      ) {
+        if (installationMode !== "coexist") {
+          res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
+          return;
+        }
+        provisioningWarning = "The VPS management VPN is not fully reconciled yet. The three Brownfield scripts were generated, but Step 2 will work only after the VPS VPN services are ready.";
+        backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
+      } else {
+        backupTunnelRouterIp = provisioning.backup.assignedIp;
+      }
+    } catch (error) {
+      if (installationMode !== "coexist") throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      provisioningWarning = `The VPS management VPN could not be reconciled yet. The three Brownfield scripts were still generated; finish VPS VPN readiness before running Step 2. (${reason})`;
+      backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
+      logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without VPS reconciliation");
     }
     const managementCaCertificatePem = readRouterManagementCaCertificate();
     if (!managementCaCertificatePem) {
@@ -1598,7 +1615,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       managementCaCertificatePem,
       tunnelRouterIp,
       tunnelVpsIp: routerManagementVpnContract("primary").gateway,
-      backupTunnelRouterIp: provisioning.backup.assignedIp,
+      backupTunnelRouterIp,
       backupTunnelVpsIp: routerManagementVpnContract("backup").gateway,
       routerId: id,
       installationMode,
@@ -1672,6 +1689,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 `;
     res.json({
       routerId: id,
+      warning: provisioningWarning || undefined,
       steps: [
         {
           id: "network",

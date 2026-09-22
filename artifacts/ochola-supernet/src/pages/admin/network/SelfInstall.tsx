@@ -97,6 +97,12 @@ type SelfInstallStep = {
   command: string;
 };
 
+type SelfInstallStepsResponse = {
+  routerId: number;
+  warning?: string;
+  steps: SelfInstallStep[];
+};
+
 const MODE_OPTIONS: Array<{
   value: InstallMode;
   backend: BackendInstallMode;
@@ -313,6 +319,7 @@ export default function SelfInstall() {
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
   const [scriptSteps, setScriptSteps] = useState<SelfInstallStep[]>([]);
+  const [scriptWarning, setScriptWarning] = useState("");
   const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
 
   useEffect(() => {
@@ -456,7 +463,7 @@ export default function SelfInstall() {
     }
   };
 
-  const fetchSelfInstallSteps = async (): Promise<SelfInstallStep[]> => {
+  const fetchSelfInstallSteps = async (): Promise<SelfInstallStepsResponse> => {
     if (!router) throw new Error("Create the router profile before generating a Self Install script.");
     const params = new URLSearchParams({
       adminId: String(ADMIN_ID),
@@ -472,12 +479,13 @@ export default function SelfInstall() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
     }
-    const payload = await response.json().catch(() => ({}));
+    const payload = await response.json().catch(() => ({})) as SelfInstallStepsResponse;
     const steps = Array.isArray(payload.steps) ? payload.steps as SelfInstallStep[] : [];
     if (steps.length === 0) throw new Error("The generated Self Install steps were empty.");
     setScriptSteps(steps);
+    setScriptWarning(payload.warning || "");
     setCopiedStep(null);
-    return steps;
+    return payload;
   };
 
   const refreshSelfInstallSteps = async () => {
@@ -485,9 +493,12 @@ export default function SelfInstall() {
     setBusy("script");
     setError("");
     setNotice("");
+    setScriptWarning("");
     try {
-      await fetchSelfInstallSteps();
-       setNotice("The ordered Self Install steps are ready. Run Step 1 first, then Step 2, then Step 3.");
+      const result = await fetchSelfInstallSteps();
+      setNotice(result.warning
+        ? "The three steps are ready. Resolve the VPS warning before running Step 2."
+        : "The ordered Self Install steps are ready. Run Step 1 first, then Step 2, then Step 3.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -501,7 +512,10 @@ export default function SelfInstall() {
     setError("");
     setNotice("");
     try {
-      const steps = scriptSteps.length > 0 ? scriptSteps : await fetchSelfInstallSteps();
+       const generated = scriptSteps.length > 0
+         ? { steps: scriptSteps }
+         : await fetchSelfInstallSteps();
+       const steps = generated.steps;
       const step = steps.find(item => item.id === stepId);
       if (!step) throw new Error("That Self Install step is not available.");
       const blob = new Blob([step.command], { type: "text/plain;charset=utf-8" });
@@ -527,7 +541,10 @@ export default function SelfInstall() {
     setError("");
     setNotice("");
     try {
-      const steps = scriptSteps.length > 0 ? scriptSteps : await fetchSelfInstallSteps();
+       const generated = scriptSteps.length > 0
+         ? { steps: scriptSteps }
+         : await fetchSelfInstallSteps();
+       const steps = generated.steps;
       const step = steps.find(item => item.id === stepId);
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
@@ -730,6 +747,12 @@ export default function SelfInstall() {
                       Refresh steps
                     </button>
                  </div>
+                  {scriptWarning && (
+                    <div style={{ marginTop: "0.75rem", padding: "0.7rem 0.8rem", borderRadius: 8, background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.28)", color: "#fbbf24", fontSize: "0.72rem", lineHeight: 1.5, display: "flex", gap: "0.45rem", alignItems: "flex-start" }}>
+                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>{scriptWarning}</span>
+                    </div>
+                  )}
                   {scriptSteps.length > 0 && (
                     <div style={{ marginTop: "0.8rem", display: "grid", gap: "0.7rem" }}>
                       {scriptSteps.map(step => (
