@@ -360,12 +360,22 @@ export function AdminLayout({
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
   const isVpnSurface                  = location.startsWith("/admin/vpn");
 
+  const resellerSections = new Set(["Overview", "Customers", "Billing", "Network", "Admin", "Reseller"]);
+  const resellerItems: Record<string, Set<string>> = {
+    Customers: new Set(["Customers", "Prepaid Users", "Hotspot Vouchers", "Hotspot Binding"]),
+    Billing: new Set(["Packages / Plans", "Transactions"]),
+    Network: new Set(["Hotspot Settings"]),
+    Admin: new Set(["Settings"]),
+    Reseller: new Set(["Network"]),
+  };
+
   const visibleNavSections = navSections
-     .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || section.label === "Overview" || section.label === "Reseller"))
+     .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || resellerSections.has(section.label)))
     .map(section => ({
       ...section,
       items: section.items
-        .filter(item => !item.visibilityKey || isVisible(item.visibilityKey))
+         .filter(item => (!isResellerAccount || resellerItems[section.label]?.has(item.name) || section.label === "Overview")
+           && (!item.visibilityKey || isVisible(item.visibilityKey)))
         .map(item => ({
           ...item,
           children: item.children?.filter(child => {
@@ -409,12 +419,6 @@ export function AdminLayout({
     }
   }, [currentFeatureKey, pageIsVisible, setLocation]);
 
-  useEffect(() => {
-    if (isResellerAccount && location !== "/admin/reseller" && location !== "/admin/reseller/connector") {
-      setLocation("/admin/reseller");
-    }
-  }, [isResellerAccount, location, setLocation]);
-
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
 
@@ -435,14 +439,6 @@ export function AdminLayout({
           <h1 style={{ fontSize: "1.35rem", marginBottom: 8 }}>Page unavailable</h1>
           <p style={{ color: "var(--isp-text-muted)" }}>This page has been disabled by the Super Admin. Redirecting to your Dashboard…</p>
         </div>
-      </div>
-    );
-  }
-
-  if (isResellerAccount && location !== "/admin/reseller" && location !== "/admin/reseller/connector") {
-    return (
-      <div className="admin-shell" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 32 }}>
-        <div style={{ color: "var(--isp-text-muted)" }}>Opening your reseller workspace…</div>
       </div>
     );
   }

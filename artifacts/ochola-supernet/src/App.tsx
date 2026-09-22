@@ -9,6 +9,7 @@ import { TypographyProvider } from "@/context/TypographyContext";
 import { AdminPageVisibilityProvider } from "@/context/AdminPageVisibilityContext";
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
+import { getAdminRole } from "@/lib/supabase";
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
@@ -75,6 +76,10 @@ import CarrierControls from "./pages/admin/network/CarrierControls";
 import ResellerConnector from "./pages/admin/network/ResellerConnector";
 import AdminRegister from "./pages/admin/AdminRegister";
 
+function RoleAwareDashboard() {
+  return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
+}
+
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
    the root "/" path redirects straight to that company's login page.
@@ -124,7 +129,7 @@ function Router() {
     <Switch>
       <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
-      <Route path="/admin/dashboard" component={AdminDashboard} />
+      <Route path="/admin/dashboard" component={RoleAwareDashboard} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
       <Route path="/admin/resellers" component={ResellerWorkspace} />
       <Route path="/admin/network/resellers" component={ResellerWorkspace} />

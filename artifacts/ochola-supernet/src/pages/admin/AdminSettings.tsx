@@ -3,7 +3,8 @@ import { useLocation } from "wouter";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Logo } from "@/components/Logo";
-import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
+import { ResellerPaymentSettingsTab } from "./ResellerWorkspace";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { useTypography } from "@/context/TypographyContext";
 import {
@@ -2303,6 +2304,7 @@ export default function AdminSettings() {
   const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
   const initialTab = TABS.some(item => item.id === requestedTab) ? requestedTab! : "profile";
   const [tab, setTab] = useState(initialTab);
+  const isReseller = getAdminRole() === "reseller";
 
   useEffect(() => {
     if (requestedTab && TABS.some(item => item.id === requestedTab)) setTab(requestedTab);
@@ -2360,7 +2362,7 @@ export default function AdminSettings() {
 
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
-          {tab === "gateways"      && <PaymentGatewaysTab />}
+          {tab === "gateways"      && (isReseller ? <ResellerPaymentSettingsTab /> : <PaymentGatewaysTab />)}
           {tab === "dashboard"     && <DashboardBuilderTab />}
           {tab === "typography"    && <TypographyTab />}
           {tab === "sms"           && <SmsEmailTab />}

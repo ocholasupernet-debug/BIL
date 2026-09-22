@@ -20,14 +20,34 @@ type Assignment = {
 type Sale = { id: number; reseller_port_id: number; client_reference: string; client_ip: string; amount: number; gateway_type: string; payment_reference: string; status: string; created_at: string };
 type ResellerResponse = { ok: boolean; account: { name: string; company_name?: string; username: string } | null; ports: Assignment[]; gateways: { gateway_type: string; is_active: boolean }[]; sales: Sale[]; error?: string };
 type ResellerPaymentSettings = {
+  paymentGateway: string;
   mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
   bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
 };
 
 const emptyPaymentSettings: ResellerPaymentSettings = {
+  paymentGateway: "mpesa_paybill",
   mpesa: { enabled: false, merchantIdentifier: "", accountReference: "", destinationType: "paybill" },
   bank: { enabled: false, merchantIdentifier: "", accountReference: "", bankName: "" },
 };
+
+const resellerGatewayOptions = [
+  ["mpesa_paybill", "M-Pesa PayBill (STK Push)"],
+  ["mpesa_till_push", "M-Pesa Till Push"],
+  ["bank_stk_push", "BankStkPush"],
+  ["airtel", "AirtelMoney"],
+  ["azampay", "AzamPay"],
+  ["custom_paybill", "CustomPaybill"],
+  ["dpo_payments", "DpoPayments"],
+  ["flutterwave", "Flutterwave"],
+  ["intasend", "Intasend"],
+  ["pesapal", "PesaPal"],
+  ["stripe", "Stripe"],
+  ["paypal", "PayPal"],
+  ["tigopesa", "TigoPesa"],
+  ["xendit", "XenditEwallet"],
+  ["manual", "Cash / Manual"],
+] as const;
 
 function authHeaders(): HeadersInit {
   const token = getAdminApiToken();
@@ -67,6 +87,76 @@ function Notice({ error, success }: { error?: string; success?: string }) {
       {error ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
       <span>{error || success}</span>
     </div>
+  );
+}
+
+export function ResellerPaymentSettingsTab() {
+  const [settings, setSettings] = useState<ResellerPaymentSettings>(emptyPaymentSettings);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings")
+      .then((result) => setSettings(result.settings ?? emptyPaymentSettings))
+      .catch((e) => setError(e instanceof Error ? e.message : "Unable to load payment settings."));
+  }, []);
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      await apiJson("/api/reseller/payment-settings", { method: "PUT", body: JSON.stringify(settings) });
+      setSuccess("Payment gateway settings saved.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to save payment settings.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={save} style={{ display: "grid", gap: 16 }}>
+      <Notice error={error} success={success} />
+      <section style={cardStyle}>
+        <div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Active payment gateway</div>
+        <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, margin: "6px 0 14px" }}>
+          Choose the same collection gateway options available to an ISP account. Central API credentials remain protected by the platform.
+        </p>
+        <select
+          style={inputStyle}
+          value={settings.paymentGateway}
+          onChange={(event) => setSettings((current) => ({ ...current, paymentGateway: event.target.value }))}
+        >
+          {resellerGatewayOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </section>
+      <section style={cardStyle}>
+        <div style={{ fontWeight: 850, color: "var(--isp-text)" }}>M-Pesa destination</div>
+        <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, margin: "6px 0 14px" }}>
+          Configure the reseller destination used for client payment attribution. Do not enter API secrets here.
+        </p>
+        <div style={{ display: "grid", gap: 12 }}>
+          <Field label="Destination type"><select style={inputStyle} value={settings.mpesa.destinationType} onChange={(event) => setSettings((current) => ({ ...current, mpesa: { ...current.mpesa, destinationType: event.target.value === "till" ? "till" : "paybill" } }))}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
+          <Field label={settings.mpesa.destinationType === "till" ? "Till number" : "PayBill number"}><input style={inputStyle} value={settings.mpesa.merchantIdentifier} onChange={(event) => setSettings((current) => ({ ...current, mpesa: { ...current.mpesa, merchantIdentifier: event.target.value } }))} /></Field>
+          {settings.mpesa.destinationType === "paybill" && <Field label="Account reference"><input style={inputStyle} value={settings.mpesa.accountReference} onChange={(event) => setSettings((current) => ({ ...current, mpesa: { ...current.mpesa, accountReference: event.target.value } }))} /></Field>}
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={settings.mpesa.enabled} onChange={(event) => setSettings((current) => ({ ...current, mpesa: { ...current.mpesa, enabled: event.target.checked } }))} /> Enable M-Pesa destination</label>
+        </div>
+      </section>
+      <section style={cardStyle}>
+        <div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Bank settlement destination</div>
+        <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, margin: "6px 0 14px" }}>Keep a bank destination available for bank settlement records.</p>
+        <div style={{ display: "grid", gap: 12 }}>
+          <Field label="Bank name"><input style={inputStyle} value={settings.bank.bankName} onChange={(event) => setSettings((current) => ({ ...current, bank: { ...current.bank, bankName: event.target.value } }))} /></Field>
+          <Field label="Merchant / business number"><input style={inputStyle} value={settings.bank.merchantIdentifier} onChange={(event) => setSettings((current) => ({ ...current, bank: { ...current.bank, merchantIdentifier: event.target.value } }))} /></Field>
+          <Field label="Account number"><input style={inputStyle} value={settings.bank.accountReference} onChange={(event) => setSettings((current) => ({ ...current, bank: { ...current.bank, accountReference: event.target.value } }))} /></Field>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontSize: 13 }}><input type="checkbox" checked={settings.bank.enabled} onChange={(event) => setSettings((current) => ({ ...current, bank: { ...current.bank, enabled: event.target.checked } }))} /> Enable bank destination</label>
+        </div>
+      </section>
+      <button disabled={saving} type="submit" style={{ justifySelf: "start", border: 0, borderRadius: 9, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: saving ? "wait" : "pointer" }}>{saving ? "Saving…" : "Save payment gateway settings"}</button>
+    </form>
   );
 }
 

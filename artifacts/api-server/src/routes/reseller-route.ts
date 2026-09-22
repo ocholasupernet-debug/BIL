@@ -1293,7 +1293,8 @@ function resellerPaymentSettings(rows: Array<{
   account_reference: string | null;
   config_json: unknown;
   is_active: boolean;
-}>): {
+}>, paymentGateway = "mpesa_paybill"): {
+  paymentGateway: string;
   mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
   bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
 } {
@@ -1321,7 +1322,7 @@ function resellerPaymentSettings(rows: Array<{
       bankName: typeof config.bankName === "string" ? config.bankName : "",
     };
   };
-  return { mpesa: readMpesa(), bank: readBank() };
+  return { paymentGateway, mpesa: readMpesa(), bank: readBank() };
 }
 
 async function saveResellerPaymentSettings(account: { id: number; parent_id: number | null }, body: any) {
@@ -1335,9 +1336,21 @@ async function saveResellerPaymentSettings(account: { id: number; parent_id: num
   const bankMerchant = cleanGatewayIdentifier(bank.merchantIdentifier, "Bank merchant number", bankEnabled);
   const bankAccount = cleanGatewayIdentifier(bank.accountReference, "Bank account number", bankEnabled);
   const bankName = cleanGatewayIdentifier(bank.bankName, "Bank name", bankEnabled);
+  const allowedPaymentGateways = new Set([
+    "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "airtel", "azampay",
+    "custom_paybill", "dpo_payments", "flutterwave", "intasend", "pesapal",
+    "stripe", "paypal", "tigopesa", "xendit", "manual",
+  ]);
+  const paymentGateway = allowedPaymentGateways.has(String(body?.paymentGateway))
+    ? String(body.paymentGateway)
+    : "mpesa_paybill";
   const now = new Date().toISOString();
 
   await Promise.all([
+    sbUpdateStrict("isp_admins", `id=eq.${account.id}&role=eq.reseller`, {
+      payment_gateway: paymentGateway,
+      updated_at: now,
+    }),
     sbUpsertStrict("payment_gateways", "user_id,gateway_type", {
       user_id: account.id,
       gateway_type: "mpesa",
@@ -1366,17 +1379,23 @@ router.get("/reseller/payment-settings", requireAdmin(), async (req, res): Promi
       res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment settings." });
       return;
     }
-    const rows = await sbSelectStrict<{
+    const [rows, accountRows] = await Promise.all([
+      sbSelectStrict<{
       gateway_type: string;
       merchant_identifier: string | null;
       account_reference: string | null;
       config_json: unknown;
       is_active: boolean;
-    }>(
-      "payment_gateways",
-      `user_id=eq.${account.id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
-    );
-    res.json({ ok: true, settings: resellerPaymentSettings(rows) });
+      }>(
+        "payment_gateways",
+        `user_id=eq.${account.id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
+      ),
+      sbSelectStrict<{ payment_gateway: string | null }>(
+        "isp_admins",
+        `id=eq.${account.id}&role=eq.reseller&select=payment_gateway&limit=1`,
+      ),
+    ]);
+    res.json({ ok: true, settings: resellerPaymentSettings(rows, accountRows[0]?.payment_gateway || "mpesa_paybill") });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load payment settings." });
   }
