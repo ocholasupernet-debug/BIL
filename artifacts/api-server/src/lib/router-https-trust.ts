@@ -1,9 +1,38 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ISRG_ROOT_X1_PEM = readFileSync(
-  new URL("./certificates/isrg-root-x1.pem", import.meta.url),
-  "utf8",
-);
+const CERTIFICATE_FILENAME = "isrg-root-x1.pem";
+
+function readIsrgRootCertificate(): string {
+  const candidatePaths: string[] = [];
+  const moduleUrl = typeof import.meta.url === "string" ? import.meta.url : undefined;
+
+  if (moduleUrl) {
+    candidatePaths.push(
+      fileURLToPath(new URL(`./certificates/${CERTIFICATE_FILENAME}`, moduleUrl)),
+    );
+  }
+  if (typeof __dirname === "string") {
+    candidatePaths.push(join(__dirname, "certificates", CERTIFICATE_FILENAME));
+  }
+
+  candidatePaths.push(
+    resolve(process.cwd(), "dist", "certificates", CERTIFICATE_FILENAME),
+    resolve(process.cwd(), "src", "lib", "certificates", CERTIFICATE_FILENAME),
+    resolve(process.cwd(), "artifacts", "api-server", "src", "lib", "certificates", CERTIFICATE_FILENAME),
+  );
+
+  const certificatePath = candidatePaths.find(path => existsSync(path));
+  if (!certificatePath) {
+    throw new Error(
+      `The public Router HTTPS trust certificate "${CERTIFICATE_FILENAME}" was not found.`,
+    );
+  }
+  return readFileSync(certificatePath, "utf8");
+}
+
+const ISRG_ROOT_X1_PEM = readIsrgRootCertificate();
 export { ISRG_ROOT_X1_PEM };
 
 /**
