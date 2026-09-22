@@ -284,7 +284,7 @@ export default function AdminRegister() {
 
   if (success) {
     const subdomainUrl = `https://${registeredSubdomain}.isplatty.org`;
-    const adminLoginUrl = `${subdomainUrl}/admin/login?first_login=1`;
+    const adminLoginUrl = `${subdomainUrl}/admin/login?first_login=1&subdomain=${encodeURIComponent(registeredSubdomain)}`;
     return (
       <div className="register-state-page" style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
         <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>

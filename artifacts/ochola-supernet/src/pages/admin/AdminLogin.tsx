@@ -13,11 +13,14 @@ interface CompanyInfo {
 
 export default function AdminLogin() {
   const [, setLocation] = useLocation();
+  const loginSubdomain = typeof window !== "undefined"
+    ? (new URLSearchParams(window.location.search).get("subdomain") || "").trim().toLowerCase()
+    : "";
   const firstLogin = typeof window !== "undefined"
     && new URLSearchParams(window.location.search).get("first_login") === "1";
   const [username, setUsername]         = useState(firstLogin ? "admin" : "");
   const [password, setPassword]         = useState(firstLogin ? "admin" : "");
-  const [companySubdomain, setCompanySubdomain] = useState("");
+  const [companySubdomain, setCompanySubdomain] = useState(loginSubdomain);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const [error, setError]               = useState("");
@@ -61,7 +64,7 @@ export default function AdminLogin() {
         body: JSON.stringify({
           username: username.trim(),
           password,
-          ...(hostSubdomain ? {} : { subdomain: companySubdomain.trim().toLowerCase() }),
+          subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
         }),
       });
       const apiSession = await apiLogin.json() as {
