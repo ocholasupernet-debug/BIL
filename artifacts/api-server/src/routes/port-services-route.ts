@@ -36,6 +36,28 @@ type PortServiceRow = {
   status: string;
 };
 
+const routerIdentityPropertyByAddPath: Record<string, string> = {
+  "/interface/bridge/add": "name",
+  "/interface/vlan/add": "name",
+  "/ip/hotspot/profile/add": "name",
+  "/ip/hotspot/add": "name",
+  "/interface/pppoe-server/server/add": "service-name",
+  "/ip/address/add": "address",
+  "/ip/pool/add": "name",
+  "/ip/dhcp-server/network/add": "address",
+  "/ip/dhcp-server/add": "name",
+  "/ip/dns/static/add": "name",
+  "/ppp/profile/add": "name",
+  "/queue/simple/add": "name",
+  "/ip/firewall/filter/add": "comment",
+  "/ip/hotspot/walled-garden/ip/add": "comment",
+  "/ip/firewall/nat/add": "comment",
+};
+
+export function routerIdentityProperty(addPath: string): string | null {
+  return routerIdentityPropertyByAddPath[addPath] ?? null;
+}
+
 type SourceEntry = { content: Buffer; contentType: string; fileName: string; expiresAt: number };
 const sourceEntries = new Map<string, SourceEntry>();
 const SOURCE_TTL_MS = 5 * 60 * 1000;
@@ -554,22 +576,6 @@ function buildVlanServiceCommands(
 
 async function executeIdempotentRouterCommand(creds: RouterCredentials, command: string[]): Promise<void> {
   const addPath = command[0];
-  const propertyByPath: Record<string, string> = {
-    "/interface/bridge/add": "name",
-    "/interface/vlan/add": "name",
-    "/ip/hotspot/profile/add": "name",
-    "/ip/hotspot/add": "name",
-    "/interface/pppoe-server/server/add": "service-name",
-    "/ip/address/add": "address",
-    "/ip/pool/add": "name",
-    "/ip/dhcp-server/network/add": "address",
-    "/ip/dhcp-server/add": "name",
-    "/ip/dns/static/add": "name",
-    "/queue/simple/add": "name",
-    "/ip/firewall/filter/add": "comment",
-    "/ip/hotspot/walled-garden/ip/add": "comment",
-    "/ip/firewall/nat/add": "comment",
-  };
 
   if (addPath === "/interface/bridge/port/add") {
     const bridgeArg = command.find((arg) => arg.startsWith("=bridge="));
@@ -618,7 +624,7 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     return;
   }
 
-  const property = propertyByPath[addPath];
+  const property = routerIdentityProperty(addPath);
   const propertyArg = command.find((arg) => arg.startsWith(`=${property}=`));
   if (!property || !propertyArg) {
     await runRouterCommand(creds, command);

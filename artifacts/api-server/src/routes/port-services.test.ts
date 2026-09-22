@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildDualServiceCommands,
   normalizeApprovedAssetPath,
+  routerIdentityProperty,
   routerSetArguments,
   shouldReuseRouterDnsEntry,
 } from "./port-services-route.js";
@@ -181,4 +182,8 @@ test("RouterOS updates omit add-only firewall placement arguments", () => {
     ),
     ["=chain=forward", "=action=accept"],
   );
+});
+
+test("PPP profiles use their stable name for idempotent reconciliation", () => {
+  assert.equal(routerIdentityProperty("/ppp/profile/add"), "name");
 });
