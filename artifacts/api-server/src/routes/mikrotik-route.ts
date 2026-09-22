@@ -560,14 +560,44 @@ router.get("/router/env/live", async (_req, res): Promise<void> => {
 });
 
 /* ─── GET /api/router/live-by-host?host=x.x.x.x ─────────────────────────── */
-router.get("/router/live-by-host", async (req, res): Promise<void> => {
+router.get("/router/live-by-host", requireAdmin(), async (req, res): Promise<void> => {
   const host = String(req.query.host ?? "").trim();
   if (!host) { res.status(400).json({ error: "host query param is required" }); return; }
 
-  const dbCreds = await getRouterCredsByHost(host);
+  const account = await authenticatedAccount(req);
+  const tenantId = await authenticatedTenantAdminId(req);
+  if (!account || !tenantId) {
+    res.status(403).json({ error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  const routerRows = await sbSelect<SbRouter>(
+    "isp_routers",
+    `host=eq.${encodeURIComponent(host)}&admin_id=eq.${tenantId}&select=id,admin_id,host,name,status&limit=1`,
+  );
+  const routerRow = routerRows[0];
+  if (!routerRow) {
+    res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+  if (account.role === "reseller") {
+    const assignedPorts = await sbSelect<{
+      router_id: number;
+      reseller_id: number | null;
+      assigned_reseller_id: number | null;
+      status: string;
+    }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${tenantId}&router_id=eq.${routerRow.id}&select=router_id,reseller_id,assigned_reseller_id,status`,
+    );
+    if (!assignedPorts.some((port) => port.status !== "disabled" && (port.assigned_reseller_id ?? port.reseller_id) === account.id)) {
+      res.status(403).json({ error: "This router is not connected to your assigned reseller port." });
+      return;
+    }
+  }
+  const dbCreds = await getRouterCreds(routerRow.id, tenantId);
   if (dbCreds) {
     try {
-      const data = await fetchRouterLiveData(dbCreds);
+      const data = await fetchRouterLiveData(dbCreds.creds);
       res.json({ host, source: "supabase", ...data });
     } catch (err) {
       routerErrorResponse(res, err);
@@ -1921,15 +1951,20 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
       ),
     ]);
 
+    if (account.role === "reseller" && resellerId !== null && resellerId !== account.id) {
+      res.status(403).json({ ok: false, error: "A reseller may only inspect its own assigned telemetry." });
+      return;
+    }
     const scopedPorts = portRows.filter((port) => {
       const assignedId = port.assigned_reseller_id ?? port.reseller_id;
       if (account.role === "reseller" && assignedId !== account.id) return false;
       if (resellerId !== null && assignedId !== resellerId) return false;
+      if (routerId !== null && port.router_id !== routerId) return false;
       return port.status !== "disabled";
     });
     const scopedRouterIds = new Set(scopedPorts.map((port) => port.router_id));
     const scopedRouters = routerRows.filter((router) => !routerId || router.id === routerId)
-      .filter((router) => routerId || scopedRouterIds.size === 0 || scopedRouterIds.has(router.id) || account.role !== "reseller");
+      .filter((router) => account.role !== "reseller" || scopedRouterIds.has(router.id));
 
     const liveResults = await Promise.all(scopedRouters.map(async (router) => {
       const found = await getRouterCreds(router.id, tenantId);
@@ -1987,7 +2022,7 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
       hotspot: total.hotspot + (entry.live?.hotspotUsers.length ?? 0),
       pppoe: total.pppoe + (entry.live?.pppoeUsers.length ?? 0),
     }), { hotspot: 0, pppoe: 0 });
-    const totals = portId !== null || resellerId !== null ? filteredTotals : globalTotals;
+    const totals = account.role === "reseller" || portId !== null || resellerId !== null ? filteredTotals : globalTotals;
 
     res.json({
       ok: true,
@@ -1999,7 +2034,7 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
       },
       rows,
       filters: {
-        routers: routerRows.map((router) => ({ id: router.id, name: router.name, status: router.status })),
+        routers: scopedRouters.map((router) => ({ id: router.id, name: router.name, status: router.status })),
         ports: scopedPorts.map((port) => ({ id: port.id, routerId: port.router_id, interfaceName: port.interface_name })),
         resellers: resellerRows
           .filter((reseller) => account.role !== "reseller" || reseller.id === account.id)
@@ -2011,10 +2046,44 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
   }
 });
 
-router.get("/router/:id/live", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> => {
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  const found = await getRouterCreds(id);
+  const account = await authenticatedAccount(req);
+  const tenantId = await authenticatedTenantAdminId(req);
+  if (!account || !tenantId) {
+    res.status(403).json({ error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  const routerRows = await sbSelect<{
+    id: number;
+    admin_id: number;
+    status: string;
+  }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=id,admin_id,status&limit=1`);
+  if (!routerRows[0]) {
+    res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+  if (account.role === "reseller") {
+    const assignedPorts = await sbSelect<{
+      router_id: number;
+      reseller_id: number | null;
+      assigned_reseller_id: number | null;
+      status: string;
+    }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${tenantId}&router_id=eq.${id}&select=router_id,reseller_id,assigned_reseller_id,status`,
+    );
+    const assigned = assignedPorts.some((port) =>
+      port.status !== "disabled" && (port.assigned_reseller_id ?? port.reseller_id) === account.id,
+    );
+    if (!assigned) {
+      res.status(403).json({ error: "This router is not connected to your assigned reseller port." });
+      return;
+    }
+  }
+  const found = await getRouterCreds(id, tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
     const data = await fetchRouterLiveData(found.creds);

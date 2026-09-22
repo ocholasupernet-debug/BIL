@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase, ADMIN_ID, type DbCustomer } from "@/lib/supabase";
+import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -454,7 +454,10 @@ export default function PrepaidUsers() {
     queries: routers.map(router => ({
       queryKey: ["prepaid_live", router.id],
       queryFn: async () => {
-        const response = await fetch(`/api/router/${router.id}/live`);
+        const token = getAdminApiToken();
+        const response = await fetch(`/api/router/${router.id}/live`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
         return response.json() as Promise<LiveData & { routerId: number }>;
       },

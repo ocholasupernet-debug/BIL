@@ -81,7 +81,7 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
 
 /* ══════════════════════════ DB helpers ══════════════════════════ */
 async function fetchCustomers(): Promise<DbCustomer[]> {
-  const { data, error } = await supabase.from("isp_customers").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("isp_customers").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];
 }
@@ -154,7 +154,7 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
 
 async function deleteCustomer(c: DbCustomer): Promise<void> {
   const radUsername = c.pppoe_username || c.username;
-  await supabase.from("isp_customers").delete().eq("id", c.id);
+  await supabase.from("isp_customers").delete().eq("id", c.id).eq("admin_id", ADMIN_ID);
   if (radUsername) {
     await supabase.from("radcheck").delete().eq("username", radUsername);
     await supabase.from("radusergroup").delete().eq("username", radUsername);

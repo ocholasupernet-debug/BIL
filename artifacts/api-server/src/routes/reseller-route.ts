@@ -4,6 +4,7 @@ import {
   sbDeleteStrict,
   sbInsertStrict,
   sbSelectStrict,
+  sbRpc,
   sbUpdateStrict,
   sbUpsertStrict,
 } from "../lib/supabase-client.js";
@@ -57,6 +58,13 @@ type ResellerPortRow = {
   status: string;
   provisioning_error: string | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
+};
+
+type ResellerCustomerMetricRow = {
+  id: number;
+  type: string | null;
+  status: string | null;
+  expires_at: string | null;
 };
 
 type ResellerAccountRow = {
@@ -1269,13 +1277,61 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
       return;
     }
     const tenantId = account.parent_id ?? account.id;
-    const [users, ports, gateways, sales] = await Promise.all([
+    const [users, portRows, gateways, sales, customers, revenueRows] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
-      sbSelectStrict("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=50`),
+      sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=50`),
       sbSelectStrict("isp_reseller_gateways", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,is_active,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=50`),
+      sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at&limit=5000`),
+      sbRpc<{
+        income_today: number | string;
+        income_month: number | string;
+        total_revenue: number | string;
+        total_transactions: number | string;
+      }>("get_revenue_summary", { p_account_id: account.id }),
     ]);
-    res.json({ ok: true, account: users[0] ?? null, ports, gateways, sales });
+    const routerIds = [...new Set(portRows.map((port) => Number(port.router_id)).filter((id) => Number.isSafeInteger(id) && id > 0))];
+    const routers = routerIds.length
+      ? await sbSelectStrict<{ id: number; name: string; status: string }>(
+        "isp_routers",
+        `admin_id=eq.${tenantId}&id=in.(${routerIds.join(",")})&select=id,name,status`,
+      )
+      : [];
+    const routerMap = new Map(routers.map((router) => [router.id, router]));
+    const ports = portRows.map((port) => ({ ...port, router: routerMap.get(Number(port.router_id)) ?? null }));
+    const now = Date.now();
+    const activeCustomers = customers.filter((customer) => {
+      const expiry = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
+      return customer.status === "active" && (!Number.isFinite(expiry) || expiry > now);
+    }).length;
+    const expiredCustomers = customers.filter((customer) => {
+      const expiry = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
+      return customer.status === "expired" || (Number.isFinite(expiry) && expiry <= now);
+    }).length;
+    const [revenue] = revenueRows;
+    res.json({
+      ok: true,
+      account: users[0] ?? null,
+      ports,
+      gateways,
+      sales,
+      metrics: {
+        revenue: {
+          incomeToday: Number(revenue?.income_today ?? 0),
+          incomeMonth: Number(revenue?.income_month ?? 0),
+          totalRevenue: Number(revenue?.total_revenue ?? 0),
+          totalTransactions: Number(revenue?.total_transactions ?? 0),
+        },
+        users: {
+          total: customers.length,
+          active: activeCustomers,
+          expired: expiredCustomers,
+          hotspot: customers.filter((customer) => customer.type === "hotspot").length,
+          pppoe: customers.filter((customer) => customer.type === "pppoe").length,
+          static: customers.filter((customer) => customer.type === "static").length,
+        },
+      },
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller dashboard." });
   }

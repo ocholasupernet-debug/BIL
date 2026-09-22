@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Users, Wifi, Activity, ArrowDown, ArrowUp, WifiOff, Copy } from "lucide-react";
+import { getAdminApiToken } from "@/lib/supabase";
 
 /* ─── Types matching backend response ────────────────────────────────────── */
 interface HotspotUser {
@@ -124,7 +125,10 @@ export function RouterLiveStats({
       } else {
         throw new Error("Either routerId or routerHost is required");
       }
-      const res = await fetch(url);
+       const token = getAdminApiToken();
+       const res = await fetch(url, {
+         headers: token ? { Authorization: `Bearer ${token}` } : {},
+       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `HTTP ${res.status}`);

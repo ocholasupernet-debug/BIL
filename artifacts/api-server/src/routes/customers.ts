@@ -25,6 +25,7 @@ import { syncRadiusCustomer } from "../lib/radius.js";
 import { hotspotPlanProfileName, isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -244,19 +245,27 @@ async function reconcileCustomerAccess(
  * Query param: adminId or ispId → filters by admin_id
  */
 
-router.get("/customers", async (req, res): Promise<void> => {
-  const adminId = req.query.adminId ?? req.query.ispId ?? "1";
+router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId ?? req.query.ispId);
+  if (!adminId) {
+    res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
+    return;
+  }
   const rows = await sbSelect("isp_customers", `admin_id=eq.${adminId}&select=*`);
   res.json(rows);
 });
 
-router.post("/customers", async (req, res): Promise<void> => {
+router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   const { adminId = 1, ispId, name, phone, email, planId, type, ipAddress, macAddress, status, expiryDate, pppoeUsername } = req.body;
   if (!name || !phone) {
     res.status(400).json({ error: "name and phone are required" });
     return;
   }
-  const effectiveAdminId = adminId || ispId || 1;
+  const effectiveAdminId = authenticatedAdminId(req, adminId || ispId);
+  if (!effectiveAdminId) {
+    res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
+    return;
+  }
   const [row] = await sbInsert<Record<string, unknown>>("isp_customers", {
     admin_id:       effectiveAdminId,
     name,
@@ -275,14 +284,14 @@ router.post("/customers", async (req, res): Promise<void> => {
   res.status(201).json(row);
 });
 
-router.patch("/customers/:id", async (req, res): Promise<void> => {
+router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> => {
   const id = req.params.id;
   const {
     adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id,
     type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
     password, fup_limit_mb,
   } = req.body;
-  const effectiveAdminId = Number(adminId || ispId || 1);
+  const effectiveAdminId = authenticatedAdminId(req, adminId || ispId);
   if (!Number.isSafeInteger(effectiveAdminId) || effectiveAdminId < 1) {
     res.status(400).json({ error: "A valid ISP account is required" });
     return;

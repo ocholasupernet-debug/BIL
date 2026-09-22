@@ -34,6 +34,7 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import {
   ADMIN_ID,
   getAdminDisplayName,
+  getAdminApiToken,
   supabase,
   type DbRouter,
   type DbTransaction,
@@ -97,7 +98,10 @@ type TelemetryResponse = {
 };
 
 async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
-  const res = await fetch(`/api/router/${routerId}/live`);
+  const token = getAdminApiToken();
+  const res = await fetch(`/api/router/${routerId}/live`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) return { hotspot: 0, pppoe: 0 };
   const data = await res.json();
   return {

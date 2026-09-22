@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
 import { NetworkTabs } from "./network/NetworkTabs";
@@ -16,9 +16,24 @@ type Assignment = {
   xpon_identifier?: string | null; link_detected?: boolean | null; last_link_checked_at?: string | null;
   link_detection_error?: string | null;
   provisioning_error?: string | null; link_provisioning_error?: string | null;
+  router?: { id: number; name: string; status: string } | null;
 };
 type Sale = { id: number; reseller_port_id: number; client_reference: string; client_ip: string; amount: number; gateway_type: string; payment_reference: string; status: string; created_at: string };
-type ResellerResponse = { ok: boolean; account: { name: string; company_name?: string; username: string } | null; ports: Assignment[]; gateways: { gateway_type: string; is_active: boolean }[]; sales: Sale[]; error?: string };
+type ResellerResponse = {
+  ok: boolean;
+  account: { name: string; company_name?: string; username: string } | null;
+  ports: Assignment[];
+  gateways: { gateway_type: string; is_active: boolean }[];
+  sales: Sale[];
+  metrics?: {
+    revenue: { incomeToday: number; incomeMonth: number; totalRevenue: number; totalTransactions: number };
+    users: { total: number; active: number; expired: number; hotspot: number; pppoe: number; static: number };
+  };
+  error?: string;
+};
+type ResellerTelemetry = {
+  totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+};
 type ResellerPaymentSettings = {
   paymentGateway: string;
   mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
@@ -540,6 +555,7 @@ function AdminResellerManagement() {
 
 function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
+  const [telemetry, setTelemetry] = useState<ResellerTelemetry | null>(null);
   const [paymentSettings, setPaymentSettings] = useState<ResellerPaymentSettings>(emptyPaymentSettings);
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [error, setError] = useState("");
@@ -548,17 +564,18 @@ function ResellerDashboard() {
 
   const load = async () => {
     try {
-      const [dashboard, settings] = await Promise.all([
+      const [dashboard, settings, liveTelemetry] = await Promise.all([
         apiJson<ResellerResponse>("/api/reseller/me"),
         apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings"),
+        apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry").catch(() => null),
       ]);
       setData(dashboard);
       setPaymentSettings(settings.settings ?? emptyPaymentSettings);
+      setTelemetry(liveTelemetry);
     }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load your reseller dashboard."); }
   };
   useEffect(() => { void load(); }, []);
-  const totalRevenue = useMemo(() => (data?.sales ?? []).filter((sale) => sale.status === "completed").reduce((sum, sale) => sum + Number(sale.amount), 0), [data]);
   const saveGateway = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(""); setSuccess("");
     try {
@@ -575,6 +592,9 @@ function ResellerDashboard() {
   };
   const port = data?.ports?.[0];
   const linkStatus = port?.link_status ?? "pending";
+  const revenue = data?.metrics?.revenue;
+  const users = data?.metrics?.users;
+  const moneyOrZero = (value: number | undefined) => money(value ?? 0);
 
   return (
     <AdminLayout>
@@ -586,16 +606,26 @@ function ResellerDashboard() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
-        <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 12 }}>
+         <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
              {[
-             { label: "Completed revenue", value: money(totalRevenue), icon: Gauge },
-             { label: "Wholesale link", value: port ? linkStatus : "Not assigned", icon: RouterIcon },
-             { label: "Port ceiling", value: port ? `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps` : "Not assigned", icon: WalletCards },
+             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge },
+             { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards },
+             { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText },
+             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote },
           ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
         </div>
+         <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+           {[
+             { label: "Total users", value: String(users?.total ?? 0), icon: Users },
+             { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle },
+             { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle },
+             { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon },
+           ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
+         </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
-           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : "All operations are guarded against ports outside this assignment."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
             {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[`${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
+             {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
         </div>
         <div className="reseller-forms-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,.85fr) minmax(0,1.15fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={saveGateway} style={cardStyle}>

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
-import { supabase, type DbTransaction } from "@/lib/supabase";
+import { supabase, ADMIN_ID, type DbTransaction } from "@/lib/supabase";
 import { Search, Download, Loader2 } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
 
@@ -30,6 +30,7 @@ async function fetchTransactions(): Promise<DbTransaction[]> {
   const { data, error } = await supabase
     .from("isp_transactions")
     .select("*")
+    .eq("admin_id", ADMIN_ID)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];
@@ -42,12 +43,12 @@ function fmtKsh(n: number) { return fmtMoney(n); }
 
 export default function Transactions() {
   const { data: transactions = [], isLoading } = useQuery({
-    queryKey: ["isp_transactions"],
+    queryKey: ["isp_transactions", ADMIN_ID],
     queryFn: fetchTransactions,
     refetchInterval: 30_000,
   });
   const { data: immutableRevenue, isLoading: immutableRevenueLoading } = useQuery({
-    queryKey: ["immutable-revenue-summary"],
+    queryKey: ["immutable-revenue-summary", ADMIN_ID],
     queryFn: fetchImmutableRevenueSummary,
     refetchInterval: 60_000,
   });
