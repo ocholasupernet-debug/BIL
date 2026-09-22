@@ -121,3 +121,20 @@ test("legacy hotspot directory placeholders resolve to approved portal files", (
   assert.equal(normalizeApprovedAssetPath("hotspot/rlogin.html"), "rlogin.html");
   assert.equal(normalizeApprovedAssetPath("login.html"), "login.html");
 });
+
+test("VLAN services accept named parent bridges that do not use an interface prefix", () => {
+  const commands = buildDualServiceCommands(
+    {
+      ...port,
+      interface_name: "ocholachrisphine3_gmail_com",
+      bridge_name: "co-hotspot-bridge",
+      vlan_tag: "1",
+      handoff_mode: "vlan_services",
+    },
+    "flash/hotspot/hs_vlan",
+    "flash/hotspot/pppoe_vlan",
+    "10.8.5.2",
+  );
+  const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
+  assert.match(script, /\/interface\/vlan\/add =name=ocholachrisphine3_gmail_com =vlan-id=1 =interface=co-hotspot-bridge/);
+});

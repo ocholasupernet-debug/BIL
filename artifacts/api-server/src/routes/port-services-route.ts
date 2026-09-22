@@ -66,6 +66,11 @@ function validInterface(value: unknown): value is string {
     && value.trim().length <= 64;
 }
 
+function validRouterResourceName(value: unknown): value is string {
+  return typeof value === "string"
+    && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim());
+}
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 48) || fallback;
@@ -465,7 +470,7 @@ function buildVlanServiceCommands(
   const bridge = port.bridge_name?.trim() || "";
   const tag = Number(port.vlan_tag);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(vlanInterface)
-    || !validInterface(bridge)
+    || !validRouterResourceName(bridge)
     || !Number.isSafeInteger(tag)
     || tag < 1
     || tag > 4094) {
