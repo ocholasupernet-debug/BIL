@@ -221,11 +221,16 @@ async function updatePortProvisioningState(
   status: PortProvisioningStatus,
   error: string | null = null,
 ): Promise<void> {
+  /* Older production databases only allow pending/active/failed/disabled.
+     Keep the in-flight state backward-compatible until their status migration
+     has been applied, while newer databases may still expose provisioning in
+     their schema and API responses. */
+  const persistedStatus = status === "provisioning" ? "pending" : status;
   await sbUpdateStrict(
     "isp_reseller_ports",
     `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
     {
-      status,
+      status: persistedStatus,
       provisioning_error: error ? error.slice(0, 500) : null,
       updated_at: new Date().toISOString(),
     },
