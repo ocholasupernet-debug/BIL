@@ -1674,9 +1674,15 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
      * so each ordered step can be reviewed, copied, downloaded, or retried
      * independently.
      */
-    const networkFileName = "networksetup.rsc";
-    const vpnFileName = "vpnsetup.rsc";
-    const serviceFileName = "servicessetup.rsc";
+    const networkFileName = installationMode === "coexist"
+      ? "brownfield-network.rsc"
+      : "networksetup.rsc";
+    const vpnFileName = installationMode === "coexist"
+      ? "brownfield-vpn.rsc"
+      : "vpnsetup.rsc";
+    const serviceFileName = installationMode === "coexist"
+      ? "brownfield-services.rsc"
+      : "servicessetup.rsc";
     createPublicRouterFileSource(id, networkFileName, {
       content: Buffer.from(networkScript, "utf8"),
       contentType: "text/plain; charset=utf-8",
