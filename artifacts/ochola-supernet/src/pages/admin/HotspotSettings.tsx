@@ -71,6 +71,8 @@ interface HSettings {
 type AssignedHotspotPort = {
   id: number;
   router_id: number;
+  vlan_tag?: string | null;
+  handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
   interface_name: string;
   bridge_name?: string | null;
   hotspot_enabled: boolean;
@@ -707,16 +709,20 @@ export default function HotspotSettings() {
     setPortalPackageShape(preferences.portalPackageShape);
   }, [appearanceSaving, preferences.portalBackground, preferences.portalPackageShape]);
 
+  useEffect(() => {
+    const requestedRouterId = new URLSearchParams(window.location.search).get("routerId");
+    if (requestedRouterId && /^\d+$/.test(requestedRouterId)) {
+      setSettings(previous => ({ ...previous, routerId: requestedRouterId }));
+    }
+  }, []);
+
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,admin_id")
-        .eq("admin_id", ADMIN_ID)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as DbRouter[];
+      const response = await fetch("/api/routers", { headers: adminApiHeaders(), cache: "no-store" });
+      const data = await response.json() as DbRouter[] | { error?: string };
+      if (!response.ok || !Array.isArray(data)) throw new Error(!Array.isArray(data) && data.error ? data.error : "Routers could not be loaded.");
+      return data;
     },
   });
 
@@ -798,9 +804,18 @@ export default function HotspotSettings() {
       });
       const data = await response.json() as { ok?: boolean; port?: AssignedHotspotPort; error?: string };
       if (!response.ok || !data.port) throw new Error(data.error || "The assigned hotspot port could not be saved.");
+      if (draft.hotspotEnabled || draft.pppoeEnabled) {
+        const deployResponse = await fetch(`/api/admin/port-services/${port.id}/deploy`, {
+          method: "POST",
+          headers: adminApiHeaders(),
+          body: JSON.stringify({}),
+        });
+        const deployData = await deployResponse.json() as { error?: string };
+        if (!deployResponse.ok) throw new Error(deployData.error || "The router service deployment failed.");
+      }
       setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
       setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
-      setNotice({ type: "success", text: `${port.interface_name} hotspot settings saved. Deploy the port from Multiport to apply RouterOS changes.` });
+      setNotice({ type: "success", text: `${port.interface_name} hotspot settings were saved and deployed to the router.` });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
     } finally {
@@ -871,7 +886,8 @@ export default function HotspotSettings() {
         portalPackageShape,
       });
       const routerId = Number(settings.routerId);
-      const adminId = getSelectedTenantId();
+       const selectedRouter = routers.find((router) => router.id === routerId);
+       const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
       if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
@@ -960,7 +976,8 @@ export default function HotspotSettings() {
 
   const handleDeploy = async () => {
     const routerId = Number(settings.routerId);
-    const adminId = getSelectedTenantId();
+     const selectedRouter = routers.find((router) => router.id === routerId);
+     const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
     if (!Number.isSafeInteger(routerId) || routerId < 1) {
       setNotice({ type: "error", text: "Choose a linked router before deploying the portal." });
       return;
@@ -1226,7 +1243,11 @@ export default function HotspotSettings() {
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                           <div>
                             <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: ".82rem" }}>{port.interface_name}</div>
-                            <div style={{ color: "var(--isp-text-sub)", fontSize: ".67rem", marginTop: 3 }}>Port service #{port.id}{draft.pppoeEnabled ? " · PPPoE enabled" : ""}</div>
+                             <div style={{ color: "var(--isp-text-sub)", fontSize: ".67rem", marginTop: 3 }}>
+                               Port service #{port.id}
+                               {port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}
+                               {draft.pppoeEnabled ? " · PPPoE enabled" : ""}
+                             </div>
                           </div>
                           <span style={{ color: statusColor, fontSize: ".68rem", fontWeight: 800, textTransform: "capitalize" }}>{port.status}</span>
                         </div>

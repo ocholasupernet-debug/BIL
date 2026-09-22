@@ -4,7 +4,7 @@ import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../li
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
-import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 
@@ -63,7 +63,10 @@ function discoverVpnIp(
  */
 
 router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
-  const adminId = authenticatedAdminId(req, req.query.adminId ?? req.query.ispId);
+  const requestedAdmin = req.query.adminId ?? req.query.ispId;
+  const adminId = requestedAdmin !== undefined && String(requestedAdmin).trim() !== ""
+    ? authenticatedAdminId(req, requestedAdmin)
+    : await authenticatedTenantAdminId(req);
   if (!adminId) {
     res.status(400).json({ ok: false, error: "The requested ISP account does not match the signed-in admin session." });
     return;

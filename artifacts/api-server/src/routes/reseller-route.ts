@@ -1,4 +1,5 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
+import { randomBytes } from "node:crypto";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import {
   sbDeleteStrict,
@@ -10,6 +11,8 @@ import {
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { reconcilePppoeUserAccess, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { deployRouterFile } from "../lib/mikrotik.js";
+import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
 import {
   compileResellerActivation,
@@ -346,7 +349,6 @@ async function provisionVlanResellerServices(
     `=profile=HS_PROFILE_${segment}`,
     `=address-pool=HS_POOL_${segment}`,
     "=disabled=no",
-    `=comment=${commentPrefix}_hotspot`,
   ]);
   const gardenRows = await runRouterCommand(creds, [
     "/ip/hotspot/walled-garden/ip/print",
@@ -404,7 +406,7 @@ async function provisionVlanResellerServices(
       "/interface/pppoe-server/server/add",
       `=service-name=PPPoE_${segment}`,
       ...pppoeFields,
-      `=comment=${commentPrefix}_pppoe`,
+      /* RouterOS 6 has no comment property on PPPoE server entries. */
     ]);
   }
   await runRouterCommand(creds, [
@@ -1202,7 +1204,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       vlan_tag: handoffType === "vlan" ? vlanTag : null,
       bridge_name: handoffMode === "vlan_services" ? bridgeName : null,
       hotspot_enabled: handoffMode === "vlan_services",
-      hotspot_template_path: handoffMode === "vlan_services" ? "hotspot" : null,
+       hotspot_template_path: handoffMode === "vlan_services" ? "login.html" : null,
       pppoe_enabled: handoffMode === "vlan_services",
       subnet_range: handoffMode === "vlan_services"
         ? nextAvailablePortSubnet(await sbSelectStrict<{ subnet_range: string | null }>(

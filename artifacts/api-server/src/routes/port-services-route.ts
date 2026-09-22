@@ -31,6 +31,8 @@ type PortServiceRow = {
   reseller_bandwidth_cap: number | null;
   bandwidth_cap_mbps: number;
   subnet_range: string | null;
+  vlan_tag?: string | null;
+  handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
   status: string;
 };
 
@@ -135,23 +137,32 @@ function optionalPortalHostname(value: unknown): string | null {
   return validPortalHostname(value);
 }
 
-async function resourceIdentityForPort(port: Pick<PortServiceRow, "admin_id" | "router_id">): Promise<{
+async function resourceIdentityForPort(port: Pick<PortServiceRow, "admin_id" | "router_id" | "assigned_reseller_id" | "reseller_id">): Promise<{
   companyName: string | null;
   routerName: string | null;
+  resellerUsername: string | null;
 }> {
   const [adminRows, routerRows] = await Promise.all([
-    sbSelectStrict<{ name: string | null }>(
+    sbSelectStrict<{ name: string | null; company_name: string | null }>(
       "isp_admins",
-      `id=eq.${port.admin_id}&select=name&limit=1`,
+      `id=eq.${port.admin_id}&select=name,company_name&limit=1`,
     ),
     sbSelectStrict<{ name: string | null }>(
       "isp_routers",
       `id=eq.${port.router_id}&admin_id=eq.${port.admin_id}&select=name&limit=1`,
     ),
   ]);
+  const resellerId = port.assigned_reseller_id ?? port.reseller_id;
+  const resellerRows = resellerId
+    ? await sbSelectStrict<{ username: string | null; company_name: string | null }>(
+      "isp_admins",
+      `id=eq.${resellerId}&parent_id=eq.${port.admin_id}&role=eq.reseller&select=username,company_name&limit=1`,
+    )
+    : [];
   return {
-    companyName: adminRows[0]?.name ?? null,
+    companyName: resellerRows[0]?.company_name ?? resellerRows[0]?.username ?? adminRows[0]?.company_name ?? adminRows[0]?.name ?? null,
     routerName: routerRows[0]?.name ?? null,
+    resellerUsername: resellerRows[0]?.username ?? null,
   };
 }
 
@@ -266,10 +277,16 @@ export function buildDualServiceCommands(
     paymentHostnames?: string[];
   } = {},
 ): string[][] {
-  if (!/^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(port.interface_name.trim())) {
+  const validAssignedInterface = port.handoff_mode === "vlan_services"
+    ? /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(port.interface_name.trim())
+    : /^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(port.interface_name.trim());
+  if (!validAssignedInterface) {
     throw new Error(`The assigned interface "${port.interface_name}" is not a valid RouterOS interface.`);
   }
   const resources = portServiceResourceNames(port, options);
+  if (port.handoff_mode === "vlan_services") {
+    return buildVlanServiceCommands(port, resources, hotspotPath, pppoePath, routerAddress, options);
+  }
   const portName = resources.portName;
   const network = portServiceNetwork(port, resources);
   const hotspotProfile = resources.hotspotProfile;
@@ -368,7 +385,10 @@ export function buildDualServiceCommands(
   }
   if (pppoePath) {
     commands.push(
-      ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, "=disabled=no", "=one-session-per-host=yes", `=comment=${comment("pppoe")}`],
+      /* RouterOS 6 does not expose comment on PPPoE server entries. Keep
+         ownership in the service name/profile instead of sending an
+         unsupported property that aborts the whole deployment. */
+      ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, `=disabled=no`, "=one-session-per-host=yes"],
       ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName}`, `=comment=${comment("pppoe_landing")}`],
       ["/ip/dns/static/add", `=name=${pppoeDnsName}`, `=address=${network.gateway}`, `=comment=${comment("pppoe_dns")}`],
       ["/queue/simple/add", `=name=PPPOE_PREMIUM_${resources.resourceName}`, `=target=${network.bridgeName}`, `=parent=${parentQueue}`, `=max-limit=${cap}M/${cap}M`, "=priority=1/1", `=comment=${comment("pppoe_premium")}`],
@@ -390,10 +410,89 @@ export function buildDualServiceCommands(
   return commands;
 }
 
+function buildVlanServiceCommands(
+  port: PortServiceRow,
+  resources: PortServiceResourceNames,
+  hotspotPath: string | null,
+  pppoePath: string | null,
+  routerAddress: string,
+  options: {
+    portalHostname?: string;
+    hotspotDnsName?: string | null;
+    pppoeDnsName?: string | null;
+    paymentHostnames?: string[];
+  },
+): string[][] {
+  const vlanInterface = port.interface_name.trim();
+  const bridge = port.bridge_name?.trim() || "";
+  const tag = Number(port.vlan_tag);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(vlanInterface)
+    || !validInterface(bridge)
+    || !Number.isSafeInteger(tag)
+    || tag < 1
+    || tag > 4094) {
+    throw new Error("The VLAN service is missing a valid VLAN interface, parent bridge, or VLAN tag.");
+  }
+  const network = portServiceNetwork(port, { ...resources, bridgeName: vlanInterface });
+  const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined) ?? resources.defaultDnsName;
+  const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined) ?? resources.defaultDnsName;
+  const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
+  const commands: string[][] = [
+    ["/interface/vlan/add", `=name=${vlanInterface}`, `=vlan-id=${tag}`, `=interface=${bridge}`, `=comment=${comment("vlan")}`],
+  ];
+  if (hotspotPath) {
+    commands.push(
+      ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${vlanInterface}`, `=comment=${comment("hotspot_gateway")}`],
+      ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
+      ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`, `=comment=${comment("hotspot_profile")}`],
+      ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${vlanInterface}`, `=profile=${resources.hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
+      ["/ip/dns/static/add", `=name=${hotspotDnsName}`, `=address=${network.gateway}`, `=comment=${comment("hotspot_dns")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${vlanInterface}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dhcp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${vlanInterface}`, "=protocol=udp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dns_udp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${vlanInterface}`, "=protocol=tcp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dns_tcp")}`],
+      ["/ip/firewall/filter/add", "=chain=forward", `=in-interface=${vlanInterface}`, "=out-interface-list=WAN", "=action=accept", "=hotspot=auth", "=place-before=0", `=comment=${comment("allow_service_forward")}`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=udp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_udp")}`],
+      ["/ip/firewall/filter/add", "=chain=input", "=in-interface-list=WAN", "=protocol=tcp", "=dst-port=53", "=action=drop", "=place-before=0", `=comment=${comment("block_wan_dns_tcp")}`],
+      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("hotspot_nat")}`],
+    );
+    for (const hostname of [...new Set([
+      validPortalHostname(options.portalHostname),
+      hotspotDnsName,
+      ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES).map(validPortalHostname).filter((value): value is string => Boolean(value)),
+    ].filter((value): value is string => Boolean(value)))]) {
+      commands.push(["/ip/hotspot/walled-garden/ip/add", `=dst-host=${hostname}`, "=action=accept", `=comment=${comment("walled_garden")}`]);
+    }
+  }
+  if (hotspotPath || pppoePath) {
+    commands.push([
+      "/queue/simple/add",
+      `=name=${resources.parentQueue}`,
+      `=target=${vlanInterface}`,
+      `=max-limit=${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M/${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M`,
+      "=priority=2/2",
+      `=comment=${comment("parent_queue")}`,
+    ]);
+  }
+  if (pppoePath) {
+    const pppoePool = `${network.network.split(".").slice(0, 3).join(".")}.200-${network.network.split(".").slice(0, 3).join(".")}.254`;
+    commands.push(
+      ["/ip/pool/add", `=name=PPPOE_POOL_${resources.resourceName}`, `=ranges=${pppoePool}`, `=comment=${comment("pppoe_pool")}`],
+      ["/ppp/profile/add", `=name=${resources.pppoeProfile}`, `=local-address=${network.gateway}`, `=remote-address=PPPOE_POOL_${resources.resourceName}`, `=dns-server=${network.gateway},8.8.8.8`, "=only-one=yes", `=comment=${comment("pppoe_profile")}`],
+      ["/interface/pppoe-server/server/add", `=service-name=${resources.pppoeService}`, `=interface=${vlanInterface}`, `=default-profile=${resources.pppoeProfile}`, "=disabled=no", "=one-session-per-host=yes"],
+      ["/ip/dns/static/add", `=name=${pppoeDnsName}`, `=address=${network.gateway}`, `=comment=${comment("pppoe_dns")}`],
+      ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("pppoe_nat")}`],
+    );
+  }
+  return commands;
+}
+
 async function executeIdempotentRouterCommand(creds: RouterCredentials, command: string[]): Promise<void> {
   const addPath = command[0];
   const propertyByPath: Record<string, string> = {
     "/interface/bridge/add": "name",
+    "/interface/vlan/add": "name",
     "/ip/hotspot/profile/add": "name",
     "/ip/hotspot/add": "name",
     "/interface/pppoe-server/server/add": "service-name",
@@ -423,6 +522,31 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     if (existing) {
       if (existing.bridge !== bridgeName) {
         throw new Error(`Interface ${interfaceName} is already assigned to foreign bridge ${existing.bridge}.`);
+      }
+      return;
+    }
+    await runRouterCommand(creds, command);
+    return;
+  }
+
+  if (addPath === "/interface/vlan/add") {
+    const name = command.find((arg) => arg.startsWith("=name="))?.slice("=name=".length);
+    if (!name) {
+      await runRouterCommand(creds, command);
+      return;
+    }
+    const rows = await runRouterCommand(creds, [
+      "/interface/vlan/print",
+      "=.proplist=.id,name,vlan-id,interface",
+      `?name=${name}`,
+    ]);
+    const existing = rows.find((row) => row.name === name);
+    if (existing?.[".id"]) {
+      const requestedTag = command.find((arg) => arg.startsWith("=vlan-id="))?.slice("=vlan-id=".length);
+      const requestedParent = command.find((arg) => arg.startsWith("=interface="))?.slice("=interface=".length);
+      if (String(existing["vlan-id"] ?? "") !== String(requestedTag ?? "")
+        || String(existing.interface ?? "") !== String(requestedParent ?? "")) {
+        throw new Error(`VLAN interface ${name} already belongs to another VLAN or parent interface.`);
       }
       return;
     }
@@ -598,6 +722,14 @@ export async function removePortServiceResources(
     ".id,name,comment",
     row => row.name === resources.bridgeName && ownedComment(row),
   );
+  if (port.handoff_mode === "vlan_services") {
+    await removeRouterResourceRows(
+      creds,
+      "/interface/vlan/print",
+      ".id,name,comment",
+      row => row.name === port.interface_name && ownedComment(row),
+    );
+  }
   await removePortServiceFiles(creds, resources);
 
   logger.info(
@@ -684,7 +816,12 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     }
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
-    const identity = await resourceIdentityForPort({ admin_id: tenantId, router_id: routerId });
+    const identity = await resourceIdentityForPort({
+      admin_id: tenantId,
+      router_id: routerId,
+      reseller_id: null,
+      assigned_reseller_id: null,
+    });
     const defaultResources = portServiceResourceNames({
       id: 0,
       router_id: routerId,
@@ -931,7 +1068,21 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
     for (const directory of [resources.hotspotDirectory, resources.pppoeDirectory]) {
       await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
     }
-    if (hotspotSource && hotspotDestination) await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
+    if (hotspotSource && hotspotDestination) {
+      await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
+      const selectedHotspotName = sourceNameFromPath(hotspotSource);
+      const companionPortal = selectedHotspotName === "rlogin.html"
+        ? getDeployableSource("hotspot", "login.html")
+        : getDeployableSource("hotspot", "rlogin.html");
+      if (companionPortal) {
+        await deployApprovedSource(
+          found.creds,
+          req,
+          companionPortal.source.name,
+          `${resources.hotspotDirectory}/${sourceNameFromPath(companionPortal.source.name)}`,
+        );
+      }
+    }
     if (pppoeSource && pppoeDestination) await deployApprovedSource(found.creds, req, pppoeSource, pppoeDestination);
     const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
     const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;

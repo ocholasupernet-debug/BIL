@@ -72,3 +72,6 @@
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
 - [Reseller connection approval](reseller-connection-approval.md) — Approving an ISP connection links accounts; port assignment and RouterOS activation remain explicit ISP actions.
 - [Reseller XPON handoff boundary](reseller-xpon-handoff.md) — ISP-router physical/VLAN handoffs use Ethernet link state and never configure reseller-owned MikroTik services.
+- [Reseller live-data boundary](reseller-live-data-boundary.md) — Verify tenant ownership and assigned-port ownership before fetching live router data or calculating reseller totals.
+- [Reseller consumption reporting](reseller-consumption-reporting.md) — Cumulative customer usage is not a historical monthly series; label cohort charts honestly until snapshots exist.
+- [VLAN service resource identity](vlan-service-resource-identity.md) — Initial handoff and later hotspot deployment must update the same RouterOS resource family.

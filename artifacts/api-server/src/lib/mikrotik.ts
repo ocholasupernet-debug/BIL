@@ -500,7 +500,17 @@ export async function runRouterCommand(
 ): Promise<Record<string, string>[]> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    return withTimeout(conn.write(command), ms) as Promise<Record<string, string>[]>;
+    try {
+      return await withTimeout(conn.write(command), ms) as Record<string, string>[];
+    } catch (error) {
+      const path = command[0] || "(empty command)";
+      const parameters = command
+        .slice(1)
+        .map((value) => value.replace(/=.+=.*/, (match) => `${match.split("=")[1]}=<value>`))
+        .join(", ");
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`RouterOS command ${path} failed [${parameters}]: ${message}`, { cause: error });
+    }
   });
 }
 

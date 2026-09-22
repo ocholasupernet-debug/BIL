@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
@@ -669,6 +670,26 @@ function ResellerDashboard() {
              </div>) : <div style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>No router assignment available.</div>}
            </div>
          </section>
+          {port?.handoff_mode === "vlan_services" && port.vlan_tag ? (
+            <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)", background: "linear-gradient(135deg, rgba(37,99,235,.08), var(--isp-card) 62%)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ color: "var(--isp-text)", fontWeight: 850, display: "flex", alignItems: "center", gap: 8 }}>
+                    <RouterIcon size={18} color="var(--isp-accent)" /> Configure your VLAN hotspot
+                  </div>
+                  <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, margin: "6px 0 0", maxWidth: 700 }}>
+                    Select the assigned router and VLAN {port.vlan_tag} in Hotspot Settings, choose the approved portal asset, and save. The reseller-specific hotspot directory, DNS name, files, firewall rules, NAT, and RouterOS service will be deployed together.
+                  </p>
+                </div>
+                <Link
+                  href={`/admin/hotspot-settings?routerId=${encodeURIComponent(String(port.router_id))}&vlan=${encodeURIComponent(String(port.vlan_tag))}`}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7, borderRadius: 9, padding: "10px 13px", background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontWeight: 800, fontSize: 12 }}
+                >
+                  Open Hotspot Settings
+                </Link>
+              </div>
+            </section>
+          ) : null}
          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 16 }}>
            <section style={cardStyle}>
              <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>Monthly registered customers</div>
