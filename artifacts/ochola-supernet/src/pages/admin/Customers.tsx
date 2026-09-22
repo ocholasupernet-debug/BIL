@@ -884,7 +884,7 @@ export default function Customers() {
                   return (
                     <tr key={c.id} className="crow" style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
                       {/* Customer */}
-                      <td style={{ padding: "0.75rem 1.25rem" }}>
+                      <td className="technical-value" style={{ padding: "0.75rem 1.25rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
                           <div style={{ width: 32, height: 32, borderRadius: "50%", background: `${color}22`, color, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.7rem", flexShrink: 0 }}>
                             {initials(name)}

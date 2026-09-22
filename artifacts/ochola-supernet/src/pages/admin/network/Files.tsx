@@ -382,7 +382,7 @@ export default function Files() {
                           <td style={{ padding: "0.72rem 1rem" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", minWidth: 240 }}>
                               {fileIcon(file)}
-                              <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", overflowWrap: "anywhere" }}>{file.name}</span>
+                              <span className="technical-value" style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", overflowWrap: "anywhere" }}>{file.name}</span>
                             </div>
                           </td>
                           <td style={{ padding: "0.72rem 0.75rem", color: "var(--isp-text-muted)" }}>{isDirectory(file) ? "Directory" : file.type || "File"}</td>

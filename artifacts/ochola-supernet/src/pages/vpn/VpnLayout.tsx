@@ -12,11 +12,11 @@ interface VpnLayoutProps {
 }
 
 const NAV = [
-  { label: "Dashboard",      href: "/vpn",               icon: LayoutDashboard, color: "text-blue-500"  },
-  { label: "Video Tutorials",href: "/vpn/tutorials",      icon: MonitorPlay,     color: "text-green-500" },
-  { label: "Remote Access",  href: "/vpn/remote-access",  icon: Wifi,            color: "text-green-500" },
-  { label: "Create VPNs",    href: "/vpn/create",         icon: Send,            color: "text-amber-500" },
-  { label: "VPN Lists",      href: "/vpn/list",           icon: Users,           color: "text-blue-600"  },
+   { label: "Dashboard",      href: "/admin/vpn/overview",        icon: LayoutDashboard, color: "text-blue-500"  },
+   { label: "Video Tutorials",href: "/admin/vpn/tutorials",       icon: MonitorPlay,     color: "text-green-500" },
+   { label: "Remote Access",  href: "/admin/vpn/remote-access",   icon: Wifi,            color: "text-green-500" },
+   { label: "Create VPNs",    href: "/admin/vpn/create",           icon: Send,            color: "text-amber-500" },
+   { label: "VPN Lists",      href: "/admin/vpn/list",             icon: Users,           color: "text-blue-600"  },
 ];
 
 export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
@@ -69,11 +69,11 @@ export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
                   <p className="text-xs font-bold text-gray-800">Chrisphine Ochola</p>
                   <p className="text-[11px] text-gray-400">chrisphine@isplatty.org</p>
                 </div>
-                <Link href="/vpn/settings#profile" onClick={() => setDropOpen(false)}
+                 <Link href="/admin/vpn/settings#profile" onClick={() => setDropOpen(false)}
                   className="flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                   <User size={14} className="text-gray-400" /> My Profile
                 </Link>
-                <Link href="/vpn/settings" onClick={() => setDropOpen(false)}
+                 <Link href="/admin/vpn/settings" onClick={() => setDropOpen(false)}
                   className="flex items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                   <Settings size={14} className="text-gray-400" /> Settings
                 </Link>
@@ -92,7 +92,7 @@ export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
       <div className="px-6 py-2.5 flex items-center gap-1.5 text-sm bg-white border-b border-gray-100">
         <Home size={13} className="text-blue-500" />
         <ChevronRight size={11} className="text-gray-400" />
-        <Link href="/vpn" className="text-blue-500 hover:underline">Chrisphine Ochola</Link>
+         <Link href="/admin/vpn/overview" className="text-blue-500 hover:underline">Chrisphine Ochola</Link>
         {breadcrumb && (
           <>
             <ChevronRight size={11} className="text-gray-400" />
@@ -103,7 +103,7 @@ export function VpnHeader({ breadcrumb }: { breadcrumb?: string }) {
 
       {/* Action buttons row */}
       <div className="px-6 pt-5 pb-1 flex flex-wrap items-center gap-2">
-        {NAV.filter(n => n.href !== "/vpn").map(n => {
+         {NAV.filter(n => n.href !== "/admin/vpn/overview").map(n => {
           const active = location === n.href;
           const Icon = n.icon;
           const bg =

@@ -6,7 +6,7 @@ import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
-  AlertCircle, ChevronLeft, ChevronRight, Radio, Wand2, Save, Copy, ChevronDown, Shield,
+   AlertCircle, ChevronLeft, ChevronRight, Radio, Wrench, Save, Copy, ChevronDown, Shield,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -983,7 +983,7 @@ export default function Routers() {
           >
             {autoFixing
               ? <><Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Detecting…</>
-              : <><Wand2 size={12} /> Auto-fix IPs</>}
+              : <><Wrench size={12} /> Auto-fix IPs</>}
           </button>
           <div style={{ flex: 1 }} />
           <button
@@ -1059,7 +1059,7 @@ export default function Routers() {
                         </td>
 
                         {/* ROUTER NAME */}
-                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem" }}>
                           <div style={{ position: "relative", display: "inline-block" }}>
                             <button
                               type="button"
@@ -1126,17 +1126,17 @@ export default function Routers() {
                         </td>
 
                         {/* IP ADDRESS */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>
                           {r.host || r.ip_address || "—"}
                         </td>
 
                         {/* MANAGEMENT VPN IP (Tunnel) */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
                           {r.vpn_ip || "—"}
                         </td>
 
                         {/* PROXY (Backup) */}
-                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem" }}>
                           {r.proxy_ip ? (
                             <span style={{
                               display: "inline-flex", alignItems: "center", gap: 4,
@@ -1152,7 +1152,7 @@ export default function Routers() {
                         </td>
 
                         {/* USERNAME */}
-                        <td style={{ padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)" }}>
                           {r.router_username || "admin"}
                         </td>
 
@@ -1722,7 +1722,7 @@ export default function Routers() {
             {/* Header */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Wand2 size={16} style={{ color: "var(--isp-accent)" }} />
+                <Wrench size={16} style={{ color: "var(--isp-accent)" }} />
                 <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--isp-text)" }}>Auto-fix VPN IPs — Results</span>
               </div>
               <button onClick={() => setAutoFixResults(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)", padding: 4 }}>
