@@ -49,6 +49,11 @@ type RevenueSummary = {
   totalRevenue: number;
   totalTransactions: number;
 };
+type ResellerSummary = {
+  activeResellers: number;
+  onlineResellers: number;
+  totalResellers: number;
+};
 
 async function fetchRevenueSummary(): Promise<RevenueSummary> {
   const token = (() => {
@@ -59,6 +64,16 @@ async function fetchRevenueSummary(): Promise<RevenueSummary> {
   });
   const data = await response.json() as RevenueSummary & { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Could not load revenue totals.");
+  return data;
+}
+
+async function fetchResellerSummary(): Promise<ResellerSummary> {
+  const token = getAdminApiToken();
+  const response = await fetch("/api/admin/dashboard/reseller-summary", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const data = await response.json() as ResellerSummary & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load reseller totals.");
   return data;
 }
 
@@ -355,6 +370,15 @@ export default function Dashboard() {
     queryFn: fetchRevenueSummary,
     refetchInterval: 60_000,
   });
+  const {
+    data: resellerSummary,
+    isLoading: resellerSummaryLoading,
+    isError: resellerSummaryError,
+  } = useQuery({
+    queryKey: ["isp_reseller_summary", ADMIN_ID],
+    queryFn: fetchResellerSummary,
+    refetchInterval: 15_000,
+  });
 
   const gatewayId = configuredGatewayId || "";
   const currentGatewayMode = gatewayLoading ? "Loading…" : gatewayError ? "Unavailable" : gatewayMode(gatewayId);
@@ -448,7 +472,7 @@ export default function Dashboard() {
   const completedRevenue = revenueSummary?.totalRevenue ?? 0;
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const displayName = getAdminDisplayName();
-  const hasError = routersError || customersError || txError || revenueError;
+  const hasError = routersError || customersError || txError || revenueError || resellerSummaryError;
   const dashboardStyle = {
     "--dashboard-accent": preferences.accentColor,
     "--dashboard-accent-glow": `${preferences.accentColor}1a`,
@@ -523,6 +547,8 @@ export default function Dashboard() {
           <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
            <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
            <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="green" />
+           <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
+           <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>
 
         <section className="gateway-strip" aria-label="Payment gateway status">

@@ -157,7 +157,7 @@ function requestHostname(req: Request): string {
 
 function validInterface(value: unknown): value is string {
   return typeof value === "string"
-    && /^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(value.trim())
+    && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim())
     && value.trim().length <= 64;
 }
 
@@ -647,6 +647,52 @@ router.get("/admin/resellers", requireAdmin(), async (req, res): Promise<void> =
     res.json({ ok: true, resellers: rows, ports });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load resellers." });
+  }
+});
+
+router.get("/admin/dashboard/reseller-summary", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot view ISP reseller totals." });
+      return;
+    }
+    const [resellers, ports] = await Promise.all([
+      sbSelectStrict<{ id: number; is_active: boolean; status: string | null }>(
+        "isp_admins",
+        `parent_id=eq.${account.id}&role=eq.reseller&select=id,is_active,status&limit=1000`,
+      ),
+      sbSelectStrict<Pick<ResellerPortRow, "assigned_reseller_id" | "reseller_id" | "status" | "link_status" | "link_detected">>(
+        "isp_reseller_ports",
+        `admin_id=eq.${account.id}&status=neq.disabled&select=assigned_reseller_id,reseller_id,status,link_status,link_detected&limit=1000`,
+      ),
+    ]);
+    const activeIds = new Set(
+      resellers
+        .filter((reseller) => reseller.is_active && String(reseller.status ?? "").toLowerCase() === "active")
+        .map((reseller) => reseller.id),
+    );
+    const onlineIds = new Set(
+      ports
+        .filter((port) => {
+          const resellerId = port.assigned_reseller_id ?? port.reseller_id;
+          return resellerId && activeIds.has(resellerId)
+            && port.status === "active"
+            && port.link_status === "active"
+            && port.link_detected === true;
+        })
+        .map((port) => port.assigned_reseller_id ?? port.reseller_id)
+        .filter((id): id is number => Number.isSafeInteger(id)),
+    );
+    res.json({
+      ok: true,
+      totalResellers: resellers.length,
+      activeResellers: activeIds.size,
+      onlineResellers: onlineIds.size,
+      refreshedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller dashboard totals." });
   }
 });
 
@@ -1367,6 +1413,44 @@ router.get("/admin/reseller-handoffs/:portId/link", requireAdmin(), async (req, 
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to detect the XPON link." });
+  }
+});
+
+router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const portId = Number(req.params.portId);
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "vlan_services") {
+      res.status(409).json({ ok: false, error: "Only VLAN service assignments can be pushed to the MikroTik." });
+      return;
+    }
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    try {
+      await provisionVlanResellerServices(target, port, requestHostname(req));
+      const updated = await sbUpdateStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
+        {
+          status: "active",
+          link_status: "active",
+          link_detected: true,
+          link_provisioning_error: null,
+          provisioning_error: null,
+          updated_at: new Date().toISOString(),
+        },
+      );
+      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
+      await sbUpdateStrict(
+        "isp_reseller_ports",
+        `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
+        { status: "failed", link_status: "pending", provisioning_error: message.slice(0, 500), updated_at: new Date().toISOString() },
+      ).catch(() => undefined);
+      res.status(502).json({ ok: false, error: `RouterOS did not apply the VLAN service: ${message}` });
+    }
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to push the VLAN service to the MikroTik." });
   }
 });
 
