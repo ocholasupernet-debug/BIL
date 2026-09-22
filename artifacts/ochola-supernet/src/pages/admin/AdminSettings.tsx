@@ -488,6 +488,47 @@ function AdminPaymentGatewayCard() {
   );
 }
 
+function ResellerPaymentGatewayCard() {
+  const [state, setState] = useState<{ gateway?: string; mode?: string; hotspot?: string; pppoe?: string; error?: string } | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, { headers: adminApiHeaders(), cache: "no-store" })
+      .then(async response => {
+        const data = await response.json() as {
+          mode?: string;
+          services?: { hotspot?: { gatewayId?: string }; pppoe?: { gatewayId?: string } };
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error || "Could not load the connected ISP payment settings.");
+        setState({
+          mode: data.mode,
+          hotspot: data.services?.hotspot?.gatewayId,
+          pppoe: data.services?.pppoe?.gatewayId,
+        });
+      })
+      .catch(error => setState({ error: error instanceof Error ? error.message : "Could not load the connected ISP payment settings." }));
+  }, []);
+
+  return (
+    <Card title="Connected ISP Payment Gateway" desc="Payment authority stays with the ISP account that assigned your VLAN service.">
+      {state?.error ? (
+        <p style={{ color: "#f87171", fontSize: "0.76rem", margin: 0 }}>{state.error}</p>
+      ) : (
+        <>
+          <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
+            You can use the ISP’s configured payment destinations for reseller customer plans, but gateway credentials and collection routing cannot be changed from a reseller account.
+          </p>
+          <Grid2>
+            <Field label="Collection mode"><Input value={state?.mode === "separate" ? "Separate Hotspot / PPPoE destinations" : "Shared ISP destination"} readOnly /></Field>
+            <Field label="Hotspot gateway"><Input value={state?.hotspot || "Loading…"} readOnly /></Field>
+            <Field label="PPPoE gateway"><Input value={state?.pppoe || "Loading…"} readOnly /></Field>
+          </Grid2>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function BillingTab() {
   const [currency, setCurrency] = useState(() => {
     try { return localStorage.getItem("ochola_admin_currency") || "KES"; } catch { return "KES"; }
@@ -1746,6 +1787,17 @@ const GATEWAYS: GatewayDef[] = [
 ];
 
 function PaymentGatewaysTab() {
+  const isReseller = getAdminRole() === "reseller";
+  if (isReseller) {
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
+          This section is available for visibility, while payment ownership remains with your connected ISP.
+        </div>
+        <ResellerPaymentGatewayCard />
+      </>
+    );
+  }
   const brand = useBrand();
   const [selectedGw, setSelectedGw] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
@@ -2302,7 +2354,7 @@ export default function AdminSettings() {
   const [location, setLocation] = useLocation();
   const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
   const isReseller = getAdminRole() === "reseller";
-  const visibleTabs = isReseller ? TABS.filter(item => item.id !== "gateways") : TABS;
+  const visibleTabs = TABS;
   const initialTab = visibleTabs.some(item => item.id === requestedTab) ? requestedTab! : "profile";
   const [tab, setTab] = useState(initialTab);
 
@@ -2362,7 +2414,7 @@ export default function AdminSettings() {
 
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
-          {tab === "gateways"      && !isReseller && <PaymentGatewaysTab />}
+           {tab === "gateways"      && <PaymentGatewaysTab />}
           {tab === "dashboard"     && <DashboardBuilderTab />}
           {tab === "typography"    && <TypographyTab />}
           {tab === "sms"           && <SmsEmailTab />}

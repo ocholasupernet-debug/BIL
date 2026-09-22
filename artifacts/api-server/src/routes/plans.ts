@@ -3,10 +3,17 @@ import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.j
 import { logActivity } from "../lib/activity-log.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
+import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
 type PlanScope = { routerId: number; portId: number | null };
+type PlanContext = {
+  account: NonNullable<Awaited<ReturnType<typeof authenticatedAccount>>>;
+  tenantId: number;
+  allowedRouterIds: Set<number> | null;
+  allowedPortIds: Set<number> | null;
+};
 
 function parseRequiredId(value: unknown): number | null {
   const parsed = Number(value);
@@ -18,11 +25,19 @@ function parseOptionalId(value: unknown): number | null {
   return parseRequiredId(value);
 }
 
-async function validatePlanScope(adminId: number, routerValue: unknown, portValue: unknown): Promise<PlanScope | null> {
+async function validatePlanScope(
+  adminId: number,
+  routerValue: unknown,
+  portValue: unknown,
+  restrictions?: Pick<PlanContext, "allowedRouterIds" | "allowedPortIds">,
+): Promise<PlanScope | null> {
   const requestedRouterId = parseOptionalId(routerValue);
   const requestedPortId = parseOptionalId(portValue);
   if (routerValue !== undefined && routerValue !== null && routerValue !== "" && requestedRouterId === null) return null;
   if (portValue !== undefined && portValue !== null && portValue !== "" && portValue !== "null" && requestedPortId === null) return null;
+  if (restrictions?.allowedPortIds) {
+    if (requestedPortId === null || !restrictions.allowedPortIds.has(requestedPortId)) return null;
+  }
 
   let routerId = requestedRouterId;
   if (requestedPortId !== null) {
@@ -36,11 +51,69 @@ async function validatePlanScope(adminId: number, routerValue: unknown, portValu
     routerId = port.router_id;
   }
   if (routerId === null) return null;
+  if (restrictions?.allowedRouterIds && !restrictions.allowedRouterIds.has(routerId)) return null;
   const routers = await sbSelect<{ id: number }>(
     "isp_routers",
     `id=eq.${routerId}&admin_id=eq.${adminId}&select=id&limit=1`,
   );
   return routers[0] ? { routerId, portId: requestedPortId } : null;
+}
+
+async function getPlanContext(req: Parameters<typeof authenticatedAccount>[0]): Promise<PlanContext> {
+  const account = await authenticatedAccount(req);
+  if (!account) throw new Error("A valid signed-in account is required.");
+  const tenantId = account.parent_id ?? account.id;
+  if (account.role !== "reseller") {
+    return { account, tenantId, allowedRouterIds: null, allowedPortIds: null };
+  }
+
+  const assignedPorts = await sbSelect<{ id: number; router_id: number; status: string }>(
+    "isp_reseller_ports",
+    `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,status&limit=1000`,
+  );
+  return {
+    account,
+    tenantId,
+    allowedRouterIds: new Set(assignedPorts.map(port => port.router_id)),
+    allowedPortIds: new Set(assignedPorts.map(port => port.id)),
+  };
+}
+
+async function planContextRows(context: PlanContext): Promise<{
+  plans: Record<string, unknown>[];
+  bandwidths: Record<string, unknown>[];
+  routers: Record<string, unknown>[];
+  ports: Record<string, unknown>[];
+  pools: Record<string, unknown>[];
+}> {
+  const [allPlans, bandwidths, routers, ports, pools] = await Promise.all([
+    sbSelect<Record<string, unknown>>("isp_plans", `admin_id=eq.${context.tenantId}&select=*&order=created_at.asc`),
+    sbSelect<Record<string, unknown>>("isp_bandwidth", `admin_id=eq.${context.tenantId}&select=*&order=created_at.asc`),
+    sbSelect<Record<string, unknown>>(
+      "isp_routers",
+      `admin_id=eq.${context.tenantId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,admin_id,name,host,model,bridge_ip,vpn_ip,status,router_username,router_secret&order=name.asc`,
+    ),
+    sbSelect<Record<string, unknown>>(
+      "isp_reseller_ports",
+      context.allowedPortIds
+        ? `admin_id=eq.${context.tenantId}&assigned_reseller_id=eq.${context.account.id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,interface_name,status&order=interface_name.asc`
+        : `admin_id=eq.${context.tenantId}&status=neq.disabled&select=id,router_id,interface_name,status&order=interface_name.asc`,
+    ),
+    sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${context.tenantId}&select=id,name,range_start,range_end,router_id&order=name.asc`),
+  ]);
+  const plans = context.allowedRouterIds
+    ? allPlans.filter(plan =>
+        context.allowedRouterIds!.has(Number(plan.router_id))
+        && context.allowedPortIds!.has(Number(plan.port_id)),
+      )
+    : allPlans;
+  const filteredRouters = context.allowedRouterIds
+    ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
+    : routers;
+  const filteredPools = context.allowedRouterIds
+    ? pools.filter(pool => pool.router_id == null || context.allowedRouterIds!.has(Number(pool.router_id)))
+    : pools;
+  return { plans, bandwidths, routers: filteredRouters, ports, pools: filteredPools };
 }
 
 function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Record<string, unknown> {
@@ -114,7 +187,100 @@ router.get("/plans", async (req, res): Promise<void> => {
   res.json(rows);
 });
 
-router.post("/plans", async (req, res): Promise<void> => {
+/* Authenticated admin plan context. Resellers receive only the parent ISP
+   resources that belong to their approved VLAN service assignments. */
+router.get("/plans/admin-context", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const context = await getPlanContext(req);
+    const rows = await planContextRows(context);
+    res.json({ ...rows, tenantId: context.tenantId, reseller: context.account.role === "reseller" });
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "Plan context could not be loaded." });
+  }
+});
+
+router.post("/plans/bandwidth", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const context = await getPlanContext(req);
+    const name = String(req.body?.name ?? "").trim();
+    const speedDown = Number(req.body?.speed_down);
+    const speedUp = Number(req.body?.speed_up);
+    if (!name || !Number.isFinite(speedDown) || speedDown <= 0 || !Number.isFinite(speedUp) || speedUp <= 0) {
+      res.status(400).json({ error: "Enter a name and positive download and upload rates." });
+      return;
+    }
+    const [row] = await sbInsert<Record<string, unknown>>("isp_bandwidth", {
+      admin_id: context.tenantId,
+      name,
+      speed_down: speedDown,
+      speed_up: speedUp,
+      speed_down_unit: String(req.body?.speed_down_unit ?? "Mbps"),
+      speed_up_unit: String(req.body?.speed_up_unit ?? "Mbps"),
+      burst_enabled: req.body?.burst_enabled === true,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    res.status(201).json(row);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "Bandwidth profile could not be created." });
+  }
+});
+
+router.patch("/plans/bandwidth/:id", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const context = await getPlanContext(req);
+    const id = parseRequiredId(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: "A valid bandwidth profile is required." });
+      return;
+    }
+    const name = String(req.body?.name ?? "").trim();
+    const speedDown = Number(req.body?.speed_down);
+    const speedUp = Number(req.body?.speed_up);
+    if (!name || !Number.isFinite(speedDown) || speedDown <= 0 || !Number.isFinite(speedUp) || speedUp <= 0) {
+      res.status(400).json({ error: "Enter a name and positive download and upload rates." });
+      return;
+    }
+    const [row] = await sbUpdate<Record<string, unknown>>(
+      "isp_bandwidth",
+      `id=eq.${id}&admin_id=eq.${context.tenantId}`,
+      {
+        name,
+        speed_down: speedDown,
+        speed_up: speedUp,
+        speed_down_unit: String(req.body?.speed_down_unit ?? "Mbps"),
+        speed_up_unit: String(req.body?.speed_up_unit ?? "Mbps"),
+        burst_enabled: req.body?.burst_enabled === true,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!row) {
+      res.status(404).json({ error: "Bandwidth profile not found." });
+      return;
+    }
+    res.json(row);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "Bandwidth profile could not be updated." });
+  }
+});
+
+router.delete("/plans/bandwidth/:id", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const context = await getPlanContext(req);
+    const id = parseRequiredId(req.params.id);
+    if (!id) {
+      res.status(400).json({ error: "A valid bandwidth profile is required." });
+      return;
+    }
+    await sbDelete("isp_bandwidth", `id=eq.${id}&admin_id=eq.${context.tenantId}`);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "Bandwidth profile could not be deleted." });
+  }
+});
+
+router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
   const {
     adminId,
     ispId,
@@ -144,14 +310,24 @@ router.post("/plans", async (req, res): Promise<void> => {
     res.status(400).json({ error: "price must be a non-negative number" });
     return;
   }
-  const effectiveAdminId = parseRequiredId(adminId ?? ispId);
-  if (effectiveAdminId === null) {
-    res.status(400).json({ error: "A valid ISP account is required." });
+  let context: PlanContext;
+  try {
+    context = await getPlanContext(req);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "A valid signed-in account is required." });
     return;
   }
-  const scope = await validatePlanScope(effectiveAdminId, routerId, portId);
+  const requestedAccountId = parseRequiredId(adminId ?? ispId);
+  if (context.account.role !== "reseller" && requestedAccountId !== null && requestedAccountId !== context.tenantId) {
+    res.status(403).json({ error: "The selected ISP account does not match the signed-in account." });
+    return;
+  }
+  const effectiveAdminId = context.tenantId;
+  const scope = await validatePlanScope(effectiveAdminId, routerId, portId, context);
   if (!scope) {
-    res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
+    res.status(400).json({ error: context.account.role === "reseller"
+      ? "Choose one of your assigned VLAN service ports for this plan."
+      : "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
   }
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
@@ -166,13 +342,16 @@ router.post("/plans", async (req, res): Promise<void> => {
   res.status(201).json(row);
 });
 
-router.patch("/plans/:id", async (req, res): Promise<void> => {
+router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   const id = req.params.id;
-  const effectiveAdminId = parseRequiredId(req.body?.adminId ?? req.body?.ispId);
-  if (effectiveAdminId === null) {
-    res.status(400).json({ error: "A valid ISP account is required." });
+  let context: PlanContext;
+  try {
+    context = await getPlanContext(req);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "A valid signed-in account is required." });
     return;
   }
+  const effectiveAdminId = context.tenantId;
   const sourceRows = await sbSelect<{ id: number; name: string; router_id: number | null; port_id: number | null }>(
     "isp_plans",
     `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=id,name,router_id,port_id&limit=1`,
@@ -183,10 +362,14 @@ router.patch("/plans/:id", async (req, res): Promise<void> => {
   const hasScopeInput = Object.prototype.hasOwnProperty.call(req.body, "routerId")
     || Object.prototype.hasOwnProperty.call(req.body, "portId");
   const scope = hasScopeInput
-    ? await validatePlanScope(effectiveAdminId, req.body.routerId, req.body.portId)
+    ? await validatePlanScope(effectiveAdminId, req.body.routerId, req.body.portId, context)
     : source.router_id
       ? { routerId: source.router_id, portId: source.port_id }
       : null;
+  if (context.allowedPortIds && (!context.allowedPortIds.has(Number(source.port_id)) || !context.allowedRouterIds?.has(Number(source.router_id)))) {
+    res.status(403).json({ error: "This plan is outside your assigned VLAN service scope." });
+    return;
+  }
   if (!scope) {
     res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
@@ -227,13 +410,20 @@ router.patch("/plans/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
-router.post("/plans/:id/copy", async (req, res): Promise<void> => {
+router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> => {
   const sourceId = parseRequiredId(req.params.id);
-  const effectiveAdminId = parseRequiredId(req.body?.adminId ?? req.body?.ispId);
-  if (sourceId === null || effectiveAdminId === null) {
-    res.status(400).json({ error: "A valid source plan and ISP account are required." });
+  if (sourceId === null) {
+    res.status(400).json({ error: "A valid source plan is required." });
     return;
   }
+  let context: PlanContext;
+  try {
+    context = await getPlanContext(req);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "A valid signed-in account is required." });
+    return;
+  }
+  const effectiveAdminId = context.tenantId;
   const sources = await sbSelect<Record<string, unknown>>(
     "isp_plans",
     `id=eq.${sourceId}&admin_id=eq.${effectiveAdminId}&select=*&limit=1`,
@@ -243,7 +433,7 @@ router.post("/plans/:id/copy", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Source plan not found." });
     return;
   }
-  const scope = await validatePlanScope(effectiveAdminId, req.body.targetRouterId, req.body.targetPortId);
+  const scope = await validatePlanScope(effectiveAdminId, req.body.targetRouterId, req.body.targetPortId, context);
   if (!scope) {
     res.status(400).json({ error: "Choose a target router, or a target port belonging to that router." });
     return;
@@ -280,18 +470,28 @@ router.post("/plans/:id/copy", async (req, res): Promise<void> => {
   res.status(201).json(row);
 });
 
-router.delete("/plans/:id", async (req, res): Promise<void> => {
+router.delete("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   const id = req.params.id;
-  const effectiveAdminId = parseRequiredId(req.query.adminId ?? req.query.ispId);
-  if (effectiveAdminId === null) {
-    res.status(400).json({ error: "A valid ISP account is required." });
+  let context: PlanContext;
+  try {
+    context = await getPlanContext(req);
+  } catch (error) {
+    res.status(403).json({ error: error instanceof Error ? error.message : "A valid signed-in account is required." });
     return;
   }
-  const rows = await sbSelect<{ name: string; admin_id: number }>(
+  const effectiveAdminId = context.tenantId;
+  const rows = await sbSelect<{ name: string; admin_id: number; router_id: number | null; port_id: number | null }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=name,admin_id&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=name,admin_id,router_id,port_id&limit=1`,
   );
   const row = rows[0];
+  if (row && context.allowedPortIds) {
+    const scope = await validatePlanScope(effectiveAdminId, undefined, row.port_id, context);
+    if (!scope) {
+      res.status(403).json({ error: "This plan is outside your assigned VLAN service scope." });
+      return;
+    }
+  }
   await sbDelete("isp_plans", `id=eq.${id}&admin_id=eq.${effectiveAdminId}`);
   if (row) void logActivity({ adminId: row.admin_id, type: "plan", action: "deleted", subject: row.name });
   res.sendStatus(204);
