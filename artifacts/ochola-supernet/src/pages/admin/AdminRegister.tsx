@@ -824,6 +824,8 @@ export default function AdminRegister() {
           .register-trust-row svg{color:#39b985}
           @media(max-width:900px){.register-form-side{padding:34px 26px 48px}.register-form-wrap{max-width:650px}.register-heading-meta{margin-top:15px}}
           @media(max-width:560px){.register-form-side{padding:24px 16px 34px}.register-heading-meta{align-items:flex-start;line-height:1.4}.register-fee-card{grid-template-columns:38px 1fr;padding:15px}.register-fee-icon{width:38px;height:38px}.register-fee-card:after{right:15px}.register-progress{margin-bottom:31px}}
+          @media(max-width:900px){.register-visual{display:flex;min-height:470px;padding:28px 26px 27px}.register-mobile-brand{display:none}.register-visual-copy{margin:44px 0 25px;padding:0}.register-visual-copy h2{font-size:clamp(2.35rem,8vw,3.4rem)}.register-proof-card{margin-top:25px}.register-form-side{min-height:auto}}
+          @media(max-width:560px){.register-visual{min-height:0;padding:22px 20px 24px}.register-visual:before{inset:12px;border-radius:18px}.register-visual-copy{margin:38px 0 24px}.register-visual-copy h2{margin:16px 0 17px;font-size:clamp(2.25rem,12vw,3.05rem)}.register-visual-copy>p{font-size:.86rem}.register-benefits{gap:14px;margin-top:27px}.register-proof-card{margin-top:23px;padding:14px}.register-visual-footer{font-size:.61rem}}
           @media(prefers-reduced-motion:reduce){.register-submit,.register-input,.register-payment-option{transition:none!important}}
       `}</style>
     </div>
