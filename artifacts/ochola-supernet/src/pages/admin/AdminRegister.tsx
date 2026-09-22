@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards } from "lucide-react";
+import { Building2, Phone, UserRound, Mail, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards, Network, Plug } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
@@ -17,6 +17,7 @@ function slugify(str: string) {
 }
 
 const COMPANY_NAME_PATTERN = /^[a-z]+$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"]);
 const INITIAL_ADMIN_USERNAME = "admin";
 
@@ -33,8 +34,10 @@ export default function AdminRegister() {
 
   const [company, setCompany] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentPhone, setPaymentPhone] = useState("");
+  const [accountRole, setAccountRole] = useState<"isp_admin" | "reseller">("isp_admin");
 
   const [checkingCompany, setCheckingCompany] = useState(false);
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
@@ -140,12 +143,13 @@ export default function AdminRegister() {
         const data = await response.json() as {
           paid?: boolean;
           status?: string;
-          registration?: { username?: string; subdomain?: string };
+          registration?: { username?: string; subdomain?: string; role?: "isp_admin" | "reseller" };
         };
         if (data.paid && data.registration?.username) {
           window.clearInterval(poll);
           setRegisteredUsername(data.registration.username);
           setRegisteredSubdomain(data.registration.subdomain || slugify(company));
+          setAccountRole(data.registration.role === "reseller" ? "reseller" : "isp_admin");
           setAwaitingPayment(false);
           setSuccess(true);
         } else if (data.status === "failed") {
@@ -171,11 +175,13 @@ export default function AdminRegister() {
           status?: "pending" | "paid" | "failed";
           username?: string;
           subdomain?: string;
+          role?: "isp_admin" | "reseller";
         };
         if (disposed) return;
         if (data.paid && data.username) {
           setRegisteredUsername(data.username);
           setRegisteredSubdomain(data.subdomain || slugify(company));
+          setAccountRole(data.role === "reseller" ? "reseller" : "isp_admin");
           setManualStatus("pending");
           setManualPayment(null);
           setSuccess(true);
@@ -207,6 +213,8 @@ export default function AdminRegister() {
     }
     if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
+    if (!email.trim()) e.email = "Email address is required";
+    else if (!EMAIL_PATTERN.test(email.trim())) e.email = "Enter a valid email address";
     if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
     else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
@@ -232,15 +240,17 @@ export default function AdminRegister() {
         body: JSON.stringify({
           company: company.trim(),
           displayName: displayName.trim(),
+          email: email.trim().toLowerCase(),
           phone: phone.trim(),
           paymentPhone: paymentPhone.trim(),
+          role: accountRole,
            username: INITIAL_ADMIN_USERNAME,
           paymentMode,
         }),
       });
       const data = await response.json() as {
         ok: boolean; error?: string; CheckoutRequestID?: string; manualPayment?: boolean; paymentReference?: string;
-        username?: string; subdomain?: string; destination?: RegistrationDestination;
+        username?: string; subdomain?: string; role?: "isp_admin" | "reseller"; destination?: RegistrationDestination;
       };
       if (!response.ok || !data.ok) {
         throw new Error(data.error || "Could not start the registration payment.");
@@ -248,6 +258,7 @@ export default function AdminRegister() {
       if (data.manualPayment) {
         setRegisteredUsername(data.username || "");
         setRegisteredSubdomain(data.subdomain || slugify(company));
+        setAccountRole(data.role === "reseller" ? "reseller" : "isp_admin");
         setManualPayment(data.destination || registrationDestination);
         setManualReference(data.paymentReference || "");
         setManualStatus("pending");
@@ -281,6 +292,8 @@ export default function AdminRegister() {
     currency: registrationFee.currency,
     maximumFractionDigits: 0,
   }).format(registrationFee.amount);
+  const isReseller = accountRole === "reseller";
+  const accountTypeLabel = isReseller ? "reseller" : "ISP";
 
   if (success) {
     const subdomainUrl = `https://${registeredSubdomain}.isplatty.org`;
@@ -295,9 +308,9 @@ export default function AdminRegister() {
             <div style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 10px", borderRadius: 999, background: "var(--isp-green-glow)", color: "var(--isp-green)", fontSize: "0.68rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 16 }}>
               <CheckCircle2 size={13} /> Payment received
             </div>
-            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 8 }}>Your account is ready</h2>
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--isp-text)", marginBottom: 8 }}>Your {accountTypeLabel} account is ready</h2>
             <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: 20 }}>
-              <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>{company}</span> has been paid for and activated.
+              <span style={{ color: "var(--isp-accent)", fontWeight: 600 }}>{company}</span> has been paid for and activated as a {accountTypeLabel} workspace.
             </p>
             <div style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "16px 20px", marginBottom: 20, textAlign: "left" }}>
               <p style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Your Login Credentials</p>
@@ -322,7 +335,7 @@ export default function AdminRegister() {
               className="btn"
               style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "12px 20px", borderRadius: 10, fontSize: "0.9rem", textDecoration: "none", background: "#16A34A", color: "#FFFFFF", border: "1px solid #15803D", boxShadow: "0 8px 18px rgba(22,163,74,0.2)" }}
             >
-              Go to Admin <ArrowRight size={16} />
+              Go to Workspace <ArrowRight size={16} />
             </a>
           </div>
         </div>
@@ -342,7 +355,7 @@ export default function AdminRegister() {
              An M-Pesa prompt for <strong style={{ color: "var(--isp-text)" }}>{displayFee}</strong> has been sent to <strong style={{ color: "var(--isp-text)" }}>{paymentPhone}</strong>.
           </p>
           <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55 }}>
-            Enter your M-Pesa PIN on your phone. Your ISP account will be created only after the payment is confirmed.
+             Enter your M-Pesa PIN on your phone. Your {accountTypeLabel} account will be created only after the payment is confirmed.
           </p>
         </div>
         <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
@@ -469,7 +482,7 @@ export default function AdminRegister() {
           <div className="register-mobile-brand"><Logo size="sm" /></div>
           <div className="register-form-wrap">
             <div className="register-progress">
-              <div className="register-step active"><span>1</span><strong>ISP details</strong></div>
+               <div className="register-step active"><span>1</span><strong>Account details</strong></div>
               <div className="register-progress-line" />
               <div className="register-step"><span>2</span><strong>Payment</strong></div>
               <div className="register-progress-line" />
@@ -477,7 +490,7 @@ export default function AdminRegister() {
             </div>
             <div className="register-heading">
               <p className="register-kicker">START YOUR JOURNEY</p>
-               <h1>Launch your <span className="register-title-accent">ISP workspace</span></h1>
+                <h1>Launch your <span className="register-title-accent">{isReseller ? "reseller workspace" : "ISP workspace"}</span></h1>
               <p>Set up your account in a few simple steps. You’ll be ready to manage your network in minutes.</p>
                <div className="register-heading-meta"><ShieldCheck size={14} /> Secure onboarding with verified M-Pesa payments</div>
             </div>
@@ -500,11 +513,41 @@ export default function AdminRegister() {
             </div>
 
             <form onSubmit={handleSubmit} className="register-form">
+              <div>
+                <label className="register-label">Choose account type</label>
+                <div className="register-payment-options" role="radiogroup" aria-label="Account type">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!isReseller}
+                    className={`register-payment-option ${!isReseller ? "selected" : ""}`}
+                    onClick={() => setAccountRole("isp_admin")}
+                  >
+                    <span className="register-option-icon"><Network size={16} /></span>
+                    <span><strong>ISP account</strong><small>Manage networks, plans, and customers</small></span>
+                    <span className="register-option-radio" />
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={isReseller}
+                    className={`register-payment-option ${isReseller ? "selected" : ""}`}
+                    onClick={() => setAccountRole("reseller")}
+                  >
+                    <span className="register-option-icon"><Plug size={16} /></span>
+                    <span><strong>Reseller account</strong><small>Manage assigned sales and customer access</small></span>
+                    <span className="register-option-radio" />
+                  </button>
+                </div>
+                <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+                  Both account types use the same one-time setup fee.
+                </p>
+              </div>
               <div className="register-form-section">
-                 <div className="register-section-heading"><span>01</span><div><strong>Your <em>business</em></strong><small>Tell us about your ISP</small></div></div>
+                 <div className="register-section-heading"><span>01</span><div><strong>Your <em>workspace</em></strong><small>Tell us about your company</small></div></div>
                 <div className="register-two-col">
                   <div>
-                    <label className="register-label">Company / ISP Name</label>
+                    <label className="register-label">Company / Workspace Name</label>
             <div style={{ position: "relative" }}>
               <Building2 size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
               <input
@@ -588,6 +631,28 @@ export default function AdminRegister() {
                   We’ll use this to address you on the dashboard. Leave it blank to use a generic greeting.
                 </p>
                 {errors.displayName && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.displayName}</p>}
+              </div>
+
+              <div>
+                <label className="register-label">Email address</label>
+                <div style={{ position: "relative" }}>
+                  <Mail size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    className="register-input"
+                    style={inputStyle(!!errors.email, null)}
+                    onFocus={e => { if (!errors.email) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
+                    onBlur={e => { e.target.style.boxShadow = "none"; }}
+                  />
+                </div>
+                <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+                  We’ll use this email for account communication and sign-in recovery.
+                </p>
+                {errors.email && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.email}</p>}
               </div>
 
                 <div className="register-payment-details">

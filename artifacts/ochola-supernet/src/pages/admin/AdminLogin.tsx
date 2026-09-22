@@ -358,7 +358,7 @@ export default function AdminLogin() {
             ) : (
               <>Don't have an account?{" "}
                 <Link href="/admin/register">
-                  <span style={{ color: "var(--isp-accent)", fontWeight: 600, cursor: "pointer" }}>Register your ISP</span>
+                  <span style={{ color: "var(--isp-accent)", fontWeight: 600, cursor: "pointer" }}>Create an account</span>
                 </Link>
               </>
             )}

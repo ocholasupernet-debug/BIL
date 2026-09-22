@@ -1609,16 +1609,21 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
 
   const paid = tx.status === "completed" || tx.status === "success" || tx.status === "paid";
   if (paid && tx.payment_method === "mpesa_registration" && tx.admin_id) {
-    const admins = await sbSelect<{ username: string; name: string; subdomain: string; is_active: boolean }>(
+    const admins = await sbSelect<{ username: string; name: string; subdomain: string; is_active: boolean; role: string | null }>(
       "isp_admins",
-      `id=eq.${tx.admin_id}&select=username,name,subdomain,is_active&limit=1`,
+      `id=eq.${tx.admin_id}&select=username,name,subdomain,is_active,role&limit=1`,
     );
     const admin = admins[0];
     res.json({
       ok: true,
       paid: !!admin?.is_active,
       status: admin?.is_active ? "completed" : "processing",
-      registration: admin ? { username: admin.username, name: admin.name, subdomain: admin.subdomain } : undefined,
+      registration: admin ? {
+        username: admin.username,
+        name: admin.name,
+        subdomain: admin.subdomain,
+        role: admin.role === "reseller" ? "reseller" : "isp_admin",
+      } : undefined,
     });
     return;
   }

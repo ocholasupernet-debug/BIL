@@ -15,6 +15,8 @@ import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
 const INITIAL_ADMIN_PASSWORD = "admin";
+type RegistrationRole = "isp_admin" | "reseller";
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function slugify(value: string): string {
   return value.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -145,12 +147,19 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
 router.post("/registration/payment", async (req: Request, res: Response): Promise<void> => {
   const company = typeof req.body?.company === "string" ? req.body.company : "";
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
+  const rawRole = req.body?.role;
   const username = typeof req.body?.username === "string"
     ? req.body.username.trim()
     : INITIAL_ADMIN_USERNAME;
   const paymentMode = req.body?.paymentMode === "paybill" ? "paybill" : "stk";
+  const role: RegistrationRole | null = rawRole === undefined
+    ? "isp_admin"
+    : rawRole === "isp_admin" || rawRole === "reseller"
+    ? rawRole
+    : null;
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
@@ -170,8 +179,16 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(400).json({ ok: false, error: "Your name must be 80 characters or fewer." });
     return;
   }
+  if (!EMAIL_PATTERN.test(email) || email.length > 254) {
+    res.status(400).json({ ok: false, error: "Enter a valid email address." });
+    return;
+  }
   if (username !== INITIAL_ADMIN_USERNAME) {
     res.status(400).json({ ok: false, error: "The initial admin username must be admin." });
+    return;
+  }
+  if (!role) {
+    res.status(400).json({ ok: false, error: "Choose either an ISP or reseller account." });
     return;
   }
   if (RESERVED_SUBDOMAINS.has(slug)) {
@@ -220,15 +237,23 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     res.status(409).json({ ok: false, error: "This phone number is already registered." });
     return;
   }
+  const emailMatches = await sbSelect<{ id: number }>(
+    "isp_admins",
+    `email=eq.${encodeURIComponent(email)}&select=id&limit=1`,
+  );
+  if (emailMatches.length) {
+    res.status(409).json({ ok: false, error: "This email address is already registered." });
+    return;
+  }
 
   let pendingAdmin: { id: number; username: string; subdomain: string } | undefined;
   for (let attempt = 0; attempt < 5 && !pendingAdmin; attempt += 1) {
     const candidate = await findAvailableSubdomain(company);
     try {
       const inserted = await sbInsertStrict<{ id: number; username: string; subdomain: string }>("isp_admins", {
-        name: company, fullname: displayName || null, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
+        name: company, fullname: displayName || null, email, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
         password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
-        is_active: false, role: "isp_admin", subdomain: candidate, status: "pending_payment",
+        is_active: false, role, subdomain: candidate, status: "pending_payment",
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       });
       pendingAdmin = inserted[0];
@@ -263,6 +288,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
         ok: true, manualPayment: true, registrationFee: { amount: registrationFee, currency: "KES" },
         paymentMode,
         paymentReference: reference,
+        role,
         destination: {
           type: destination.type, name: destination.name, number: destination.number,
           accountReference: destination.accountReference, instructions: destination.instructions,
@@ -328,7 +354,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     await processDeferredMpesaCallbacks(checkoutId);
     res.json({
       ok: true, CheckoutRequestID: checkoutId, registrationFee: { amount: registrationFee, currency: "KES" },
-      username: pendingAdmin.username, subdomain: pendingAdmin.subdomain,
+      username: pendingAdmin.username, subdomain: pendingAdmin.subdomain, role,
     });
   } catch (error) {
     await sbUpdate("isp_admins", `id=eq.${pendingAdmin.id}`, { status: "payment_failed", updated_at: new Date().toISOString() });
@@ -362,9 +388,10 @@ router.get("/registration/status", async (req: Request, res: Response): Promise<
     status: string;
     username: string | null;
     subdomain: string | null;
+    role: RegistrationRole | null;
   }>(
     "isp_admins",
-    `id=eq.${encodeURIComponent(String(transaction.admin_id))}&select=is_active,status,username,subdomain&limit=1`,
+    `id=eq.${encodeURIComponent(String(transaction.admin_id))}&select=is_active,status,username,subdomain,role&limit=1`,
   );
   const admin = admins[0];
   const paid = transaction.status === "completed" && admin?.is_active === true && admin.status === "active";
@@ -372,7 +399,11 @@ router.get("/registration/status", async (req: Request, res: Response): Promise<
     ok: true,
     status: paid ? "paid" : transaction.status === "failed" ? "failed" : "pending",
     paid,
-    ...(paid ? { username: admin.username, subdomain: admin.subdomain } : {}),
+    ...(paid ? {
+      username: admin.username,
+      subdomain: admin.subdomain,
+      role: admin.role === "reseller" ? "reseller" : "isp_admin",
+    } : {}),
   });
 });
 
