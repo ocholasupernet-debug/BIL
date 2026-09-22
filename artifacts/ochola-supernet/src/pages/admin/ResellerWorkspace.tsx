@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, RefreshCw, Router as RouterIcon, Save, ShieldCheck, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
+import { NetworkTabs } from "./network/NetworkTabs";
 
 type RouterOption = { id: number; name: string; status?: string };
 type PortOption = { name: string; type: string; running: boolean; assigned: boolean };
 type Reseller = { id: number; name: string; company_name?: string; username: string; email?: string; is_active: boolean; created_at: string };
+type ConnectionRequest = { id: number; reseller_id: number; note?: string | null; status: "pending" | "approved" | "rejected"; created_at: string; updated_at: string };
 type Assignment = {
   id: number; reseller_id?: number; router_id: number; interface_name: string; bridge_name?: string | null;
   assigned_reseller_id?: number | null; vlan_tag?: string | null; hotspot_enabled: boolean; pppoe_enabled: boolean; subnet_range?: string | null;
@@ -81,6 +83,8 @@ function AdminResellerManagement() {
   const [routers, setRouters] = useState<RouterOption[]>([]);
   const [portOptions, setPortOptions] = useState<PortOption[]>([]);
   const [resellers, setResellers] = useState<Reseller[]>([]);
+  const [connectionRequests, setConnectionRequests] = useState<ConnectionRequest[]>([]);
+  const [requestResellers, setRequestResellers] = useState<Reseller[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [routerId, setRouterId] = useState("");
   const [form, setForm] = useState({
@@ -96,16 +100,28 @@ function AdminResellerManagement() {
   const [linkCapDraft, setLinkCapDraft] = useState<Record<number, string>>({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [requestBusy, setRequestBusy] = useState<number | null>(null);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    companyName: string;
+    username: string;
+    email: string;
+    phone: string;
+    password: string;
+  } | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
-      const [routerResult, resellerResult] = await Promise.all([
+      const [routerResult, resellerResult, connectionResult] = await Promise.all([
         apiJson<{ ok: boolean; routers: RouterOption[] }>(`/api/routers?adminId=${ADMIN_ID}`),
         apiJson<{ ok: boolean; resellers: Reseller[]; ports: Assignment[] }>("/api/admin/resellers"),
+        apiJson<{ ok: boolean; requests: ConnectionRequest[]; resellers: Reseller[] }>("/api/isp/reseller-connection-requests")
+          .catch(() => ({ ok: true, requests: [], resellers: [] })),
       ]);
       setRouters(routerResult.routers ?? []);
       setResellers(resellerResult.resellers ?? []);
+      setConnectionRequests(connectionResult.requests ?? []);
+      setRequestResellers(connectionResult.resellers ?? []);
       setAssignments(resellerResult.ports ?? []);
       if (!routerId && routerResult.routers?.[0]) setRouterId(String(routerResult.routers[0].id));
     } catch (e) {
@@ -127,13 +143,32 @@ function AdminResellerManagement() {
   const update = (key: string, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError(""); setSuccess(""); setSubmitting(true);
+    const submittedCredentials = { companyName: form.companyName || form.name, username: form.username, email: form.email, phone: form.phone, password: form.password };
     try {
       await apiJson("/api/admin/resellers", { method: "POST", body: JSON.stringify({ ...form, routerId: Number(routerId) }) });
+      setCreatedCredentials(submittedCredentials);
       setSuccess("Reseller account created and the physical port was provisioned.");
        setForm((current) => ({ ...current, name: "", companyName: "", username: "", email: "", phone: "", password: "", interfaceName: "", hotspotTemplatePath: "", pppoeFolderPath: "" }));
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Provisioning failed."); }
     finally { setSubmitting(false); }
+  };
+  const respondToConnectionRequest = async (requestId: number, action: "approve" | "reject") => {
+    setRequestBusy(requestId); setError(""); setSuccess("");
+    try {
+      const result = await apiJson<{ message?: string }>(`/api/isp/reseller-connection-requests/${requestId}`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      });
+      setSuccess(result.message || (action === "approve" ? "Reseller connection approved." : "Reseller connection request rejected."));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to update the connection request.");
+    } finally { setRequestBusy(null); }
+  };
+  const copyCredential = (value: string) => {
+    void navigator.clipboard?.writeText(value);
+    setSuccess("Credential copied to the clipboard.");
   };
   const updateLink = async (port: Assignment, linkStatus: "active" | "suspended") => {
     const resellerId = port.assigned_reseller_id ?? port.reseller_id;
@@ -161,6 +196,7 @@ function AdminResellerManagement() {
 
   return (
     <AdminLayout>
+      <NetworkTabs active="resellers" />
       <div className="reseller-workspace reseller-admin">
         <div className="reseller-page-header">
           <div className="reseller-eyebrow">RESELLER OPERATIONS</div>
@@ -169,9 +205,56 @@ function AdminResellerManagement() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
+        {createdCredentials && (
+          <section style={{ ...cardStyle, borderColor: "rgba(34,197,94,.35)", background: "linear-gradient(135deg, rgba(34,197,94,.08), var(--isp-card) 62%)" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#15803d", fontWeight: 850 }}><ShieldCheck size={18} /> Reseller credentials ready</div>
+                <p style={{ margin: "7px 0 0", color: "var(--isp-text-muted)", fontSize: 13 }}>Share these credentials securely. The password is shown here only because it was just created and cannot be recovered later.</p>
+              </div>
+              <button type="button" onClick={() => setCreatedCredentials(null)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 10px", background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: 12 }}>Hide credentials</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 10, marginTop: 16 }}>
+              {[
+                ["Business", createdCredentials.companyName],
+                ["Username", createdCredentials.username],
+                ["Email", createdCredentials.email || "Not provided"],
+                ["Phone", createdCredentials.phone || "Not provided"],
+                ["Initial password", createdCredentials.password],
+              ].map(([label, value]) => <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 11px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-input-bg)" }}>
+                <div><div style={{ color: "var(--isp-text-muted)", fontSize: 10, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>{label}</div><code style={{ display: "block", marginTop: 4, color: "var(--isp-text)", fontSize: 13 }}>{value}</code></div>
+                <button type="button" aria-label={`Copy ${label}`} onClick={() => copyCredential(value)} style={{ border: 0, background: "transparent", color: "var(--isp-accent)", cursor: "pointer", padding: 4 }}><Copy size={15} /></button>
+              </div>)}
+            </div>
+          </section>
+        )}
         <a href="/admin/network/carrier-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "start", width: "fit-content", padding: "10px 13px", borderRadius: 9, background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 800 }}>
           Open carrier link approvals
         </a>
+        <section style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14 }}>
+            <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Approve an account connection before assigning a physical port or enabling wholesale traffic.</div></div>
+            <span className="isp-badge isp-badge-amber">{connectionRequests.filter((request) => request.status === "pending").length} pending</span>
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {connectionRequests.map((request) => {
+              const reseller = requestResellers.find((candidate) => candidate.id === request.reseller_id);
+              const busy = requestBusy === request.id;
+              return <div key={request.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: "12px 13px", border: "1px solid var(--isp-border)", borderRadius: 9 }}>
+                <div>
+                  <div style={{ color: "var(--isp-text)", fontWeight: 800 }}>{reseller?.company_name || reseller?.name || `Reseller #${request.reseller_id}`}</div>
+                  <div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 4 }}>@{reseller?.username || "unknown"} · {reseller?.email || "No email"} · Requested {new Date(request.created_at).toLocaleString()}</div>
+                  {request.note && <div style={{ color: "var(--isp-text)", fontSize: 12, marginTop: 7 }}>“{request.note}”</div>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
+                  {request.status === "pending" && <><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "#16a34a", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "Saving…" : "Approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
+                </div>
+              </div>;
+            })}
+            {!connectionRequests.length && <div style={{ padding: 22, textAlign: "center", color: "var(--isp-text-muted)", fontSize: 13 }}>No reseller connection requests yet.</div>}
+          </div>
+        </section>
         <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>
           <form onSubmit={submit} style={cardStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", marginBottom: 20 }}>

@@ -16,6 +16,7 @@
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
+- [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
@@ -69,3 +70,4 @@
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
+- [Reseller connection approval](reseller-connection-approval.md) — Approving an ISP connection links accounts; port assignment and RouterOS activation remain explicit ISP actions.

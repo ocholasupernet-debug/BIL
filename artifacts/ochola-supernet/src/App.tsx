@@ -72,6 +72,7 @@ import PlatformNotifications from "./pages/admin/PlatformNotifications";
 import AdminSetPassword from "./pages/admin/AdminSetPassword";
 import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
 import CarrierControls from "./pages/admin/network/CarrierControls";
+import ResellerConnector from "./pages/admin/network/ResellerConnector";
 import AdminRegister from "./pages/admin/AdminRegister";
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
@@ -126,6 +127,8 @@ function Router() {
       <Route path="/admin/dashboard" component={AdminDashboard} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
       <Route path="/admin/resellers" component={ResellerWorkspace} />
+      <Route path="/admin/network/resellers" component={ResellerWorkspace} />
+      <Route path="/admin/reseller/connector" component={ResellerConnector} />
       <Route path="/admin/network/carrier-controls" component={CarrierControls} />
       <Route path="/admin/carrier-controls" component={CarrierControls} />
       <Route path="/admin/customers" component={AdminCustomers} />

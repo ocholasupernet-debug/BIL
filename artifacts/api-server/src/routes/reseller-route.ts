@@ -64,6 +64,17 @@ type ResellerAccountRow = {
   created_at: string;
 };
 
+type ResellerConnectionRequestRow = {
+  id: number;
+  reseller_id: number;
+  isp_admin_id: number;
+  note: string | null;
+  status: "pending" | "approved" | "rejected";
+  responded_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 55) || fallback;
@@ -497,6 +508,171 @@ router.get("/isp/pending-resellers", requireAdmin(), async (req, res): Promise<v
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load pending reseller links." });
+  }
+});
+
+router.get("/reseller/connection-options", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "This endpoint is for reseller accounts." });
+      return;
+    }
+    const [isps, requests] = await Promise.all([
+      sbSelectStrict<{ id: number; name: string; company_name: string | null; subdomain: string | null }>(
+        "isp_admins",
+        "role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name,subdomain&order=company_name.asc,name.asc&limit=200",
+      ),
+      sbSelectStrict<ResellerConnectionRequestRow>(
+        "isp_reseller_connection_requests",
+        `reseller_id=eq.${account.id}&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&order=created_at.desc&limit=50`,
+      ),
+    ]);
+    const connectedIspId = account.parent_id ?? null;
+    res.json({ ok: true, isps, requests, connectedIspId });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load ISP connection options." });
+  }
+});
+
+router.post("/reseller/connection-requests", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can request an ISP connection." });
+      return;
+    }
+    if (account.parent_id) {
+      res.status(409).json({ ok: false, error: "This reseller is already connected to an ISP account." });
+      return;
+    }
+    const ispAdminId = Number(req.body?.ispAdminId);
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
+    if (!Number.isSafeInteger(ispAdminId) || ispAdminId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid ISP account." });
+      return;
+    }
+    const ispRows = await sbSelectStrict<{ id: number; name: string; company_name: string | null }>(
+      "isp_admins",
+      `id=eq.${ispAdminId}&role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name&limit=1`,
+    );
+    if (!ispRows[0]) {
+      res.status(404).json({ ok: false, error: "That ISP account is not available for connection." });
+      return;
+    }
+    const existing = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `reseller_id=eq.${account.id}&isp_admin_id=eq.${ispAdminId}&status=eq.pending&select=id&limit=1`,
+    );
+    if (existing[0]) {
+      res.status(409).json({ ok: false, error: "A connection request to this ISP is already pending." });
+      return;
+    }
+    const inserted = await sbInsertStrict<ResellerConnectionRequestRow>("isp_reseller_connection_requests", {
+      reseller_id: account.id,
+      isp_admin_id: ispAdminId,
+      note: note || null,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    res.status(201).json({ ok: true, request: inserted[0] ?? null, isp: ispRows[0] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to send the ISP connection request." });
+  }
+});
+
+router.get("/isp/reseller-connection-requests", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot review ISP connection requests." });
+      return;
+    }
+    const requests = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `isp_admin_id=eq.${account.id}&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&order=created_at.desc&limit=100`,
+    );
+    const resellerIds = [...new Set(requests.map((request) => request.reseller_id))];
+    const resellers = resellerIds.length
+      ? await sbSelectStrict<ResellerAccountRow>(
+        "isp_admins",
+        `id=in.(${resellerIds.join(",")})&role=eq.reseller&select=id,name,company_name,username,email,status,is_active,created_at`,
+      )
+      : [];
+    res.json({ ok: true, requests, resellers });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller connection requests." });
+  }
+});
+
+router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot approve connection requests." });
+      return;
+    }
+    const requestId = Number(req.params.requestId);
+    const action = req.body?.action === "reject" ? "rejected" : req.body?.action === "approve" ? "approved" : "";
+    if (!Number.isSafeInteger(requestId) || requestId <= 0 || !action) {
+      res.status(400).json({ ok: false, error: "Provide a valid request and choose approve or reject." });
+      return;
+    }
+    const requestRows = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.pending&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&limit=1`,
+    );
+    const request = requestRows[0];
+    if (!request) {
+      res.status(404).json({ ok: false, error: "This pending connection request was not found." });
+      return;
+    }
+    const resellerRows = await sbSelectStrict<{
+      id: number;
+      parent_id: number | null;
+      role: string;
+      name: string;
+      company_name: string | null;
+      username: string;
+      email: string | null;
+      is_active: boolean;
+    }>(
+      "isp_admins",
+      `id=eq.${request.reseller_id}&role=eq.reseller&select=id,parent_id,role,name,company_name,username,email,is_active&limit=1`,
+    );
+    const reseller = resellerRows[0];
+    if (!reseller) {
+      res.status(404).json({ ok: false, error: "The requesting reseller account no longer exists." });
+      return;
+    }
+    if (action === "approved" && reseller.parent_id && reseller.parent_id !== account.id) {
+      res.status(409).json({ ok: false, error: "This reseller is already connected to another ISP account." });
+      return;
+    }
+    const now = new Date().toISOString();
+    if (action === "approved") {
+      await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${reseller.id}&role=eq.reseller&parent_id=is.null`,
+        { parent_id: account.id, status: "active", updated_at: now },
+      );
+    }
+    const updated = await sbUpdateStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.pending`,
+      { status: action, responded_at: now, updated_at: now },
+    );
+    res.json({
+      ok: true,
+      request: updated[0] ?? { ...request, status: action, responded_at: now, updated_at: now },
+      reseller,
+      message: action === "approved"
+        ? "Reseller connected. Assign and provision a physical port when ready."
+        : "Reseller connection request rejected.",
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update the reseller connection request." });
   }
 });
 

@@ -17,6 +17,7 @@ const TABS = [
   { id: "router-api-config", label: "API Config",      href: "/admin/network/router-api-config", icon: Settings2 },
   { id: "migration",        label: "Migration",        href: "/admin/network/migration",          icon: ShieldCheck },
   { id: "multiport",        label: "Multiport",        href: "/admin/network/multiport",          icon: Layers3   },
+  { id: "resellers",        label: "Resellers",        href: "/admin/network/resellers",         icon: Users     },
 ];
 
 export function NetworkTabs({ active }: { active: string }) {

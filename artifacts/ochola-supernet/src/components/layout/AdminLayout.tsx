@@ -115,7 +115,7 @@ const navSections: NavSection[] = [
           { name: "Routers",        href: "/admin/network/routers" },
           { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Files",          href: "/admin/network/files" },
-          { name: "Reseller Ports", href: "/admin/resellers" },
+          { name: "Resellers",      href: "/admin/network/resellers" },
           { name: "Migration & Recovery", href: "/admin/network/migration" },
           { name: "Multiport",      href: "/admin/network/multiport" },
           { name: "Replace Router", href: "/admin/network/replace-router" },
@@ -138,6 +138,18 @@ const navSections: NavSection[] = [
         children: [
           { name: "General",    href: "/admin/hotspot-settings" },
           { name: "Login Page", href: "/admin/hotspot-settings?tab=login" },
+        ],
+      },
+    ],
+  },
+  {
+    label: "Reseller",
+    visibilityKey: "network",
+    items: [
+      {
+        name: "Network", icon: Network,
+        children: [
+          { name: "Connector", href: "/admin/reseller/connector" },
         ],
       },
     ],
@@ -349,7 +361,7 @@ export function AdminLayout({
   const isVpnSurface                  = location.startsWith("/admin/vpn");
 
   const visibleNavSections = navSections
-    .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || section.label === "Overview"))
+     .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || section.label === "Overview" || section.label === "Reseller"))
     .map(section => ({
       ...section,
       items: section.items
@@ -398,7 +410,7 @@ export function AdminLayout({
   }, [currentFeatureKey, pageIsVisible, setLocation]);
 
   useEffect(() => {
-    if (isResellerAccount && location !== "/admin/reseller") {
+    if (isResellerAccount && location !== "/admin/reseller" && location !== "/admin/reseller/connector") {
       setLocation("/admin/reseller");
     }
   }, [isResellerAccount, location, setLocation]);
@@ -427,7 +439,7 @@ export function AdminLayout({
     );
   }
 
-  if (isResellerAccount && location !== "/admin/reseller") {
+  if (isResellerAccount && location !== "/admin/reseller" && location !== "/admin/reseller/connector") {
     return (
       <div className="admin-shell" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 32 }}>
         <div style={{ color: "var(--isp-text-muted)" }}>Opening your reseller workspace…</div>
