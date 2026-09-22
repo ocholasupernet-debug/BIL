@@ -36,6 +36,7 @@ type ConnectorResponse = {
   isps: IspOption[];
   requests: ConnectionRequest[];
   connectedIspId: number | null;
+  connectedIspIds?: number[];
   error?: string;
 };
 
@@ -98,6 +99,7 @@ function StatusBadge({ status }: { status: ConnectionRequest["status"] }) {
 export default function ResellerConnector() {
   const [data, setData] = useState<ConnectorResponse | null>(null);
   const [ispId, setIspId] = useState("");
+  const [ispCompanyName, setIspCompanyName] = useState("");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -110,6 +112,7 @@ export default function ResellerConnector() {
       const result = await apiJson<ConnectorResponse>("/api/reseller/connection-options");
       setData(result);
       setIspId((current) => current || (result.isps[0] ? String(result.isps[0].id) : ""));
+      setIspCompanyName((current) => current || (result.isps[0]?.company_name || result.isps[0]?.name || ""));
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to load ISP connection options.");
@@ -128,9 +131,12 @@ export default function ResellerConnector() {
     () => new Map((data?.isps ?? []).map((isp) => [isp.id, isp.company_name || isp.name])),
     [data?.isps],
   );
-  const currentConnection = data?.connectedIspId
-    ? ispNames.get(data.connectedIspId) || `ISP #${data.connectedIspId}`
-    : null;
+  const connectedIspIds = data?.connectedIspIds?.length
+    ? data.connectedIspIds
+    : data?.connectedIspId
+      ? [data.connectedIspId]
+      : [];
+  const currentConnections = connectedIspIds.map((id) => ispNames.get(id) || `ISP #${id}`);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -140,9 +146,15 @@ export default function ResellerConnector() {
     try {
       await apiJson("/api/reseller/connection-requests", {
         method: "POST",
-        body: JSON.stringify({ ispAdminId: Number(ispId), note }),
+        body: JSON.stringify({
+          ispAdminId: ispId ? Number(ispId) : undefined,
+          companyName: ispCompanyName.trim(),
+          note,
+        }),
       });
       setNote("");
+      setIspId("");
+      setIspCompanyName("");
       setSuccess("Connection request sent. The ISP administrator will review it.");
       await load();
     } catch (cause) {
@@ -175,36 +187,48 @@ export default function ResellerConnector() {
         {error && <div style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 13px", borderRadius: 9, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.22)", color: "#b91c1c", fontSize: 13 }}><AlertTriangle size={16} /> <span>{error}</span></div>}
         {success && <div style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 13px", borderRadius: 9, background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.22)", color: "#15803d", fontSize: 13 }}><CheckCircle2 size={16} /> <span>{success}</span></div>}
 
-        {currentConnection ? (
+        {currentConnections.length > 0 && (
           <section style={{ ...cardStyle, padding: 18, borderColor: "rgba(34,197,94,.3)" }}>
-            <div style={{ display: "flex", gap: 11, alignItems: "center", color: "#15803d", fontWeight: 850 }}><ShieldCheck size={19} /> Connected to {currentConnection}</div>
+            <div style={{ display: "flex", gap: 11, alignItems: "center", color: "#15803d", fontWeight: 850 }}><ShieldCheck size={19} /> Connected ISP accounts</div>
             <p style={{ margin: "8px 0 0", color: "var(--isp-text-muted)", fontSize: 13 }}>
-              Your ISP connection is approved. Ask the ISP administrator to assign and provision your wholesale port before serving customers.
+              {currentConnections.join(", ")}. Ask each ISP administrator to assign and provision a wholesale port before serving customers.
             </p>
           </section>
-        ) : (
-          <form onSubmit={submit} style={{ ...cardStyle, padding: 20 }}>
+        )}
+        <form onSubmit={submit} style={{ ...cardStyle, padding: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--isp-text)", fontWeight: 850, fontSize: 16 }}><Building2 size={18} color="var(--isp-accent)" /> Send a connection request</div>
-            <p style={{ margin: "7px 0 17px", color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Your account details are shared with the selected ISP. Do not include passwords or router credentials in the note.</p>
+            <p style={{ margin: "7px 0 17px", color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Enter an ISP company name or choose a suggested account. You can send additional requests to the same or another ISP. Do not include passwords or router credentials in the note.</p>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0,.8fr) minmax(0,1.2fr)", gap: 14, alignItems: "end" }}>
               <label style={{ display: "grid", gap: 6, color: "var(--isp-text-muted)", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>
-                ISP administrator
-                <select required value={ispId} onChange={(event) => setIspId(event.target.value)} style={inputStyle} disabled={loading || !data?.isps.length}>
-                  <option value="">{loading ? "Loading ISP accounts…" : "Choose an ISP"}</option>
-                  {(data?.isps ?? []).map((isp) => <option key={isp.id} value={isp.id}>{isp.company_name || isp.name}{isp.subdomain ? ` · ${isp.subdomain}` : ""}</option>)}
-                </select>
+                ISP company name
+                <input
+                  required
+                  list="reseller-isp-company-options"
+                  value={ispCompanyName}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setIspCompanyName(value);
+                    const match = (data?.isps ?? []).find((isp) => (isp.company_name || isp.name) === value);
+                    setIspId(match ? String(match.id) : "");
+                  }}
+                  placeholder={loading ? "Loading ISP accounts…" : "Enter the ISP company name"}
+                  style={inputStyle}
+                  disabled={loading}
+                />
+                <datalist id="reseller-isp-company-options">
+                  {(data?.isps ?? []).map((isp) => <option key={isp.id} value={isp.company_name || isp.name}>{isp.subdomain ? `Subdomain: ${isp.subdomain}` : ""}</option>)}
+                </datalist>
               </label>
               <label style={{ display: "grid", gap: 6, color: "var(--isp-text-muted)", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>
                 Message (optional)
                 <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} placeholder="Tell the ISP how you want to work together" style={inputStyle} />
               </label>
             </div>
-            <button type="submit" disabled={sending || loading || !ispId} style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 8, border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: sending ? "wait" : "pointer" }}>
+             <button type="submit" disabled={sending || loading || !ispCompanyName.trim()} style={{ marginTop: 16, display: "inline-flex", alignItems: "center", gap: 8, border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: sending ? "wait" : "pointer" }}>
               <Send size={15} /> {sending ? "Sending request…" : "Request connection"}
             </button>
             {!loading && !data?.isps.length && <div style={{ marginTop: 12, color: "var(--isp-text-muted)", fontSize: 13 }}>No active ISP accounts are currently available to connect.</div>}
-          </form>
-        )}
+        </form>
 
         <section style={{ ...cardStyle, overflow: "hidden" }}>
           <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--isp-border)" }}>

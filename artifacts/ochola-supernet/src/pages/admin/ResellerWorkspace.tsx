@@ -37,6 +37,11 @@ type ResellerResponse = {
   };
   error?: string;
 };
+type ResellerPaymentSettings = {
+  paymentGateway: string;
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+};
 type ResellerTelemetry = {
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
 };
@@ -578,12 +583,22 @@ function HorizontalMetricBars({ items, suffix = "" }: { items: Array<{ label: st
 function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
   const [telemetry, setTelemetry] = useState<ResellerTelemetry | null>(null);
+  const [paymentSettings, setPaymentSettings] = useState<ResellerPaymentSettings | null>(null);
+  const [selectedPortId, setSelectedPortId] = useState("");
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "" });
+  const [staticClient, setStaticClient] = useState({ name: "", phone: "", ipAddress: "", username: "", password: "" });
+  const [gatewayForm, setGatewayForm] = useState<ResellerPaymentSettings>({
+    paymentGateway: "mpesa_paybill",
+    mpesa: { enabled: false, merchantIdentifier: "", accountReference: "", destinationType: "paybill" },
+    bank: { enabled: false, merchantIdentifier: "", accountReference: "", bankName: "" },
+  });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [pppoeSaving, setPppoeSaving] = useState(false);
+  const [staticSaving, setStaticSaving] = useState(false);
+  const [gatewaySaving, setGatewaySaving] = useState(false);
 
   const load = async () => {
     try {
@@ -593,6 +608,11 @@ function ResellerDashboard() {
       ]);
       setData(dashboard);
       setTelemetry(liveTelemetry);
+      setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
+      setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
+      const settings = await apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings");
+      setPaymentSettings(settings.settings);
+      setGatewayForm(settings.settings);
     }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load your reseller dashboard."); }
   };
@@ -616,7 +636,31 @@ function ResellerDashboard() {
       setError(e instanceof Error ? e.message : "Unable to assign the PPPoE client.");
     } finally { setPppoeSaving(false); }
   };
-  const port = data?.ports?.[0];
+  const assignStaticClient = async (event: React.FormEvent) => {
+    event.preventDefault(); setStaticSaving(true); setError(""); setSuccess("");
+    try {
+      await apiJson("/api/reseller/static-clients", {
+        method: "POST",
+        body: JSON.stringify({ ...staticClient, portId: Number(selectedPortId) }),
+      });
+      setSuccess("Static customer assigned and synchronized to the MikroTik service.");
+      setStaticClient({ name: "", phone: "", ipAddress: "", username: "", password: "" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to assign the static customer.");
+    } finally { setStaticSaving(false); }
+  };
+  const saveGatewaySettings = async (event: React.FormEvent) => {
+    event.preventDefault(); setGatewaySaving(true); setError(""); setSuccess("");
+    try {
+      await apiJson("/api/reseller/payment-settings", { method: "PUT", body: JSON.stringify(gatewayForm) });
+      setPaymentSettings(gatewayForm);
+      setSuccess("Payment gateway settings saved. Automated prompts will use the selected Daraja-compatible gateway when configured.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to save payment gateway settings.");
+    } finally { setGatewaySaving(false); }
+  };
+  const port = data?.ports?.find((item) => String(item.id) === selectedPortId) ?? data?.ports?.[0];
   const linkStatus = port?.link_status ?? "pending";
   const revenue = data?.metrics?.revenue;
   const users = data?.metrics?.users;
@@ -656,7 +700,14 @@ function ResellerDashboard() {
          </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : port?.handoff_mode === "vlan_services" ? "VLAN Hotspot + PPPoE service" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : port?.handoff_mode === "vlan_services" ? "Add the assigned VLAN to your XPON hotspot bridge. The ISP router supplies the reseller portal and PPPoE service under the locked speed cap." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
-             {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "vlan_services" ? `VLAN ${port.vlan_tag}` : port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
+              {port ? <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                {data && data.ports.length > 1 && <Field label="Assigned router / service"><select style={inputStyle} value={selectedPortId} onChange={(event) => { setSelectedPortId(event.target.value); setCheckout((current) => ({ ...current, portId: event.target.value })); }}><option value="">Choose an assigned service</option>{data.ports.map((item) => <option key={item.id} value={item.id}>{item.router?.name || "Router"} · {item.interface_name} · {item.handoff_mode === "vlan_services" ? `VLAN ${item.vlan_tag}` : "XPON handoff"}</option>)}</select></Field>}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "vlan_services" ? `VLAN ${port.vlan_tag}` : port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 18, color: "var(--isp-text-muted)", fontSize: 12, fontWeight: 750 }}>
+                  <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: port.link_detected ? "#16a34a" : "#f59e0b", marginRight: 6 }} />XPON router {port.link_detected ? "active" : "waiting"}</span>
+                  <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: ["active", "online", "connected", "running"].includes(String(port.router?.status || "").toLowerCase()) ? "#16a34a" : "#f59e0b", marginRight: 6 }} />ISP router {["active", "online", "connected", "running"].includes(String(port.router?.status || "").toLowerCase()) ? "active" : "checking"}</span>
+                </div>
+              </div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
         </div>
          <section style={cardStyle}>
            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 13 }}>
@@ -716,7 +767,7 @@ function ResellerDashboard() {
            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Record a paid client session</div>
            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Record a confirmed manual payment without configuring reseller payment settings. Service-mode ports also receive a child queue; ISP-router handoffs record the paid session for the ISP-controlled router.</p>
            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
-             <Field label="Assigned port"><select required style={inputStyle} value={checkout.portId || String(port?.id ?? "")} onChange={(e) => setCheckout({ ...checkout, portId: e.target.value })}><option value="">Choose port</option>{data?.ports?.map((item) => <option key={item.id} value={item.id}>{item.interface_name} · {item.status}</option>)}</select></Field>
+              <Field label="Assigned port"><select required style={inputStyle} value={checkout.portId || String(port?.id ?? "")} onChange={(e) => { setCheckout({ ...checkout, portId: e.target.value }); setSelectedPortId(e.target.value); }}><option value="">Choose port</option>{data?.ports?.map((item) => <option key={item.id} value={item.id}>{item.router?.name || "Router"} · {item.interface_name} · {item.status}</option>)}</select></Field>
              <Field label="Client reference"><input required style={inputStyle} value={checkout.clientReference} onChange={(e) => setCheckout({ ...checkout, clientReference: e.target.value })} /></Field>
              <Field label="Client IPv4"><input required placeholder="192.168.30.55" style={inputStyle} value={checkout.clientIp} onChange={(e) => setCheckout({ ...checkout, clientIp: e.target.value })} /></Field>
              <Field label="Amount (KES)"><input required min="0" type="number" style={inputStyle} value={checkout.amount} onChange={(e) => setCheckout({ ...checkout, amount: e.target.value })} /></Field>
@@ -725,6 +776,34 @@ function ResellerDashboard() {
            </div>
            <button disabled={saving || !port || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> Record paid session</button>
          </form>
+          {port?.handoff_mode === "vlan_services" && (
+            <form onSubmit={assignStaticClient} style={{ ...cardStyle, borderColor: "rgba(16,185,129,.3)" }}>
+              <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="#16a34a" /> Assign a static customer</div>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Reserve a fixed IPv4 address on the selected reseller service. The customer record and RouterOS queue are written together.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+                <Field label="Client name"><input required style={inputStyle} value={staticClient.name} onChange={(e) => setStaticClient({ ...staticClient, name: e.target.value })} /></Field>
+                <Field label="Phone"><input required style={inputStyle} value={staticClient.phone} onChange={(e) => setStaticClient({ ...staticClient, phone: e.target.value })} /></Field>
+                <Field label="Static IPv4"><input required placeholder="192.168.180.20" style={inputStyle} value={staticClient.ipAddress} onChange={(e) => setStaticClient({ ...staticClient, ipAddress: e.target.value })} /></Field>
+                <Field label="Username (optional)"><input style={inputStyle} value={staticClient.username} onChange={(e) => setStaticClient({ ...staticClient, username: e.target.value })} /></Field>
+                <Field label="Password (optional)"><input type="password" minLength={8} style={inputStyle} value={staticClient.password} onChange={(e) => setStaticClient({ ...staticClient, password: e.target.value })} /></Field>
+              </div>
+              <button disabled={staticSaving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "#16a34a", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {staticSaving ? "Assigning…" : "Assign static customer"}</button>
+            </form>
+          )}
+          <form onSubmit={saveGatewaySettings} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
+            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Payment gateway settings</div>
+            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Configure the merchant destination used for reseller customer payments. Credentials stay server-side; manual receipts remain available for non-automated gateways.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+              <Field label="Selected gateway"><select style={inputStyle} value={gatewayForm.paymentGateway} onChange={(e) => setGatewayForm({ ...gatewayForm, paymentGateway: e.target.value })}><option value="mpesa_paybill">M-Pesa PayBill</option><option value="mpesa_till_push">M-Pesa Till</option><option value="bank_stk_push">Bank STK Push</option><option value="manual">Manual / cash</option></select></Field>
+              <Field label="M-Pesa Till / PayBill"><input style={inputStyle} value={gatewayForm.mpesa.merchantIdentifier} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, merchantIdentifier: e.target.value, enabled: true } })} /></Field>
+              <Field label="M-Pesa account reference"><input style={inputStyle} value={gatewayForm.mpesa.accountReference} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, accountReference: e.target.value, enabled: true } })} /></Field>
+              <Field label="M-Pesa destination"><select style={inputStyle} value={gatewayForm.mpesa.destinationType} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, destinationType: e.target.value === "till" ? "till" : "paybill" } })}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
+              <Field label="Bank name"><input style={inputStyle} value={gatewayForm.bank.bankName} onChange={(e) => setGatewayForm({ ...gatewayForm, bank: { ...gatewayForm.bank, bankName: e.target.value, enabled: true } })} /></Field>
+              <Field label="Bank account / merchant"><input style={inputStyle} value={gatewayForm.bank.accountReference} onChange={(e) => setGatewayForm({ ...gatewayForm, bank: { ...gatewayForm.bank, accountReference: e.target.value, enabled: true } })} /></Field>
+            </div>
+            <button disabled={gatewaySaving} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer" }}>{gatewaySaving ? "Saving…" : "Save payment settings"}</button>
+            {paymentSettings && <span style={{ marginLeft: 12, color: "#15803d", fontSize: 12, fontWeight: 750 }}>{paymentSettings.paymentGateway} selected</span>}
+          </form>
           {port?.handoff_mode === "vlan_services" && port.pppoe_enabled && (
             <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>
               <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="var(--isp-accent)" /> Assign a PPPoE client</div>
