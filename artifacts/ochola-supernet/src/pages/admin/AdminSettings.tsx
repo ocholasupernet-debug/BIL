@@ -244,6 +244,12 @@ const ADMIN_PAYMENT_GATEWAY_OPTIONS = [
   { id: "manual", label: "Cash / Manual" },
 ];
 
+interface ResellerPaymentSettings {
+  paymentGateway: string;
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+}
+
 type PaymentTestStatus = "idle" | "sending" | "pending" | "paid" | "failed" | "expired";
 
 function AdminPaymentTestCard({ currency }: { currency: string }) {
@@ -489,40 +495,85 @@ function AdminPaymentGatewayCard() {
 }
 
 function ResellerPaymentGatewayCard() {
-  const [state, setState] = useState<{ gateway?: string; mode?: string; hotspot?: string; pppoe?: string; error?: string } | null>(null);
+  const [state, setState] = useState<{
+    paymentGateway: string;
+    mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+    bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, { headers: adminApiHeaders(), cache: "no-store" })
+    fetch("/api/reseller/payment-settings", { headers: adminApiHeaders(), cache: "no-store" })
       .then(async response => {
-        const data = await response.json() as {
-          mode?: string;
-          services?: { hotspot?: { gatewayId?: string }; pppoe?: { gatewayId?: string } };
-          error?: string;
-        };
-        if (!response.ok) throw new Error(data.error || "Could not load the connected ISP payment settings.");
-        setState({
-          mode: data.mode,
-          hotspot: data.services?.hotspot?.gatewayId,
-          pppoe: data.services?.pppoe?.gatewayId,
-        });
+        const data = await response.json() as { settings?: ResellerPaymentSettings; error?: string };
+        if (!response.ok || !data.settings) throw new Error(data.error || "Could not load reseller payment settings.");
+        setState(data.settings);
       })
-      .catch(error => setState({ error: error instanceof Error ? error.message : "Could not load the connected ISP payment settings." }));
+      .catch(error => setError(error instanceof Error ? error.message : "Could not load reseller payment settings."));
   }, []);
 
+  const save = async () => {
+    if (!state) return;
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const response = await fetch("/api/reseller/payment-settings", {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify(state),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the reseller payment method.");
+      setSaved(true);
+      window.dispatchEvent(new Event("ochola-payment-gateway-change"));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save the reseller payment method.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <Card title="Connected ISP Payment Gateway" desc="Payment authority stays with the ISP account that assigned your VLAN service.">
-      {state?.error ? (
-        <p style={{ color: "#f87171", fontSize: "0.76rem", margin: 0 }}>{state.error}</p>
+    <Card title="Reseller Payment Method" desc="Choose the payment method your reseller customers use.">
+      {error ? (
+        <p style={{ color: "#f87171", fontSize: "0.76rem", margin: "0 0 10px" }}>{error}</p>
+      ) : !state ? (
+        <p style={{ color: C.muted, fontSize: "0.76rem", margin: 0 }}>Loading payment methods…</p>
       ) : (
         <>
           <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
-            You can use the ISP’s configured payment destinations for reseller customer plans, but gateway credentials and collection routing cannot be changed from a reseller account.
+            Select the method to record for reseller customer payments. The connected ISP remains responsible for platform payment credentials and settlement.
           </p>
-          <Grid2>
-            <Field label="Collection mode"><Input value={state?.mode === "separate" ? "Separate Hotspot / PPPoE destinations" : "Shared ISP destination"} readOnly /></Field>
-            <Field label="Hotspot gateway"><Input value={state?.hotspot || "Loading…"} readOnly /></Field>
-            <Field label="PPPoE gateway"><Input value={state?.pppoe || "Loading…"} readOnly /></Field>
-          </Grid2>
+          <Field label="Payment method">
+            <Select
+              value={state.paymentGateway}
+              onChange={event => {
+                setState(current => current ? { ...current, paymentGateway: event.target.value } : current);
+                setSaved(false);
+              }}
+            >
+              {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </Select>
+          </Field>
+          <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
+            Current M-Pesa and bank destination details remain stored with this reseller account and are not changed by selecting a method.
+          </p>
+          {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>Payment method saved.</p>}
+          <Row>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+            >
+              <Save size={13} /> {saving ? "Saving…" : "Save Payment Method"}
+            </button>
+          </Row>
         </>
       )}
     </Card>
