@@ -75,6 +75,14 @@ function routerBoolean(value: unknown): boolean {
   return value === true || value === "true" || value === "yes" || value === "1";
 }
 
+export function shouldReuseRouterDnsEntry(row: Record<string, unknown>): boolean {
+  const dynamic = row.dynamic ?? row[".dynamic"];
+  /* RouterOS versions differ in whether they return the dynamic flag. An
+     existing entry with no reliable flag must be treated as protected rather
+     than risking a /set against a dynamic entry. */
+  return dynamic === undefined || dynamic === null || dynamic === "" || routerBoolean(dynamic);
+}
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 48) || fallback;
@@ -616,9 +624,9 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
   const rows = await runRouterCommand(creds, [printPath, proplist]).catch(() => []);
   const existing = rows.find((row) => row[property] === propertyArg.slice(property.length + 2));
   if (existing?.[".id"]) {
-    if (addPath === "/ip/dns/static/add" && routerBoolean(existing.dynamic)) {
+    if (addPath === "/ip/dns/static/add" && shouldReuseRouterDnsEntry(existing)) {
       const requestedAddress = command.find((arg) => arg.startsWith("=address="))?.slice("=address=".length);
-      if (requestedAddress && existing.address && existing.address !== requestedAddress) {
+      if (routerBoolean(existing.dynamic) && requestedAddress && existing.address && existing.address !== requestedAddress) {
         throw new Error(
           `DNS name ${propertyArg.slice(property.length + 2)} is already a dynamic entry for ${existing.address}; it cannot be changed to ${requestedAddress}.`,
         );

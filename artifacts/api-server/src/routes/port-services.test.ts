@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDualServiceCommands, normalizeApprovedAssetPath } from "./port-services-route.js";
+import {
+  buildDualServiceCommands,
+  normalizeApprovedAssetPath,
+  shouldReuseRouterDnsEntry,
+} from "./port-services-route.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const port = {
@@ -154,4 +158,10 @@ test("VLAN service deployments include DNS names without treating dynamic Router
     { hotspotDnsName: "goo.com", pppoeDnsName: "goo.com" },
   );
   assert.equal(commands.filter(([path]) => path === "/ip/dns/static/add").length, 2);
+});
+
+test("unknown RouterOS DNS entry flags are protected from static updates", () => {
+  assert.equal(shouldReuseRouterDnsEntry({ ".id": "*1" }), true);
+  assert.equal(shouldReuseRouterDnsEntry({ ".id": "*2", dynamic: "yes" }), true);
+  assert.equal(shouldReuseRouterDnsEntry({ ".id": "*3", dynamic: "no" }), false);
 });
