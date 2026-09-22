@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildDualServiceCommands } from "./port-services-route.js";
+import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const port = {
   id: 12,
@@ -96,4 +97,18 @@ test("different assigned ports receive different service identities", () => {
   assert.match(firstScript, /HS_router-3-ether2/);
   assert.match(secondScript, /HS_router-3-ether3/);
   assert.notEqual(firstScript, secondScript);
+});
+
+test("a VLAN service keeps reseller resources separate from shared hotspot files", () => {
+  const resources = portServiceResourceNames({
+    ...port,
+    handoff_mode: "vlan_services",
+    vlan_tag: "210",
+    reseller_id: 9,
+    assigned_reseller_id: 42,
+  });
+
+  assert.equal(resources.hotspotDirectory, "flash/hotspot/hs_p12-ether2");
+  assert.equal(resources.hotspotServer, "HS_RS42_VLAN210");
+  assert.notEqual(resources.hotspotDirectory, "flash/hotspot");
 });

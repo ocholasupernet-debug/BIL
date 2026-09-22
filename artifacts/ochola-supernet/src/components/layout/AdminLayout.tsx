@@ -378,11 +378,14 @@ export function AdminLayout({
            && (!item.visibilityKey || isVisible(item.visibilityKey)))
         .map(item => ({
           ...item,
-          children: item.children?.filter(child => {
-            if (hiddenNavHrefs.includes(child.href)) return false;
-            const childFeatureKey = getAdminFeatureKeyForPath(child.href);
-            return !childFeatureKey || isVisible(childFeatureKey);
-          }),
+          children: (isResellerAccount && item.name === "Hotspot Settings"
+            ? [{ name: "Assigned VLAN page", href: "/admin/hotspot-settings" }]
+            : item.children
+          )?.filter(child => {
+              if (hiddenNavHrefs.includes(child.href)) return false;
+              const childFeatureKey = getAdminFeatureKeyForPath(child.href);
+              return !childFeatureKey || isVisible(childFeatureKey);
+            }),
         }))
         .filter(item => !item.children || item.children.length > 0),
     }))
