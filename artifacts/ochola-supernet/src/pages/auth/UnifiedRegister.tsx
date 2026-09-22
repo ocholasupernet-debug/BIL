@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, Mail, Network, Plug, ShieldCheck, UserRound } from "lucide-react";
 import { useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
@@ -40,6 +40,14 @@ export default function UnifiedRegister() {
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "Register New company | OcholaSupernet";
+    return () => {
+      document.title = previousTitle;
+    };
+  }, []);
 
   const selectedRole = useMemo(
     () => ROLE_OPTIONS.find((option) => option.value === role) ?? ROLE_OPTIONS[0],

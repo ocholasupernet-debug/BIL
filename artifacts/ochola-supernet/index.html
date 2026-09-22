@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <title>OcholaSupernet</title>
+    <meta name="description" content="OcholaSupernet ISP network operations platform." />
     <meta name="theme-color" content="#0f172a" />
     <meta name="application-name" content="OcholaSuperNet" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -15,6 +16,15 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      if (window.location.hostname.toLowerCase() === "register.isplatty.org") {
+        document.title = "Register New company | OcholaSupernet";
+        document.querySelector('meta[name="description"]')?.setAttribute(
+          "content",
+          "Register New company with OcholaSupernet.",
+        );
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
