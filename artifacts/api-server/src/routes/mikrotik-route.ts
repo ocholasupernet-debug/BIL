@@ -46,7 +46,7 @@ import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../lib/supabas
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
-import { routerManagementVpnContract } from "../lib/router-management-vpn";
+import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import {
   provisionRouterManagementOpenVpn,
@@ -1521,12 +1521,28 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     ? requestedMode
     : "coexist";
   try {
-    const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
-      routerId: id,
-      adminId,
-      routerName: found.row.name,
-    });
     let provisioningWarning = "";
+    let openVpnCredentials: { username: string; password: string };
+    try {
+      openVpnCredentials = await ensureRouterManagementOvpnCredentials({
+        routerId: id,
+        adminId,
+        routerName: found.row.name,
+      });
+    } catch (error) {
+      if (installationMode !== "coexist") throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      /*
+       * Brownfield generation is intentionally additive. If secure credential
+       * persistence is temporarily unavailable, use the deterministic
+       * router-name credential in the generated bundle and keep the
+       * management provisioning warning visible instead of blocking the
+       * independent scripts.
+       */
+      openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
+      provisioningWarning = `The router management VPN credentials could not be persisted yet. The three Brownfield scripts were generated; finish VPS VPN readiness before running Step 2. (${reason})`;
+      logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without credential persistence");
+    }
     let backupTunnelRouterIp: string;
     try {
       const provisioning = await provisionRouterManagementOpenVpnPair({
@@ -1545,7 +1561,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
           return;
         }
-        provisioningWarning = "The VPS management VPN is not fully reconciled yet. The three Brownfield scripts were generated, but Step 2 will work only after the VPS VPN services are ready.";
+        provisioningWarning = provisioningWarning
+          ? `${provisioningWarning} The VPS management VPN is not fully reconciled yet.`
+          : "The VPS management VPN is not fully reconciled yet. The three Brownfield scripts were generated, but Step 2 will work only after the VPS VPN services are ready.";
         backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
       } else {
         backupTunnelRouterIp = provisioning.backup.assignedIp;
@@ -1553,7 +1571,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     } catch (error) {
       if (installationMode !== "coexist") throw error;
       const reason = error instanceof Error ? error.message : String(error);
-      provisioningWarning = `The VPS management VPN could not be reconciled yet. The three Brownfield scripts were still generated; finish VPS VPN readiness before running Step 2. (${reason})`;
+      provisioningWarning = provisioningWarning
+        ? `${provisioningWarning} The VPS management VPN could not be reconciled yet. (${reason})`
+        : `The VPS management VPN could not be reconciled yet. The three Brownfield scripts were still generated; finish VPS VPN readiness before running Step 2. (${reason})`;
       backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
       logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without VPS reconciliation");
     }
@@ -1580,13 +1600,19 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const platformRadiusIp = String(
       req.query.radiusIp
       ?? process.env["RADIUS_SERVER_IP"]
-      ?? routerManagementVpnContract("primary").gateway,
+      ?? "",
     ).trim();
     const platformRadiusSecret = String(
       process.env["RADIUS_SHARED_SECRET"]
       ?? process.env["RADIUS_SECRET"]
       ?? "",
     ).trim();
+    const hasCompletePlatformRadius = Boolean(platformRadiusIp && platformRadiusSecret);
+    if (installationMode === "coexist" && !hasCompletePlatformRadius) {
+      provisioningWarning = provisioningWarning
+        ? `${provisioningWarning} Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.`
+        : "Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
+    }
     const portalHostname = new URL(sourceOrigin).hostname;
     const defaultPortalFiles = [
       { routeName: "hotspot-login.html", fileName: "login.html", sourceName: "login.html" },
@@ -1629,8 +1655,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
       portName: serviceBridgePorts[0],
-      radiusIp: installationMode === "coexist" ? platformRadiusIp : undefined,
-      radiusSecret: installationMode === "coexist" ? platformRadiusSecret : undefined,
+      radiusIp: installationMode === "coexist" && hasCompletePlatformRadius ? platformRadiusIp : undefined,
+      radiusSecret: installationMode === "coexist" && hasCompletePlatformRadius ? platformRadiusSecret : undefined,
       /* The shared bridge is the single physical service wire. Bandwidth
          queues remain opt-in until a tenant supplies an aggregate speed. */
       maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))
@@ -1718,9 +1744,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       ],
     });
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    logger.error({ routerId: id, installationMode, error: reason }, "[self-install] script generation failed");
     res.status(503).json({
       error: "Self Install script generation failed",
-      detail: error instanceof Error ? error.message : String(error),
+      detail: reason,
     });
   }
 });
