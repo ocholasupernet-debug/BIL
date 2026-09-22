@@ -28,3 +28,12 @@ test("classifies a failed management API forward as an offline VPN state", () =>
   assert.equal(diagnosis.profile, "offline_vpn_tunnel");
   assert.equal(diagnosis.summary, "Offline VPN tunnel container state");
 });
+
+test("classifies a duplicate hotspot user IP as a RouterOS user conflict", () => {
+  const diagnosis = classifyRouterConnectionFailure(
+    new Error("failure: already have user with this IP address"),
+  );
+
+  assert.equal(diagnosis.profile, "hotspot_user_conflict");
+  assert.equal(diagnosis.summary, "Hotspot user/IP conflict");
+});

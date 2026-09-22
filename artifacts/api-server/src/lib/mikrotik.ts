@@ -186,6 +186,7 @@ export type RouterConnectionFailureProfile =
   | "tcp_timeout"
   | "bad_credentials"
   | "offline_vpn_tunnel"
+  | "hotspot_user_conflict"
   | "unknown";
 
 export function classifyRouterConnectionFailure(error: unknown): {
@@ -218,6 +219,17 @@ export function classifyRouterConnectionFailure(error: unknown): {
     return {
       profile: "offline_vpn_tunnel",
       summary: "Offline VPN tunnel container state",
+      message,
+    };
+  }
+  if (
+    lower.includes("already have user with this ip address")
+    || lower.includes("already have user with this address")
+    || lower.includes("duplicate address")
+  ) {
+    return {
+      profile: "hotspot_user_conflict",
+      summary: "Hotspot user/IP conflict",
       message,
     };
   }

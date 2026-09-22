@@ -1960,7 +1960,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         disabled: false,
         comment: hotspotUsername,
         server: hotspotServer,
-        address: routerAddress || undefined,
         limitBytesTotal,
       });
     } catch {
@@ -1970,7 +1969,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         profile: hotspotProfile,
         comment: hotspotUsername,
         server: hotspotServer,
-        address: routerAddress || undefined,
         limitBytesTotal,
       });
     }
