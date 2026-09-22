@@ -321,61 +321,6 @@ type ResellerPaymentRoute = {
   accountReference: string;
 };
 
-function resellerDestinationConfig(value: unknown): {
-  destinationType: "till" | "paybill";
-  merchantIdentifier: string;
-  accountReference: string;
-} {
-  const map = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  const destinationType = map.destinationType === "till" ? "till" : "paybill";
-  const merchantIdentifier = typeof map.merchantIdentifier === "string"
-    ? map.merchantIdentifier.trim()
-    : typeof map.merchantId === "string"
-      ? map.merchantId.trim()
-      : typeof map.destination === "string"
-        ? map.destination.trim()
-        : "";
-  const accountReference = typeof map.accountReference === "string"
-    ? map.accountReference.trim()
-    : typeof map.accountNumber === "string"
-      ? map.accountNumber.trim()
-      : "";
-  return { destinationType, merchantIdentifier, accountReference };
-}
-
-function resellerMpesaRoute(
-  config: { destinationType: "till" | "paybill"; merchantIdentifier: string; accountReference: string },
-  settings: MpesaSettings,
-): Omit<ResellerPaymentRoute, "resellerId" | "portId"> | null {
-  const gateway = config.destinationType === "till" ? "mpesa_till_push" : "mpesa_paybill";
-  if (!config.merchantIdentifier) return null;
-  if (gateway === "mpesa_till_push") {
-    return {
-      paymentGateway: gateway,
-      settings,
-      bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
-      mpesaTillPush: { tillNumber: config.merchantIdentifier },
-      mpesaPaybill: { paybillNumber: "", accountNumber: "" },
-      merchantIdentifier: config.merchantIdentifier,
-      accountReference: "",
-    };
-  }
-  return {
-    paymentGateway: gateway,
-    settings,
-    bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
-    mpesaTillPush: { tillNumber: "" },
-    mpesaPaybill: {
-      paybillNumber: config.merchantIdentifier,
-      accountNumber: config.accountReference,
-    },
-    merchantIdentifier: config.merchantIdentifier,
-    accountReference: config.accountReference,
-  };
-}
-
 async function getResellerPaymentRoute(
   adminId: number,
   planId: number,
@@ -402,34 +347,53 @@ async function getResellerPaymentRoute(
     throw new Error("This reseller link is not active for checkout.");
   }
 
-  const gatewayRows = await sbSelectStrict<{
-    merchant_identifier: string | null;
-    account_reference: string | null;
-    config_json: unknown;
-    is_active: boolean;
-  }>(
-    "payment_gateways",
-    `user_id=eq.${port.assigned_reseller_id}&gateway_type=eq.mpesa&is_active=is.true&select=merchant_identifier,account_reference,config_json,is_active&limit=1`,
-  );
-  const gateway = gatewayRows[0];
-  const destination = gateway
-    ? resellerDestinationConfig({
-        ...(gateway.config_json && typeof gateway.config_json === "object" && !Array.isArray(gateway.config_json)
-          ? gateway.config_json as Record<string, unknown>
-          : {}),
-        merchantIdentifier: gateway.merchant_identifier ?? undefined,
-        accountReference: gateway.account_reference ?? undefined,
-      })
-    : null;
-  if (!destination?.merchantIdentifier) {
-    throw new Error("The assigned reseller has not configured a complete M-Pesa gateway.");
+  /*
+   * Reseller checkout uses the parent ISP account's payment settings. The
+   * merchant gateway belongs to the ISP tenant, just like other ISP billing
+   * settings; reseller accounts must not maintain a second destination that
+   * can drift from the account serving the assigned VLAN.
+   */
+  const [settings, fallback] = await Promise.all([
+    getAdminPaymentSettings(adminId, "hotspot"),
+    getMpesaSettings(),
+  ]);
+  if (!isDarajaGateway(settings.paymentGateway)) {
+    throw new Error("The ISP account has not selected a supported automated payment gateway.");
   }
-  const fallback = await getMpesaSettings();
-  const route = resellerMpesaRoute(destination, fallback);
-  if (!route) {
-    throw new Error("The assigned reseller M-Pesa gateway is incomplete.");
+
+  const destination = settings.paymentGateway === "mpesa_till_push"
+    ? {
+        merchantIdentifier: settings.mpesaTillPush.tillNumber,
+        accountReference: "",
+        destinationType: "till" as const,
+      }
+    : settings.paymentGateway === "bank_stk_push"
+      ? {
+          merchantIdentifier: settings.bankStkPush.paybillNumber,
+          accountReference: settings.bankStkPush.accountNumber,
+          destinationType: "paybill" as const,
+        }
+      : {
+          merchantIdentifier: settings.mpesaPaybill.paybillNumber,
+          accountReference: settings.mpesaPaybill.accountNumber,
+          destinationType: "paybill" as const,
+        };
+  if (!destination.merchantIdentifier
+    || (destination.destinationType === "paybill" && !destination.accountReference)) {
+    throw new Error("Complete the ISP account payment gateway destination before accepting reseller payments.");
   }
-  return { resellerId: port.assigned_reseller_id, portId, ...route };
+
+  return {
+    resellerId: port.assigned_reseller_id,
+    portId,
+    paymentGateway: settings.paymentGateway,
+    settings: fallback,
+    bankStkPush: settings.bankStkPush,
+    mpesaTillPush: settings.mpesaTillPush,
+    mpesaPaybill: settings.mpesaPaybill,
+    merchantIdentifier: destination.merchantIdentifier,
+    accountReference: destination.accountReference,
+  };
 }
 
 async function isActiveIspAdmin(adminId: number): Promise<boolean> {
