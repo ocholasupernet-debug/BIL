@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, Smartphone, WalletCards } from "lucide-react";
+import { Building2, Phone, UserRound, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
@@ -126,11 +126,7 @@ export default function AdminRegister() {
         }
         setRegistrationDestination(data.destination ?? null);
         setManualPaybillAvailable(data.manualPaybillAvailable === true);
-        if (data.manualPaybillAvailable === true && data.automaticPaymentAvailable === true) {
-          setPaymentMode("paybill");
-        } else if (data.manualPaybillAvailable === true) {
-          setPaymentMode("paybill");
-        }
+        setPaymentMode(data.automaticPaymentAvailable === true ? "stk" : data.manualPaybillAvailable === true ? "paybill" : "stk");
         setPaymentReady(data.manualPaymentRequired === true || data.automaticPaymentAvailable === true || data.manualPaybillAvailable === true);
       })
       .catch(() => setPaymentReady(false));
@@ -481,7 +477,7 @@ export default function AdminRegister() {
             </div>
             <div className="register-heading">
               <p className="register-kicker">START YOUR JOURNEY</p>
-              <h1>Launch your ISP workspace</h1>
+               <h1>Launch your <span className="register-title-accent">ISP workspace</span></h1>
               <p>Set up your account in a few simple steps. You’ll be ready to manage your network in minutes.</p>
                <div className="register-heading-meta"><ShieldCheck size={14} /> Secure onboarding with verified M-Pesa payments</div>
             </div>
@@ -505,7 +501,7 @@ export default function AdminRegister() {
 
             <form onSubmit={handleSubmit} className="register-form">
               <div className="register-form-section">
-                <div className="register-section-heading"><span>01</span><div><strong>Your business</strong><small>Tell us about your ISP</small></div></div>
+                 <div className="register-section-heading"><span>01</span><div><strong>Your <em>business</em></strong><small>Tell us about your ISP</small></div></div>
                 <div className="register-two-col">
                   <div>
                     <label className="register-label">Company / ISP Name</label>
@@ -594,43 +590,7 @@ export default function AdminRegister() {
                 {errors.displayName && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.displayName}</p>}
               </div>
 
-               <div>
-                 <label className="register-label">Admin username</label>
-                 <div style={{ position: "relative" }}>
-                   <UserRound size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
-                   <input
-                     type="text"
-                     value={INITIAL_ADMIN_USERNAME}
-                     readOnly
-                     aria-readonly="true"
-                     autoComplete="username"
-                     className="register-input"
-                     style={{ ...inputStyle(false, null), cursor: "not-allowed", opacity: 0.8 }}
-                   />
-                 </div>
-                 <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
-                   Your temporary login username is <strong>admin</strong>. You will set a new password after the first login.
-                 </p>
-               </div>
-
-               <div className="register-form-section">
-                 <div className="register-section-heading"><span>02</span><div><strong>Choose how to pay</strong><small>Secure your workspace with a one-time activation payment</small></div></div>
-                 {manualPaybillAvailable && registrationDestination?.type === "paybill" && (
-                   <div className="register-payment-options">
-                     <button type="button" className={`register-payment-option ${paymentMode === "paybill" ? "selected" : ""}`} onClick={() => setPaymentMode("paybill")}>
-                       <span className="register-option-icon"><WalletCards size={17} /></span>
-                       <span><strong>Pay manually</strong><small>Use M-Pesa PayBill</small></span>
-                       <span className="register-option-radio" />
-                     </button>
-                     {registrationDestination && (
-                       <button type="button" className={`register-payment-option ${paymentMode === "stk" ? "selected" : ""}`} onClick={() => setPaymentMode("stk")}>
-                         <span className="register-option-icon"><Smartphone size={17} /></span>
-                         <span><strong>Send a prompt</strong><small>Approve on your phone</small></span>
-                         <span className="register-option-radio" />
-                       </button>
-                     )}
-                   </div>
-                 )}
+                <div className="register-payment-details">
                  {paymentMode === "paybill" && manualPaybillAvailable && registrationDestination?.type === "paybill" ? (
                    <div className="register-manual-preview">
                      <div className="register-manual-preview-icon"><WalletCards size={18} /></div>
@@ -838,6 +798,7 @@ export default function AdminRegister() {
           .register-heading{margin-bottom:28px}
           .register-kicker{margin-bottom:12px;letter-spacing:.16em}
           .register-heading h1{font-size:clamp(2rem,3.2vw,2.75rem);letter-spacing:-.06em}
+          .register-title-accent{color:#3974df}
           .register-heading>p:last-child{max-width:590px;font-size:.88rem;line-height:1.7}
           .register-heading-meta{display:flex;align-items:center;gap:7px;width:fit-content;margin-top:14px;padding:7px 10px;border:1px solid #dce7f5;border-radius:8px;color:#61728c;background:#f5f8fd;font-size:.66rem;font-weight:700}
           .register-heading-meta svg{color:#3e76df}
@@ -852,7 +813,9 @@ export default function AdminRegister() {
           .register-section-heading{gap:12px;margin-bottom:18px}
           .register-section-heading>span{display:grid;place-items:center;width:25px;height:25px;border:1px solid #cfe0fb;border-radius:8px;background:#f0f5ff;color:#3b73dd}
           .register-section-heading strong{font-size:.84rem}
+          .register-section-heading strong em{color:#3974df;font-style:normal}
           .register-section-heading small{font-size:.69rem}
+          .register-payment-details{padding-top:1px}
           .register-label{margin-bottom:9px;color:#2f3d56;font-size:.72rem}
           .register-submit{min-height:56px;border-radius:15px;background:linear-gradient(105deg,#245ed8,#4b82f4 72%,#5c9ef5);box-shadow:0 12px 25px rgba(37,99,235,.22);font-size:.84rem}
           .register-submit:not(:disabled):hover{box-shadow:0 16px 30px rgba(37,99,235,.3)}
