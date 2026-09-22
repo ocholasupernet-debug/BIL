@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
-import { clearAdminAuth, getAdminName, getAdminRole } from "@/lib/supabase";
+import { ADMIN_ID, clearAdminAuth, getAdminApiToken, getAdminName, getAdminRole } from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
@@ -199,6 +199,133 @@ const navSections: NavSection[] = [
 
 const SIDEBAR_W = 240;
 const SIDEBAR_COLLAPSED_W = 64;
+
+type PlatformBillingState = {
+  eligible: boolean;
+  invoice?: {
+    id: number;
+    amount_due: number;
+    due_date: string;
+    status: string;
+    payment_phone?: string | null;
+  } | null;
+};
+
+function PlatformBillingBanner() {
+  const [state, setState] = useState<PlatformBillingState | null>(null);
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const role = getAdminRole();
+  const token = getAdminApiToken();
+
+  const load = async () => {
+    if (!token || role === "superadmin") return;
+    try {
+      const response = await fetch("/api/billing/current", { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) return;
+      const data = await response.json() as PlatformBillingState;
+      setState(data);
+      if (data.invoice?.payment_phone && !phone) setPhone(data.invoice.payment_phone);
+    } catch {
+      // The dashboard remains usable when the optional billing banner is unavailable.
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [token, role]);
+
+  if (role === "superadmin" || !state?.eligible || !state.invoice || state.invoice.status === "paid") return null;
+
+  const dueAt = Date.parse(`${state.invoice.due_date}T23:59:59.999Z`);
+  const remaining = Math.max(0, dueAt - now);
+  const days = Math.floor(remaining / 86400000);
+  const hours = Math.floor((remaining % 86400000) / 3600000);
+  const minutes = Math.floor((remaining % 3600000) / 60000);
+  const countdown = remaining ? `${days}d ${hours}h ${minutes}m` : "Past due";
+
+  const renew = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const prepare = await fetch("/api/billing/renew", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      const prepared = await prepare.json() as { ok?: boolean; error?: string; invoiceId?: number; amount?: number; adminId?: number; accountReference?: string };
+      if (!prepare.ok || !prepared.ok || !prepared.invoiceId || !prepared.amount) throw new Error(prepared.error || "Could not prepare the payment.");
+      const stk = await fetch("/api/mpesa/stk", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone,
+          amount: prepared.amount,
+          adminId: prepared.adminId ?? ADMIN_ID,
+          billing_invoice_id: prepared.invoiceId,
+          account_ref: prepared.accountReference,
+        }),
+      });
+      const started = await stk.json() as { ok?: boolean; error?: string; CheckoutRequestID?: string };
+      if (!stk.ok || !started.ok || !started.CheckoutRequestID) throw new Error(started.error || "Could not send the M-Pesa prompt.");
+      setMessage("Prompt sent. Enter your M-Pesa PIN, then wait for confirmation.");
+      const checkoutId = started.CheckoutRequestID;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 3000));
+        const status = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`, { headers: { Authorization: `Bearer ${token}` } });
+        const result = await status.json() as { paid?: boolean; status?: string };
+        if (result.paid || result.status === "completed") {
+          setMessage("Payment confirmed. Your account is renewed.");
+          await load();
+          return;
+        }
+        if (result.status === "failed") throw new Error("M-Pesa reported that the payment failed.");
+      }
+      setMessage("The prompt is still processing. This banner will update when confirmation arrives.");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Payment could not be started.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section
+      role="status"
+      style={{
+        marginBottom: 18, borderRadius: 14, padding: "15px 17px",
+        border: "1px solid rgba(245,158,11,0.4)", background: "linear-gradient(115deg, rgba(120,53,15,0.26), rgba(245,158,11,0.08))",
+        color: "var(--isp-text)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
+      }}
+    >
+      <div style={{ flex: "1 1 260px" }}>
+        <strong style={{ display: "block", color: "#fbbf24", fontSize: 14 }}>Platform renewal due</strong>
+        <span style={{ display: "block", marginTop: 3, fontSize: 12 }}>
+          KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")} due by {new Date(`${state.invoice.due_date}T00:00:00.000Z`).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}.
+          {" "}Time left: <strong>{countdown}</strong>
+        </span>
+        {message && <small style={{ display: "block", marginTop: 6, color: message.includes("confirmed") ? "#86efac" : "var(--isp-text-muted)" }}>{message}</small>}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "1 1 320px", maxWidth: 430 }}>
+        <input
+          value={phone}
+          onChange={event => setPhone(event.target.value)}
+          placeholder="07xx xxx xxx"
+          aria-label="M-Pesa phone number"
+          style={{ flex: 1, minWidth: 145, padding: "9px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(0,0,0,0.15)", color: "inherit" }}
+        />
+        <button type="button" onClick={() => void renew()} disabled={busy || !phone.trim()} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "#f59e0b", color: "#1c1917", fontWeight: 800, cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+          {busy ? "Waiting…" : "Renew"}
+        </button>
+      </div>
+    </section>
+  );
+}
 
 export function AdminLayout({
   children,
@@ -484,6 +611,7 @@ export function AdminLayout({
               {notice}
             </div>
           )}
+          <PlatformBillingBanner />
           {children}
         </main>
       </div>

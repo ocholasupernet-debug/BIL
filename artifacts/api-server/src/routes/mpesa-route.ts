@@ -1315,8 +1315,8 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number;
   };
   const requestedMac = readMacAddress(mac_address);
   const requestedDeviceName = readDeviceName(device_name);
@@ -1368,6 +1368,32 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   if (!hasSuperAdminSession && !hasAdminSession && !hasMatchingIntent) {
     res.status(401).json({ ok: false, error: "Create a payment checkout from an active plan or sign in as this ISP Admin." });
     return;
+  }
+  const billingInvoiceId = Number(billing_invoice_id);
+  let platformBillingInvoice: { id: number; account_id: number; amount_due: number | string; status: string } | null = null;
+  if (billing_invoice_id !== undefined) {
+    if (!Number.isSafeInteger(billingInvoiceId) || billingInvoiceId <= 0 || !hasAdminSession && !hasSuperAdminSession) {
+      res.status(400).json({ ok: false, error: "A valid authenticated billing invoice is required." });
+      return;
+    }
+    const invoiceRows = await sbSelectStrict<{
+      id: number;
+      account_id: number;
+      amount_due: number | string;
+      status: string;
+    }>(
+      "platform_billing_invoices",
+      `id=eq.${billingInvoiceId}&account_id=eq.${scopedAdminId}&select=id,account_id,amount_due,status&limit=1`,
+    );
+    platformBillingInvoice = invoiceRows[0] ?? null;
+    if (!platformBillingInvoice || platformBillingInvoice.status === "paid") {
+      res.status(409).json({ ok: false, error: "This platform billing invoice is already paid or unavailable." });
+      return;
+    }
+    if (Math.ceil(Number(amount)) !== Math.ceil(Number(platformBillingInvoice.amount_due))) {
+      res.status(400).json({ ok: false, error: "The payment amount does not match the billing invoice." });
+      return;
+    }
   }
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const plans = await sbSelect<{ id: number; price: number | string; name: string; type?: string }>(
@@ -1480,10 +1506,12 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
         reseller_id: resellerRoute?.resellerId ?? null,
         reseller_port_id: resellerRoute?.portId ?? null,
        amount: Math.ceil(Number(amount)),
-       payment_method: "mpesa",
+       payment_method: platformBillingInvoice ? "mpesa_platform_billing" : "mpesa",
        payment_phone: normalised,
         mac_address: mac.value || null,
-        payment_metadata: resellerRoute
+        payment_metadata: platformBillingInvoice
+          ? { source: "platform_billing", billing_invoice_id: platformBillingInvoice.id }
+          : resellerRoute
           ? {
               source: "reseller_daraja_bridge",
               destinationType: resellerRoute.paymentGateway === "mpesa_till_push" ? "till" : "paybill",
@@ -1515,7 +1543,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       PhoneNumber:       normalised,
        CallBackURL:       resolvedCallbackUrl,
         AccountReference:  payment.accountReference ?? account_ref ?? "ISPlatty",
-      TransactionDesc:   `Plan ${plan_id ?? "purchase"}`,
+      TransactionDesc:   platformBillingInvoice ? `Platform billing ${platformBillingInvoice.id}` : `Plan ${plan_id ?? "purchase"}`,
     };
 
     const stkRes = await fetch(`${darajaBase(cfg)}/mpesa/stkpush/v1/processrequest`, {

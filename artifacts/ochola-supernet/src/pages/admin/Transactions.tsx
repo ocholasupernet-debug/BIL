@@ -7,6 +7,25 @@ import { supabase, type DbTransaction } from "@/lib/supabase";
 import { Search, Download, Loader2 } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
 
+type ImmutableRevenueSummary = {
+  incomeToday: number;
+  incomeMonth: number;
+  totalRevenue: number;
+  totalTransactions: number;
+};
+
+async function fetchImmutableRevenueSummary(): Promise<ImmutableRevenueSummary> {
+  const token = (() => {
+    try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
+  })();
+  const response = await fetch("/api/billing/revenue-summary", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const data = await response.json() as ImmutableRevenueSummary & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load immutable revenue totals.");
+  return data;
+}
+
 async function fetchTransactions(): Promise<DbTransaction[]> {
   const { data, error } = await supabase
     .from("isp_transactions")
@@ -27,30 +46,21 @@ export default function Transactions() {
     queryFn: fetchTransactions,
     refetchInterval: 30_000,
   });
+  const { data: immutableRevenue, isLoading: immutableRevenueLoading } = useQuery({
+    queryKey: ["immutable-revenue-summary"],
+    queryFn: fetchImmutableRevenueSummary,
+    refetchInterval: 60_000,
+  });
 
   const [searchTerm,  setSearchTerm]  = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterMethod, setFilterMethod] = useState("all");
 
   /* ─── Totals ─── */
-  const totalRevenue = useMemo(() =>
-    transactions.filter(t => t.status === "completed").reduce((s, t) => s + t.amount, 0),
-    [transactions]);
-
   const now = new Date();
-  const thisMonth = useMemo(() =>
-    transactions.filter(t => {
-      const d = new Date(t.created_at);
-      return t.status === "completed" && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    }).reduce((s, t) => s + t.amount, 0),
-    [transactions]);
-
-  const today = useMemo(() =>
-    transactions.filter(t => {
-      const d = new Date(t.created_at);
-      return t.status === "completed" && d.toDateString() === now.toDateString();
-    }).reduce((s, t) => s + t.amount, 0),
-    [transactions]);
+  const totalRevenue = immutableRevenue?.totalRevenue ?? 0;
+  const thisMonth = immutableRevenue?.incomeMonth ?? 0;
+  const today = immutableRevenue?.incomeToday ?? 0;
 
   /* ─── Filter ─── */
   const filtered = useMemo(() => {
@@ -78,9 +88,9 @@ export default function Transactions() {
 
         {/* KPI cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard label="Total Revenue"  value={fmtKsh(totalRevenue)} color="green" subValue="All completed" />
-          <StatCard label="This Month"     value={fmtKsh(thisMonth)}    color="cyan"  subValue={now.toLocaleString("en-KE", { month: "long", year: "numeric" })} />
-          <StatCard label="Today"          value={fmtKsh(today)}        color="amber" subValue={now.toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })} />
+           <StatCard label="Total Revenue"  value={immutableRevenueLoading ? "…" : fmtKsh(totalRevenue)} color="green" subValue="Immutable completed sales" />
+           <StatCard label="This Month"     value={immutableRevenueLoading ? "…" : fmtKsh(thisMonth)}    color="cyan"  subValue={now.toLocaleString("en-KE", { month: "long", year: "numeric" })} />
+           <StatCard label="Today"          value={immutableRevenueLoading ? "…" : fmtKsh(today)}        color="amber" subValue={now.toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })} />
         </div>
 
         {/* Table */}

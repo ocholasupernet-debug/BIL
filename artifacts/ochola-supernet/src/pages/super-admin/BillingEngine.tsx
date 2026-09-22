@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { Receipt, Save, CheckCircle2, DollarSign, AlertTriangle, Clock, RefreshCw } from "lucide-react";
 
@@ -38,6 +38,9 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 }
 
 export default function SuperAdminBillingEngine() {
+  const [platform, setPlatform] = useState({
+    cutoff_day: "25", due_day: "5", sales_threshold: "8000", low_sales_fee: "500", high_sales_fee: "1400",
+  });
   const [cfg, setCfg] = useState({
     billingCycle: "monthly", gracePeriodDays: "3", lateFee: "50", lateFeeType: "fixed",
     autoInvoice: true, autoSuspend: true, autoResume: true,
@@ -48,8 +51,53 @@ export default function SuperAdminBillingEngine() {
     commissionRate: "10",
   });
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
   const set = (k: keyof typeof cfg, v: string | boolean) => { setCfg(f => ({ ...f, [k]: v })); setSaved(false); };
-  const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+  const platformSet = (k: keyof typeof platform, value: string) => {
+    setPlatform(current => ({ ...current, [k]: value }));
+    setSaved(false);
+  };
+  const token = () => {
+    try { return localStorage.getItem("ochola_superadmin_token") || ""; } catch { return ""; }
+  };
+  useEffect(() => {
+    fetch("/api/super-admin/billing/platform-config", { headers: { "x-sa-token": token() } })
+      .then(async response => {
+        const data = await response.json() as { config?: Record<string, unknown>; error?: string };
+        if (!response.ok) throw new Error(data.error || "Could not load platform billing rules.");
+        if (data.config) setPlatform(current => ({
+          ...current,
+          cutoff_day: String(data.config?.cutoff_day ?? current.cutoff_day),
+          due_day: String(data.config?.due_day ?? current.due_day),
+          sales_threshold: String(data.config?.sales_threshold ?? current.sales_threshold),
+          low_sales_fee: String(data.config?.low_sales_fee ?? current.low_sales_fee),
+          high_sales_fee: String(data.config?.high_sales_fee ?? current.high_sales_fee),
+        }));
+      })
+      .catch(loadError => setError(loadError instanceof Error ? loadError.message : "Could not load platform billing rules."));
+  }, []);
+  const save = async () => {
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/billing/platform-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-sa-token": token() },
+        body: JSON.stringify({
+          cutoff_day: Number(platform.cutoff_day),
+          due_day: Number(platform.due_day),
+          sales_threshold: Number(platform.sales_threshold),
+          low_sales_fee: Number(platform.low_sales_fee),
+          high_sales_fee: Number(platform.high_sales_fee),
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save platform billing rules.");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save platform billing rules.");
+    }
+  };
 
   return (
     <SuperAdminLayout>
@@ -63,6 +111,44 @@ export default function SuperAdminBillingEngine() {
             {saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saved ? "Saved!" : "Save"}
           </button>
         </div>
+
+        {error && <div role="alert" style={{ marginBottom: 18, color: "#fca5a5", background: "rgba(127,29,29,0.22)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 10, padding: "11px 14px", fontSize: 13 }}>{error}</div>}
+
+        <Section title="ISP & reseller platform renewal" icon={DollarSign}>
+          <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.6, margin: "0 0 20px" }}>
+            Accounts created on or before the cutoff are assessed from the immutable previous-month sales ledger. The invoice is created on the 1st and is due on the configured day.
+          </p>
+          <Row label="Registration cutoff day" hint="Accounts created on or before this day enter recurring billing">
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input style={{ ...inp, width: 90 }} type="number" min="1" max="28" value={platform.cutoff_day} onChange={e => platformSet("cutoff_day", e.target.value)} />
+              <span style={{ color: C.sub, fontSize: "0.82rem" }}>day of month</span>
+            </div>
+          </Row>
+          <Row label="Payment deadline" hint="Banner countdown ends at the end of this day">
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input style={{ ...inp, width: 90 }} type="number" min="1" max="28" value={platform.due_day} onChange={e => platformSet("due_day", e.target.value)} />
+              <span style={{ color: C.sub, fontSize: "0.82rem" }}>of each month</span>
+            </div>
+          </Row>
+          <Row label="Sales threshold" hint="The higher fee applies when monthly sales exceed this amount">
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ color: C.sub, fontSize: "0.82rem" }}>KSh</span>
+              <input style={{ ...inp, width: 130 }} type="number" min="0" value={platform.sales_threshold} onChange={e => platformSet("sales_threshold", e.target.value)} />
+            </div>
+          </Row>
+          <Row label="Fee below threshold">
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ color: C.sub, fontSize: "0.82rem" }}>KSh</span>
+              <input style={{ ...inp, width: 130 }} type="number" min="0" value={platform.low_sales_fee} onChange={e => platformSet("low_sales_fee", e.target.value)} />
+            </div>
+          </Row>
+          <Row label="Fee above threshold">
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ color: C.sub, fontSize: "0.82rem" }}>KSh</span>
+              <input style={{ ...inp, width: 130 }} type="number" min="0" value={platform.high_sales_fee} onChange={e => platformSet("high_sales_fee", e.target.value)} />
+            </div>
+          </Row>
+        </Section>
 
         <Section title="Billing Cycle" icon={RefreshCw}>
           <Row label="Default Billing Cycle" hint="How often ISP customers are billed">

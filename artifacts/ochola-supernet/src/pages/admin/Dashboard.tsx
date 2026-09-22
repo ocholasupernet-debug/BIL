@@ -42,6 +42,24 @@ import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 
 type LiveCounts = { hotspot: number; pppoe: number };
+type RevenueSummary = {
+  incomeToday: number;
+  incomeMonth: number;
+  totalRevenue: number;
+  totalTransactions: number;
+};
+
+async function fetchRevenueSummary(): Promise<RevenueSummary> {
+  const token = (() => {
+    try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
+  })();
+  const response = await fetch("/api/billing/revenue-summary", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  const data = await response.json() as RevenueSummary & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load revenue totals.");
+  return data;
+}
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -323,6 +341,16 @@ export default function Dashboard() {
     queryFn: fetchConfiguredGateway,
     refetchOnWindowFocus: true,
   });
+  const {
+    data: revenueSummary,
+    isLoading: revenueLoading,
+    isError: revenueError,
+    refetch: refetchRevenue,
+  } = useQuery({
+    queryKey: ["immutable-revenue-summary", ADMIN_ID],
+    queryFn: fetchRevenueSummary,
+    refetchInterval: 60_000,
+  });
 
   const gatewayId = configuredGatewayId || "";
   const currentGatewayMode = gatewayLoading ? "Loading…" : gatewayError ? "Unavailable" : gatewayMode(gatewayId);
@@ -362,21 +390,8 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   });
 
-  const incomeToday = useMemo(
-    () => transactions
-      .filter((transaction) => transaction.status === "completed" && new Date(transaction.created_at).toDateString() === now.toDateString())
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
-    [transactions, now],
-  );
-  const incomeMonth = useMemo(
-    () => transactions
-      .filter((transaction) => {
-        const date = new Date(transaction.created_at);
-        return transaction.status === "completed" && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-      })
-      .reduce((sum, transaction) => sum + transaction.amount, 0),
-    [transactions, now],
-  );
+  const incomeToday = revenueSummary?.incomeToday ?? 0;
+  const incomeMonth = revenueSummary?.incomeMonth ?? 0;
 
   const onlineRouters = routers.filter(routerOnline).length;
   const offlineRouters = routers.length - onlineRouters;
@@ -426,12 +441,10 @@ export default function Dashboard() {
   const telemetry = telemetryQuery.data;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const recentTxs = transactions.slice(0, 5);
-  const completedRevenue = transactions
-    .filter((transaction) => transaction.status === "completed")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const completedRevenue = revenueSummary?.totalRevenue ?? 0;
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const displayName = getAdminDisplayName();
-  const hasError = routersError || customersError || txError;
+  const hasError = routersError || customersError || txError || revenueError;
   const dashboardStyle = {
     "--dashboard-accent": preferences.accentColor,
     "--dashboard-accent-glow": `${preferences.accentColor}1a`,
@@ -470,7 +483,7 @@ export default function Dashboard() {
             <button
               type="button"
               className="dashboard-error-retry"
-              onClick={() => { void refetchRouters(); void refetchCustomers(); void refetchTransactions(); }}
+               onClick={() => { void refetchRouters(); void refetchCustomers(); void refetchTransactions(); void refetchRevenue(); }}
             >
               Retry
             </button>
@@ -494,10 +507,10 @@ export default function Dashboard() {
           </button>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
-          <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
-          <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
-          <KpiCard label="Total transactions" value={txLoading ? "…" : String(transactions.length)} icon={<ReceiptText size={19} />} tone="amber" />
-          <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : txLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
+           <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
+           <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
+           <KpiCard label="Total transactions" value={revenueLoading ? "…" : String(revenueSummary?.totalTransactions ?? 0)} icon={<ReceiptText size={19} />} tone="amber" />
+           <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
         </section>
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">

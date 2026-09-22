@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
-import { sbDelete, sbInsert, sbSelect, sbUpdate } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings, isMpesaConfigured } from "../lib/settings-store.js";
 
 const router: IRouter = Router();
@@ -119,6 +119,55 @@ router.get("/super-admin/billing/admins", async (req, res): Promise<void> => {
     res.json({ ok: true, admins });
   } catch {
     res.status(503).json({ ok: false, error: "Could not load active ISP accounts." });
+  }
+});
+
+router.get("/super-admin/billing/platform-config", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const [config] = await sbSelectStrict<Record<string, unknown>>(
+      "platform_billing_config",
+      "id=eq.1&select=cutoff_day,due_day,sales_threshold,low_sales_fee,high_sales_fee,updated_at&limit=1",
+    );
+    res.json({ ok: true, config });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load platform billing rules." });
+  }
+});
+
+router.put("/super-admin/billing/platform-config", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  const numberField = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const cutoffDay = numberField(req.body?.cutoff_day, 25);
+  const dueDay = numberField(req.body?.due_day, 5);
+  const threshold = numberField(req.body?.sales_threshold, 8000);
+  const lowFee = numberField(req.body?.low_sales_fee, 500);
+  const highFee = numberField(req.body?.high_sales_fee, 1400);
+  if (![cutoffDay, dueDay].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 28)
+      || ![threshold, lowFee, highFee].every(value => value >= 0 && value <= 100000000)) {
+    res.status(400).json({ ok: false, error: "Enter valid billing days, threshold, and non-negative fees." });
+    return;
+  }
+  try {
+    const [config] = await sbUpsertStrict<Record<string, unknown>>(
+      "platform_billing_config",
+      "id",
+      {
+        id: 1,
+        cutoff_day: cutoffDay,
+        due_day: dueDay,
+        sales_threshold: threshold,
+        low_sales_fee: lowFee,
+        high_sales_fee: highFee,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    res.json({ ok: true, config });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not save platform billing rules." });
   }
 });
 

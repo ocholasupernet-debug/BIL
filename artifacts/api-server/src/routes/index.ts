@@ -30,6 +30,7 @@ import storageGovernanceRouter from "./storage-governance-route.js";
 import adminSettingsRouter from "./admin-settings-route.js";
 import resellerRouter from "./reseller-route.js";
 import portServicesRouter from "./port-services-route.js";
+import billingRouter from "./billing-route.js";
 
 const router: IRouter = Router();
 
@@ -64,5 +65,6 @@ router.use(dashboardPreferencesRouter);
   router.use(adminSettingsRouter);
   router.use(resellerRouter);
   router.use(portServicesRouter);
+  router.use(billingRouter);
 
 export default router;
