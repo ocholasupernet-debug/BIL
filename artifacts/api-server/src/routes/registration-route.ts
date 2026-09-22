@@ -147,6 +147,9 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
   const paymentPhone = typeof req.body?.paymentPhone === "string" ? req.body.paymentPhone.trim() : "";
+  const username = typeof req.body?.username === "string"
+    ? req.body.username.trim()
+    : INITIAL_ADMIN_USERNAME;
   const paymentMode = req.body?.paymentMode === "paybill" ? "paybill" : "stk";
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
@@ -157,14 +160,18 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
   if (!/^2547\d{8}$/.test(formattedPhone) ||
-      (paymentMode === "stk" && !/^2547\d{8}$/.test(formattedPaymentPhone))) {
+      !/^2547\d{8}$/.test(formattedPaymentPhone)) {
     res.status(400).json({ ok: false, error: paymentMode === "paybill"
-      ? "Enter a valid Kenyan contact number."
+      ? "Enter valid Kenyan contact and payment numbers."
       : "Enter valid contact and M-Pesa payment numbers." });
     return;
   }
   if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
     res.status(400).json({ ok: false, error: "Your name must be 80 characters or fewer." });
+    return;
+  }
+  if (username !== INITIAL_ADMIN_USERNAME) {
+    res.status(400).json({ ok: false, error: "The initial admin username must be admin." });
     return;
   }
   if (RESERVED_SUBDOMAINS.has(slug)) {
