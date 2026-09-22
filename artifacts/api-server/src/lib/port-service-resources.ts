@@ -5,6 +5,7 @@ export type PortServiceResourceInput = {
   bridge_name?: string | null;
   handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
   reseller_id?: number | null;
+  assigned_reseller_id?: number | null;
   vlan_tag?: string | null;
 };
 
@@ -58,8 +59,9 @@ export function portServiceResourceNames(
     .replace(/^-+|-+$/g, "")
     .slice(0, 56);
   const bridgeName = explicitBridge || `${resourceName}-bridge`;
-  if (port.handoff_mode === "vlan_services" && port.reseller_id && port.vlan_tag) {
-    const segment = `RS${port.reseller_id}_VLAN${port.vlan_tag}`
+  const ownerId = port.assigned_reseller_id ?? port.reseller_id;
+  if (port.handoff_mode === "vlan_services" && ownerId && port.vlan_tag) {
+    const segment = `RS${ownerId}_VLAN${port.vlan_tag}`
       .replace(/[^A-Za-z0-9_-]+/g, "_")
       .slice(0, 48);
     return {

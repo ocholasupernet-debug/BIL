@@ -14,6 +14,7 @@ import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
   getAdminApiToken,
+  getAdminRole,
   getSelectedTenantId,
 } from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
@@ -24,8 +25,6 @@ import {
   Save, ShieldCheck, Smartphone, Sparkles, Trash2, Upload, Wifi, X,
 } from "lucide-react";
 
-const ADMIN_ID = getSelectedTenantId() ?? AUTH_ADMIN_ID;
-const STORAGE_KEY = `hotspot_settings_${ADMIN_ID}`;
 const PUBLIC_BASE_DOMAIN = "isplatty.org";
 
 const DEFAULT_COLORS = {
@@ -156,9 +155,9 @@ const DEFAULT_SETTINGS: HSettings = {
   colors: DEFAULT_COLORS,
 };
 
-function loadSettings(): HSettings {
+function loadSettings(storageKey: string): HSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_COLORS } };
     const parsed = JSON.parse(raw) as Partial<HSettings>;
     return {
@@ -309,12 +308,13 @@ function renderStaticPlanCards(plans: PortalPlan[], packageShape: string): strin
 
 function makeExportConfig(
   settings: HSettings,
+  adminId: number,
   apiBase: string,
   plans: PortalPlan[],
   appearance: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
 ): ExportConfig {
   return {
-    adminId: ADMIN_ID,
+    adminId,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
       ? Number(settings.routerId)
       : 0,
@@ -348,13 +348,13 @@ function makeExportConfig(
   };
 }
 
-async function resolvePortalAppearance(domain: string): Promise<{
+async function resolvePortalAppearance(domain: string, adminId: number): Promise<{
   apiBase: string;
   portalBackground: string;
   portalPackageShape: string;
 }> {
   try {
-    const response = await fetch(`/api/public/typography?adminId=${encodeURIComponent(String(ADMIN_ID))}`, {
+    const response = await fetch(`/api/public/typography?adminId=${encodeURIComponent(String(adminId))}`, {
       cache: "no-store",
     });
     if (response.ok) {
@@ -378,10 +378,11 @@ export async function buildPortalHtml(
   domain: string,
   appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
 ): Promise<string> {
+  const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
-  const resolvedAppearance = await resolvePortalAppearance(domain);
+  const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
   const appearance = {
     ...resolvedAppearance,
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
@@ -393,7 +394,7 @@ export async function buildPortalHtml(
     const routerQuery = Number.isSafeInteger(routerId) && routerId > 0
       ? `&routerId=${encodeURIComponent(String(routerId))}`
       : "";
-    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(ADMIN_ID))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}`, {
+    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}`, {
       cache: "no-store",
     });
     if (plansResponse.ok) {
@@ -414,7 +415,7 @@ export async function buildPortalHtml(
   } catch {
     /* The API fallback remains available when the admin panel is offline. */
   }
-  const config = makeExportConfig(settings, appearance.apiBase, plans, appearance);
+  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
@@ -679,13 +680,16 @@ function PreviewModal({
 
 export default function HotspotSettings() {
   const brand = useBrand();
+  const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
+  const storageKey = `hotspot_settings_${adminId}`;
+  const isResellerAccount = getAdminRole() === "reseller";
   const {
     preferences,
     loading: appearanceLoading,
     saving: appearanceSaving,
     savePreferences,
   } = useDashboardPreferences();
-  const [settings, setSettings] = useState<HSettings>(loadSettings);
+  const [settings, setSettings] = useState<HSettings>(() => loadSettings(storageKey));
   const [portalBackground, setPortalBackground] = useState<PortalBackground>(preferences.portalBackground);
   const [portalPackageShape, setPortalPackageShape] = useState<PortalPackageShape>(preferences.portalPackageShape);
   const [saving, setSaving] = useState(false);
@@ -717,7 +721,7 @@ export default function HotspotSettings() {
   }, []);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
-    queryKey: ["routers_for_hotspot_settings", ADMIN_ID],
+    queryKey: ["routers_for_hotspot_settings", adminId],
     queryFn: async () => {
       const response = await fetch("/api/routers", { headers: adminApiHeaders(), cache: "no-store" });
       const data = await response.json() as DbRouter[] | { error?: string };
@@ -764,6 +768,16 @@ export default function HotspotSettings() {
     };
   }, [settings.routerId]);
 
+  useEffect(() => {
+    if (!isResellerAccount || routersLoading) return;
+    setSettings(previous => {
+      const current = Number(previous.routerId);
+      const stillAssigned = routers.some(router => router.id === current);
+      if (stillAssigned) return previous;
+      return { ...previous, routerId: routers[0] ? String(routers[0].id) : "" };
+    });
+  }, [isResellerAccount, routers, routersLoading]);
+
   const update = <K extends keyof HSettings>(key: K, value: HSettings[K]) => {
     setSettings(previous => ({ ...previous, [key]: value }));
     setNotice(null);
@@ -787,6 +801,9 @@ export default function HotspotSettings() {
     setSavingPortId(port.id);
     setNotice(null);
     try {
+      const resellerPortalHtml = isResellerAccount && draft.hotspotEnabled
+        ? await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape })
+        : "";
       const response = await fetch(`/api/admin/port-services/${port.id}`, {
         method: "PUT",
         headers: adminApiHeaders(),
@@ -808,7 +825,7 @@ export default function HotspotSettings() {
         const deployResponse = await fetch(`/api/admin/port-services/${port.id}/deploy`, {
           method: "POST",
           headers: adminApiHeaders(),
-          body: JSON.stringify({}),
+          body: JSON.stringify(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
         });
         const deployData = await deployResponse.json() as { error?: string };
         if (!deployResponse.ok) throw new Error(deployData.error || "The router service deployment failed.");
@@ -879,7 +896,7 @@ export default function HotspotSettings() {
     setSaving(true);
     setNotice(null);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      localStorage.setItem(storageKey, JSON.stringify(settings));
       await savePreferences({
         ...preferences,
         portalBackground,
@@ -1148,10 +1165,11 @@ export default function HotspotSettings() {
         <header className="hs-hero">
           <div>
             <div className="hs-eyebrow"><Wifi size={13} /> Customer access experience</div>
-            <h1 className="hs-title">Hotspot portal</h1>
+            <h1 className="hs-title">{isResellerAccount ? "Assigned VLAN hotspot" : "Hotspot portal"}</h1>
             <p className="hs-subtitle">
-              Shape what customers see when they join your Wi-Fi, then export one ready-to-upload
-              <strong> login.html</strong> with the same payment and RouterOS behavior.
+              {isResellerAccount
+                ? "Edit only the hotspot page assigned to your ISP-linked VLAN. Saving generates reseller-specific files and pushes them to the ISP MikroTik service directory."
+                : <>Shape what customers see when they join your Wi-Fi, then export one ready-to-upload <strong> login.html</strong> with the same payment and RouterOS behavior.</>}
             </p>
           </div>
           <div className="hs-actions">
@@ -1161,15 +1179,15 @@ export default function HotspotSettings() {
             <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting}>
               {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
             </button>
-            <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting}>
+            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting}>
               {deploying ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {deploying ? "Deploying…" : "Deploy to router"}
-            </button>
-            <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || deploying || exporting}>
+            </button>}
+            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || deploying || exporting}>
               {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing files…" : "Install hotspot files"}
-            </button>
-            <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
+            </button>}
+            {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
               <FolderOpen size={14} /> View router files
-            </Link>
+            </Link>}
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Saving…" : saved ? "Saved" : "Save settings"}
@@ -1193,11 +1211,11 @@ export default function HotspotSettings() {
               <Field label="Tagline" help="A short promise shown below the portal title.">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>
-              <Field label="Linked router" help="Keeps this workspace’s hotspot export associated with the selected router.">
+              <Field label={isResellerAccount ? "Assigned ISP router" : "Linked router"} help={isResellerAccount ? "Only routers carrying a VLAN assigned to this reseller are available." : "Keeps this workspace’s hotspot export associated with the selected router."}>
                 {routersLoading ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
                   <div className="hs-select-wrap">
                     <select className="hs-select" value={settings.routerId} onChange={event => update("routerId", event.target.value)}>
-                      <option value="">Choose a router (optional)</option>
+                      <option value="">{isResellerAccount ? "No assigned VLAN router found" : "Choose a router (optional)"}</option>
                       {routers.map(router => (
                         <option key={router.id} value={router.id}>
                           {router.name}{router.host ? ` — ${router.host}` : ""}
@@ -1221,7 +1239,7 @@ export default function HotspotSettings() {
               </Field>
             </Section>
 
-            <Section icon={<Wifi size={16} />} title="Assigned hotspot ports" description="View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22.">
+            <Section icon={<Wifi size={16} />} title={isResellerAccount ? "Your assigned VLAN hotspot" : "Assigned hotspot ports"} description={isResellerAccount ? "This is the only VLAN service and hotspot page this reseller account can edit. Save to create isolated login.html and rlogin.html files on the ISP MikroTik." : "View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22."}>
               {!settings.routerId ? (
                 <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
               ) : portsLoading ? (
@@ -1260,10 +1278,17 @@ export default function HotspotSettings() {
                             Portal DNS name
                             <input className="hs-input" value={draft.hotspotDnsName} onChange={event => updateAssignedPort(port.id, "hotspotDnsName", event.target.value)} placeholder="hotspot.example.com" />
                           </label>
-                          <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
-                            Hotspot asset path
-                            <input className="hs-input" value={draft.hotspotFolderPath} onChange={event => updateAssignedPort(port.id, "hotspotFolderPath", event.target.value)} placeholder="login.html" />
-                          </label>
+                           {isResellerAccount ? (
+                             <div style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                               Reseller hotspot files
+                               <div style={{ color: "var(--isp-text)", fontSize: ".76rem", fontWeight: 700 }}>Generated as login.html + rlogin.html in an isolated VLAN folder.</div>
+                             </div>
+                           ) : (
+                             <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                               Hotspot asset path
+                               <input className="hs-input" value={draft.hotspotFolderPath} onChange={event => updateAssignedPort(port.id, "hotspotFolderPath", event.target.value)} placeholder="login.html" />
+                             </label>
+                           )}
                           <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
                             Service bridge
                             <input className="hs-input" value={draft.bridgeName} onChange={event => updateAssignedPort(port.id, "bridgeName", event.target.value)} placeholder="router-bridge-ether2" />

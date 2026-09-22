@@ -263,6 +263,32 @@ async function deployApprovedSource(
   }
 }
 
+async function deployPortalContent(
+  creds: RouterCredentials,
+  req: Request,
+  html: string,
+  destinationPath: string,
+): Promise<void> {
+  const token = randomBytes(24).toString("hex");
+  const content = Buffer.from(html, "utf8");
+  sourceEntries.set(token, {
+    content,
+    contentType: "text/html; charset=utf-8",
+    fileName: sourceNameFromPath(destinationPath),
+    expiresAt: Date.now() + SOURCE_TTL_MS,
+  });
+  try {
+    await deployRouterFile(creds, {
+      destinationPath,
+      sourceUrl: `${requestOrigin(req)}/api/port-service-source/${token}`,
+      overwrite: true,
+      uploadId: token.slice(0, 16),
+    });
+  } finally {
+    sourceEntries.delete(token);
+  }
+}
+
 export function buildDualServiceCommands(
   port: PortServiceRow,
   hotspotPath: string | null,
@@ -766,9 +792,17 @@ router.get("/admin/port-services", requireAdmin(), async (req, res): Promise<voi
       `admin_id=eq.${tenantId}${routerId && /^\d+$/.test(routerId) ? `&router_id=eq.${routerId}` : ""}&select=*&order=interface_name.asc`,
     );
     const visible = account.role === "reseller"
-      ? rows.filter((row) => activeResellerId(row) === account.id)
+      ? rows.filter((row) => activeResellerId(row) === account.id && row.handoff_mode === "vlan_services")
       : rows;
-    res.json({ ok: true, ports: visible });
+    res.json({
+      ok: true,
+      ports: visible,
+      hotspotAssets: account.role === "reseller"
+        ? getDeployableSource("hotspot", "login.html")
+          ? ["login.html", "rlogin.html"]
+          : []
+        : undefined,
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load port services." });
   }
@@ -897,9 +931,15 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
 router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
   try {
     const port = portFromLocals(res);
+    const account = await authenticatedAccount(req);
     const identity = await resourceIdentityForPort(port);
     const defaultResources = portServiceResourceNames(port, identity);
-    const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
+    const requestedHotspotFolderPath = req.body?.hotspotFolderPath;
+    const hotspotFolderPath = account?.role === "reseller"
+      && req.body?.hotspotEnabled === true
+      && (typeof requestedHotspotFolderPath !== "string" || !requestedHotspotFolderPath.trim())
+      ? "login.html"
+      : requestedHotspotFolderPath === "" ? null : cleanPath(requestedHotspotFolderPath);
     const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
@@ -1012,8 +1052,18 @@ router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess
 router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
   try {
     const port = portFromLocals(res);
+    const account = await authenticatedAccount(req);
+    if (account?.role === "reseller" && port.handoff_mode !== "vlan_services") {
+      res.status(409).json({ ok: false, error: "Only the VLAN service assigned to this reseller can receive reseller hotspot files." });
+      return;
+    }
     if (!port.hotspot_enabled && !port.pppoe_enabled) {
       res.status(400).json({ ok: false, error: "Enable at least one service before deploying this port." });
+      return;
+    }
+    const portalHtml = typeof req.body?.portalHtml === "string" ? req.body.portalHtml : "";
+    if (portalHtml && (Buffer.byteLength(portalHtml, "utf8") > 2_000_000 || !/<html[\s>]/i.test(portalHtml))) {
+      res.status(400).json({ ok: false, error: "The reseller portal HTML is invalid or too large." });
       return;
     }
     const hotspotSource = port.hotspot_enabled ? cleanPath(port.hotspot_folder_path ?? port.hotspot_template_path) : null;
@@ -1063,12 +1113,17 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
         updated_at: new Date().toISOString(),
       });
     }
-    const hotspotDestination = hotspotSource ? `${resources.hotspotDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
+    const hotspotDestination = portalHtml
+      ? `${resources.hotspotDirectory}/login.html`
+      : hotspotSource ? `${resources.hotspotDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
     const pppoeDestination = pppoeSource ? `${resources.pppoeDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
     for (const directory of [resources.hotspotDirectory, resources.pppoeDirectory]) {
       await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
     }
-    if (hotspotSource && hotspotDestination) {
+    if (portalHtml && hotspotDestination) {
+      await deployPortalContent(found.creds, req, portalHtml, hotspotDestination);
+      await deployPortalContent(found.creds, req, portalHtml, `${resources.hotspotDirectory}/rlogin.html`);
+    } else if (hotspotSource && hotspotDestination) {
       await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
       const selectedHotspotName = sourceNameFromPath(hotspotSource);
       const companionPortal = selectedHotspotName === "rlogin.html"

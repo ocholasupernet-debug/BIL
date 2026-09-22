@@ -4,7 +4,7 @@ import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../li
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
-import { authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
+import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 
@@ -63,8 +63,11 @@ function discoverVpnIp(
  */
 
 router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
   const requestedAdmin = req.query.adminId ?? req.query.ispId;
-  const adminId = requestedAdmin !== undefined && String(requestedAdmin).trim() !== ""
+  const adminId = account?.role === "reseller"
+    ? await authenticatedTenantAdminId(req)
+    : requestedAdmin !== undefined && String(requestedAdmin).trim() !== ""
     ? authenticatedAdminId(req, requestedAdmin)
     : await authenticatedTenantAdminId(req);
   if (!adminId) {
@@ -75,9 +78,22 @@ router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
   const setupFilter = includeSetup
     ? ""
     : "&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)";
+  const resellerRouterIds = account?.role === "reseller"
+    ? await sbSelect<{ router_id: number }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${adminId}&assigned_reseller_id=eq.${account.id}&status=neq.disabled&select=router_id&limit=100`,
+    )
+    : [];
+  if (account?.role === "reseller" && resellerRouterIds.length === 0) {
+    res.json([]);
+    return;
+  }
+  const routerFilter = account?.role === "reseller"
+    ? `&id=in.(${[...new Set(resellerRouterIds.map(row => Number(row.router_id)).filter(id => Number.isSafeInteger(id) && id > 0))].join(",")})`
+    : "";
   const rows = await sbSelect(
     "isp_routers",
-    `admin_id=eq.${adminId}${setupFilter}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
+    `admin_id=eq.${adminId}${routerFilter}${setupFilter}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
 });

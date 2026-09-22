@@ -254,19 +254,22 @@ export function requireAdmin() {
     const tenantSubdomain = getTenantSubdomainFromRequest(req);
     req.tenantSubdomain = tenantSubdomain;
     if (tenantSubdomain && req.authUser.uid !== "superadmin") {
-      const sessionRows = await sbSelect<{ id: number; parent_id: number | null }>(
+      const sessionRows = await sbSelect<{ id: number; parent_id: number | null; subdomain: string | null }>(
         "isp_admins",
-        `id=eq.${encodeURIComponent(req.authUser.uid)}&is_active=is.true&select=id,parent_id&limit=1`,
+        `id=eq.${encodeURIComponent(req.authUser.uid)}&is_active=is.true&select=id,parent_id,subdomain&limit=1`,
       );
       const session = sessionRows[0];
       const tenantId = session?.parent_id ?? session?.id;
       const tenantRows = tenantId
-        ? await sbSelect<{ id: number }>(
+        ? await sbSelect<{ id: number; parent_id: number | null }>(
             "isp_admins",
-            `id=eq.${encodeURIComponent(tenantId)}&subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id&limit=1`,
+          `subdomain=eq.${encodeURIComponent(tenantSubdomain)}&is_active=is.true&select=id,parent_id&limit=10`,
           )
         : [];
-      if (!tenantRows[0]) {
+      const sameLinkedTenant = tenantRows.some((row) =>
+        Number(row.id) === Number(tenantId) || Number(row.parent_id) === Number(tenantId),
+      );
+      if (!sameLinkedTenant) {
         res.status(403).json({ ok: false, error: "This session does not belong to the requested ISP subdomain." });
         return;
       }
