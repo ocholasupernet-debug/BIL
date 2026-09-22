@@ -37,11 +37,6 @@ type ResellerResponse = {
   };
   error?: string;
 };
-type ResellerPaymentSettings = {
-  paymentGateway: string;
-  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
-  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
-};
 type ResellerTelemetry = {
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
 };
@@ -583,22 +578,15 @@ function HorizontalMetricBars({ items, suffix = "" }: { items: Array<{ label: st
 function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
   const [telemetry, setTelemetry] = useState<ResellerTelemetry | null>(null);
-  const [paymentSettings, setPaymentSettings] = useState<ResellerPaymentSettings | null>(null);
   const [selectedPortId, setSelectedPortId] = useState("");
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "" });
   const [staticClient, setStaticClient] = useState({ name: "", phone: "", ipAddress: "", username: "", password: "" });
-  const [gatewayForm, setGatewayForm] = useState<ResellerPaymentSettings>({
-    paymentGateway: "mpesa_paybill",
-    mpesa: { enabled: false, merchantIdentifier: "", accountReference: "", destinationType: "paybill" },
-    bank: { enabled: false, merchantIdentifier: "", accountReference: "", bankName: "" },
-  });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [pppoeSaving, setPppoeSaving] = useState(false);
   const [staticSaving, setStaticSaving] = useState(false);
-  const [gatewaySaving, setGatewaySaving] = useState(false);
 
   const load = async () => {
     try {
@@ -610,9 +598,6 @@ function ResellerDashboard() {
       setTelemetry(liveTelemetry);
       setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
       setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
-      const settings = await apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings");
-      setPaymentSettings(settings.settings);
-      setGatewayForm(settings.settings);
     }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load your reseller dashboard."); }
   };
@@ -649,16 +634,6 @@ function ResellerDashboard() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to assign the static customer.");
     } finally { setStaticSaving(false); }
-  };
-  const saveGatewaySettings = async (event: React.FormEvent) => {
-    event.preventDefault(); setGatewaySaving(true); setError(""); setSuccess("");
-    try {
-      await apiJson("/api/reseller/payment-settings", { method: "PUT", body: JSON.stringify(gatewayForm) });
-      setPaymentSettings(gatewayForm);
-      setSuccess("Payment gateway settings saved. Automated prompts will use the selected Daraja-compatible gateway when configured.");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to save payment gateway settings.");
-    } finally { setGatewaySaving(false); }
   };
   const port = data?.ports?.find((item) => String(item.id) === selectedPortId) ?? data?.ports?.[0];
   const linkStatus = port?.link_status ?? "pending";
@@ -790,20 +765,10 @@ function ResellerDashboard() {
               <button disabled={staticSaving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "#16a34a", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {staticSaving ? "Assigning…" : "Assign static customer"}</button>
             </form>
           )}
-          <form onSubmit={saveGatewaySettings} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
-            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Payment gateway settings</div>
-            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Configure the merchant destination used for reseller customer payments. Credentials stay server-side; manual receipts remain available for non-automated gateways.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
-              <Field label="Selected gateway"><select style={inputStyle} value={gatewayForm.paymentGateway} onChange={(e) => setGatewayForm({ ...gatewayForm, paymentGateway: e.target.value })}><option value="mpesa_paybill">M-Pesa PayBill</option><option value="mpesa_till_push">M-Pesa Till</option><option value="bank_stk_push">Bank STK Push</option><option value="manual">Manual / cash</option></select></Field>
-              <Field label="M-Pesa Till / PayBill"><input style={inputStyle} value={gatewayForm.mpesa.merchantIdentifier} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, merchantIdentifier: e.target.value, enabled: true } })} /></Field>
-              <Field label="M-Pesa account reference"><input style={inputStyle} value={gatewayForm.mpesa.accountReference} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, accountReference: e.target.value, enabled: true } })} /></Field>
-              <Field label="M-Pesa destination"><select style={inputStyle} value={gatewayForm.mpesa.destinationType} onChange={(e) => setGatewayForm({ ...gatewayForm, mpesa: { ...gatewayForm.mpesa, destinationType: e.target.value === "till" ? "till" : "paybill" } })}><option value="paybill">PayBill</option><option value="till">Till</option></select></Field>
-              <Field label="Bank name"><input style={inputStyle} value={gatewayForm.bank.bankName} onChange={(e) => setGatewayForm({ ...gatewayForm, bank: { ...gatewayForm.bank, bankName: e.target.value, enabled: true } })} /></Field>
-              <Field label="Bank account / merchant"><input style={inputStyle} value={gatewayForm.bank.accountReference} onChange={(e) => setGatewayForm({ ...gatewayForm, bank: { ...gatewayForm.bank, accountReference: e.target.value, enabled: true } })} /></Field>
-            </div>
-            <button disabled={gatewaySaving} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer" }}>{gatewaySaving ? "Saving…" : "Save payment settings"}</button>
-            {paymentSettings && <span style={{ marginLeft: 12, color: "#15803d", fontSize: 12, fontWeight: 750 }}>{paymentSettings.paymentGateway} selected</span>}
-          </form>
+           <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
+             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> ISP payment gateway</div>
+             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 0 }}>Automated customer payments use the gateway configured by the connected ISP account. Payment gateway changes are managed in ISP Settings so the assigned VLAN and its portal use one merchant destination.</p>
+           </section>
           {port?.handoff_mode === "vlan_services" && port.pppoe_enabled && (
             <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>
               <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="var(--isp-accent)" /> Assign a PPPoE client</div>

@@ -715,6 +715,7 @@ export default function HotspotSettings() {
   const [showPreview, setShowPreview] = useState(false);
   const [assignedPorts, setAssignedPorts] = useState<AssignedHotspotPort[]>([]);
   const [portDrafts, setPortDrafts] = useState<Record<number, AssignedHotspotPortDraft>>({});
+  const [selectedAssignedPortId, setSelectedAssignedPortId] = useState("");
   const [portsLoading, setPortsLoading] = useState(false);
   const [savingPortId, setSavingPortId] = useState<number | null>(null);
   const [deletingPortId, setDeletingPortId] = useState<number | null>(null);
@@ -748,14 +749,17 @@ export default function HotspotSettings() {
 
   useEffect(() => {
     const routerId = Number(settings.routerId);
-    if (!Number.isSafeInteger(routerId) || routerId < 1) {
+    if (!isResellerAccount && (!Number.isSafeInteger(routerId) || routerId < 1)) {
       setAssignedPorts([]);
       setPortDrafts({});
       return;
     }
     let cancelled = false;
     setPortsLoading(true);
-    fetch(`/api/admin/port-services?routerId=${encodeURIComponent(String(routerId))}`, {
+    const routerQuery = isResellerAccount
+      ? ""
+      : `?routerId=${encodeURIComponent(String(routerId))}`;
+    fetch(`/api/admin/port-services${routerQuery}`, {
       headers: adminApiHeaders(),
       cache: "no-store",
     })
@@ -768,6 +772,18 @@ export default function HotspotSettings() {
         if (cancelled) return;
         setAssignedPorts(ports);
         setPortDrafts(Object.fromEntries(ports.map(port => [port.id, draftFromAssignedHotspotPort(port)])));
+        if (isResellerAccount) {
+          setSelectedAssignedPortId(current => {
+            const stillAssigned = ports.some(port => String(port.id) === current);
+            return stillAssigned ? current : String(ports[0]?.id ?? "");
+          });
+          setSettings(previous => {
+            const selected = ports.find(port => String(port.id) === selectedAssignedPortId) ?? ports[0];
+            return selected && String(selected.router_id) !== previous.routerId
+              ? { ...previous, routerId: String(selected.router_id) }
+              : previous;
+          });
+        }
       })
       .catch(error => {
         if (!cancelled) setNotice({ type: "error", text: error instanceof Error ? error.message : "Assigned hotspot ports could not be loaded." });
@@ -778,7 +794,7 @@ export default function HotspotSettings() {
     return () => {
       cancelled = true;
     };
-  }, [settings.routerId]);
+  }, [isResellerAccount, settings.routerId]);
 
   useEffect(() => {
     if (!isResellerAccount || routersLoading) return;
@@ -914,6 +930,16 @@ export default function HotspotSettings() {
         portalBackground,
         portalPackageShape,
       });
+      if (isResellerAccount) {
+        const selectedPort = assignedPorts.find(port => String(port.id) === selectedAssignedPortId);
+        if (!selectedPort) {
+          throw new Error("Choose the assigned MikroTik VLAN interface before syncing.");
+        }
+        await saveAssignedPort(selectedPort);
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 2500);
+        return;
+      }
       const routerId = Number(settings.routerId);
        const selectedRouter = routers.find((router) => router.id === routerId);
        const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
@@ -1168,6 +1194,9 @@ export default function HotspotSettings() {
     "--mini-accent": settings.colors.accentColor,
     "--mini-button": settings.colors.buttonColor,
   } as React.CSSProperties;
+  const visibleAssignedPorts = isResellerAccount && selectedAssignedPortId
+    ? assignedPorts.filter(port => String(port.id) === selectedAssignedPortId)
+    : assignedPorts;
 
   return (
     <AdminLayout>
@@ -1202,7 +1231,7 @@ export default function HotspotSettings() {
             </Link>}
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-              {saving ? "Saving…" : saved ? "Saved" : "Save settings"}
+              {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : "Save settings"}
             </button>
           </div>
         </header>
@@ -1223,16 +1252,35 @@ export default function HotspotSettings() {
               <Field label="Tagline" help="A short promise shown below the portal title.">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>
-              <Field label={isResellerAccount ? "Assigned ISP router" : "Linked router"} help={isResellerAccount ? "Only routers carrying a VLAN assigned to this reseller are available." : "Keeps this workspace’s hotspot export associated with the selected router."}>
-                {routersLoading ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
+               <Field label={isResellerAccount ? "Assigned MikroTik VLAN interface" : "Linked router"} help={isResellerAccount ? "Use the VLAN interface name assigned on the MikroTik. Syncing this service writes changes to that VLAN interface." : "Keeps this workspace’s hotspot export associated with the selected router."}>
+                 {(!isResellerAccount && routersLoading) ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
                   <div className="hs-select-wrap">
-                    <select className="hs-select" value={settings.routerId} onChange={event => update("routerId", event.target.value)}>
-                      <option value="">{isResellerAccount ? "No assigned VLAN router found" : "Choose a router (optional)"}</option>
-                      {routers.map(router => (
-                        <option key={router.id} value={router.id}>
-                          {router.name}{router.host ? ` — ${router.host}` : ""}
-                        </option>
-                      ))}
+                     <select
+                       className="hs-select"
+                       value={isResellerAccount ? selectedAssignedPortId : settings.routerId}
+                       onChange={event => {
+                         if (!isResellerAccount) {
+                           update("routerId", event.target.value);
+                           return;
+                         }
+                         const selected = assignedPorts.find(port => String(port.id) === event.target.value);
+                         setSelectedAssignedPortId(event.target.value);
+                         if (selected) update("routerId", String(selected.router_id));
+                       }}
+                       disabled={isResellerAccount && (portsLoading || assignedPorts.length === 0)}
+                     >
+                       <option value="">{isResellerAccount ? "No assigned VLAN interface found" : "Choose a router (optional)"}</option>
+                       {isResellerAccount
+                         ? assignedPorts.map(port => (
+                           <option key={port.id} value={port.id}>
+                             {port.interface_name}{port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}{port.status ? ` · ${port.status}` : ""}
+                           </option>
+                         ))
+                         : routers.map(router => (
+                           <option key={router.id} value={router.id}>
+                             {router.name}{router.host ? ` — ${router.host}` : ""}
+                           </option>
+                         ))}
                     </select>
                     <ChevronDown size={14} />
                   </div>
@@ -1252,15 +1300,15 @@ export default function HotspotSettings() {
             </Section>
 
             <Section icon={<Wifi size={16} />} title={isResellerAccount ? "Your assigned VLAN hotspot" : "Assigned hotspot ports"} description={isResellerAccount ? "This is the only VLAN service and hotspot page this reseller account can edit. Save to create isolated login.html and rlogin.html files on the ISP MikroTik." : "View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22."}>
-              {!settings.routerId ? (
+               {!settings.routerId && !isResellerAccount ? (
                 <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
               ) : portsLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={15} className="animate-spin" /> Loading assigned ports…</div>
-              ) : assignedPorts.length === 0 ? (
-                <div className="hs-status hs-status-info"><Info size={15} /> No physical port services are assigned to this router yet. Use Multiport to assign one.</div>
+               ) : visibleAssignedPorts.length === 0 ? (
+                 <div className="hs-status hs-status-info"><Info size={15} /> {isResellerAccount ? "No VLAN interface has been assigned to this reseller yet." : "No physical port services are assigned to this router yet. Use Multiport to assign one."}</div>
               ) : (
                 <div style={{ display: "grid", gap: 14, padding: "14px 0 8px" }}>
-                  {assignedPorts.map(port => {
+                   {visibleAssignedPorts.map(port => {
                     const draft = portDrafts[port.id];
                     if (!draft) return null;
                     const statusColor = port.status === "active" || port.status === "completed"
@@ -1322,7 +1370,7 @@ export default function HotspotSettings() {
                         <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, flexWrap: "wrap", marginTop: 12 }}>
                           <button type="button" className="hs-btn hs-btn-primary" onClick={() => void saveAssignedPort(port)} disabled={savingPortId === port.id || deletingPortId === port.id}>
                             {savingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                            {savingPortId === port.id ? "Saving…" : "Save port changes"}
+                             {savingPortId === port.id ? "Syncing…" : isResellerAccount ? "Sync to MikroTik" : "Save port changes"}
                           </button>
                           <button type="button" className="hs-btn" onClick={() => void deleteAssignedPort(port)} disabled={savingPortId === port.id || deletingPortId === port.id} style={{ color: "#b91c1c", borderColor: "rgba(220,38,38,.35)", background: "rgba(220,38,38,.06)" }}>
                             {deletingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
