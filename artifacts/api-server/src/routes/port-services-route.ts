@@ -71,6 +71,10 @@ function validRouterResourceName(value: unknown): value is string {
     && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim());
 }
 
+function routerBoolean(value: unknown): boolean {
+  return value === true || value === "true" || value === "yes" || value === "1";
+}
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 48) || fallback;
@@ -606,10 +610,21 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
   const printPath = addPath.replace(/\/add$/, "/print");
   const proplist = addPath === "/ip/address/add"
     ? "=.proplist=.id,address,interface"
+    : addPath === "/ip/dns/static/add"
+      ? "=.proplist=.id,name,address,dynamic"
     : `=.proplist=.id,${property}`;
   const rows = await runRouterCommand(creds, [printPath, proplist]).catch(() => []);
   const existing = rows.find((row) => row[property] === propertyArg.slice(property.length + 2));
   if (existing?.[".id"]) {
+    if (addPath === "/ip/dns/static/add" && routerBoolean(existing.dynamic)) {
+      const requestedAddress = command.find((arg) => arg.startsWith("=address="))?.slice("=address=".length);
+      if (requestedAddress && existing.address && existing.address !== requestedAddress) {
+        throw new Error(
+          `DNS name ${propertyArg.slice(property.length + 2)} is already a dynamic entry for ${existing.address}; it cannot be changed to ${requestedAddress}.`,
+        );
+      }
+      return;
+    }
     if (
       addPath === "/ip/address/add"
       && existing.interface

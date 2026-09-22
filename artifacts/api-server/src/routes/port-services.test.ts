@@ -138,3 +138,20 @@ test("VLAN services accept named parent bridges that do not use an interface pre
   const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
   assert.match(script, /\/interface\/vlan\/add =name=ocholachrisphine3_gmail_com =vlan-id=1 =interface=co-hotspot-bridge/);
 });
+
+test("VLAN service deployments include DNS names without treating dynamic RouterOS entries as static", () => {
+  const commands = buildDualServiceCommands(
+    {
+      ...port,
+      interface_name: "ocholachrisphine3_gmail_com",
+      bridge_name: "co-hotspot-bridge",
+      vlan_tag: "1",
+      handoff_mode: "vlan_services",
+    },
+    "flash/hotspot/hs_vlan",
+    "flash/hotspot/pppoe_vlan",
+    "10.8.5.2",
+    { hotspotDnsName: "goo.com", pppoeDnsName: "goo.com" },
+  );
+  assert.equal(commands.filter(([path]) => path === "/ip/dns/static/add").length, 2);
+});
