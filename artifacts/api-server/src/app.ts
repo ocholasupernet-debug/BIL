@@ -3,7 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -75,6 +75,35 @@ if (shouldServeStatic) {
     moduleStaticDir;
 
   if (existsSync(staticDir)) {
+    const registerIndexPath = path.join(staticDir, "index.html");
+    app.use((req, res, next) => {
+      const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
+        .split(",")[0]
+        .trim();
+      const requestHost = (forwardedHost || req.get("host") || req.hostname || "")
+        .split(":")[0]
+        .toLowerCase();
+      const isDocumentRequest = req.method === "GET"
+        && !req.path.startsWith("/api/")
+        && !req.path.startsWith("/assets/")
+        && !/\.[a-z0-9]+$/i.test(req.path);
+      if (requestHost !== "register.isplatty.org" || !isDocumentRequest) {
+        next();
+        return;
+      }
+
+      try {
+        const html = readFileSync(registerIndexPath, "utf8")
+          .replace(/<title>[^<]*<\/title>/i, "<title>Register New company | OcholaSupernet</title>")
+          .replace(
+            /<meta name="description" content="[^"]*"\s*\/?>/i,
+            '<meta name="description" content="Register New company with OcholaSupernet." />',
+          );
+        res.type("html").send(html);
+      } catch {
+        next();
+      }
+    });
     app.use(express.static(staticDir));
 
     // Never let an unknown API route fall through to the SPA document.
