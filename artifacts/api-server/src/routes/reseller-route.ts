@@ -47,6 +47,12 @@ type ResellerPortRow = {
   assigned_reseller_id?: number | null;
   link_status?: "pending" | "active" | "suspended" | null;
   vlan_tag?: string | null;
+  handoff_mode?: "services" | "isp_router" | null;
+  handoff_type?: "physical" | "vlan" | null;
+  xpon_identifier?: string | null;
+  link_detected?: boolean | null;
+  last_link_checked_at?: string | null;
+  link_detection_error?: string | null;
   link_provisioning_error?: string | null;
   status: string;
   provisioning_error: string | null;
@@ -168,6 +174,42 @@ async function tenantRouter(adminId: number, routerId: number): Promise<RouterRo
   );
   if (!rows[0]) throw new Error("Router not found for this ISP account.");
   return rows[0];
+}
+
+async function detectRouterInterfaceLink(
+  target: RouterRow,
+  interfaceName: string,
+): Promise<{ exists: boolean; running: boolean; disabled: boolean; type: string; macAddress: string; error: string | null }> {
+  try {
+    const rows = await runRouterCommand(routerCredentials(target), [
+      "/interface/print",
+      "=.proplist=name,type,running,disabled,mac-address",
+      `?name=${interfaceName}`,
+    ]);
+    const row = Array.isArray(rows)
+      ? rows.find((item) => String((item as Record<string, unknown>).name ?? "") === interfaceName) as Record<string, unknown> | undefined
+      : undefined;
+    if (!row) {
+      return { exists: false, running: false, disabled: false, type: "", macAddress: "", error: "The selected interface was not found on the ISP router." };
+    }
+    return {
+      exists: true,
+      running: String(row.running ?? "").toLowerCase() === "true",
+      disabled: String(row.disabled ?? "").toLowerCase() === "true",
+      type: String(row.type ?? ""),
+      macAddress: String(row["mac-address"] ?? ""),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      exists: false,
+      running: false,
+      disabled: false,
+      type: "",
+      macAddress: "",
+      error: error instanceof Error ? error.message.slice(0, 500) : "The ISP router link could not be checked.",
+    };
+  }
 }
 
 function routerResourceId(row: Record<string, unknown>): string {
@@ -333,7 +375,7 @@ router.get("/admin/resellers", requireAdmin(), async (req, res): Promise<void> =
     );
     const ports = await sbSelectStrict(
       "isp_reseller_ports",
-      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,provisioning_error,link_provisioning_error&order=created_at.desc`,
+      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&order=created_at.desc`,
     );
     res.json({ ok: true, resellers: rows, ports });
   } catch (error) {
@@ -398,6 +440,47 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
       return;
     }
     const targetRouter = await tenantRouter(account.id, port.router_id);
+    if (port.handoff_mode === "isp_router") {
+      const link = await detectRouterInterfaceLink(targetRouter, port.interface_name);
+      const checkedAt = new Date().toISOString();
+      const effectiveLinkStatus = requestedState === "suspended"
+        ? "suspended"
+        : link.running ? "active" : "pending";
+      const updated = await sbUpdateStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${port.id}&admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}`,
+        {
+          link_status: effectiveLinkStatus,
+          bandwidth_cap_mbps: cap,
+          reseller_bandwidth_cap: cap,
+          link_detected: link.running,
+          last_link_checked_at: checkedAt,
+          link_detection_error: link.error,
+          link_provisioning_error: null,
+          updated_at: checkedAt,
+        },
+      );
+      if (!updated[0]) throw new Error("The ISP router handoff state could not be saved.");
+      await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${resellerId}&parent_id=eq.${account.id}&role=eq.reseller`,
+        {
+          status: requestedState === "suspended" ? "suspended_payment_pending" : "active",
+          updated_at: checkedAt,
+        },
+      );
+      res.json({
+        ok: true,
+        link: { ...(updated[0] ?? {}), link_status: effectiveLinkStatus, link_detected: link.running, last_link_checked_at: checkedAt },
+        handoffMode: "isp_router",
+        message: requestedState === "suspended"
+          ? "ISP router handoff suspended."
+          : link.running
+            ? "ISP router handoff is active and the XPON link is detected."
+            : "Handoff is waiting for the XPON router link. Connect the XPON router, then refresh link status.",
+      });
+      return;
+    }
     const updated = await sbUpdateStrict<ResellerPortRow>(`isp_reseller_ports`,
       `id=eq.${port.id}&admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}`,
       {
@@ -482,7 +565,7 @@ router.get("/isp/pending-resellers", requireAdmin(), async (req, res): Promise<v
       ),
       sbSelectStrict<ResellerPortRow>(
         "isp_reseller_ports",
-        `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,link_provisioning_error&order=created_at.desc`,
+      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,link_provisioning_error&order=created_at.desc`,
       ),
       sbSelectStrict<{ id: number; name: string; status: string }>(
         "isp_routers",
@@ -676,6 +759,171 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
   }
 });
 
+/**
+ * Attach an approved reseller to an ISP-managed router/XPON handoff. This
+ * intentionally does not install RouterOS services, queues, or packages:
+ * the ISP router remains responsible for DHCP/PPPoE/NAT and the reseller
+ * only connects their XPON/router to the assigned handoff.
+ */
+router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot provision ISP router handoffs." });
+      return;
+    }
+    const requestId = Number(req.params.requestId);
+    const routerId = Number(req.body?.routerId);
+    const interfaceName = typeof req.body?.interfaceName === "string" ? req.body.interfaceName.trim() : "";
+    const handoffType = req.body?.handoffType === "vlan" ? "vlan" : "physical";
+    const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    const xponIdentifier = typeof req.body?.xponIdentifier === "string"
+      ? req.body.xponIdentifier.trim().slice(0, 120)
+      : "";
+    const cap = Number(req.body?.bandwidthCapMbps);
+    if (!Number.isSafeInteger(requestId) || requestId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(interfaceName)) {
+      res.status(400).json({ ok: false, error: "Choose a valid ISP router and XPON-facing interface." });
+      return;
+    }
+    if (handoffType === "vlan" && (!/^\d{1,4}$/.test(vlanTag) || Number(vlanTag) < 1 || Number(vlanTag) > 4094)) {
+      res.status(400).json({ ok: false, error: "Enter a VLAN ID between 1 and 4094 for this handoff." });
+      return;
+    }
+    if (!Number.isSafeInteger(cap) || cap < 1 || cap > 100000) {
+      res.status(400).json({ ok: false, error: "The bandwidth cap must be between 1 and 100000 Mbps." });
+      return;
+    }
+
+    const requests = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.approved&select=id,reseller_id,isp_admin_id,status&limit=1`,
+    );
+    const request = requests[0];
+    if (!request) {
+      res.status(404).json({ ok: false, error: "Approve the reseller connection before assigning an ISP router handoff." });
+      return;
+    }
+    const resellerRows = await sbSelectStrict<{ id: number; parent_id: number | null; role: string; company_name: string | null }>(
+      "isp_admins",
+      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,parent_id,role,company_name&limit=1`,
+    );
+    if (!resellerRows[0]) {
+      res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
+      return;
+    }
+
+    const target = await tenantRouter(account.id, routerId);
+    const link = await detectRouterInterfaceLink(target, interfaceName);
+    if (!link.exists || link.disabled) {
+      res.status(409).json({ ok: false, error: link.error || "The selected XPON-facing interface is unavailable on the ISP router." });
+      return;
+    }
+    const existingForReseller = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${account.id}&assigned_reseller_id=eq.${request.reseller_id}&status=neq.disabled&select=id&limit=1`,
+    );
+    if (existingForReseller[0]) {
+      res.status(409).json({ ok: false, error: "This reseller already has an active router handoff or port assignment." });
+      return;
+    }
+    const collisionFilter = handoffType === "vlan"
+      ? `&vlan_tag=eq.${encodeURIComponent(vlanTag)}`
+      : "&vlan_tag=is.null";
+    const collisions = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${account.id}&router_id=eq.${routerId}&interface_name=eq.${encodeURIComponent(interfaceName)}&status=neq.disabled${collisionFilter}&select=id&limit=1`,
+    );
+    if (collisions[0]) {
+      res.status(409).json({ ok: false, error: handoffType === "vlan" ? "That router interface and VLAN is already assigned." : "That physical router interface is already assigned." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const inserted = await sbInsertStrict<ResellerPortRow>("isp_reseller_ports", {
+      admin_id: account.id,
+      reseller_id: request.reseller_id,
+      assigned_reseller_id: request.reseller_id,
+      router_id: routerId,
+      interface_name: interfaceName,
+      vlan_tag: handoffType === "vlan" ? vlanTag : null,
+      bridge_name: null,
+      hotspot_enabled: false,
+      hotspot_template_path: null,
+      pppoe_enabled: false,
+      subnet_range: null,
+      bandwidth_cap_mbps: cap,
+      reseller_bandwidth_cap: cap,
+      status: "active",
+      provisioning_error: null,
+      link_status: link.running ? "active" : "pending",
+      link_provisioning_error: null,
+      handoff_mode: "isp_router",
+      handoff_type: handoffType,
+      xpon_identifier: xponIdentifier || null,
+      link_detected: link.running,
+      last_link_checked_at: now,
+      link_detection_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+    res.status(201).json({
+      ok: true,
+      handoff: inserted[0] ?? null,
+      link: {
+        detected: link.running,
+        interfaceName,
+        interfaceType: link.type,
+        macAddress: link.macAddress,
+        checkedAt: now,
+      },
+      message: link.running
+        ? "ISP router handoff assigned and the XPON link is detected."
+        : "ISP router handoff assigned. Connect the XPON router, then refresh link status.",
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the ISP router handoff." });
+  }
+});
+
+router.get("/admin/reseller-handoffs/:portId/link", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const portId = Number(req.params.portId);
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "isp_router") {
+      res.status(409).json({ ok: false, error: "This assignment is not an ISP router handoff." });
+      return;
+    }
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const link = await detectRouterInterfaceLink(target, port.interface_name);
+    const checkedAt = new Date().toISOString();
+    await sbUpdateStrict(
+      "isp_reseller_ports",
+      `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
+      {
+        link_detected: link.running,
+        last_link_checked_at: checkedAt,
+        link_detection_error: link.error,
+        updated_at: checkedAt,
+      },
+    );
+    res.json({
+      ok: true,
+      link: {
+        detected: link.running,
+        exists: link.exists,
+        disabled: link.disabled,
+        interfaceName: port.interface_name,
+        interfaceType: link.type,
+        macAddress: link.macAddress,
+        checkedAt,
+        error: link.error,
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to detect the XPON link." });
+  }
+});
+
 router.post("/isp/toggle-reseller-pipe", requireAdmin(), async (req, res): Promise<void> => {
   const action = req.body?.action;
   if (action !== "activate" && action !== "suspend") {
@@ -698,6 +946,7 @@ router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Pr
       return;
     }
     const routerId = Number(req.query.routerId);
+    const handoffType = req.query.handoffType === "vlan" ? "vlan" : "physical";
     if (!Number.isSafeInteger(routerId) || routerId <= 0) {
       res.status(400).json({ ok: false, error: "Choose a router first." });
       return;
@@ -727,7 +976,7 @@ router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Pr
           comment: row.comment || "",
           assigned: assigned.has(row.name),
         }))
-        .filter((row) => validInterface(row.name) && !row.disabled && !assigned.has(row.name)),
+         .filter((row) => validInterface(row.name) && !row.disabled && (handoffType === "vlan" || !assigned.has(row.name))),
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load router ports." });
@@ -1022,7 +1271,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const tenantId = account.parent_id ?? account.id;
     const [users, ports, gateways, sales] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
-      sbSelectStrict("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,provisioning_error,link_provisioning_error&limit=50`),
+      sbSelectStrict("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=50`),
       sbSelectStrict("isp_reseller_gateways", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,is_active,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=50`),
     ]);
@@ -1156,6 +1405,10 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
     }
     const portId = Number(req.body?.portId);
     const port = await ownedPort(req, portId);
+    if (port.handoff_mode === "isp_router") {
+      res.status(409).json({ ok: false, error: "This ISP router handoff is managed by the ISP router. The reseller does not provision RouterOS client queues on it." });
+      return;
+    }
     if (port.status !== "active" || port.link_status !== "active") {
       res.status(409).json({ ok: false, error: "This reseller link is not active." });
       return;
