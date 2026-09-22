@@ -18,6 +18,7 @@ function slugify(str: string) {
 
 const COMPANY_NAME_PATTERN = /^[a-z]+$/;
 const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"]);
+const INITIAL_ADMIN_USERNAME = "admin";
 
 interface RegistrationDestination {
   type: "bank" | "till" | "paybill";
@@ -210,8 +211,8 @@ export default function AdminRegister() {
     }
     if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
-    if (paymentMode === "stk" && !paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
-    else if (paymentMode === "stk" && !/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
+    if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
+    else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
     }
     if (displayName.length > 80 || /[\u0000-\u001F\u007F]/.test(displayName)) {
@@ -237,6 +238,7 @@ export default function AdminRegister() {
           displayName: displayName.trim(),
           phone: phone.trim(),
           paymentPhone: paymentPhone.trim(),
+           username: INITIAL_ADMIN_USERNAME,
           paymentMode,
         }),
       });
@@ -286,6 +288,7 @@ export default function AdminRegister() {
 
   if (success) {
     const subdomainUrl = `https://${registeredSubdomain}.isplatty.org`;
+    const adminLoginUrl = `${subdomainUrl}/admin/login?first_login=1`;
     return (
       <div className="register-state-page" style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>
         <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
@@ -319,11 +322,11 @@ export default function AdminRegister() {
               </div>
             </div>
             <a
-              href={subdomainUrl}
-              className="btn btn-primary"
-              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "12px 20px", borderRadius: 10, fontSize: "0.9rem", textDecoration: "none" }}
+              href={adminLoginUrl}
+              className="btn"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "12px 20px", borderRadius: 10, fontSize: "0.9rem", textDecoration: "none", background: "#16A34A", color: "#FFFFFF", border: "1px solid #15803D", boxShadow: "0 8px 18px rgba(22,163,74,0.2)" }}
             >
-              Go to My Portal <ArrowRight size={16} />
+              Go to Admin <ArrowRight size={16} />
             </a>
           </div>
         </div>
@@ -528,7 +531,7 @@ export default function AdminRegister() {
             {errors.company && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.company}</p>}
                   </div>
                   <div>
-                    <label className="register-label">ISP Contact Number</label>
+                    <label className="register-label">Mobile Number</label>
             <div style={{ position: "relative" }}>
               <Phone size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
               <input
@@ -579,6 +582,25 @@ export default function AdminRegister() {
                 </p>
                 {errors.displayName && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.displayName}</p>}
               </div>
+
+               <div>
+                 <label className="register-label">Admin username</label>
+                 <div style={{ position: "relative" }}>
+                   <UserRound size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--isp-text-sub)" }} />
+                   <input
+                     type="text"
+                     value={INITIAL_ADMIN_USERNAME}
+                     readOnly
+                     aria-readonly="true"
+                     autoComplete="username"
+                     className="register-input"
+                     style={{ ...inputStyle(false, null), cursor: "not-allowed", opacity: 0.8 }}
+                   />
+                 </div>
+                 <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
+                   Your temporary login username is <strong>admin</strong>. You will set a new password after the first login.
+                 </p>
+               </div>
 
                <div className="register-form-section">
                  <div className="register-section-heading"><span>02</span><div><strong>Choose how to pay</strong><small>Secure your workspace with a one-time activation payment</small></div></div>
