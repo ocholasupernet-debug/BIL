@@ -477,7 +477,10 @@ export default function SelfInstall() {
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || payload.detail || `Script generation failed (${response.status})`);
+      const message = [payload.error, payload.detail]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" — ");
+      throw new Error(message || `Script generation failed (${response.status})`);
     }
     const payload = await response.json().catch(() => ({})) as SelfInstallStepsResponse;
     const steps = Array.isArray(payload.steps) ? payload.steps as SelfInstallStep[] : [];

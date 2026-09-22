@@ -140,6 +140,20 @@ test("coexistence never removes defaults or moves foreign resources", () => {
   assert.match(script, /platform RADIUS profile skipped; existing RADIUS entries were preserved/);
 });
 
+test("coexistence compiles without a platform RADIUS pair", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "coexist",
+    routerId: 91,
+    bridgeName: "co-hotspot-bridge",
+    bridgePorts: ["ether4"],
+    portName: "ether4",
+    radiusIp: undefined,
+    radiusSecret: undefined,
+  });
+
+  assert.match(script, /platform RADIUS profile skipped; existing RADIUS entries were preserved/);
+});
+
 test("coexistence rejects incomplete or unsafe RADIUS configuration", () => {
   assert.throws(
     () => generateServiceSetupScript({
