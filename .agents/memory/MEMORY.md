@@ -1,4 +1,5 @@
 - [VPS deployment verification](vps-deployment-verification.md) — Verify production through one GitHub Actions run plus live HTTPS checks; avoid overlapping deploy triggers.
+- [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.

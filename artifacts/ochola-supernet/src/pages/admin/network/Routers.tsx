@@ -1059,7 +1059,7 @@ export default function Routers() {
                         </td>
 
                         {/* ROUTER NAME */}
-                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem" }}>
                           <div style={{ position: "relative", display: "inline-block" }}>
                             <button
                               type="button"
@@ -1126,17 +1126,17 @@ export default function Routers() {
                         </td>
 
                         {/* IP ADDRESS */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", color: "var(--isp-accent)", fontSize: "0.75rem" }}>
                           {r.host || r.ip_address || "—"}
                         </td>
 
                         {/* MANAGEMENT VPN IP (Tunnel) */}
-                        <td style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
                           {r.vpn_ip || "—"}
                         </td>
 
                         {/* PROXY (Backup) */}
-                        <td style={{ padding: "0.65rem 0.75rem" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem" }}>
                           {r.proxy_ip ? (
                             <span style={{
                               display: "inline-flex", alignItems: "center", gap: 4,
@@ -1152,7 +1152,7 @@ export default function Routers() {
                         </td>
 
                         {/* USERNAME */}
-                        <td style={{ padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)" }}>
+                        <td className="technical-value" style={{ padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)" }}>
                           {r.router_username || "admin"}
                         </td>
 

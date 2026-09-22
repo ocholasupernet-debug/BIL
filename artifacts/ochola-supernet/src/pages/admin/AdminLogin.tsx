@@ -135,7 +135,7 @@ export default function AdminLogin() {
       minHeight: "100vh",
       background: "var(--isp-bg)",
       display: "flex",
-       fontFamily: "'DM Sans', system-ui, sans-serif",
+        fontFamily: "'Inter', system-ui, sans-serif",
     }}>
       <div style={{
         display: "none",
@@ -166,7 +166,7 @@ export default function AdminLogin() {
 
         <div style={{ position: "relative" }}>
           <h2 style={{
-            fontSize: "2rem", fontWeight: 800, color: "#F1F5F9",
+             fontSize: "2rem", fontWeight: 600, color: "#F1F5F9",
             lineHeight: 1.25, letterSpacing: "-0.03em", marginBottom: 16,
           }}>
             Manage your ISP with confidence
@@ -215,7 +215,7 @@ export default function AdminLogin() {
            </div>
 
           <h1 style={{
-             fontSize: "1.9rem", fontWeight: 800, color: "var(--isp-text)",
+             fontSize: "1.9rem", fontWeight: 600, color: "var(--isp-text)",
             letterSpacing: "-0.03em", marginBottom: 6,
           }}>
             Welcome back

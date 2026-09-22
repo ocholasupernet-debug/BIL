@@ -2,6 +2,18 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { isLoggedIn, ADMIN_ID } from "@/lib/supabase";
 import { DEFAULT_TYPOGRAPHY, type TypographyPreferences } from "@/lib/typography";
 
+const PROFESSIONAL_FONT_FAMILIES = new Set([
+  "Inter",
+  "DM Sans",
+  "Roboto",
+  "Open Sans",
+  "Lato",
+  "Source Sans 3",
+  "Arial",
+  "Verdana",
+]);
+const PROFESSIONAL_FONT_WEIGHTS = new Set([400, 500, 600]);
+
 interface TypographyContextValue extends TypographyPreferences {
   loading: boolean;
   refresh: () => Promise<void>;
@@ -48,10 +60,16 @@ export function TypographyProvider({ children }: { children: React.ReactNode }) 
       if (!response.ok) throw new Error("Typography request failed");
       const data = await response.json() as Partial<TypographyPreferences>;
       const next: TypographyPreferences = {
-        fontFamily: typeof data.fontFamily === "string" ? data.fontFamily : DEFAULT_TYPOGRAPHY.fontFamily,
+        fontFamily: typeof data.fontFamily === "string" && PROFESSIONAL_FONT_FAMILIES.has(data.fontFamily)
+          ? data.fontFamily
+          : DEFAULT_TYPOGRAPHY.fontFamily,
         fontStyle: data.fontStyle === "italic" || data.fontStyle === "oblique" ? data.fontStyle : "normal",
-        fontWeight: typeof data.fontWeight === "number" ? data.fontWeight : DEFAULT_TYPOGRAPHY.fontWeight,
-        fontSize: typeof data.fontSize === "number" ? data.fontSize : DEFAULT_TYPOGRAPHY.fontSize,
+        fontWeight: typeof data.fontWeight === "number" && PROFESSIONAL_FONT_WEIGHTS.has(data.fontWeight)
+          ? data.fontWeight
+          : DEFAULT_TYPOGRAPHY.fontWeight,
+        fontSize: typeof data.fontSize === "number"
+          ? Math.min(18, Math.max(14, data.fontSize))
+          : DEFAULT_TYPOGRAPHY.fontSize,
       };
       setPreferences(next);
       applyTypography(next);
