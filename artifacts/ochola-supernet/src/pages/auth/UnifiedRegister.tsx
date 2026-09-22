@@ -116,7 +116,7 @@ export default function UnifiedRegister() {
       <section className="unified-register-card" aria-labelledby="unified-register-title">
         <div className="unified-register-card-header">
           <div className="unified-register-kicker"><span className="unified-register-kicker-dot" /> NETWORK OPERATIONS PLATFORM</div>
-          <h1 id="unified-register-title">Build the workspace your network deserves.</h1>
+          <h1 id="unified-register-title">Register New company</h1>
           <p>One secure account for the tools, access, and operational clarity behind your business.</p>
         </div>
 
