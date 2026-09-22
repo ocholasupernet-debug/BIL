@@ -438,6 +438,19 @@ async function tenantRouter(adminId: number, routerId: number): Promise<RouterRo
   return rows[0];
 }
 
+async function resellerCanUseIsp(
+  resellerId: number,
+  parentId: number | null | undefined,
+  ispAdminId: number,
+): Promise<boolean> {
+  if (parentId === ispAdminId) return true;
+  const approved = await sbSelectStrict<{ id: number }>(
+    "isp_reseller_connection_requests",
+    `reseller_id=eq.${resellerId}&isp_admin_id=eq.${ispAdminId}&status=eq.approved&select=id&limit=1`,
+  );
+  return Boolean(approved[0]);
+}
+
 async function detectRouterInterfaceLink(
   target: RouterRow,
   interfaceName: string,
@@ -597,7 +610,9 @@ async function ownedPort(req: Request, portId: number): Promise<ResellerPortRow>
   }
   const tenantId = account.parent_id ?? account.id;
   const resellerFilter = account.role === "reseller" ? `&assigned_reseller_id=eq.${account.id}` : "";
-  const tenantFilter = tier === "system_admin" && req.query.adminId && /^\d+$/.test(String(req.query.adminId))
+  const tenantFilter = account.role === "reseller"
+    ? ""
+    : tier === "system_admin" && req.query.adminId && /^\d+$/.test(String(req.query.adminId))
     ? `&admin_id=eq.${Number(req.query.adminId)}`
     : `&admin_id=eq.${tenantId}`;
   const rows = await sbSelectStrict<ResellerPortRow>(
@@ -605,6 +620,9 @@ async function ownedPort(req: Request, portId: number): Promise<ResellerPortRow>
     `id=eq.${portId}${tenantFilter}${resellerFilter}&select=*&limit=1`,
   );
   if (!rows[0]) throw new Error("This port is not assigned to your account.");
+  if (account.role === "reseller" && !(await resellerCanUseIsp(account.id, account.parent_id, rows[0].admin_id))) {
+    throw new Error("This port belongs to an ISP connection that has not approved your reseller account.");
+  }
   return rows[0];
 }
 
@@ -918,15 +936,19 @@ router.get("/reseller/connection-options", requireAdmin(), async (req, res): Pro
     const [isps, requests] = await Promise.all([
       sbSelectStrict<{ id: number; name: string; company_name: string | null; subdomain: string | null }>(
         "isp_admins",
-        "role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name,subdomain&order=company_name.asc,name.asc&limit=200",
+        "role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name,subdomain&order=company_name.asc,name.asc&limit=500",
       ),
       sbSelectStrict<ResellerConnectionRequestRow>(
         "isp_reseller_connection_requests",
         `reseller_id=eq.${account.id}&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&order=created_at.desc&limit=50`,
       ),
     ]);
-    const connectedIspId = account.parent_id ?? null;
-    res.json({ ok: true, isps, requests, connectedIspId });
+    const connectedIspIds = requests
+      .filter((request) => request.status === "approved")
+      .map((request) => request.isp_admin_id);
+    if (account.parent_id && !connectedIspIds.includes(account.parent_id)) connectedIspIds.push(account.parent_id);
+    const connectedIspId = connectedIspIds[0] ?? null;
+    res.json({ ok: true, isps, requests, connectedIspId, connectedIspIds });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load ISP connection options." });
   }
@@ -939,35 +961,35 @@ router.post("/reseller/connection-requests", requireAdmin(), async (req, res): P
       res.status(403).json({ ok: false, error: "Only reseller accounts can request an ISP connection." });
       return;
     }
-    if (account.parent_id) {
-      res.status(409).json({ ok: false, error: "This reseller is already connected to an ISP account." });
-      return;
-    }
+    const requestedCompanyName = typeof req.body?.companyName === "string"
+      ? req.body.companyName.trim().slice(0, 160)
+      : "";
     const ispAdminId = Number(req.body?.ispAdminId);
     const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
-    if (!Number.isSafeInteger(ispAdminId) || ispAdminId <= 0) {
-      res.status(400).json({ ok: false, error: "Choose a valid ISP account." });
+    if ((!Number.isSafeInteger(ispAdminId) || ispAdminId <= 0) && !requestedCompanyName) {
+      res.status(400).json({ ok: false, error: "Enter the ISP company name or choose a valid ISP account." });
       return;
     }
-    const ispRows = await sbSelectStrict<{ id: number; name: string; company_name: string | null }>(
+    const availableIsps = await sbSelectStrict<{ id: number; name: string; company_name: string | null }>(
       "isp_admins",
-      `id=eq.${ispAdminId}&role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name&limit=1`,
+      "role=eq.isp_admin&is_active=is.true&parent_id=is.null&select=id,name,company_name&order=company_name.asc,name.asc&limit=500",
     );
+    const normalizedCompanyName = requestedCompanyName.toLocaleLowerCase().replace(/\s+/g, " ").trim();
+    const ispRows = Number.isSafeInteger(ispAdminId) && ispAdminId > 0
+      ? availableIsps.filter((isp) => isp.id === ispAdminId)
+      : availableIsps.filter((isp) => {
+        const company = String(isp.company_name || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+        const name = String(isp.name || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+        return company === normalizedCompanyName || name === normalizedCompanyName;
+      });
     if (!ispRows[0]) {
-      res.status(404).json({ ok: false, error: "That ISP account is not available for connection." });
+      res.status(404).json({ ok: false, error: "No active ISP administrator matched that company name." });
       return;
     }
-    const existing = await sbSelectStrict<ResellerConnectionRequestRow>(
-      "isp_reseller_connection_requests",
-      `reseller_id=eq.${account.id}&isp_admin_id=eq.${ispAdminId}&status=eq.pending&select=id&limit=1`,
-    );
-    if (existing[0]) {
-      res.status(409).json({ ok: false, error: "A connection request to this ISP is already pending." });
-      return;
-    }
+    const selectedIspAdminId = ispRows[0].id;
     const inserted = await sbInsertStrict<ResellerConnectionRequestRow>("isp_reseller_connection_requests", {
       reseller_id: account.id,
-      isp_admin_id: ispAdminId,
+      isp_admin_id: selectedIspAdminId,
       note: note || null,
       status: "pending",
       created_at: new Date().toISOString(),
@@ -1043,17 +1065,21 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       res.status(404).json({ ok: false, error: "The requesting reseller account no longer exists." });
       return;
     }
-    if (action === "approved" && reseller.parent_id && reseller.parent_id !== account.id) {
-      res.status(409).json({ ok: false, error: "This reseller is already connected to another ISP account." });
-      return;
-    }
     const now = new Date().toISOString();
     if (action === "approved") {
-      await sbUpdateStrict(
-        "isp_admins",
-        `id=eq.${reseller.id}&role=eq.reseller&parent_id=is.null`,
-        { parent_id: account.id, status: "active", updated_at: now },
-      );
+      if (!reseller.parent_id) {
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${reseller.id}&role=eq.reseller&parent_id=is.null`,
+          { parent_id: account.id, status: "active", updated_at: now },
+        );
+      } else {
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${reseller.id}&role=eq.reseller`,
+          { status: "active", updated_at: now },
+        );
+      }
     }
     const updated = await sbUpdateStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
@@ -1133,10 +1159,14 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
     }
     const resellerRows = await sbSelectStrict<{ id: number; parent_id: number | null; role: string; company_name: string | null; username: string }>(
       "isp_admins",
-      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,parent_id,role,company_name,username&limit=1`,
+      `id=eq.${request.reseller_id}&role=eq.reseller&is_active=is.true&select=id,parent_id,role,company_name,username&limit=1`,
     );
     if (!resellerRows[0]) {
       res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
+      return;
+    }
+    if (!(await resellerCanUseIsp(request.reseller_id, resellerRows[0].parent_id, account.id))) {
+      res.status(409).json({ ok: false, error: "Approve the reseller connection before assigning an ISP router handoff." });
       return;
     }
 
@@ -1799,9 +1829,9 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const tenantId = account.parent_id ?? account.id;
     const [users, portRows, gateways, sales, customers, revenueRows] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
-      sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=50`),
+      sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `assigned_reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=100`),
       sbSelectStrict("isp_reseller_gateways", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,is_active,created_at,updated_at&order=updated_at.desc`),
-      sbSelectStrict("isp_reseller_sales", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=50`),
+      sbSelectStrict("isp_reseller_sales", `reseller_id=eq.${account.id}&select=id,admin_id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=100`),
       sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at,created_at,name,username,data_used_mb,data_used_bytes&limit=5000`),
       sbRpc<{
         income_today: number | string;
@@ -1814,7 +1844,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const routers = routerIds.length
       ? await sbSelectStrict<{ id: number; name: string; status: string }>(
         "isp_routers",
-        `admin_id=eq.${tenantId}&id=in.(${routerIds.join(",")})&select=id,name,status`,
+        `id=in.(${routerIds.join(",")})&select=id,name,status`,
       )
       : [];
     const routerMap = new Map(routers.map((router) => [router.id, router]));
@@ -1967,6 +1997,101 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
       await sbDeleteStrict("isp_customers", `id=eq.${customerId}`).catch(() => undefined);
     }
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the PPPoE client." });
+  }
+});
+
+router.post("/reseller/static-clients", requireAdmin(), async (req, res): Promise<void> => {
+  let customerId = 0;
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "This endpoint is for reseller accounts." });
+      return;
+    }
+    const portId = Number(req.body?.portId);
+    const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 120) : "";
+    const phone = typeof req.body?.phone === "string" ? req.body.phone.trim().slice(0, 40) : "";
+    const ipAddress = typeof req.body?.ipAddress === "string" ? req.body.ipAddress.trim() : "";
+    const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (
+      !Number.isSafeInteger(portId)
+      || portId <= 0
+      || name.length < 2
+      || !phone
+      || !/^(\d{1,3}\.){3}\d{1,3}$/.test(ipAddress)
+      || ipAddress.split(".").some((part: string) => Number(part) < 0 || Number(part) > 255)
+      || (username && !/^[A-Za-z0-9._-]{3,64}$/.test(username))
+      || (password && password.length < 8)
+    ) {
+      res.status(400).json({ ok: false, error: "Provide a client name, phone, valid IPv4 address, and optional valid login credentials." });
+      return;
+    }
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "vlan_services" || port.status !== "active" || port.link_status !== "active") {
+      res.status(409).json({ ok: false, error: "Static service assignment is available only on an active VLAN service." });
+      return;
+    }
+    const duplicate = await sbSelectStrict<{ id: number }>(
+      "isp_customers",
+      `admin_id=eq.${account.id}&ip_address=eq.${encodeURIComponent(ipAddress)}&select=id&limit=1`,
+    );
+    if (duplicate[0]) {
+      res.status(409).json({ ok: false, error: "That static IP is already assigned in your reseller account." });
+      return;
+    }
+    const staticUsername = username || `static_${safeSegment(name, `client_${Date.now()}`)}`.slice(0, 64);
+    const inserted = await sbInsertStrict<{ id: number; name: string; phone: string; username: string; ip_address: string; type: string; status: string }>(
+      "isp_customers",
+      {
+        admin_id: account.id,
+        name,
+        phone,
+        username: staticUsername,
+        password: password || null,
+        type: "static",
+        router_id: port.router_id,
+        plan_id: null,
+        ip_address: ipAddress,
+        status: "active",
+        expires_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    );
+    customerId = Number(inserted[0]?.id);
+    if (!customerId) throw new Error("The static customer record could not be created.");
+
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const resources = vlanServiceResources(port);
+    const comment = `OcholaSupernet_RS${account.id}_static_${customerId}`;
+    const creds = routerCredentials(target);
+    await runRouterCommand(creds, [
+      "/queue/simple/add",
+      `=name=STATIC_${account.id}_${customerId}`,
+      `=target=${ipAddress}/32`,
+      `=max-limit=${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M/${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M`,
+      `=comment=${comment}`,
+    ]);
+    if (port.hotspot_enabled && validRouterResourceName(resources.vlanInterface)) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/ip-binding/add",
+        `=address=${ipAddress}`,
+        "=type=bypassed",
+        `=server=all`,
+        `=comment=${comment}`,
+      ]);
+    }
+    res.status(201).json({
+      ok: true,
+      customer: inserted[0] ?? { id: customerId, name, phone, username: staticUsername, ip_address: ipAddress, type: "static", status: "active" },
+      message: "Static customer assigned and synchronized to the reseller service.",
+    });
+  } catch (error) {
+    if (customerId) {
+      await sbDeleteStrict("isp_customers", `id=eq.${customerId}`).catch(() => undefined);
+    }
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the static customer." });
   }
 });
 
@@ -2129,7 +2254,7 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
       res.status(400).json({ ok: false, error: "Provide a client reference, IPv4 address, payment reference, gateway, amount, and valid speed." });
       return;
     }
-    const tenantId = account.parent_id ?? account.id;
+    const tenantId = port.admin_id;
     const saleRows = await sbInsertStrict<{ id: number }>("isp_reseller_sales", {
       admin_id: tenantId,
       reseller_id: account.id,
