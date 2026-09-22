@@ -865,7 +865,8 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
       routerName: routerRows[0]?.name,
     });
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
-    const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const pppoeFolderPath = requestedPppoeFolderPath ?? (hotspotEnabled ? hotspotFolderPath : null);
     const requestedHotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName);
     const requestedPppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName);
     if ((req.body?.hotspotDnsName && !requestedHotspotDnsName) || (req.body?.pppoeDnsName && !requestedPppoeDnsName)) {
@@ -940,9 +941,10 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
       && (typeof requestedHotspotFolderPath !== "string" || !requestedHotspotFolderPath.trim())
       ? "login.html"
       : requestedHotspotFolderPath === "" ? null : cleanPath(requestedHotspotFolderPath);
-    const pppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
+    const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const pppoeFolderPath = requestedPppoeFolderPath ?? (hotspotEnabled ? hotspotFolderPath : null);
     const requestedHotspotDnsName = req.body?.hotspotDnsName === undefined
       ? port.hotspot_dns_name
       : optionalPortalHostname(req.body.hotspotDnsName);
@@ -1067,7 +1069,9 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       return;
     }
     const hotspotSource = port.hotspot_enabled ? cleanPath(port.hotspot_folder_path ?? port.hotspot_template_path) : null;
-    const pppoeSource = port.pppoe_enabled ? cleanPath(port.pppoe_folder_path) : null;
+    const pppoeSource = port.pppoe_enabled
+      ? cleanPath(port.pppoe_folder_path ?? (port.hotspot_enabled ? port.hotspot_folder_path ?? port.hotspot_template_path : null))
+      : null;
     if ((port.hotspot_enabled && !hotspotSource) || (port.pppoe_enabled && !pppoeSource)) {
       res.status(409).json({ ok: false, error: "Both enabled services must have an approved asset binding." });
       return;
