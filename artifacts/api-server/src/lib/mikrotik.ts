@@ -5240,7 +5240,7 @@ ${ownedOrConflict(
   `name=${routerOsString(hotspotProfile)}`,
   hotspotProfile,
   profileComment,
-  `/ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString("172.16.99.1")} html-directory=${routerOsString(hotspotDirectory)} login-by=${routerOsString("http-chap,http-pap,cookie")} use-radius=yes comment=${routerOsString(profileComment)}`,
+  `/ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString("172.16.99.1")} html-directory=${routerOsString(hotspotDirectory)} login-by=${routerOsString("http-chap,http-pap,cookie")} use-radius=yes`,
 )}
 ${ownedOrConflict(
   "coexistHotspotServer",
@@ -5248,7 +5248,7 @@ ${ownedOrConflict(
   `name=${routerOsString(hotspotServer)}`,
   hotspotServer,
   `${tag} owned Hotspot server`,
-  `/ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} owned Hotspot server`)}`,
+  `/ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no`,
 )}`);
 
   blocks.push(`# 5. Isolated PPPoE pool, profile, and server

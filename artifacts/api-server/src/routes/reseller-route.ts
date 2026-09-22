@@ -340,7 +340,6 @@ async function provisionVlanResellerServices(
     `=hotspot-address=${gateway}`,
     `=html-directory=${port.hotspot_template_path || `hotspot/reseller_${segment}_page`}`,
     "=login-by=http-chap,http-pap,cookie",
-    `=comment=${commentPrefix}_hotspot_profile`,
   ]);
   await ensureNamed("/ip/hotspot/print", `HS_${segment}`, [
     "/ip/hotspot/add",
@@ -1708,7 +1707,6 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
         `=hotspot-address=${serviceNetwork.gateway}`,
         `=html-directory=${hotspotPath}`,
         "=login-by=http-chap,http-pap",
-        `=comment=OcholaSupernet_${servicePortName}_hotspot_profile`,
       ]);
       await runRouterCommand(creds, [
         "/ip/hotspot/add",
@@ -1717,7 +1715,6 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
         `=profile=${hotspotProfile}`,
         `=address-pool=HS_POOL_${servicePortName}`,
         "=disabled=no",
-        `=comment=OcholaSupernet_${servicePortName}_hotspot`,
       ]);
       await runRouterCommand(creds, [
         "/ip/hotspot/walled-garden/ip/add",
@@ -1758,7 +1755,6 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
         `=name=PPPOE_ALERT_${servicePortName}`,
         `=html-directory=${pppoePath}`,
         "=login-by=http-chap,http-pap",
-        `=comment=OcholaSupernet_${servicePortName}_pppoe_landing`,
       ]);
       await runRouterCommand(creds, [
         "/queue/simple/add",

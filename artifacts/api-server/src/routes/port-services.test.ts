@@ -48,6 +48,8 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.match(script, /\/ip\/firewall\/filter\/add =chain=input =in-interface=router-3-ether2-bridge =protocol=udp =dst-port=53/);
   assert.match(script, /\/ip\/firewall\/filter\/add =chain=forward =in-interface=router-3-ether2-bridge =out-interface-list=WAN =action=accept/);
   assert.match(script, /block_wan_dns_tcp/);
+  assert.doesNotMatch(script, /\/ip\/hotspot\/profile\/add[^\n]*comment=/);
+  assert.doesNotMatch(script, /\/ip\/hotspot\/add[^\n]*comment=/);
   assert.doesNotMatch(script, /interface=ether2 =profile=HS_ether2/);
 });
 

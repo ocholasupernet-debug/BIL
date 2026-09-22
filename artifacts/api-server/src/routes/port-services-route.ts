@@ -341,8 +341,8 @@ export function buildDualServiceCommands(
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
       ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${network.bridgeName}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
-      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`, `=comment=${comment("hotspot_profile")}`],
-      ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no", `=comment=${comment("hotspot")}`],
+      ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`],
+      ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/dns/static/add", `=name=${hotspotDnsName}`, `=address=${network.gateway}`, `=comment=${comment("hotspot_dns")}`],
       ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dhcp")}`],
       ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${network.bridgeName}`, "=protocol=udp", "=dst-port=53", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dns_udp")}`],
@@ -415,7 +415,7 @@ export function buildDualServiceCommands(
          ownership in the service name/profile instead of sending an
          unsupported property that aborts the whole deployment. */
       ["/interface/pppoe-server/server/add", `=service-name=${pppoeService}`, `=interface=${network.bridgeName}`, `=disabled=no`, "=one-session-per-host=yes"],
-      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName}`, `=comment=${comment("pppoe_landing")}`],
+      ["/ip/hotspot/profile/add", `=name=${pppoeLandingProfile}`, `=html-directory=${pppoePath}`, "=login-by=http-chap,http-pap", `=dns-name=${pppoeDnsName}`],
       ["/ip/dns/static/add", `=name=${pppoeDnsName}`, `=address=${network.gateway}`, `=comment=${comment("pppoe_dns")}`],
       ["/queue/simple/add", `=name=PPPOE_PREMIUM_${resources.resourceName}`, `=target=${network.bridgeName}`, `=parent=${parentQueue}`, `=max-limit=${cap}M/${cap}M`, "=priority=1/1", `=comment=${comment("pppoe_premium")}`],
       ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("pppoe_nat")}`],
@@ -472,7 +472,7 @@ function buildVlanServiceCommands(
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
       ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
-      ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`, `=comment=${comment("hotspot_profile")}`],
+      ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${vlanInterface}`, `=profile=${resources.hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/dns/static/add", `=name=${hotspotDnsName}`, `=address=${network.gateway}`, `=comment=${comment("hotspot_dns")}`],
       ["/ip/firewall/filter/add", "=chain=input", `=in-interface=${vlanInterface}`, "=protocol=udp", "=dst-port=67", "=action=accept", "=place-before=0", `=comment=${comment("allow_service_dhcp")}`],
