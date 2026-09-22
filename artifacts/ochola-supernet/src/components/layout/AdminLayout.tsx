@@ -219,6 +219,7 @@ export function AdminLayout({
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
+  const isVpnSurface                  = location.startsWith("/admin/vpn");
 
   const visibleNavSections = navSections
     .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || section.label === "Overview"))
@@ -477,7 +478,7 @@ export function AdminLayout({
         </header>
 
         {/* Page content */}
-        <main className="admin-content">
+        <main className={`admin-content ${isVpnSurface ? "admin-vpn-surface" : ""}`}>
           {notice && (
             <div role="status" style={{ marginBottom: 18, border: "1px solid rgba(245,158,11,0.35)", background: "rgba(245,158,11,0.1)", color: "#fbbf24", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontWeight: 600 }}>
               {notice}

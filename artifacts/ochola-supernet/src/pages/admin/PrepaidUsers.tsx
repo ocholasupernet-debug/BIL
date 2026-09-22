@@ -663,16 +663,16 @@ export default function PrepaidUsers() {
     fontSize: "0.82rem", fontFamily: "inherit", outline: "none",
   };
   const TH: React.CSSProperties = {
-    padding: "0.58rem 0.8rem", fontSize: "0.68rem", fontWeight: 800,
-    color: "#334155", textTransform: "uppercase",
+    padding: "0.62rem 0.8rem", fontSize: "0.68rem", fontWeight: 600,
+    color: "var(--isp-text-muted)", textTransform: "uppercase",
     letterSpacing: "0.06em", textAlign: "left",
-    background: "#f8fafc",
-    borderBottom: "1px solid #e2e8f0",
-    borderRight: "1px solid #e2e8f0",
+    background: "var(--isp-section)",
+    borderBottom: "1px solid var(--isp-border)",
+    borderRight: "1px solid var(--isp-border)",
   };
   const TD: React.CSSProperties = {
     padding: "0.5rem 0.8rem", fontSize: "0.78rem",
-    color: "#1e293b", borderBottom: "1px solid #f1f5f9",
+    color: "var(--isp-text)", borderBottom: "1px solid var(--isp-border)",
     verticalAlign: "middle",
   };
 
@@ -705,14 +705,14 @@ export default function PrepaidUsers() {
         .prepaid-primary-button:disabled{opacity:.55;cursor:wait}
         .prepaid-help{font-size:.72rem;line-height:1.45;color:var(--isp-text-muted);margin:10px 0 0}
         .prepaid-spin{animation:spin 1s linear infinite}
-        .prepaid-toolbar-card{position:relative;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:12px;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+        .prepaid-toolbar-card{position:relative;background:var(--isp-card);border:1px solid var(--isp-border);border-radius:8px;padding:12px;box-shadow:var(--shadow-card)}
         .prepaid-filter-grid{display:grid;grid-template-columns:minmax(260px,2fr) minmax(160px,1fr) minmax(100px,.65fr) minmax(160px,1fr);gap:10px;align-items:end}
         .prepaid-filter-field{display:flex;flex-direction:column;gap:5px;min-width:0}
-        .prepaid-filter-label{color:#64748b;font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+        .prepaid-filter-label{color:var(--isp-text-muted);font-size:.66rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
         .prepaid-search-control{display:flex;min-width:0}
         .prepaid-search-control input{width:100%;min-width:0;border-radius:5px 0 0 5px!important;border-right:0!important}
-        .prepaid-search-control button{border:1px solid #00bfa5;border-radius:0 5px 5px 0;background:#00bfa5;color:#fff;padding:0 15px;font:700 .76rem inherit;cursor:pointer}
-        .prepaid-search-control button:hover{background:#00a991}
+        .prepaid-search-control button{border:1px solid var(--isp-accent);border-radius:0 5px 5px 0;background:var(--isp-accent);color:#fff;padding:0 15px;font:600 .76rem inherit;cursor:pointer}
+        .prepaid-search-control button:hover{background:var(--isp-accent-strong)}
         .prepaid-recharge-wrap{display:flex;min-width:0}
         .prepaid-recharge-button{width:100%;min-height:34px;border:1px solid #007bef;border-radius:5px;background:#007bef;color:#fff;padding:0 12px;font:700 .76rem inherit;cursor:pointer}
         .prepaid-recharge-button:hover{background:#006ddd}
@@ -720,18 +720,26 @@ export default function PrepaidUsers() {
         .prepaid-recharge-picker select{width:100%;margin-bottom:8px}
         .prepaid-recharge-picker button{width:100%;border:0;border-radius:4px;background:#007bef;color:#fff;padding:8px;font:700 .74rem inherit;cursor:pointer}
         .prepaid-recharge-picker button:disabled{opacity:.45;cursor:not-allowed}
-        .prepaid-secondary-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9}
-        .prepaid-status-tabs{display:flex;gap:2px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;padding:3px}
-        .prepaid-status-tabs button{border:0;border-radius:3px;background:transparent;padding:5px 9px;color:#64748b;font:700 .72rem inherit;cursor:pointer}
-        .prepaid-status-tabs button.active{background:#fff;color:#007bef;box-shadow:0 1px 2px rgba(15,23,42,.08)}
-        .prepaid-table-shell{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:6px!important;box-shadow:0 1px 2px rgba(15,23,42,.03)}
-        .prepaid-table-shell tbody tr{background:#fff}
-        .prepaid-table-shell tbody tr:hover{background:#f8fafc}
-         .prepaid-table-shell tbody tr.prepaid-row-expired{background:#fff8f8;box-shadow:inset 3px 0 0 rgba(248,113,113,.58)}
-         .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:#fff1f1}
-        .prepaid-table-shell tbody td{border-right:1px solid #f8fafc}
-        .prepaid-username-link{border:0;background:transparent;color:#4a90e2;padding:0;font:800 .78rem monospace;white-space:nowrap;cursor:pointer;text-align:left}
-        .prepaid-username-link:hover{text-decoration:underline;color:#2563eb}
+        .prepaid-secondary-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--isp-border)}
+        .prepaid-status-tabs{display:flex;gap:2px;background:var(--isp-section);border:1px solid var(--isp-border);border-radius:5px;padding:3px}
+        .prepaid-status-tabs button{border:0;border-radius:3px;background:transparent;padding:5px 9px;color:var(--isp-text-muted);font:400 .72rem inherit;cursor:pointer}
+        .prepaid-status-tabs button.active{background:var(--isp-card);color:var(--isp-accent);box-shadow:0 1px 2px rgba(15,23,42,.08)}
+        .prepaid-table-shell{background:var(--isp-card)!important;border:1px solid var(--isp-border)!important;border-radius:8px!important;box-shadow:var(--shadow-card)}
+        .prepaid-table-shell tbody tr{background:var(--isp-card)}
+        .prepaid-table-shell tbody tr:hover{background:var(--isp-hover)}
+        .prepaid-table-shell tbody tr.prepaid-row-expired{background:color-mix(in srgb,var(--isp-card) 92%,#c66b5f);box-shadow:inset 3px 0 0 #c66b5f}
+        .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:color-mix(in srgb,var(--isp-hover) 88%,#c66b5f)}
+        .prepaid-table-shell tbody td{border-right:1px solid var(--isp-border)}
+        .prepaid-username-link{border:0;background:transparent;color:var(--isp-accent);padding:0;font:400 .78rem var(--font-mono);white-space:nowrap;cursor:pointer;text-align:left}
+        .prepaid-username-link:hover{text-decoration:underline;color:var(--isp-accent-strong)}
+        .prepaid-plain-value{font-weight:400;color:var(--isp-text);white-space:nowrap}
+        .prepaid-plain-muted{font-weight:400;color:var(--isp-text-muted);white-space:nowrap}
+        .prepaid-plain-status{font-weight:400;color:var(--isp-text);white-space:nowrap}
+        .prepaid-plain-status::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;background:var(--isp-text-sub)}
+        .prepaid-plain-status--online::before{background:var(--isp-green)}
+        .prepaid-plain-status--offline::before{background:#c66b5f}
+        .prepaid-table-shell th,.prepaid-table-shell td{border-right:1px solid var(--isp-border)}
+        @media(max-width:1150px){.prepaid-table-shell .prepaid-col-optional{display:none}.prepaid-table-shell table{min-width:820px!important}}
         @media(max-width:900px){.prepaid-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:520px){.prepaid-filter-grid{grid-template-columns:1fr}.prepaid-recharge-picker{position:static;width:auto;margin-top:10px}}
         @media(max-width:680px){.prepaid-form-grid{grid-template-columns:1fr}.prepaid-table-shell{margin-right:-16px;border-right:0;border-radius:10px 0 0 10px}}
@@ -817,7 +825,7 @@ export default function PrepaidUsers() {
             )}
           </div>
 
-          <button onClick={exportCSV} style={BTN("linear-gradient(135deg,#22c55e,#16a34a)")}>
+           <button onClick={exportCSV} style={BTN("var(--isp-accent)")}>
             <Download size={13} /> Export CSV
           </button>
 
@@ -961,21 +969,21 @@ export default function PrepaidUsers() {
 
         {/* ── Table ── */}
         <div id="prepaid-users-table" className="prepaid-table-shell" style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, overflowX: "auto" }}>
-             <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
+             <table className="prepaid-table" style={{ width: "100%", minWidth: 1160, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={TH}>Username</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
-                <th style={TH}>Created (date &amp; time)</th>
+                 <th className="prepaid-col-optional" style={TH}>Created (date &amp; time)</th>
                 <th style={TH}>Expires (date &amp; time)</th>
-                <th style={TH}>Method</th>
+                 <th className="prepaid-col-optional" style={TH}>Method</th>
                 <th style={TH}>Router</th>
                 <th style={TH}>Service status</th>
                 <th style={TH}>Connection</th>
-                <th style={TH}>Last seen</th>
-                <th style={TH}>Data used</th>
-                <th style={TH}>FUP</th>
+                 <th className="prepaid-col-optional" style={TH}>Last seen</th>
+                 <th className="prepaid-col-optional" style={TH}>Data used</th>
+                 <th className="prepaid-col-optional" style={TH}>FUP</th>
                 <th style={{ ...TH, textAlign: "center" }}>Manage</th>
               </tr>
             </thead>
@@ -1023,13 +1031,13 @@ export default function PrepaidUsers() {
                           {username}
                         </button>
                       </td>
-                      <td style={TD}><TypeBadge type={user.type} /></td>
+                      <td style={TD}><span className="prepaid-plain-value">{user.type === "pppoe" ? "PPPoE" : user.type === "hotspot" ? "Hotspot" : user.type || "—"}</span></td>
                       <td style={TD}>
-                        <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--isp-text)", whiteSpace: "nowrap" }}>
+                        <div className="prepaid-plain-value">
                           {displayedPlan?.name || (payment?.plan_id ? `Plan #${payment.plan_id}` : "No plan")}
                         </div>
                       </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
+                      <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
                         <div>{fmtDateOnly(user.created_at)}</div>
                         <div style={{ color: "var(--isp-text-sub)", fontSize: "0.64rem", marginTop: 2 }}>{fmtTimeOnly(user.created_at)}</div>
                       </td>
@@ -1040,36 +1048,28 @@ export default function PrepaidUsers() {
                         </span>
                         {expiring && !expired && <div style={{ fontSize: "0.6rem", color: "#fbbf24", fontWeight: 700 }}>Expiring soon</div>}
                       </td>
-                      <td style={{ ...TD, minWidth: 240, maxWidth: 320 }}>
-                        <span title={paymentLabel(payment)} style={{ display: "block", whiteSpace: "normal", overflowWrap: "anywhere", fontSize: "0.7rem", lineHeight: 1.35, color: payment ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
+                      <td className="prepaid-col-optional" style={{ ...TD, minWidth: 180, maxWidth: 260 }}>
+                        <span className="prepaid-plain-muted" title={paymentLabel(payment)} style={{ display: "block", whiteSpace: "normal", overflowWrap: "anywhere", fontSize: "0.7rem", lineHeight: 1.35 }}>
                           {paymentLabel(payment)}
                         </span>
                       </td>
                       <td style={TD}>
                         {router ? (
-                          <span style={{
-                            display: "inline-flex", alignItems: "center", gap: "0.3rem",
-                            fontSize: "0.72rem", fontWeight: 700,
-                            background: "rgba(37,99,235,0.07)", border: "1px solid rgba(37,99,235,0.18)",
-                            color: "var(--isp-accent)", borderRadius: 5, padding: "0.18rem 0.5rem",
-                          }}>
-                            <span style={{ width: 5, height: 5, borderRadius: "50%", background: router.status === "online" ? "#22c55e" : "#475569" }} />
-                            {router.name}
-                          </span>
+                           <span className="prepaid-plain-muted">{router.name}</span>
                         ) : (
                           <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>Unassigned</span>
                         )}
                       </td>
-                      <td style={TD}><StatusBadge status={serviceStatus} /></td>
-                      <td style={TD}><PresenceBadge online={online} /></td>
-                      <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.68rem" }}>{online ? "Online" : fmtDate(user.last_seen ?? (expired ? user.expires_at : null))}</td>
-                      <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                         <span style={{ fontWeight: 700, fontSize: "0.68rem" }} title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
+                      <td style={TD}><span className="prepaid-plain-status">{serviceStatus === "online" ? "Active" : serviceStatus === "suspended" ? "Suspended" : serviceStatus === "expired" || expired ? "Expired" : "Offline"}</span></td>
+                      <td style={TD}><span className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}>{online ? "Online" : "Offline"}</span></td>
+                      <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.68rem" }}>{online ? "Online" : fmtDate(user.last_seen ?? (expired ? user.expires_at : null))}</td>
+                      <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap" }}>
+                         <span className="prepaid-plain-muted" title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
                            {formatUsageBytes(usageBytes)}
                          </span>
                       </td>
-                       <td style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem", fontWeight: 800, color: fup !== null && Number(fup) > 0 ? "#4ade80" : "var(--isp-text-muted)" }}>
-                         {fup !== null && Number(fup) > 0 ? "Enabled" : "Disabled"}
+                        <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }}>
+                          <span className="prepaid-plain-muted">{fup !== null && Number(fup) > 0 ? "Enabled" : "Disabled"}</span>
                        </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>

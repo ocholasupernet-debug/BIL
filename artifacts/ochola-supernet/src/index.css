@@ -4093,3 +4093,181 @@ table:not([role="grid"]) td [data-technical="true"] {
 .inner-card {
   border-radius: 8px;
 }
+
+/* Final admin dashboard pass: operational surfaces stay flat and readable.
+   Public/portal surfaces keep their own expressive treatments. */
+.dashboard-page {
+  position: static;
+  gap: 14px;
+}
+.dashboard-page::before,
+.dashboard-hero::after,
+.dashboard-live-mark::after,
+.dashboard-kpi::after,
+.router-card::after {
+  display: none;
+}
+.dashboard-hero {
+  min-height: 0;
+  padding: 4px 0 14px;
+  border-bottom-color: var(--isp-border);
+}
+.dashboard-section-kicker {
+  min-height: 0;
+  color: var(--isp-text-muted);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.dashboard-section-kicker::after {
+  background: var(--isp-border);
+}
+.dashboard-section-kicker > span:first-child {
+  display: none;
+}
+.dashboard-kpi,
+.dashboard-stat,
+.gateway-strip,
+.router-filter-bar,
+.section-card {
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+  background: var(--isp-card);
+}
+.dashboard-kpi {
+  min-height: 0;
+  padding: 11px 12px;
+  border-top-width: 1px;
+  background: var(--isp-card);
+}
+.dashboard-kpi:hover,
+.dashboard-stat:hover,
+.router-card:hover {
+  transform: none;
+  box-shadow: var(--shadow-card);
+}
+.dashboard-kpi-icon,
+.dashboard-stat-icon,
+.panel-title-icon,
+.gateway-icon,
+.gateway-detail-icon {
+  border-radius: 6px;
+  box-shadow: none;
+}
+.dashboard-stat {
+  background: var(--isp-card);
+}
+.gateway-strip {
+  min-height: 0;
+  background: var(--isp-card);
+  border-color: var(--isp-border);
+}
+.router-card {
+  background: var(--isp-inner-card);
+}
+.chart-body {
+  background: var(--isp-card);
+}
+
+/* VPN screens are functional admin pages, not a separate light-theme app.
+   Scope these mappings so public portal and registration styling is unchanged. */
+.admin-vpn-surface {
+  color: var(--isp-text);
+}
+.admin-vpn-surface .bg-white,
+.admin-vpn-surface .bg-gray-50,
+.admin-vpn-surface .bg-gray-100,
+.admin-vpn-surface .bg-gray-200,
+.admin-vpn-surface .bg-gray-900,
+.admin-vpn-surface .bg-gradient-to-br,
+.admin-vpn-surface .bg-gradient-to-r {
+  background: var(--isp-card) !important;
+}
+.admin-vpn-surface .bg-gray-50,
+.admin-vpn-surface .bg-gray-100,
+.admin-vpn-surface .bg-gray-200 {
+  background: var(--isp-inner-card) !important;
+}
+.admin-vpn-surface .border-gray-100,
+.admin-vpn-surface .border-gray-200,
+.admin-vpn-surface .divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--isp-border) !important;
+}
+.admin-vpn-surface .text-gray-900,
+.admin-vpn-surface .text-gray-800,
+.admin-vpn-surface .text-gray-700 {
+  color: var(--isp-text) !important;
+}
+.admin-vpn-surface .text-gray-600,
+.admin-vpn-surface .text-gray-500,
+.admin-vpn-surface .text-gray-400 {
+  color: var(--isp-text-muted) !important;
+}
+.admin-vpn-surface .text-gray-300 {
+  color: var(--isp-text-sub) !important;
+}
+.admin-vpn-surface input,
+.admin-vpn-surface select,
+.admin-vpn-surface textarea {
+  color: var(--isp-text);
+  background: var(--isp-input-bg);
+  border-color: var(--isp-border);
+}
+.admin-vpn-surface .shadow-sm,
+.admin-vpn-surface .shadow-md,
+.admin-vpn-surface .shadow-lg,
+.admin-vpn-surface .shadow-xl,
+.admin-vpn-surface .shadow-2xl {
+  box-shadow: var(--shadow-card) !important;
+}
+.admin-vpn-surface .rounded-xl,
+.admin-vpn-surface .rounded-2xl {
+  border-radius: 9px;
+}
+.admin-vpn-surface .bg-blue-50,
+.admin-vpn-surface .bg-green-50,
+.admin-vpn-surface .bg-amber-50,
+.admin-vpn-surface .bg-red-50,
+.admin-vpn-surface .bg-purple-50 {
+  background: var(--isp-section) !important;
+}
+.admin-vpn-surface .text-blue-800,
+.admin-vpn-surface .text-blue-700,
+.admin-vpn-surface .text-blue-600,
+.admin-vpn-surface .text-blue-500 {
+  color: var(--isp-accent) !important;
+}
+.admin-vpn-surface .text-white {
+  color: var(--isp-text) !important;
+}
+.admin-vpn-surface .bg-blue-600 .text-white,
+.admin-vpn-surface .bg-blue-700 .text-white,
+.admin-vpn-surface .bg-green-500 .text-white,
+.admin-vpn-surface .bg-green-600 .text-white,
+.admin-vpn-surface .bg-amber-500 .text-white,
+.admin-vpn-surface .bg-amber-600 .text-white,
+.admin-vpn-surface button.bg-blue-600,
+.admin-vpn-surface button.bg-blue-700,
+.admin-vpn-surface button.bg-green-500,
+.admin-vpn-surface button.bg-green-600,
+.admin-vpn-surface button.bg-amber-500,
+.admin-vpn-surface button.bg-amber-600 {
+  color: #fff !important;
+}
+.admin-vpn-surface .from-blue-600,
+.admin-vpn-surface .from-purple-500,
+.admin-vpn-surface .from-green-500,
+.admin-vpn-surface .from-orange-500,
+.admin-vpn-surface .from-indigo-500,
+.admin-vpn-surface .from-red-500,
+.admin-vpn-surface .from-teal-500 {
+  --tw-gradient-from: var(--isp-accent) !important;
+}
+.admin-vpn-surface .to-blue-800,
+.admin-vpn-surface .to-purple-800,
+.admin-vpn-surface .to-green-800,
+.admin-vpn-surface .to-orange-800,
+.admin-vpn-surface .to-indigo-800,
+.admin-vpn-surface .to-red-800,
+.admin-vpn-surface .to-teal-800 {
+  --tw-gradient-to: var(--isp-accent-strong) !important;
+}

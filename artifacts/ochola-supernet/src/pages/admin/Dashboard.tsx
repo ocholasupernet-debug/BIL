@@ -447,7 +447,7 @@ export default function Dashboard() {
 
   return (
     <AdminLayout>
-      <div className={`dashboard-page dashboard-page--${preferences.layout} dashboard-shape--${preferences.cardShape}`} style={dashboardStyle}>
+      <div className="dashboard-page" style={dashboardStyle}>
         <header className="dashboard-hero">
           <div>
             <div className="dashboard-eyebrow">
@@ -478,7 +478,6 @@ export default function Dashboard() {
         )}
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
-          <span>01</span>
           Financial pulse
           <span className="dashboard-section-meta">Updated from live payment activity</span>
           <button
@@ -523,7 +522,6 @@ export default function Dashboard() {
         </section>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
-          <span>02</span>
           Network health
           <span>Heartbeat window · 10 seconds</span>
         </div>
@@ -687,7 +685,6 @@ export default function Dashboard() {
         </section>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
-          <span>03</span>
           Customer intelligence
           <span>Accounts, access mix, and payment flow</span>
         </div>
@@ -782,7 +779,6 @@ export default function Dashboard() {
         </div>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
-          <span>04</span>
           Payment activity
           <span>Most recent subscriber transactions</span>
         </div>
