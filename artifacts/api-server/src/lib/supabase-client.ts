@@ -43,6 +43,26 @@ function url(table: string, query = ""): string {
   return `${SUPABASE_URL}/rest/v1/${table}${query ? `?${query}` : ""}`;
 }
 
+async function supabaseFailure(res: Response, operation: string): Promise<Error> {
+  let detail = "";
+  try {
+    const body = await res.json() as {
+      code?: unknown;
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+    };
+    detail = [body.code, body.message, body.details, body.hint]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map(value => value.trim().replace(/\s+/g, " "))
+      .join(" — ")
+      .slice(0, 600);
+  } catch {
+    // Keep the stable status-only error when Supabase does not return JSON.
+  }
+  return new Error(`Supabase rejected ${operation} (HTTP ${res.status})${detail ? `: ${detail}` : "."}`);
+}
+
 /** SELECT rows. Returns [] if Supabase is not configured. */
 export async function sbSelect<T>(
   table: string,
@@ -64,7 +84,7 @@ export async function sbSelectStrict<T>(
   }
   const res = await fetch(url(table, query), { headers: headers() });
   if (!res.ok) {
-    throw new Error(`Supabase rejected the schema check (HTTP ${res.status}).`);
+    throw await supabaseFailure(res, "the schema check");
   }
   return res.json() as Promise<T[]>;
 }
@@ -93,7 +113,7 @@ export async function sbInsertStrict<T>(
   const res = await fetch(url(table), {
     method: "POST", headers: headers({ Prefer: "return=representation" }), body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Supabase rejected the migration write (HTTP ${res.status}).`);
+  if (!res.ok) throw await supabaseFailure(res, "the migration write");
   return res.json() as Promise<T[]>;
 }
 
@@ -128,7 +148,7 @@ export async function sbUpsertStrict<T>(
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(`Supabase rejected the secure settings write (HTTP ${res.status}).`);
+    throw await supabaseFailure(res, "the secure settings write");
   }
   return res.json() as Promise<T[]>;
 }
@@ -178,7 +198,7 @@ export async function sbUpdateStrict<T>(
   const res = await fetch(url(table, filterQuery), {
     method: "PATCH", headers: headers({ Prefer: "return=representation" }), body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Supabase rejected the migration write (HTTP ${res.status}).`);
+  if (!res.ok) throw await supabaseFailure(res, "the migration write");
   return res.json() as Promise<T[]>;
 }
 
@@ -206,6 +226,6 @@ export async function sbDeleteStrict<T>(
     method: "DELETE",
     headers: headers({ Prefer: "return=representation" }),
   });
-  if (!res.ok) throw new Error(`Supabase rejected the VPN persistence change (HTTP ${res.status}).`);
+  if (!res.ok) throw await supabaseFailure(res, "the VPN persistence change");
   return res.json() as Promise<T[]>;
 }
