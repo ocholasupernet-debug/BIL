@@ -4350,16 +4350,22 @@ __export(mikrotik_exports, {
   assignBridgePorts: () => assignBridgePorts,
   changeHotspotUsername: () => changeHotspotUsername,
   changePPPSecretName: () => changePPPSecretName,
+  classifyRouterConnectionFailure: () => classifyRouterConnectionFailure,
   connectHotspotUser: () => connectHotspotUser,
   createBridge: () => createBridge,
   deployRouterFile: () => deployRouterFile,
   detectBridgeInterfaces: () => detectBridgeInterfaces,
+  disableGeneratedHotspot: () => disableGeneratedHotspot,
   disconnectHotspotActiveUser: () => disconnectHotspotActiveUser,
   disconnectPPPActive: () => disconnectPPPActive,
   disconnectPPPActiveByName: () => disconnectPPPActiveByName,
+  ensureHotspotServerAddressPool: () => ensureHotspotServerAddressPool,
+  ensureHotspotUserProfile: () => ensureHotspotUserProfile,
+  ensureHotspotUserRateQueue: () => ensureHotspotUserRateQueue,
   ensureRouterHttpsTrust: () => ensureRouterHttpsTrust,
   ensureRouterManagementAccess: () => ensureRouterManagementAccess,
   fetchBridgePortLayout: () => fetchBridgePortLayout,
+  fetchHotspotConnectedDevices: () => fetchHotspotConnectedDevices,
   fetchHotspotUserList: () => fetchHotspotUserList,
   fetchHotspotUsers: () => fetchHotspotUsers,
   fetchInterfaces: () => fetchInterfaces,
@@ -4373,10 +4379,13 @@ __export(mikrotik_exports, {
   fetchTraffic: () => fetchTraffic,
   fetchWireless: () => fetchWireless,
   generateFirewallScript: () => generateFirewallScript,
+  generateNetworkSetupScript: () => generateNetworkSetupScript,
   generateOvpnClientConfig: () => generateOvpnClientConfig,
   generateRouterAsClientScript: () => generateRouterAsClientScript,
   generateRouterIpsecClientScript: () => generateRouterIpsecClientScript,
+  generateRouterManagementVpnScript: () => generateRouterManagementVpnScript,
   generateRouterWireGuardClientScript: () => generateRouterWireGuardClientScript,
+  generateServiceSetupScript: () => generateServiceSetupScript,
   generateVpnSetupScript: () => generateVpnSetupScript,
   getEnvCredentials: () => getEnvCredentials,
   getHotspotUserIp: () => getHotspotUserIp,
@@ -4386,16 +4395,28 @@ __export(mikrotik_exports, {
   pingRouter: () => pingRouter,
   probeAllHosts: () => probeAllHosts,
   probePort: () => probePort,
+  reconcileGeneratedServiceConfiguration: () => reconcileGeneratedServiceConfiguration,
+  reconcileHotspotUserAccess: () => reconcileHotspotUserAccess,
+  reconcilePppoeUserAccess: () => reconcilePppoeUserAccess,
   removeDstNatByAddress: () => removeDstNatByAddress,
+  removeHotspotIpBinding: () => removeHotspotIpBinding,
   removeHotspotUser: () => removeHotspotUser,
+  removeHotspotUserExpiry: () => removeHotspotUserExpiry,
   removeHotspotUserProfile: () => removeHotspotUserProfile,
+  removeHotspotUserRateQueue: () => removeHotspotUserRateQueue,
   removeIpFromAddressList: () => removeIpFromAddressList,
   removeIpPool: () => removeIpPool,
   removePPPProfile: () => removePPPProfile,
   removePPPSecret: () => removePPPSecret,
   removePPPSecretByName: () => removePPPSecretByName,
+  removePppUserExpiry: () => removePppUserExpiry,
+  repairGeneratedServiceNetworking: () => repairGeneratedServiceNetworking,
+  requireHotspotUserProfile: () => requireHotspotUserProfile,
+  resetHotspotUserCounters: () => resetHotspotUserCounters,
   resolveHotspotClientMac: () => resolveHotspotClientMac,
   runRouterCommand: () => runRouterCommand,
+  scheduleHotspotUserExpiry: () => scheduleHotspotUserExpiry,
+  schedulePppUserExpiry: () => schedulePppUserExpiry,
   setWirelessInterface: () => setWirelessInterface,
   setWirelessSecurityProfile: () => setWirelessSecurityProfile,
   syncHotspotPortalHostname: () => syncHotspotPortalHostname,
@@ -4408,6 +4429,7 @@ __export(mikrotik_exports, {
 });
 module.exports = __toCommonJS(mikrotik_exports);
 var net2 = __toESM(require("net"), 1);
+var import_node_crypto = require("node:crypto");
 var import_node_routeros = require("node-routeros");
 
 // src/lib/logger.ts
@@ -4488,61 +4510,27 @@ function routerManagementBackupIp(primaryIp) {
 }
 
 // src/lib/router-https-trust.ts
+var import_node_fs = require("node:fs");
+var import_meta = {};
+var ISRG_ROOT_X1_PEM = (0, import_node_fs.readFileSync)(
+  new URL("./certificates/isrg-root-x1.pem", import_meta.url),
+  "utf8"
+);
 var ROUTER_HTTPS_CERTIFICATE_NAME = "ochola-isrg-root-x1";
 var ROUTER_HTTPS_CERTIFICATE_FILE = "ochola-isrg-root-x1.pem";
 var ROUTER_HTTPS_CERTIFICATE_PATH = `/scripts/${ROUTER_HTTPS_CERTIFICATE_FILE}`;
-function routerOsCertificateFileWriter(value, fileVariable = "caBuildFile", fileBaseVariable = "caBuildBase", indent = "") {
+function routerOsTextVariableWriter(value, variableName = "caText", indent = "") {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  if (lines.length === 0) throw new Error("Cannot render an empty RouterOS certificate.");
+  if (lines.length === 0) throw new Error("Cannot render an empty RouterOS text value.");
   const escaped = (line) => line.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const file = `$${fileVariable}`;
-  const output = [
-    `${indent}/file print file=$${fileBaseVariable}`,
-    `${indent}/file set [find name=${file}] contents=""`,
-    `${indent}:local caText "${escaped(lines[0])}"`,
-    `${indent}/file set [find name=${file}] contents=$caText`
-  ];
+  const output = [`${indent}:local ${variableName} "${escaped(lines[0])}"`];
   for (const line of lines.slice(1)) {
     output.push(
-      `${indent}:set caText ($caText . "\\n" . "${escaped(line)}")`,
-      `${indent}/file set [find name=${file}] contents=$caText`
+      `${indent}:set ${variableName} ($${variableName} . "\\n" . "${escaped(line)}")`
     );
   }
   return output.join("\n");
 }
-var ISRG_ROOT_X1_PEM = `-----BEGIN CERTIFICATE-----
-MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
-TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
-cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
-WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
-ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
-MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
-h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
-0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
-A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
-T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
-B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
-B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
-KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
-OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
-jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
-qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
-rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
-HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
-hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
-ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
-3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
-NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
-ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
-TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
-jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
-oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
-4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
-mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
-emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
------END CERTIFICATE-----
-`;
 
 // src/lib/vps-ssh.ts
 var import_fs = require("fs");
@@ -4761,6 +4749,57 @@ printf '%s' '${b64(passphrase)}' | base64 -d
   throw new Error(lastError);
 }
 
+// src/lib/payment-walled-garden.ts
+var PAYMENT_WALLED_GARDEN_HOSTNAMES = [
+  // Safaricom M-Pesa Daraja
+  "api.safaricom.co.ke",
+  "sandbox.safaricom.co.ke",
+  // Airtel Money
+  "openapi.airtel.africa",
+  // AzamPay
+  "api.azampay.co.tz",
+  "checkout.azampay.co.tz",
+  "sandbox.azampay.co.tz",
+  // Flutterwave
+  "api.flutterwave.com",
+  "checkout.flutterwave.com",
+  // IntaSend
+  "api.intasend.com",
+  "payment.intasend.com",
+  // PesaPal
+  "pay.pesapal.com",
+  "www.pesapal.com",
+  "cybqa.pesapal.com",
+  // Stripe
+  "api.stripe.com",
+  "checkout.stripe.com",
+  "js.stripe.com",
+  // PayPal
+  "api-m.paypal.com",
+  "www.paypal.com",
+  "www.paypalobjects.com",
+  // Tigo Pesa
+  "api.tigo.co.tz",
+  // DPO / 3G Direct Pay
+  "secure.3gdirectpay.com",
+  "pay.dpo-group.com",
+  // Xendit
+  "api.xendit.co",
+  "checkout.xendit.co"
+];
+
+// src/lib/shared-hotspot-resources.ts
+var SHARED_HOTSPOT_SERVER_NAME = "hotspot";
+var SHARED_HOTSPOT_POOL_NAME = "hotspot pool";
+var SHARED_HOTSPOT_PROFILE_NAME = "hsprof";
+function legacySharedHotspotResourceNames(routerId) {
+  const tag = `ochola-services-${routerId}`;
+  return {
+    serverName: `${tag}-hotspot`,
+    poolName: `${tag}-hotspot-pool`
+  };
+}
+
 // src/lib/mikrotik.ts
 var PRIVATE_RANGES = [
   /^10\./,
@@ -4842,6 +4881,32 @@ function withTimeout(promise, ms) {
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
+function classifyRouterConnectionFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("login failed") || lower.includes("authentication") || lower.includes("bad credentials") || lower.includes("invalid user") || lower.includes("invalid password") || lower.includes("not authorized")) {
+    return {
+      profile: "bad_credentials",
+      summary: "Bad Credentials handshake",
+      message
+    };
+  }
+  if (lower.includes("management api forward failed") || lower.includes("openvpn") || lower.includes("tunnel is offline")) {
+    return {
+      profile: "offline_vpn_tunnel",
+      summary: "Offline VPN tunnel container state",
+      message
+    };
+  }
+  if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("etimedout") || lower.includes("ehostunreach") || lower.includes("enetunreach") || lower.includes("econnrefused") || lower.includes("not reachable") || lower.includes("port 8728")) {
+    return {
+      profile: "tcp_timeout",
+      summary: "TCP Timeout (Port 8728 blocked/unreachable)",
+      message
+    };
+  }
+  return { profile: "unknown", summary: "Unknown RouterOS connection failure", message };
+}
 async function probePort(host, port, timeoutMs = 5e3) {
   const start = Date.now();
   return new Promise((resolve) => {
@@ -4884,21 +4949,25 @@ async function connectWithRetry(creds) {
     const vpn = isVpnIp(creds.host);
     const label = vpn ? `${creds.host} (VPN tunnel)` : isPrivateIp(creds.host) ? `${creds.host} (\u26A0 LAN IP \u2014 only reachable on local network)` : creds.host;
     hosts.push({ host: creds.host, label, isVpn: vpn });
-    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
-      const backupIp = routerManagementBackupIp(creds.host);
-      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
+      const backupIp = creds.host.startsWith("10.8.5.") ? routerManagementBackupIp(creds.host) : creds.host.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
     }
   }
   if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
     hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
-    if (/^10\.8\.5\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
-      const backupIp = routerManagementBackupIp(creds.bridgeIp);
-      hosts.push({ host: backupIp, label: `${backupIp} (backup VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
+      const backupIp = creds.bridgeIp.startsWith("10.8.5.") ? routerManagementBackupIp(creds.bridgeIp) : creds.bridgeIp.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
     }
   }
   if (hosts.length === 0) {
     throw new Error("No host or bridge IP configured for this router");
   }
+  const usernames = Array.from(new Set([
+    creds.username,
+    ...creds.alternateUsernames ?? []
+  ].map((username) => username.trim()).filter(Boolean)));
   hosts.sort((a, b) => (b.isVpn ? 1 : 0) - (a.isVpn ? 1 : 0));
   let lastErr = new Error("No connection attempts made");
   let lastProbe = { host: "", port: creds.port, reachable: false, latencyMs: 0 };
@@ -4935,29 +5004,31 @@ async function connectWithRetry(creds) {
         continue;
       }
       logger.debug({ host: label, port: creds.port, latencyMs: probe.latencyMs }, "Port open");
-      const conn = makeConn(connectionHost, { ...creds, host: connectionHost, port: connectionPort });
-      try {
-        logger.debug({ host: label, attempt }, "RouterOS API connect");
-        await withTimeout(conn.connect(), connectMs);
-        logger.debug({ host: label, attempt }, "RouterOS API connected");
-        return {
-          conn,
-          connectedHost: host,
-          probe,
-          closeForward: forward ? () => forward.close() : void 0
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ host: label, attempt, err: msg }, "RouterOS API connect failed");
-        lastErr = new Error(
-          `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} but RouterOS API login failed (attempt ${attempt}/${MAX_RETRIES}): ${msg}. Check the API username and password, and that the API service is enabled.`
-        );
+      for (const username of usernames) {
+        const conn = makeConn(connectionHost, { ...creds, username, host: connectionHost, port: connectionPort });
         try {
-          conn.close();
-        } catch {
+          logger.debug({ host: label, username, attempt }, "RouterOS API connect");
+          await withTimeout(conn.connect(), connectMs);
+          logger.debug({ host: label, username, attempt }, "RouterOS API connected");
+          return {
+            conn,
+            connectedHost: host,
+            probe,
+            closeForward: forward ? () => forward.close() : void 0
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ host: label, username, attempt, err: msg }, "RouterOS API connect failed");
+          lastErr = new Error(
+            `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} but RouterOS API login failed for ${username} (attempt ${attempt}/${MAX_RETRIES}): ${msg}. Check the API username and password, and that the API service is enabled.`
+          );
+          try {
+            conn.close();
+          } catch {
+          }
         }
-        await forward?.close();
       }
+      await forward?.close();
     }
     if (attempt < MAX_RETRIES) {
       const delay = Math.min(500 * Math.pow(2, attempt - 1), 4e3);
@@ -4984,6 +5055,455 @@ async function runRouterCommand(creds, command) {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     return withTimeout(conn.write(command), ms);
   });
+}
+async function ensureHotspotServerAddressPool(creds, opts) {
+  const poolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name,ranges",
+    `?name=${opts.poolName}`
+  ]);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find((row) => row.name === opts.poolName);
+  const existingRanges = String(pool?.ranges ?? "").trim();
+  if (!existingRanges) {
+    const poolCommand = pool?.[".id"] ? ["/ip/pool/set", `=.id=${pool[".id"]}`] : ["/ip/pool/add", `=name=${opts.poolName}`];
+    poolCommand.push(`=ranges=${opts.poolRanges}`);
+    if (opts.comment) poolCommand.push(`=comment=${opts.comment}`);
+    await runRouterCommand(creds, poolCommand);
+  }
+  const serverRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,address-pool",
+    `?name=${opts.serverName}`
+  ]);
+  const server = (Array.isArray(serverRows) ? serverRows : []).find((row) => row.name === opts.serverName);
+  if (!server?.[".id"]) {
+    throw new Error(`Hotspot server "${opts.serverName}" is not deployed on the router.`);
+  }
+  if (server["address-pool"] !== opts.poolName) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${server[".id"]}`,
+      `=address-pool=${opts.poolName}`
+    ]);
+  }
+}
+async function disableGeneratedHotspot(creds, routerId) {
+  const legacy = legacySharedHotspotResourceNames(routerId);
+  const rows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,disabled"
+  ]);
+  const server = (Array.isArray(rows) ? rows : []).find((row) => row.name === SHARED_HOTSPOT_SERVER_NAME) ?? (Array.isArray(rows) ? rows : []).find((row) => row.name === legacy.serverName);
+  const name = server?.name ?? SHARED_HOTSPOT_SERVER_NAME;
+  if (!server?.[".id"]) {
+    throw new Error(`Generated Hotspot server "${name}" was not found on the router.`);
+  }
+  const alreadyDisabled = String(server.disabled ?? "").toLowerCase() === "true";
+  if (!alreadyDisabled) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${server[".id"]}`,
+      "=disabled=yes"
+    ]);
+  }
+  return { name, alreadyDisabled };
+}
+async function reconcileGeneratedServiceConfiguration(creds, routerId) {
+  const tag = `ochola-services-${routerId}`;
+  const hotspotName = SHARED_HOTSPOT_SERVER_NAME;
+  const hotspotPool = SHARED_HOTSPOT_POOL_NAME;
+  const hotspotProfile = SHARED_HOTSPOT_PROFILE_NAME;
+  const legacy = legacySharedHotspotResourceNames(routerId);
+  const dhcpServer = `${tag}-dhcp`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const pppoeServiceName = `${tag}-pppoe`;
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
+  const hotspotPoolRange = "192.168.180.10-192.168.183.254";
+  const pppoeGateway = "192.168.99.1";
+  const pppoePoolRange = "192.168.99.10-192.168.99.254";
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,interface,disabled"
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : []).find((row) => row.name === hotspotName) ?? (Array.isArray(hotspotRows) ? hotspotRows : []).find((row) => row.name === legacy.serverName);
+  if (hotspot?.name === legacy.serverName && hotspot[".id"]) {
+    const canonicalServer = (Array.isArray(hotspotRows) ? hotspotRows : []).find((row) => row.name === hotspotName);
+    if (!canonicalServer) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/set",
+        `=.id=${hotspot[".id"]}`,
+        `=name=${hotspotName}`
+      ]);
+      hotspot.name = hotspotName;
+    }
+  }
+  const bridgeName = String(hotspot?.interface || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The generated Hotspot has no valid bridge interface.");
+  }
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=.id,name,comment",
+    `?name=${bridgeName}`
+  ]);
+  const bridge = (Array.isArray(bridgeRows) ? bridgeRows : []).find((row) => row.name === bridgeName);
+  if (!bridge) {
+    throw new Error(`The required service bridge "${bridgeName}" was not found on the router.`);
+  }
+  if (bridgeName === "hotspot-bridge" && String(bridge.comment ?? "").trim()) {
+    await runRouterCommand(creds, [
+      "/interface/bridge/set",
+      `=.id=${bridge[".id"]}`,
+      "=comment="
+    ]);
+  }
+  const addressRows = await runRouterCommand(creds, [
+    "/ip/address/print",
+    "=.proplist=.id,address,interface,comment"
+  ]);
+  for (const row of (Array.isArray(addressRows) ? addressRows : []).filter((item) => item.comment === `${tag} hotspot gateway`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/address/remove", `=.id=${row[".id"]}`]);
+  }
+  if (!(Array.isArray(addressRows) ? addressRows : []).some((row) => row.address === `${hotspotGateway}/22` && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/ip/address/add",
+      `=address=${hotspotGateway}/22`,
+      `=interface=${bridgeName}`,
+      `=comment=${tag} hotspot gateway`
+    ]);
+  }
+  const poolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name"
+  ]);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find((row) => row.name === hotspotPool) ?? (Array.isArray(poolRows) ? poolRows : []).find((row) => row.name === legacy.poolName);
+  if (pool?.name === legacy.poolName && pool[".id"]) {
+    const canonicalPool = (Array.isArray(poolRows) ? poolRows : []).find((row) => row.name === hotspotPool);
+    if (!canonicalPool) {
+      await runRouterCommand(creds, [
+        "/ip/pool/set",
+        `=.id=${pool[".id"]}`,
+        `=name=${hotspotPool}`
+      ]);
+      pool.name = hotspotPool;
+    }
+  }
+  if (pool?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pool[".id"]}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${hotspotPool}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`
+    ]);
+  }
+  const dhcpNetworkRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/print",
+    "=.proplist=.id,address,comment"
+  ]);
+  for (const row of (Array.isArray(dhcpNetworkRows) ? dhcpNetworkRows : []).filter((item) => item.comment === `${tag} Hotspot DHCP network`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/dhcp-server/network/remove", `=.id=${row[".id"]}`]);
+  }
+  await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/add",
+    `=address=${hotspotNetwork}`,
+    `=gateway=${hotspotGateway}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    `=comment=${tag} Hotspot DHCP network`
+  ]);
+  const dhcpRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/print",
+    "=.proplist=.id,name",
+    `?name=${dhcpServer}`
+  ]);
+  const dhcp = (Array.isArray(dhcpRows) ? dhcpRows : []).find((row) => row.name === dhcpServer);
+  if (dhcp?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/set",
+      `=.id=${dhcp[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no"
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/add",
+      `=name=${dhcpServer}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no"
+    ]);
+  }
+  const profileRows = await runRouterCommand(creds, [
+    "/ip/hotspot/profile/print",
+    "=.proplist=.id,name"
+  ]);
+  const profile = (Array.isArray(profileRows) ? profileRows : []).find((row) => row.name === hotspotProfile) ?? (Array.isArray(profileRows) ? profileRows : []).find((row) => row.name === "hprofile");
+  if (profile?.name === "hprofile" && profile[".id"]) {
+    const canonicalProfile = (Array.isArray(profileRows) ? profileRows : []).find((row) => row.name === hotspotProfile);
+    if (!canonicalProfile) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/profile/set",
+        `=.id=${profile[".id"]}`,
+        `=name=${hotspotProfile}`
+      ]);
+      profile.name = hotspotProfile;
+    }
+  }
+  const profileFields = [
+    `=hotspot-address=${hotspotGateway}`,
+    "=html-directory=hotspot",
+    "=login-by=http-chap,http-pap,cookie"
+  ];
+  if (profile?.[".id"]) {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/set", `=.id=${profile[".id"]}`, ...profileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, ...profileFields]);
+  }
+  if (hotspot?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${hotspot[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/add",
+      `=name=${hotspotName}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=yes"
+    ]);
+  }
+  const pppoePoolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name",
+    `?name=${pppoePool}`
+  ]);
+  const pppoePoolRow = (Array.isArray(pppoePoolRows) ? pppoePoolRows : []).find((row) => row.name === pppoePool);
+  if (pppoePoolRow?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pppoePoolRow[".id"]}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${pppoePool}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`
+    ]);
+  }
+  const pppoeProfileRows = await runRouterCommand(creds, [
+    "/ppp/profile/print",
+    "=.proplist=.id,name",
+    `?name=${pppoeProfile}`
+  ]);
+  const pppoeProfileRow = (Array.isArray(pppoeProfileRows) ? pppoeProfileRows : []).find((row) => row.name === pppoeProfile);
+  const pppoeProfileFields = [
+    `=local-address=${pppoeGateway}`,
+    `=remote-address=${pppoePool}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    "=only-one=yes",
+    "=use-encryption=yes",
+    "=change-tcp-mss=yes"
+  ];
+  if (pppoeProfileRow?.[".id"]) {
+    await runRouterCommand(creds, ["/ppp/profile/set", `=.id=${pppoeProfileRow[".id"]}`, ...pppoeProfileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ppp/profile/add", `=name=${pppoeProfile}`, ...pppoeProfileFields]);
+  }
+  const pppoeRows = await runRouterCommand(creds, [
+    "/interface/pppoe-server/server/print",
+    "=.proplist=.id,service-name",
+    `?service-name=${pppoeServiceName}`
+  ]);
+  const pppoe = (Array.isArray(pppoeRows) ? pppoeRows : []).find((row) => row["service-name"] === pppoeServiceName);
+  const pppoeFields = [
+    `=interface=${bridgeName}`,
+    `=default-profile=${pppoeProfile}`,
+    "=one-session-per-host=yes",
+    "=disabled=no"
+  ];
+  if (pppoe?.[".id"]) {
+    await runRouterCommand(creds, ["/interface/pppoe-server/server/set", `=.id=${pppoe[".id"]}`, ...pppoeFields]);
+  } else {
+    await runRouterCommand(creds, [
+      "/interface/pppoe-server/server/add",
+      `=service-name=${pppoeServiceName}`,
+      ...pppoeFields
+    ]);
+  }
+  return { bridgeName, hotspotNetwork, pppoeInterface: bridgeName };
+}
+async function repairGeneratedServiceNetworking(creds, routerId, requestedBridgeName) {
+  const tag = `ochola-services-${routerId}`;
+  const safeRequestedBridge = String(requestedBridgeName ?? "").trim();
+  if (safeRequestedBridge && !/^[A-Za-z0-9_.-]+$/.test(safeRequestedBridge)) {
+    throw new Error("The service bridge name is not a valid RouterOS resource name.");
+  }
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=name,interface",
+    `?name=${tag}-hotspot`
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : []).find((row) => row.name === `${tag}-hotspot`);
+  const bridgeName = String((hotspot?.interface ?? safeRequestedBridge) || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The router has no valid generated Hotspot bridge name.");
+  }
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=name",
+    `?name=${bridgeName}`
+  ]);
+  if (!(Array.isArray(bridgeRows) ? bridgeRows : []).some((row) => row.name === bridgeName)) {
+    throw new Error(`The generated service bridge "${bridgeName}" was not found on the router.`);
+  }
+  const interfaceLists = await runRouterCommand(creds, [
+    "/interface/list/print",
+    "=.proplist=name"
+  ]);
+  const listRows = Array.isArray(interfaceLists) ? interfaceLists : [];
+  if (!listRows.some((row) => row.name === "LAN")) {
+    await runRouterCommand(creds, ["/interface/list/add", "=name=LAN"]);
+  }
+  const members = await runRouterCommand(creds, [
+    "/interface/list/member/print",
+    "=.proplist=.id,list,interface"
+  ]);
+  if (!(Array.isArray(members) ? members : []).some((row) => row.list === "LAN" && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/interface/list/member/add",
+      "=list=LAN",
+      `=interface=${bridgeName}`
+    ]);
+  }
+  await runRouterCommand(creds, ["/ip/dns/set", "=allow-remote-requests=yes"]);
+  const routeRows = await runRouterCommand(creds, [
+    "/ip/route/print",
+    "=.proplist=dst-address,active,disabled,interface,immediate-gw,gateway"
+  ]);
+  const defaultRoute = (Array.isArray(routeRows) ? routeRows : []).find(
+    (row) => row["dst-address"] === "0.0.0.0/0" && String(row.disabled ?? "").toLowerCase() !== "true" && String(row.active ?? "").toLowerCase() !== "false"
+  );
+  const immediateGatewayInterface = String(defaultRoute?.["immediate-gw"] ?? "").split("%")[1]?.trim() ?? "";
+  const rawEgressInterface = [
+    defaultRoute?.interface,
+    immediateGatewayInterface,
+    defaultRoute?.gateway
+  ].map((value) => String(value ?? "").trim()).find(Boolean) ?? "";
+  const egressInterface = /^[A-Za-z0-9_.-]+$/.test(rawEgressInterface) ? rawEgressInterface : null;
+  const filterRows = await runRouterCommand(creds, [
+    "/ip/firewall/filter/print",
+    "=.proplist=.id,comment"
+  ]);
+  const removeTaggedFilters = async (comment) => {
+    for (const row of (Array.isArray(filterRows) ? filterRows : []).filter((item) => item.comment === comment)) {
+      if (row[".id"]) {
+        await runRouterCommand(creds, ["/ip/firewall/filter/remove", `=.id=${row[".id"]}`]);
+      }
+    }
+  };
+  const addFilter = async (comment, fields) => {
+    await removeTaggedFilters(comment);
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/add",
+      ...fields,
+      `=comment=${comment}`,
+      "=place-before=0"
+    ]);
+  };
+  const wanInterfaceListFound = listRows.some((row) => row.name === "WAN");
+  const egressField = wanInterfaceListFound ? "=out-interface-list=WAN" : egressInterface ? `=out-interface=${egressInterface}` : null;
+  if (egressField) {
+    await addFilter(`${tag} service-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      `=in-interface=${bridgeName}`,
+      egressField,
+      "=hotspot=auth",
+      "=connection-state=new,established,related"
+    ]);
+    await addFilter(`${tag} pppoe-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      "=src-address=192.168.99.0/24",
+      egressField,
+      "=connection-state=new,established,related"
+    ]);
+  }
+  await addFilter(`${tag} allow-service-dns-udp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=udp",
+    "=dst-port=53"
+  ]);
+  await addFilter(`${tag} allow-service-dns-tcp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=tcp",
+    "=dst-port=53"
+  ]);
+  if (wanInterfaceListFound) {
+    await addFilter(`${tag} block-wan-dns-udp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=udp",
+      "=dst-port=53"
+    ]);
+    await addFilter(`${tag} block-wan-dns-tcp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=tcp",
+      "=dst-port=53"
+    ]);
+  }
+  if (egressField) {
+    const natRows = await runRouterCommand(creds, [
+      "/ip/firewall/nat/print",
+      "=.proplist=.id,comment"
+    ]);
+    const removeTaggedNat = async (comment) => {
+      for (const row of (Array.isArray(natRows) ? natRows : []).filter((item) => item.comment === comment)) {
+        if (row[".id"]) {
+          await runRouterCommand(creds, ["/ip/firewall/nat/remove", `=.id=${row[".id"]}`]);
+        }
+      }
+    };
+    for (const [comment, source] of [
+      [`${tag} Hotspot masquerade`, "192.168.180.0/22"],
+      [`${tag} PPPoE masquerade`, "192.168.99.0/24"]
+    ]) {
+      await removeTaggedNat(comment);
+      await runRouterCommand(creds, [
+        "/ip/firewall/nat/add",
+        "=chain=srcnat",
+        "=action=masquerade",
+        `=src-address=${source}`,
+        egressField,
+        `=comment=${comment}`
+      ]);
+    }
+  }
+  return { bridgeName, wanInterfaceListFound, egressInterface, dnsEnabled: true };
 }
 async function syncHotspotPortalHostname(creds, hostname) {
   return withConn(creds, async (conn, connectedHost) => {
@@ -5036,7 +5556,7 @@ async function syncHotspotPortalHostname(creds, hostname) {
       ]),
       timeoutMs
     );
-    const hotspotServer = hotspotServers.find((row) => row.disabled !== "true")?.name ?? "";
+    const hotspotServer = hotspotServers.find((row) => row.name === SHARED_HOTSPOT_SERVER_NAME && row.disabled !== "true")?.name ?? hotspotServers.find((row) => row.disabled !== "true")?.name ?? "";
     if (!hotspotServer) throw new Error("The router has no enabled hotspot server.");
     const walledGardenRows = await withTimeout(
       conn.write([
@@ -5045,23 +5565,30 @@ async function syncHotspotPortalHostname(creds, hostname) {
       ]),
       timeoutMs
     );
-    for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
-      if (row["dst-host"]?.toLowerCase() === hostname.toLowerCase() && row.server === hotspotServer && row[".id"]) {
-        await withTimeout(
-          conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
-          timeoutMs
-        );
+    const allowedHostnames = Array.from(/* @__PURE__ */ new Set([
+      hostname.trim().toLowerCase(),
+      ...PAYMENT_WALLED_GARDEN_HOSTNAMES
+    ]));
+    for (const allowedHostname of allowedHostnames) {
+      for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
+        if (row["dst-host"]?.toLowerCase() === allowedHostname && row.server === hotspotServer && row[".id"]) {
+          await withTimeout(
+            conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
+            timeoutMs
+          );
+        }
       }
+      await withTimeout(
+        conn.write([
+          "/ip/hotspot/walled-garden/ip/add",
+          `=server=${hotspotServer}`,
+          `=dst-host=${allowedHostname}`,
+          "=action=accept",
+          `=comment=${allowedHostname === hostname.trim().toLowerCase() ? `tenant portal ${hostname}` : `payment walled garden ${allowedHostname}`}`
+        ]),
+        timeoutMs
+      );
     }
-    await withTimeout(
-      conn.write([
-        "/ip/hotspot/walled-garden/ip/add",
-        `=server=${hotspotServer}`,
-        `=dst-host=${hostname}`,
-        "=action=accept"
-      ]),
-      timeoutMs
-    );
     return { hostname, hotspotAddress, hotspotServer, connectedHost };
   });
 }
@@ -5348,7 +5875,14 @@ async function deployRouterFile(creds, options) {
         ]),
         Math.max(ms, 12e4)
       );
-      const transferredFile = (await listFiles()).find((file) => file.name === options.destinationPath);
+      let transferredFile;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        transferredFile = (await listFiles()).find((file) => file.name === options.destinationPath);
+        if (transferredFile) break;
+        if (attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+      }
       if (!transferredFile) {
         throw new Error("The router did not create the destination upload file");
       }
@@ -5375,6 +5909,61 @@ async function fetchRouterFiles(creds) {
     );
     const files = (Array.isArray(rows) ? rows : []).map(routerFileFromRow).filter((file) => file.name.length > 0);
     return { files, connectedHost };
+  });
+}
+function validRouterMac(value) {
+  const mac = String(value ?? "").trim();
+  return /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(mac) ? mac.toUpperCase() : "";
+}
+async function fetchHotspotConnectedDevices(creds) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const byMac = /* @__PURE__ */ new Map();
+    const add = (row, source) => {
+      const mac = validRouterMac(row["mac-address"]);
+      const reportedName = String(
+        source === "hotspot" ? row.user ?? row.comment ?? row["host-name"] : row["host-name"] ?? row.comment ?? row.user
+      ).trim();
+      if (!mac) return;
+      const address = String(row.address ?? "").trim();
+      const name = (reportedName || `Network device ${mac}`).slice(0, 64);
+      if (!byMac.has(mac) || source === "hotspot") {
+        byMac.set(mac, { name, macAddress: mac, address, source });
+      }
+    };
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/active/print", "=.proplist=user,address,mac-address,comment,host-name"]),
+        ms
+      );
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "hotspot");
+    } catch {
+    }
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/dhcp-server/lease/print", "?status=bound", "=.proplist=host-name,address,mac-address,comment"]),
+        ms
+      );
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "dhcp");
+    } catch {
+    }
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
+        ms
+      );
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "host");
+    } catch {
+    }
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+        ms
+      );
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "arp");
+    } catch {
+    }
+    return [...byMac.values()].sort((a, b) => a.name.localeCompare(b.name));
   });
 }
 function parseBytes(val) {
@@ -5456,10 +6045,264 @@ async function addHotspotUser(creds, opts) {
     if (opts.comment) params.push(`=comment=${opts.comment}`);
     if (opts.server) params.push(`=server=${opts.server}`);
     if (opts.email) params.push(`=email=${opts.email}`);
+    if (opts.address) params.push(`=address=${opts.address}`);
     if (opts.limitUptime) params.push(`=limit-uptime=${opts.limitUptime}`);
     if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
     await withTimeout(conn.write(params), ms);
   });
+}
+function hotspotExpirySchedulerName(name) {
+  return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+function hotspotPaidExpirySchedulerName(name) {
+  return `ochola-paid-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+function isLegacyPaidHotspotBinding(row) {
+  return row.type === "bypassed" && /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? "");
+}
+function sameMacAddress(left, right) {
+  const normalize = (value) => String(value ?? "").replace(/[:-]/g, "").toUpperCase();
+  return normalize(left) === normalize(right);
+}
+async function removeHotspotIpBinding(creds, opts) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let rows = await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms
+    );
+    if (!Array.isArray(rows) || rows.length === 0) {
+      rows = await withTimeout(
+        conn.write(["/ip/hotspot/ip-binding/print"]),
+        ms
+      );
+    }
+    const bindings = (Array.isArray(rows) ? rows : []).filter(
+      (row) => sameMacAddress(row["mac-address"], opts.macAddress) && (row.comment === opts.comment || isLegacyPaidHotspotBinding(row))
+    );
+    for (const binding of bindings) {
+      if (binding[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/ip-binding/remove", `=.id=${binding[".id"]}`]),
+          ms
+        );
+      }
+    }
+    const schedulerNames = /* @__PURE__ */ new Set([
+      hotspotPaidExpirySchedulerName(opts.comment),
+      ...bindings.map((binding) => binding.comment).filter((comment) => Boolean(comment)).map(hotspotPaidExpirySchedulerName)
+    ]);
+    for (const schedulerName of schedulerNames) {
+      const schedulers = await withTimeout(
+        conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+        ms
+      );
+      for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+        if (scheduler[".id"]) {
+          await withTimeout(
+            conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]),
+            ms
+          );
+        }
+      }
+    }
+  });
+}
+async function removeHotspotUserExpiry(creds, name) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = hotspotExpirySchedulerName(name);
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms
+    );
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+async function scheduleHotspotUserExpiry(creds, opts) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive hotspot user duration is required.");
+    }
+    const clockRows = await withTimeout(
+      conn.write(["/system/clock/print"]),
+      ms
+    );
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1e3);
+    const schedulerName = hotspotExpirySchedulerName(opts.name);
+    const expiryScript = `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; :foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; :foreach id in=[/ip hotspot ip-binding find where comment="${opts.name}"] do={/ip hotspot ip-binding remove $id}; :foreach id in=[/queue simple find where name="${hotspotRateQueueName(opts.name)}"] do={/queue simple remove $id}; /system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms
+    );
+    const schedulerCommand = schedulers[0]?.[".id"] ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`] : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet hotspot user expiry"
+    );
+    await withTimeout(conn.write(schedulerCommand), ms);
+  });
+}
+async function reconcileHotspotUserAccess(creds, opts) {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+  const fields = {
+    password: opts.password,
+    profile: opts.profile,
+    disabled: !enabled,
+    ...opts.address ? { address: opts.address } : {},
+    ...opts.comment !== void 0 ? { comment: opts.comment } : {},
+    ...opts.limitBytesTotal !== void 0 ? { limitBytesTotal: opts.limitBytesTotal } : {}
+  };
+  await requireHotspotUserProfile(creds, opts.profile);
+  try {
+    await updateHotspotUser(creds, opts.name, fields);
+  } catch {
+    await addHotspotUser(creds, {
+      name: opts.name,
+      password: opts.password,
+      profile: opts.profile,
+      comment: opts.comment,
+      address: opts.address ?? void 0,
+      limitBytesTotal: opts.limitBytesTotal
+    });
+    if (!enabled) await updateHotspotUser(creds, opts.name, { disabled: true });
+  }
+  if (!enabled) {
+    await disconnectHotspotActiveUser(creds, opts.name).catch(() => {
+    });
+    await removeHotspotUserRateQueue(creds, opts.name).catch(() => {
+    });
+    await removeHotspotUserExpiry(creds, opts.name).catch(() => {
+    });
+    if (opts.macAddress) {
+      await removeHotspotIpBinding(creds, {
+        macAddress: opts.macAddress,
+        comment: opts.name
+      });
+    }
+    return;
+  }
+  if (opts.limitBytesTotal !== void 0) {
+    await resetHotspotUserCounters(creds, opts.name).catch(() => {
+    });
+  }
+  if (opts.address && opts.rateLimit) {
+    await ensureHotspotUserRateQueue(creds, {
+      username: opts.name,
+      address: opts.address,
+      maxLimit: opts.rateLimit
+    });
+  }
+  await disconnectHotspotActiveUser(creds, opts.name);
+  if (Number.isFinite(expiryMs)) {
+    await scheduleHotspotUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1e3))
+    });
+  } else {
+    await removeHotspotUserExpiry(creds, opts.name);
+  }
+}
+function pppExpirySchedulerName(name) {
+  return `ochola-ppp-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+async function removePppUserExpiry(creds, name) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = pppExpirySchedulerName(name);
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms
+    );
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+async function schedulePppUserExpiry(creds, opts) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive PPP user duration is required.");
+    }
+    const clockRows = await withTimeout(conn.write(["/system/clock/print"]), ms);
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The PPP router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1e3);
+    const schedulerName = pppExpirySchedulerName(opts.name);
+    const expiryScript = `:foreach id in=[/ppp active find where name="${opts.name}"] do={/ppp active remove $id}; :foreach id in=[/ppp secret find where name="${opts.name}"] do={/ppp secret set $id disabled=yes}; /system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms
+    );
+    const command = schedulers[0]?.[".id"] ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`] : ["/system/scheduler/add", `=name=${schedulerName}`];
+    command.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet PPP user expiry"
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+async function reconcilePppoeUserAccess(creds, opts) {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+  const secrets = await fetchPPPSecrets(creds);
+  const existing = secrets.find((secret) => secret.name === opts.name);
+  if (existing?.id) {
+    await updatePPPSecret(creds, existing.id, {
+      password: opts.password,
+      profile: opts.profile,
+      disabled: !enabled,
+      comment: opts.comment,
+      ...opts.remoteAddress !== void 0 && opts.remoteAddress !== null ? { remoteAddress: opts.remoteAddress } : {}
+    });
+  } else {
+    await addPPPSecret(creds, {
+      name: opts.name,
+      password: opts.password,
+      profile: opts.profile,
+      service: "pppoe",
+      comment: opts.comment,
+      ...opts.remoteAddress ? { remoteAddress: opts.remoteAddress } : {}
+    });
+    if (!enabled) {
+      const created = (await fetchPPPSecrets(creds)).find((secret) => secret.name === opts.name);
+      if (created?.id) await updatePPPSecret(creds, created.id, { disabled: true });
+    }
+  }
+  await disconnectPPPActiveByName(creds, opts.name).catch(() => {
+  });
+  if (!enabled) {
+    await removePppUserExpiry(creds, opts.name).catch(() => {
+    });
+  } else if (Number.isFinite(expiryMs)) {
+    await schedulePppUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1e3))
+    });
+  } else {
+    await removePppUserExpiry(creds, opts.name);
+  }
 }
 async function removeHotspotUser(creds, name) {
   return withConn(creds, async (conn) => {
@@ -5480,10 +6323,29 @@ async function updateHotspotUser(creds, name, fields) {
     if (fields.profile !== void 0) params.push(`=profile=${fields.profile}`);
     if (fields.disabled !== void 0) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
     if (fields.comment !== void 0) params.push(`=comment=${fields.comment}`);
+    if (fields.server !== void 0) params.push(`=server=${fields.server}`);
     if (fields.email !== void 0) params.push(`=email=${fields.email}`);
+    if (fields.address !== void 0) params.push(`=address=${fields.address}`);
     if (fields.limitUptime !== void 0) params.push(`=limit-uptime=${fields.limitUptime}`);
     if (fields.limitBytesTotal !== void 0) params.push(`=limit-bytes-total=${fields.limitBytesTotal}`);
     await withTimeout(conn.write(params), ms);
+  });
+}
+async function resetHotspotUserCounters(creds, name) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/user/print", `?name=${name}`]),
+      ms
+    );
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/user/reset-counters", `=.id=${row[".id"]}`]),
+          ms
+        );
+      }
+    }
   });
 }
 async function changeHotspotUsername(creds, fromName, toName) {
@@ -5501,20 +6363,24 @@ async function disconnectHotspotActiveUser(creds, username) {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms);
-    const id = rows[0]?.[".id"];
-    if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = row[".id"];
+      if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+    }
   });
 }
 async function connectHotspotUser(creds, opts) {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    await withTimeout(conn.write([
+    const command = [
       "/ip/hotspot/active/login",
       `=user=${opts.user}`,
       `=password=${opts.password}`,
       `=ip=${opts.ip}`,
       `=mac-address=${opts.macAddress}`
-    ]), ms);
+    ];
+    if (opts.server) command.push(`=server=${opts.server}`);
+    await withTimeout(conn.write(command), ms);
   });
 }
 async function addHotspotIpBinding(creds, opts) {
@@ -5524,8 +6390,10 @@ async function addHotspotIpBinding(creds, opts) {
       conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
       ms
     );
-    const paidBinding = existing.find((row) => row.comment === opts.comment);
-    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return;
+    const paidBinding = existing.find((row) => row.comment === opts.comment) ?? existing.find(
+      (row) => row.type === "bypassed" && /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? "")
+    );
+    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return false;
     if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
       throw new Error("A positive hotspot access duration is required.");
     }
@@ -5536,8 +6404,10 @@ async function addHotspotIpBinding(creds, opts) {
     const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
     if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
     const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1e3);
-    const schedulerName = `ochola-paid-${opts.comment.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
-    const expiryScript = `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; /system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulerName = hotspotPaidExpirySchedulerName(opts.comment);
+    const queueName = opts.queueName ?? hotspotRateQueueName(opts.comment);
+    const queueExpiry = queueName ? `:foreach id in=[/queue simple find where name="${queueName}"] do={/queue simple remove $id}; ` : "";
+    const expiryScript = `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; :foreach id in=[/ip hotspot active find where user="${opts.comment}"] do={/ip hotspot active remove $id}; :foreach id in=[/ip hotspot user find where name="${opts.comment}"] do={/ip hotspot user set $id disabled=yes}; ` + queueExpiry + `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = await withTimeout(
       conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
       ms
@@ -5554,7 +6424,7 @@ async function addHotspotIpBinding(creds, opts) {
     try {
       const id = paidBinding?.[".id"];
       const params = id ? ["/ip/hotspot/ip-binding/set", `=.id=${id}`] : ["/ip/hotspot/ip-binding/add", `=mac-address=${opts.macAddress}`];
-      params.push("=type=bypassed", `=comment=${opts.comment}`);
+      params.push(`=type=${opts.bindingType ?? "bypassed"}`, `=comment=${opts.comment}`);
       if (opts.ipAddress) params.push(`=address=${opts.ipAddress}`);
       await withTimeout(conn.write(params), ms);
     } catch (error) {
@@ -5573,6 +6443,47 @@ async function addHotspotIpBinding(creds, opts) {
         }).catch(() => void 0);
       }
       throw error;
+    }
+    return true;
+  });
+}
+function hotspotRateQueueName(username) {
+  return `ochola-rate-${username.replace(/[^A-Za-z0-9_-]/g, "-").slice(-52)}`;
+}
+async function ensureHotspotUserRateQueue(creds, opts) {
+  const address = opts.address;
+  if (!address || !opts.maxLimit) return;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(opts.username);
+    const target = address.includes("/") ? address : `${address}/32`;
+    const rows = await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms
+    );
+    const existing = Array.isArray(rows) ? rows[0] : void 0;
+    const command = existing?.[".id"] ? ["/queue/simple/set", `=.id=${existing[".id"]}`] : ["/queue/simple/add", `=name=${name}`];
+    command.push(
+      `=target=${target}`,
+      `=max-limit=${opts.maxLimit}`,
+      `=comment=${opts.username}`,
+      "=disabled=no"
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+async function removeHotspotUserRateQueue(creds, username) {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(username);
+    const rows = await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms
+    );
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row[".id"]) {
+        await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
     }
   });
 }
@@ -5616,6 +6527,39 @@ async function addHotspotUserProfile(creds, opts) {
     ];
     if (opts.rateLimit) params.push(`=rate-limit=${opts.rateLimit}`);
     await withTimeout(conn.write(params), ms);
+  });
+}
+async function ensureHotspotUserProfile(creds, opts) {
+  try {
+    await updateHotspotUserProfile(creds, opts.name, {
+      sharedUsers: opts.sharedUsers,
+      rateLimit: opts.rateLimit
+    });
+  } catch {
+    try {
+      await addHotspotUserProfile(creds, opts);
+    } catch {
+      await updateHotspotUserProfile(creds, opts.name, {
+        sharedUsers: opts.sharedUsers,
+        rateLimit: opts.rateLimit
+      });
+    }
+  }
+}
+async function requireHotspotUserProfile(creds, name) {
+  const normalizedName = name.trim();
+  if (!normalizedName) throw new Error("The hotspot plan has no RouterOS profile name");
+  await withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/user/profile/print", `?name=${normalizedName}`]),
+      ms
+    );
+    if (!Array.isArray(rows) || !rows.some((row) => row[".id"])) {
+      throw new Error(
+        `Hotspot plan profile '${normalizedName}' does not exist on this router. Sync the created plan before provisioning paid users.`
+      );
+    }
   });
 }
 async function updateHotspotUserProfile(creds, name, fields) {
@@ -6197,7 +7141,7 @@ function generateVpnSetupScript(opts) {
     vpnUsername = "admin",
     vpnPassword = "ochola",
     tunnelNetwork = "192.168.89",
-    lanNetwork = "192.168.88.0/24",
+    lanNetwork = "192.168.180.0/22",
     routerId
   } = opts;
   const routerGateway = `${tunnelNetwork}.1`;
@@ -6307,7 +7251,7 @@ function generateOvpnClientConfig(opts) {
     vpnUsername = "admin",
     vpnPassword = "ochola",
     tunnelClientIp = "192.168.89.2",
-    lanNetwork = "192.168.88.0/24",
+    lanNetwork = "192.168.180.0/22",
     apiPorts = "8728, 8729",
     routeAll = false
   } = opts;
@@ -6397,6 +7341,20 @@ function prefixToMask(prefix) {
 function routerOsString(value) {
   return `"${value.replace(/[\u0000-\u001F\u007F]/g, "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
+function certificateCommonName(pem) {
+  let subject;
+  try {
+    subject = new import_node_crypto.X509Certificate(pem).subject;
+  } catch {
+    throw new Error("Management VPN CA certificate PEM could not be parsed.");
+  }
+  const match = /(?:^|[,\n])CN=([^,\n]+)/.exec(subject);
+  const commonName = match?.[1]?.trim() ?? "";
+  if (!commonName || /["\r\n]/.test(commonName)) {
+    throw new Error("Management VPN CA certificate has no safe common name.");
+  }
+  return commonName;
+}
 function validateRouterOpenVpnEndpoint(value) {
   const endpoint = value.trim();
   if (!endpoint || endpoint.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(endpoint)) {
@@ -6439,6 +7397,32 @@ function validateRouterOsResourceName(value, label) {
   }
   return resource;
 }
+function routerHotspotGateway(value) {
+  const raw = String(value ?? "").trim();
+  const [rawIp, rawPrefix] = raw.split("/");
+  const octets = rawIp?.split(".").map(Number) ?? [];
+  const prefix = Number(rawPrefix);
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255) || !Number.isInteger(prefix) || prefix < 1 || prefix > 30) {
+    throw new Error("Hotspot LAN network must be a valid IPv4 CIDR between /1 and /30.");
+  }
+  const ip = ((octets[0] * 256 + octets[1]) * 256 + octets[2]) * 256 + octets[3] >>> 0;
+  const mask = 4294967295 << 32 - prefix >>> 0;
+  const network = (ip & mask) >>> 0;
+  const broadcast = (network | ~mask >>> 0) >>> 0;
+  const gateway = network + 1;
+  if (gateway >= broadcast) {
+    throw new Error("Hotspot LAN network does not have a usable gateway address.");
+  }
+  return {
+    address: [
+      gateway >>> 24 & 255,
+      gateway >>> 16 & 255,
+      gateway >>> 8 & 255,
+      gateway & 255
+    ].join("."),
+    prefix
+  };
+}
 function generateRouterAsClientScript(opts) {
   const {
     vpsPublicIp,
@@ -6446,41 +7430,122 @@ function generateRouterAsClientScript(opts) {
     vpnUsername,
     vpnPassword,
     caCertificateUrl,
+    managementCaCertificatePem,
     caCertificateName = "ochola-router-management-ca",
     backendRegistrationUrl,
     tunnelRouterIp,
     tunnelVpsIp = "10.8.5.1",
-    lanNetwork = "192.168.88.0/24",
+    lanNetwork = "192.168.180.0/22",
     routerId,
     routerOsMajor = 6,
+    autoDetectRouterOsMajor = false,
     vpnRole = "primary",
+    backupVpnPort,
+    backupVpnUsername,
+    backupVpnPassword,
+    backupTunnelRouterIp,
+    backupTunnelVpsIp = ROUTER_MANAGEMENT_VPN_BACKUP.gateway,
     installationMode = "coexist",
     bridgeName,
     bridgePorts = [],
     apiUsername,
     apiPassword,
-    managementApiUsername
+    managementApiUsername,
+    managementApiPassword,
+    hotspotAssets = [],
+    minimalManagementSetup = false
   } = opts;
   const endpoint = validateRouterOpenVpnEndpoint(vpsPublicIp);
   const port = validateRouterOpenVpnPort(vpnPort);
   const safeVpnUsername = validateRouterOpenVpnCredential(vpnUsername, "username");
   const safeVpnPassword = validateRouterOpenVpnCredential(vpnPassword, "password");
+  const backupValues = [
+    backupVpnPort,
+    backupVpnUsername,
+    backupVpnPassword,
+    backupTunnelRouterIp
+  ];
+  const hasBackupManagementVpn = backupValues.some((value) => value !== void 0 && String(value).trim() !== "");
+  if (hasBackupManagementVpn && backupValues.some((value) => value === void 0 || String(value).trim() === "")) {
+    throw new Error("Backup management VPN configuration must include port, credentials, and router tunnel IP.");
+  }
+  const safeBackupVpnUsername = hasBackupManagementVpn ? validateRouterOpenVpnCredential(backupVpnUsername ?? "", "backup username") : "";
+  const safeBackupVpnPassword = hasBackupManagementVpn ? validateRouterOpenVpnCredential(backupVpnPassword ?? "", "backup password") : "";
+  const backupPort = hasBackupManagementVpn ? validateRouterOpenVpnPort(backupVpnPort ?? 0) : 0;
+  const safeBackupTunnelRouterIp = hasBackupManagementVpn ? String(backupTunnelRouterIp).trim() : "";
+  if (hasBackupManagementVpn && !/^10\.8\.6\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-3])$/.test(safeBackupTunnelRouterIp)) {
+    throw new Error("Backup management tunnel IP must be a valid host in the isolated 10.8.6.0/24 network.");
+  }
+  const safeBackupTunnelVpsIp = hasBackupManagementVpn ? String(backupTunnelVpsIp).trim() : "";
+  if (hasBackupManagementVpn && safeBackupTunnelVpsIp !== ROUTER_MANAGEMENT_VPN_BACKUP.gateway) {
+    throw new Error("Backup management tunnel gateway must remain 10.8.6.1.");
+  }
   const safeCaCertificateUrl = validateRouterOpenVpnCaUrl(caCertificateUrl);
+  const embeddedManagementCa = String(managementCaCertificatePem ?? ISRG_ROOT_X1_PEM).trim();
+  if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/.test(embeddedManagementCa)) {
+    throw new Error("Management VPN CA certificate PEM is missing or invalid.");
+  }
+  const embeddedManagementCaCommonName = certificateCommonName(embeddedManagementCa);
   const safeBackendRegistrationUrl = validateRouterOpenVpnCaUrl(backendRegistrationUrl);
+  const safeCaCertificateName = validateRouterOsResourceName(
+    caCertificateName,
+    "RouterOS CA certificate filename"
+  );
   const coexistence = installationMode === "coexist" || installationMode === "direct";
-  const routerOs7 = routerOsMajor >= 7;
-  const routerOsPath = routerOs7 ? "RouterOS 7+" : "RouterOS 6";
-  const openVpnCipher = routerOs7 ? "aes128-cbc" : "aes128";
+  const routerOs7 = !autoDetectRouterOsMajor && routerOsMajor >= 7;
+  const routerOsPath = autoDetectRouterOsMajor ? "auto-detected RouterOS 6/7" : routerOs7 ? "RouterOS 7+" : "RouterOS 6";
+  const openVpnCipher = autoDetectRouterOsMajor ? "$ocholaOpenVpnCipher" : routerOs7 ? "aes128-cbc" : "aes128";
+  const openVpnDisplayCipher = autoDetectRouterOsMajor ? "auto-detected (RouterOS 6: aes128; RouterOS 7+: aes128-cbc)" : openVpnCipher;
   const contract = vpnRole === "backup" ? ROUTER_MANAGEMENT_VPN_BACKUP : ROUTER_MANAGEMENT_VPN;
   const roleSuffix = vpnRole === "backup" ? "-backup" : "";
   const interfaceName = vpnRole === "primary" ? ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME : installationMode === "direct" ? `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME}-backup` : routerId ? routerManagementClientInterfaceName(routerId, vpnRole) : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME}${roleSuffix}`;
   const tag = routerId ? `ochola-mgmt-vpn-${routerId}${roleSuffix}` : `ocholasupernet${roleSuffix}`;
   const interfaceComment = vpnRole === "primary" ? ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT : routerId ? `${tag} VPS tunnel` : `${ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT}${roleSuffix}`;
-  const safeBridgeName = bridgeName ? validateRouterOsResourceName(bridgeName, "Self Install bridge name") : "";
-  const safeBridgePorts = bridgePorts.map((port2) => validateRouterOsResourceName(port2, "Self Install bridge port")).filter((port2, index, values) => values.indexOf(port2) === index);
-  const safeApiUsername = apiUsername ? validateRouterOsResourceName(apiUsername, "RouterOS API username") : "";
-  const safeApiPassword = apiPassword ? validateRouterOpenVpnCredential(apiPassword, "API password") : "";
-  const safeManagementApiUsername = managementApiUsername ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username") : "";
+  const backupInterfaceName = `${interfaceName}-backup`;
+  const backupInterfaceComment = `${interfaceComment}-backup`;
+  const failoverSchedulerName = routerId ? `ochola-mgmt-failover-${routerId}` : "ocholasupernet-mgmt-failover";
+  const safeBridgeName = !minimalManagementSetup && bridgeName ? validateRouterOsResourceName(bridgeName, "Self Install bridge name") : "";
+  const safeBridgePorts = (minimalManagementSetup ? [] : bridgePorts).map((port2) => validateRouterOsResourceName(port2, "Self Install bridge port")).filter((port2, index, values) => values.indexOf(port2) === index);
+  const safeApiUsername = !minimalManagementSetup && apiUsername ? validateRouterOsResourceName(apiUsername, "RouterOS API username") : "";
+  const safeApiPassword = !minimalManagementSetup && apiPassword ? validateRouterOpenVpnCredential(apiPassword, "API password") : "";
+  const safeManagementApiUsername = !minimalManagementSetup && managementApiUsername ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username") : "";
+  const safeManagementApiPassword = managementApiPassword ? validateRouterOpenVpnCredential(managementApiPassword, "API password") : "";
+  const hotspotGateway = safeBridgeName ? routerHotspotGateway(lanNetwork) : null;
+  const safeHotspotAssets = (minimalManagementSetup ? [] : hotspotAssets).map((asset) => {
+    const destinationPath = String(asset.destinationPath ?? "").trim().replaceAll("\\", "/");
+    if (!/^flash\/hotspot\/[A-Za-z0-9._/-]+$/.test(destinationPath) || destinationPath.includes("..")) {
+      throw new Error("Self Install hotspot asset destination is invalid.");
+    }
+    return {
+      sourceUrl: validateRouterOpenVpnCaUrl(asset.sourceUrl),
+      destinationPath,
+      sourceName: String(asset.sourceName ?? destinationPath.split("/").pop() ?? "asset").replace(/[\u0000-\u001F\u007F"]/g, "")
+    };
+  });
+  const hotspotDirectories = Array.from(/* @__PURE__ */ new Set([
+    "flash/hotspot",
+    ...safeHotspotAssets.map((asset) => asset.destinationPath.slice(0, asset.destinationPath.lastIndexOf("/")))
+  ])).sort((left, right) => left.split("/").length - right.split("/").length);
+  const hotspotAssetInstall = safeHotspotAssets.length > 0 ? `# Step 10: Import the approved hotspot asset bundle
+# Existing files are preserved so a retry cannot replace a customized portal.
+:put "${tag}: STEP 10/10 - Installing ${safeHotspotAssets.length} approved hotspot assets."
+${hotspotDirectories.map((directory) => `:do { /file make-dir dir-name=${routerOsString(directory)} } on-error={}`).join("\n")}
+${safeHotspotAssets.map((asset) => `:if ([:len [/file find where name=${routerOsString(asset.destinationPath)}]] = 0) do={
+    :do {
+        /tool fetch url=${routerOsString(asset.sourceUrl)} dst-path=${routerOsString(asset.destinationPath)} keep-result=yes mode=https check-certificate=yes
+        :if ([:len [/file find where name=${routerOsString(asset.destinationPath)}]] = 0) do={
+            :put "${asset.sourceName}: RouterOS did not create the destination file."
+        } else={
+            :put "${asset.sourceName}: hotspot asset installed."
+        }
+    } on-error={
+        :local hotspotAssetError $error
+        :put ("${asset.sourceName}: hotspot asset download failed: " . $hotspotAssetError)
+    }
+} else={
+    :put "${asset.sourceName}: already present; preserved."
+}`).join("\n")}
+:put "${tag}: STEP 10/10 complete - hotspot asset installation finished."` : `:put "${tag}: STEP 10/10 skipped - no approved hotspot assets were requested."`;
   const resourcePreparation = coexistence ? `# Coexistence guard: never replace a foreign VPN or API policy. A previous
 # incomplete Ochola attempt may leave its uniquely tagged, non-running client
 # behind; remove only that stale resource so the administrator can retry.
@@ -6504,43 +7569,87 @@ function generateRouterAsClientScript(opts) {
         :error $ocholaVpnChildError
     }
 }
-:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
+${hasBackupManagementVpn ? `:local existingBackupOvpnIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+:if ([:len $existingBackupOvpnIds] > 0) do={
+    :local existingBackupOvpnId [:pick $existingBackupOvpnIds 0]
+    :local existingBackupOvpnComment [/interface ovpn-client get $existingBackupOvpnId comment]
+    :if ($existingBackupOvpnComment = "${backupInterfaceComment}") do={
+        :set reuseExistingBackupOvpn true
+        :do { /interface ovpn-client set $existingBackupOvpnId disabled=yes } on-error={
+            :set ocholaVpnChildError "${tag}: could not disable the previous backup management interface."
+            :error $ocholaVpnChildError
+        }
+    } else={
+        :set ocholaVpnChildError "${tag}: coexistence conflict - a foreign ${backupInterfaceName} interface was found; nothing was replaced."
+        :error $ocholaVpnChildError
+    }
+}` : ""}
+${minimalManagementSetup ? "" : `:if ([:len [/ip service find where name="api" && disabled=yes]] > 0) do={
     :set ocholaVpnChildError "${tag}: coexistence conflict - RouterOS API is disabled; it was not enabled."
     :error $ocholaVpnChildError
-}` : `:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
+}`}` : `:do { /system scheduler remove [find where name="${failoverSchedulerName}"] } on-error={}
+:do { /interface ovpn-client remove [find where name="ovpn-to-vps"] } on-error={}
 :do { /interface ovpn-client remove [find where name="ocholasupernet" comment="mainbillingvpn"] } on-error={}
+:do { /interface ovpn-client remove [find where name="${backupInterfaceName}"] } on-error={}
 :do { /interface ovpn-client remove [find where name="coreispbilling"] } on-error={}
 :do { /interface ovpn-client remove [find where name="${interfaceName}"] } on-error={}`;
   const firewallPreparation = coexistence ? `:if ([:len [/ip firewall filter find where comment="${tag}-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0 } on-error={ :set ovpnError "RouterOS rejected the coexistence API firewall rule." } }
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
+${hasBackupManagementVpn ? `:if ([:len [/ip firewall filter find where comment="${tag}-backup-api-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-backup-api-from-vps-tunnel" place-before=0 } on-error={ :set ovpnError "RouterOS rejected the backup coexistence API firewall rule." } }` : ""}
+:if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }
 :if ([:len [/ip firewall filter find where comment="${tag}-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the coexistence ping firewall rule." } }
+${hasBackupManagementVpn ? `:if ([:len [/ip firewall filter find where comment="${tag}-backup-ping-from-vps-tunnel"]] = 0) do={ :do { /ip firewall filter add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=icmp comment="${tag}-backup-ping-from-vps-tunnel" } on-error={ :set ovpnError "RouterOS rejected the backup coexistence ping firewall rule." } }` : ""}
 :if ([:len $ovpnError] > 0) do={ :set ocholaVpnChildError ("${tag}: " . $ovpnError) ; :error $ocholaVpnChildError }` : `/ip firewall filter
 remove [find where comment="${tag}-api-from-vps-tunnel"]
 add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-api-from-vps-tunnel" place-before=0
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-api-from-vps-tunnel"]
+add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=tcp dst-port=8728,8729 comment="${tag}-backup-api-from-vps-tunnel" place-before=0` : ""}
 remove [find where comment="${tag}-ping-from-vps-tunnel"]
-add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"`;
-  const bridgeSetup = safeBridgeName ? `# Step 4: Create the requested hotspot bridge and add only the selected ports
+add action=accept chain=input src-address=${tunnelVpsIp}/32 protocol=icmp comment="${tag}-ping-from-vps-tunnel"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-ping-from-vps-tunnel"]
+add action=accept chain=input src-address=${safeBackupTunnelVpsIp}/32 protocol=icmp comment="${tag}-backup-ping-from-vps-tunnel"` : ""}`;
+  const bridgeSetup = safeBridgeName ? `# Step 5: Create the requested hotspot bridge and add only the selected ports
+:put "${tag}: STEP 5/10 - Configuring hotspot bridge ${safeBridgeName}."
 /interface bridge
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
-    :do { /interface bridge add name="${safeBridgeName}" comment="${tag} hotspot bridge" } on-error={
+     :do { /interface bridge add name="${safeBridgeName}"${safeBridgeName === "hotspot-bridge" ? "" : ` comment="${tag} hotspot bridge"`} } on-error={
         :set ocholaVpnChildError "${tag}: hotspot bridge creation failed."
         :error $ocholaVpnChildError
     }
-}
-${safeBridgePorts.map((port2) => `:if ([:len [/interface find where name="${port2}"]] = 0) do={
+ }
+${safeBridgeName === "hotspot-bridge" ? `/interface bridge set [find where name="${safeBridgeName}"] comment=""` : ""}
+${safeBridgePorts.map((port2) => `:put "${tag}: STEP 5/10 - Checking physical port ${port2}."
+:if ([:len [/interface find where name="${port2}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: physical interface ${port2} was not found."
     :error $ocholaVpnChildError
 }
 :if ([:len [/interface bridge port find where bridge="${safeBridgeName}" && interface="${port2}"]] = 0) do={
+    :put "${tag}: STEP 5/10 - Adding ${port2} to ${safeBridgeName}."
     :do { /interface bridge port add bridge="${safeBridgeName}" interface="${port2}" comment="${tag} hotspot port" } on-error={
         :set ocholaVpnChildError "${tag}: could not add ${port2} to ${safeBridgeName}."
         :error $ocholaVpnChildError
     }
-}`).join("\n")}
+:put "${tag}: STEP 5/10 - ${port2} is attached to ${safeBridgeName}."
+`).join("\n")}
+:local hotspotAddress "${hotspotGateway.address}/${hotspotGateway.prefix}"
+:put ("${tag}: STEP 5/10 - Verifying hotspot gateway " . $hotspotAddress . " on ${safeBridgeName}.")
+:if ([:len [/ip address find where address=$hotspotAddress && interface="${safeBridgeName}"]] = 0) do={
+    :do {
+        /ip address add address=$hotspotAddress interface="${safeBridgeName}" comment="${tag} hotspot gateway"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: could not add hotspot gateway $hotspotAddress to ${safeBridgeName}."
+        :error $ocholaVpnChildError
+    }
+}
+:if ([:len [/ip address find where address=$hotspotAddress && interface="${safeBridgeName}"]] = 0) do={
+    :set ocholaVpnChildError "${tag}: hotspot gateway $hotspotAddress was not verified on ${safeBridgeName}."
+    :error $ocholaVpnChildError
+}
 :if ([:len [/interface bridge find where name="${safeBridgeName}"]] = 0) do={
     :set ocholaVpnChildError "${tag}: hotspot bridge was not verified."
     :error $ocholaVpnChildError
-}` : "";
+}
+:put "${tag}: STEP 5/10 complete - bridge, ports, and gateway verified."` : "";
   const safeApiUsernames = Array.from(new Set([safeManagementApiUsername, safeApiUsername].filter(Boolean)));
   const apiUserSetup = safeApiPassword && safeApiUsernames.length > 0 ? `# Step 5: Create or reconcile the dedicated management API accounts
 /user
@@ -6560,13 +7669,53 @@ ${safeApiUsernames.map((username) => `:local managementUserIds [/user find where
     :set ocholaVpnChildError "${tag}: management API user ${username} was not verified."
     :error $ocholaVpnChildError
 }`).join("\n")}` : "";
+  const managementApiUserSetup = safeManagementApiPassword ? `# Create the stable backend API account without removing any existing users.
+/user
+:local ocholaManagementUserIds [/user find where name="ocholasupernet"]
+:if ([:len $ocholaManagementUserIds] = 0) do={
+    :do {
+        add name="ocholasupernet" group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet API"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: ocholasupernet API user creation failed."
+        :error $ocholaVpnChildError
+    }
+} else={
+    :do {
+        set [:pick $ocholaManagementUserIds 0] group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet API"
+    } on-error={
+        :set ocholaVpnChildError "${tag}: ocholasupernet API user update failed."
+        :error $ocholaVpnChildError
+    }
+}
+:if ([:len [/user find where name="ocholasupernet" && disabled=no]] = 0) do={
+    :set ocholaVpnChildError "${tag}: ocholasupernet API user was not verified."
+    :error $ocholaVpnChildError
+}` : "";
+  const apiNetworks = ["10.8.0.0/24", "10.8.5.0/24", "10.8.6.0/24"];
+  const apiNetworkCsv = apiNetworks.join(",");
+  const apiServiceAddresses = hasBackupManagementVpn ? `${tunnelVpsIp}/32,${safeBackupTunnelVpsIp}/32` : `${tunnelVpsIp}/32`;
   const natSetup = safeBridgeName ? `# Step 6: Add only the management NAT rules needed for the two interfaces
 /ip firewall nat
 remove [find where comment="${tag}-mgmt-to-hotspot-nat"]
 add chain=srcnat action=masquerade src-address=${tunnelVpsIp}/32 out-interface="${safeBridgeName}" comment="${tag}-mgmt-to-hotspot-nat"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-backup-mgmt-to-hotspot-nat"]
+add chain=srcnat action=masquerade src-address=${safeBackupTunnelVpsIp}/32 out-interface="${safeBridgeName}" comment="${tag}-backup-mgmt-to-hotspot-nat"` : ""}
 remove [find where comment="${tag}-hotspot-to-mgmt-nat"]
-add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"` : "";
-  const openVpnOptionalSettings = routerOs7 ? `# RouterOS 7 path: certificate verification is mandatory.
+add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${interfaceName}" comment="${tag}-hotspot-to-mgmt-nat"
+${hasBackupManagementVpn ? `remove [find where comment="${tag}-hotspot-to-backup-mgmt-nat"]
+add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${backupInterfaceName}" comment="${tag}-hotspot-to-backup-mgmt-nat"` : ""}` : "";
+  const openVpnOptionalSettings = autoDetectRouterOsMajor ? `# The auto-detected path keeps RouterOS 6 free of RouterOS 7-only
+# properties. RouterOS parses the verification command at runtime only after
+# the local major-version check has selected RouterOS 7.
+:if ($ocholaRouterOsMajor = "7") do={
+    :do {
+        :local ocholaVerifyServerCertificate [:parse "/interface ovpn-client set [find where name=\\"${interfaceName}\\"] verify-server-certificate=yes"]
+        $ocholaVerifyServerCertificate
+    } on-error={
+        :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable OpenVPN server certificate verification."
+        :error $ocholaVpnChildError
+    }
+}` : routerOs7 ? `# RouterOS 7 path: certificate verification is mandatory.
 :do {
     /interface ovpn-client set [find where name="${interfaceName}"] verify-server-certificate=yes
 } on-error={
@@ -6574,49 +7723,227 @@ add chain=srcnat action=masquerade src-address=${lanNetwork} out-interface="${in
     :error $ocholaVpnChildError
 }` : `# RouterOS 6 path: keep the client command to the conservative common property set.
 # RouterOS 6 must not parse RouterOS 7-only OpenVPN properties.`;
+  const backupOpenVpnOptionalSettings = hasBackupManagementVpn ? autoDetectRouterOsMajor ? `:do {
+    :if ($ocholaRouterOsMajor = "7") do={
+        :local ocholaVerifyBackupServerCertificate [:parse "/interface ovpn-client set [find where name=\\"${backupInterfaceName}\\"] verify-server-certificate=yes"]
+        $ocholaVerifyBackupServerCertificate
+    }
+} on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS 7 could not enable backup OpenVPN server certificate verification."
+    :error $ocholaVpnChildError
+}` : "" : "";
   const openVpnPostCreateSettings = `# Apply optional OpenVPN settings only after the portable client exists.
 :do {
     /interface ovpn-client set [find where name="${interfaceName}"] mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no
 } on-error={
     :set ocholaVpnChildError "${tag}: OpenVPN client options were rejected after interface creation."
     :error $ocholaVpnChildError
-}`;
+}
+${hasBackupManagementVpn ? `:do {
+    /interface ovpn-client set [find where name="${backupInterfaceName}"] mode=ip cipher=${openVpnCipher} auth=sha1 add-default-route=no
+} on-error={
+    :set ocholaVpnChildError "${tag}: backup OpenVPN client options were rejected after interface creation."
+    :error $ocholaVpnChildError
+}` : ""}`;
+  const openVpnPreflight = `# Create the management interface disabled while CA trust is prepared.
+# This makes the requested OVPN interface visible even if the CA bootstrap
+# needs to be repaired and retried.
+:put "${tag}: Creating management OpenVPN client interface (disabled pending CA trust)."
+:if (!$reuseExistingOvpn) do={
+ :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=yes comment="${interfaceComment}" } on-error={
+    :local routerError ""
+    :do { :set routerError $error } on-error={}
+    :set ovpnError "RouterOS rejected the OpenVPN client add command"
+    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+ }
+}
+:if ([:len $ovpnError] > 0) do={
+    :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Management OpenVPN client interface is present and disabled until CA trust succeeds."`;
+  const backupOpenVpnPreflight = hasBackupManagementVpn ? `# Create the backup client disabled. The failover scheduler enables it only
+# after the primary client is no longer running.
+:put "${tag}: Creating backup management OpenVPN client interface (standby)."
+:if (!$reuseExistingBackupOvpn) do={
+ :do { /interface ovpn-client add name=${routerOsString(backupInterfaceName)} connect-to=${routerOsString(endpoint)} port=${backupPort} user=${routerOsString(safeBackupVpnUsername)} password=${routerOsString(safeBackupVpnPassword)} disabled=yes comment="${backupInterfaceComment}" } on-error={
+    :local routerError ""
+    :do { :set routerError $error } on-error={}
+    :set ovpnError "RouterOS rejected the backup OpenVPN client add command"
+    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
+ }
+}
+:if ([:len $ovpnError] > 0) do={
+    :set ocholaVpnChildError ("${tag}: backup OVPN client creation failed: " . $ovpnError)
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Backup management OpenVPN client is present and disabled in primary-first standby mode."` : "";
+  const caFileName = `${safeCaCertificateName}.crt`;
+  const caBuildBaseName = `${safeCaCertificateName}-bootstrap`;
+  const caBuildFileName = `${caBuildBaseName}.txt`;
+  const httpsCaFileName = `${safeCaCertificateName}-https-root.crt`;
+  const httpsCaBuildBaseName = `${safeCaCertificateName}-https-root`;
+  const httpsCaBuildFileName = `${httpsCaBuildBaseName}.txt`;
+  const publicHttpsCaCommonName = certificateCommonName(ISRG_ROOT_X1_PEM);
   const caBootstrap = `# Step 1: Import the management VPN CA
 # Prefer the RouterOS built-in trust store. If it cannot validate the public
-# endpoint yet, use the embedded ISRG Root X1 trust anchor instead of trusting
-# an unverified download.
-:local caFile "${caCertificateName}.crt"
-:local caBuildBase "${caCertificateName}-bootstrap"
-:local caBuildFile "${caCertificateName}-bootstrap.txt"
-:local caImportFile $caFile
+# endpoint yet, use the embedded management OpenVPN CA instead of trusting an
+# unverified download.
+:global ocholaCaPhase
+:global ocholaCaError
+:global ocholaCaImportError
+:set ocholaCaPhase "prepare CA file"
+:set ocholaCaError ""
+:set ocholaCaImportError ""
+:put "${tag}: STEP 1/10 - Starting CA trust bootstrap."
 :do {
-    :do { /file remove [find name="$caFile"] } on-error={}
-    :do { /file remove [find name="$caBuildFile"] } on-error={}
+    :do { /file remove [find name="${caFileName}"] } on-error={}
+    :do { /file remove [find name="${caBuildFileName}"] } on-error={}
     :local fetchedViaTrustedStore false
     :do {
-        /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="$caFile" keep-result=yes mode=https check-certificate=yes
+        /tool fetch url=${routerOsString(safeCaCertificateUrl)} dst-path="${caFileName}" keep-result=yes mode=https check-certificate=yes
         :set fetchedViaTrustedStore true
     } on-error={}
-    :if (!$fetchedViaTrustedStore) do={
-        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; using embedded ISRG Root X1."
-${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", "        ")}
-        :set caImportFile $caBuildFile
+    :if ($fetchedViaTrustedStore && [:len [/file find name="${caFileName}"]] = 0) do={
+        :set fetchedViaTrustedStore false
+        :put "${tag}: RouterOS reported a completed CA fetch but did not create the destination file; using the embedded management OpenVPN CA."
     }
-    /certificate import file-name=$caImportFile name=${routerOsString(caCertificateName)}
-    /certificate set [find name=${routerOsString(caCertificateName)}] trusted=yes
-    :do { /file remove [find name="$caFile"] } on-error={}
-    :do { /file remove [find name="$caBuildFile"] } on-error={}
-    :if ([:len [/certificate find name=${routerOsString(caCertificateName)}]] = 0) do={
+    :if (!$fetchedViaTrustedStore) do={
+        :put "${tag}: RouterOS built-in trust did not validate the CA endpoint; writing the embedded management OpenVPN CA."
+        :set ocholaCaPhase "create embedded CA file"
+${routerOsTextVariableWriter(embeddedManagementCa, "ocholaExpectedCa", "        ")}
+        :do {
+            /file print file="${caBuildBaseName}"
+            :delay 1s
+            /file set [find name="${caBuildFileName}"] contents=$ocholaExpectedCa
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("management VPN embedded CA file creation failed: " . $ocholaCaImportError)
+        }
+        :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
+            :error "management VPN embedded CA file was not created"
+        }
+    }
+    :set ocholaCaPhase "verify CA file"
+    :if (!$fetchedViaTrustedStore) do={
+        :if ([:len [/file find name="${caBuildFileName}"]] = 0) do={
+            :error "management VPN CA embedded file was not created"
+        }
+    } else={
+        :if ([:len [/file find name="${caFileName}"]] = 0) do={
+            :error "management VPN CA downloaded file was not created"
+        }
+    }
+    :set ocholaCaPhase "import CA certificate"
+    :if (!$fetchedViaTrustedStore) do={
+        :do {
+            /certificate import file-name="${caBuildFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+    } else={
+        :do {
+            /certificate import file-name="${caFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("management VPN CA certificate import failed: " . $ocholaCaImportError)
+    }
+    :set ocholaCaPhase "verify imported CA certificate"
+    :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
+        :error "management VPN CA certificate common name was not found after import"
+    }
+    :set ocholaCaPhase "trust imported CA certificate"
+    :do {
+        /certificate set [find where common-name=${routerOsString(embeddedManagementCaCommonName)}] trusted=yes
+    } on-error={
+        :set ocholaCaImportError $error
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("management VPN CA trust update failed: " . $ocholaCaImportError)
+    }
+    :set ocholaCaPhase "prepare public HTTPS CA"
+    :set ocholaCaImportError ""
+    :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
+${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
+        :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
+        :do { /file remove [find name="${httpsCaBuildFileName}"] } on-error={}
+        :do {
+            /file print file="${httpsCaBuildBaseName}"
+            :delay 1s
+            /file set [find name="${httpsCaBuildFileName}"] contents=$ocholaHttpsCa
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("public HTTPS CA file creation failed: " . $ocholaCaImportError)
+        }
+        :do {
+            /certificate import file-name="${httpsCaBuildFileName}" passphrase=""
+        } on-error={
+            :set ocholaCaImportError $error
+        }
+        :if ([:len $ocholaCaImportError] > 0) do={
+            :error ("public HTTPS CA certificate import failed: " . $ocholaCaImportError)
+        }
+    }
+    :set ocholaCaPhase "trust public HTTPS CA"
+    :set ocholaCaImportError ""
+    :do {
+        /certificate set [find where common-name=${routerOsString(publicHttpsCaCommonName)}] trusted=yes
+    } on-error={
+        :set ocholaCaImportError $error
+    }
+    :if ([:len $ocholaCaImportError] > 0) do={
+        :error ("public HTTPS CA trust update failed: " . $ocholaCaImportError)
+    }
+    :set ocholaCaPhase "clean up CA file"
+    :do { /file remove [find name="${caFileName}"] } on-error={}
+    :do { /file remove [find name="${caBuildFileName}"] } on-error={}
+    :do { /file remove [find name="${httpsCaFileName}"] } on-error={}
+    :do { /file remove [find name="${httpsCaBuildFileName}"] } on-error={}
+    :if ([:len [/certificate find where common-name=${routerOsString(embeddedManagementCaCommonName)}]] = 0) do={
         :error "management VPN CA was not imported"
     }
+    :if ([:len [/certificate find where common-name=${routerOsString(publicHttpsCaCommonName)}]] = 0) do={
+        :error "public HTTPS CA was not imported"
+    }
+    :put "${tag}: STEP 1/10 complete - management and public HTTPS CA certificates imported and trusted."
 } on-error={
-    :set ocholaVpnChildError "${tag}: management VPN CA import failed; refusing an unverified OpenVPN connection."
+    :set ocholaCaError $error
+    :if ([:len $ocholaCaError] = 0) do={
+        :set ocholaCaError "RouterOS returned no diagnostic text"
+    }
+    :set ocholaVpnChildError ("${tag}: management VPN CA failed during " . $ocholaCaPhase . ": " . $ocholaCaError)
     :error $ocholaVpnChildError
 }
 
 # Step 2: Create the OVPN client interface
 # Make this safe to re-import during recovery or after a failed migration.
 `;
+  const routerOsDetection = autoDetectRouterOsMajor ? `# Detect the installed RouterOS major before selecting version-sensitive values.
+:local ocholaRouterOsVersion ""
+:local ocholaRouterOsMajor ""
+:do {
+    :set ocholaRouterOsVersion [/system resource get version]
+    :set ocholaRouterOsMajor [:pick $ocholaRouterOsVersion 0 1]
+} on-error={
+    :set ocholaVpnChildError "${tag}: could not read the installed RouterOS version."
+    :error $ocholaVpnChildError
+}
+:if (($ocholaRouterOsMajor != "6") && ($ocholaRouterOsMajor != "7")) do={
+    :set ocholaVpnChildError ("${tag}: unsupported RouterOS major version " . $ocholaRouterOsVersion . "; expected 6 or 7.")
+    :error $ocholaVpnChildError
+}
+:local ocholaOpenVpnCipher "aes128"
+:if ($ocholaRouterOsMajor = "7") do={
+    :set ocholaOpenVpnCipher "aes128-cbc"
+}
+:put ("${tag}: detected RouterOS " . $ocholaRouterOsVersion . "; using cipher " . $ocholaOpenVpnCipher . ".")` : "";
   return `# ===============================================================
 # OcholaSupernet - MikroTik ${routerOsPath} Router as OpenVPN CLIENT
 # Generated  : ${(/* @__PURE__ */ new Date()).toISOString()}
@@ -6625,7 +7952,7 @@ ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", 
 # VPS OVPN server : ${endpoint}:${port}/tcp  (${contract.interfaceName} ${tunnelVpsIp})
 # Router tunnel IP: dynamic (discover it from /ip address after connect)
 # VPN user        : ${safeVpnUsername}
-# OpenVPN cipher  : ${openVpnCipher} / auth=sha1
+# OpenVPN cipher  : ${openVpnDisplayCipher} / auth=sha1
 #
 # After import:
 #   - Router connects to VPS and receives a dynamic tunnel IPv4 address
@@ -6646,26 +7973,69 @@ ${routerOsCertificateFileWriter(ISRG_ROOT_X1_PEM, "caBuildFile", "caBuildBase", 
 :set ocholaVpnChildError ""
 :local ovpnError ""
 :local reuseExistingOvpn false
+${hasBackupManagementVpn ? ":local reuseExistingBackupOvpn false" : ""}
+${routerOsDetection}
 :if ([:len "$ocholaVpnChildError"] = 0) do={
-${caBootstrap}
+:put "${tag}: STEP 2/10 - Preparing management VPN resources."
 ${resourcePreparation}
-}
-:if (!$reuseExistingOvpn) do={
- :do { /interface ovpn-client add name=${routerOsString(interfaceName)} connect-to=${routerOsString(endpoint)} port=${port} user=${routerOsString(safeVpnUsername)} password=${routerOsString(safeVpnPassword)} disabled=no comment="${interfaceComment}" } on-error={
-    :local routerError ""
-    :do { :set routerError $error } on-error={}
-    :set ovpnError "RouterOS rejected the OpenVPN client add command"
-    :if ([:len $routerError] > 0) do={ :set ovpnError ($ovpnError . ": " . $routerError) }
- }
-}
-:if ([:len $ovpnError] > 0) do={
-    :set ocholaVpnChildError ("${tag}: OVPN client creation failed: " . $ovpnError)
-    :error $ocholaVpnChildError
-}
+:put "${tag}: STEP 2/10 complete - management VPN resources ready."
+${openVpnPreflight}
+${caBootstrap}
+:put "${tag}: STEP 3/10 - Enabling management OpenVPN client."
+${backupOpenVpnPreflight}
 ${openVpnPostCreateSettings}
 ${openVpnOptionalSettings}
+${backupOpenVpnOptionalSettings}
+:if (!$reuseExistingOvpn) do={
+    :do { /interface ovpn-client set [find where name="${interfaceName}"] disabled=no } on-error={
+        :set ocholaVpnChildError "${tag}: management OpenVPN client could not be enabled after CA trust succeeded."
+        :error $ocholaVpnChildError
+    }
+}
+:if (${hasBackupManagementVpn ? "!$reuseExistingBackupOvpn" : "false"}) do={
+    :do { /interface ovpn-client set [find where name="${backupInterfaceName}"] disabled=yes } on-error={
+        :set ocholaVpnChildError "${tag}: backup management OpenVPN client could not remain disabled during primary startup."
+        :error $ocholaVpnChildError
+    }
+}
+:put "${tag}: STEP 3/10 complete - OpenVPN client configured."
+}
 
-:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the tunnel..."
+# Keep the backup disconnected during normal operation. The scheduler is
+# independent of this import so it can recover the management path later.
+${hasBackupManagementVpn ? `/system scheduler
+:do { remove [find where name="${failoverSchedulerName}"] } on-error={}
+:do {
+    add name="${failoverSchedulerName}" interval=00:00:15 start-time=startup on-event={
+        :local primaryIds [/interface ovpn-client find where name="${interfaceName}"]
+        :local backupIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+        :local primaryRunning false
+        :if ([:len $primaryIds] > 0) do={
+            :if ([/interface ovpn-client get [:pick $primaryIds 0] running] = true) do={ :set primaryRunning true }
+        }
+        :if ([:len $backupIds] > 0) do={
+            :local backupId [:pick $backupIds 0]
+            :local backupDisabled [/interface ovpn-client get $backupId disabled]
+            :if (!$primaryRunning) do={
+                :if ($backupDisabled = true) do={
+                    :do { /interface ovpn-client set $backupId disabled=no } on-error={}
+                    :log warning "${tag}: primary management VPN is down; backup management VPN enabled."
+                }
+            } else={
+                :if ($backupDisabled = false) do={
+                    :do { /interface ovpn-client set $backupId disabled=yes } on-error={}
+                    :log info "${tag}: primary management VPN restored; backup management VPN disabled."
+                }
+            }
+        }
+    }
+} on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS could not install the management VPN failover scheduler."
+    :error $ocholaVpnChildError
+}
+:put "${tag}: Primary-first management VPN failover scheduler is active."` : ""}
+
+:put "${tag}: OpenVPN client created (cipher=${openVpnCipher}, protocol=tcp); waiting up to 60s for the primary tunnel..."
 :local ovpnRunning false
 :for attempt from=1 to=12 do={
     :if (!$ovpnRunning) do={
@@ -6675,11 +8045,29 @@ ${openVpnOptionalSettings}
         }
     }
 }
+:if (!$ovpnRunning && ${hasBackupManagementVpn ? "true" : "false"}) do={
+    :put "${tag}: Primary management VPN did not start; enabling the backup management VPN."
+    :do { /interface ovpn-client set [find where name="${backupInterfaceName}"] disabled=no } on-error={
+        :set ocholaVpnChildError "${tag}: backup management OpenVPN client could not be enabled after primary failure."
+        :error $ocholaVpnChildError
+    }
+    :for attempt from=1 to=12 do={
+        :if (!$ovpnRunning) do={
+            :delay 5s
+            :if ([:len [/interface ovpn-client find where name="${backupInterfaceName}" && running=yes]] > 0) do={
+                :set ovpnRunning true
+            }
+        }
+    }
+}
 :if (!$ovpnRunning) do={
     :put "${tag}: OpenVPN did not reach running=yes before the 60s timeout."
     :put "${tag}: Safe interface diagnostics (credentials are intentionally omitted):"
     :do {
         :local ovpnIds [/interface ovpn-client find where name="${interfaceName}"]
+        :if ([:len $ovpnIds] = 0 && ${hasBackupManagementVpn ? "true" : "false"}) do={
+            :set ovpnIds [/interface ovpn-client find where name="${backupInterfaceName}"]
+        }
         :if ([:len $ovpnIds] > 0) do={
             :local ovpnId [:pick $ovpnIds 0]
             :put ("  name=" . [/interface ovpn-client get $ovpnId name] . " running=" . [/interface ovpn-client get $ovpnId running] . " disabled=" . [/interface ovpn-client get $ovpnId disabled] . " connect-to=" . [/interface ovpn-client get $ovpnId connect-to] . " port=" . [/interface ovpn-client get $ovpnId port])
@@ -6692,33 +8080,62 @@ ${openVpnOptionalSettings}
     :set ocholaVpnChildError "${tag}: OVPN client did not establish a running session within 60 seconds. Review the safe interface diagnostics and OpenVPN log output above for reachability, TLS, authentication, certificate, or server-readiness errors."
     :error $ocholaVpnChildError
 } else={
-    :put "${tag}: OVPN client is running."
+    :put "${tag}: Management OpenVPN client is running."
 }
 
-# Step 3: Allow API access from the validated VPN peer
+# Step 3: Continue after the management tunnel is running.
+${minimalManagementSetup ? `# Core firewall and NAT rules are delivered separately in networksetup.rsc.
+# The management API allow rule is installed here because Step 9 verifies
+# RouterOS API reachability before networksetup.rsc is normally imported.
+:put "${tag}: STEP 4/10 - Preparing management API firewall access."
+${firewallPreparation}
+:put "${tag}: STEP 4/10 complete - management API firewall access ready; core firewall and NAT remain in networksetup.rsc."` : `# Allow API access from the validated VPN peer.
 # Only the configured VPS tunnel gateway may reach RouterOS API ports.
+:put "${tag}: STEP 4/10 - Applying management firewall rules."
 /ip firewall filter
 ${firewallPreparation}
+:put "${tag}: STEP 4/10 complete - management firewall rules ready."`}
 ${bridgeSetup}
+:if ([:len "${safeBridgeName}"] = 0) do={ :put "${tag}: STEP 5/10 skipped - no hotspot bridge was requested." }
+${minimalManagementSetup ? `:put "${tag}: STEP 6/10 - Creating the protected OcholaSupernet API account."
+${managementApiUserSetup}
+:put "${tag}: STEP 6/10 complete - OcholaSupernet API account verified."` : safeApiUsernames.length > 0 ? `:put "${tag}: STEP 6/10 - Creating or reconciling management API accounts."
 ${apiUserSetup}
-${natSetup}
+:put "${tag}: STEP 6/10 complete - management API accounts verified."` : `:put "${tag}: STEP 6/10 skipped - no management API account was requested."`}
+:put "${tag}: STEP 7/10 - Preparing RouterOS API access."
+${minimalManagementSetup ? `# Enable the RouterOS API service and allow the isolated API source networks.
+/ip service
+:do { /ip service set [find where name="api"] disabled=no address=${routerOsString(apiNetworkCsv)} } on-error={
+    :set ocholaVpnChildError "${tag}: RouterOS API service could not be enabled."
+    :error $ocholaVpnChildError
+}
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${routerOsString(apiNetworkCsv)} } on-error={}` : `${natSetup}
 
 # Step 7: Ensure API service is enabled and restricted
 /ip service
-:do { /ip service set [find where name="api"] disabled=no address=${tunnelVpsIp}/32 } on-error={
+:do { /ip service set [find where name="api"] disabled=no address=${routerOsString(apiServiceAddresses)} } on-error={
     :set ocholaVpnChildError "${tag}: could not restrict the RouterOS API service to the management VPN peer."
     :error $ocholaVpnChildError
 }
-:do { /ip service set [find where name="api-ssl"] disabled=no address=${tunnelVpsIp}/32 } on-error={}
+:do { /ip service set [find where name="api-ssl"] disabled=no address=${routerOsString(apiServiceAddresses)} } on-error={}`}
+:put "${tag}: STEP 7/10 complete - RouterOS API service is ready."
 
 # Step 8: Discover and report the live tunnel IPv4
-:local ovpnId [/interface ovpn-client find where name="${interfaceName}"]
+:put "${tag}: STEP 8/10 - Discovering the live management tunnel address."
+:local activeInterface "${interfaceName}"
+:if ([:len [/interface ovpn-client find where name="${interfaceName}" && running=yes]] = 0 && ${hasBackupManagementVpn ? "true" : "false"}) do={
+    :if ([:len [/interface ovpn-client find where name="${backupInterfaceName}" && running=yes]] > 0) do={
+        :set activeInterface "${backupInterfaceName}"
+        :put "${tag}: Primary tunnel is down; using the backup management tunnel."
+    }
+}
+:local ovpnId [/interface ovpn-client find where name=$activeInterface]
 :local liveTunnelIp ""
 :if ([:len $ovpnId] > 0) do={
-    :local addressRows [/ip address find where interface="${interfaceName}"]
+    :local addressRows [/ip address find where interface=$activeInterface]
     :foreach addressId in=$addressRows do={
         :local addressValue [/ip address get $addressId address]
-        :if ($addressValue ~ "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/") do={
+        :if ($addressValue ~ "^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/") do={
             :set liveTunnelIp [:pick $addressValue 0 [:find $addressValue "/"]]
         }
     }
@@ -6727,30 +8144,48 @@ ${natSetup}
     :set ocholaVpnChildError "${tag}: OpenVPN is running but no valid tunnel IPv4 was assigned."
     :error $ocholaVpnChildError
 }
+:put ("${tag}: STEP 8/10 complete - live tunnel IPv4 is " . $liveTunnelIp . " via " . $activeInterface . ".")
 
 # Step 9: Verify RouterOS API reachability and backend registration
+:put "${tag}: STEP 9/10 - Verifying RouterOS API and registering the live tunnel."
 :local apiReachable false
 :do {
     :local apiIds [/ip service find where name="api" && disabled=no]
     :if ([:len $apiIds] > 0) do={ :set apiReachable true }
 } on-error={}
 :if (!$apiReachable) do={
-    :set ocholaVpnChildError "${tag}: tunnel IPv4 \${liveTunnelIp} is present but RouterOS API is not enabled."
+    :set ocholaVpnChildError "${tag}: tunnel IPv4 $liveTunnelIp is present but RouterOS API is not enabled."
     :error $ocholaVpnChildError
 }
 :local registrationUrl ${routerOsString(safeBackendRegistrationUrl)}
 :set registrationUrl ($registrationUrl . "?ip=" . $liveTunnelIp)
+:local registrationError ""
 :do {
     /tool fetch url=$registrationUrl keep-result=no mode=https check-certificate=yes
 } on-error={
-    :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
+    :do { :set registrationError $error } on-error={}
+    :if ([:len $registrationError] > 0) do={
+        :set ocholaVpnChildError ("${tag}: live tunnel IPv4 was found, but authenticated backend registration failed: " . $registrationError)
+    } else={
+        :set ocholaVpnChildError "${tag}: live tunnel IPv4 was found, but authenticated backend registration failed."
+    }
     :error $ocholaVpnChildError
 }
-:put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp)
+:put ("${tag}: backend registration accepted for live tunnel IPv4 " . $liveTunnelIp . " via " . $activeInterface)
 :put ("${tag}: backend must now verify RouterOS API reachability at " . $liveTunnelIp . ":8728 before promotion.")
+:put "${tag}: STEP 9/10 complete - backend registration accepted."
 
-:log info "${tag}: OVPN client running; dynamic tunnel IPv4=\${liveTunnelIp}; backend API verification pending"
+:log info ("${tag}: OVPN client running via " . $activeInterface . "; dynamic tunnel IPv4=" . $liveTunnelIp . "; backend API verification pending")
+# Step 10: Hotspot assets
+${hotspotAssetInstall}
 `;
+}
+function generateRouterManagementVpnScript(opts) {
+  return generateRouterAsClientScript({
+    ...opts,
+    autoDetectRouterOsMajor: true,
+    minimalManagementSetup: true
+  }).trim() + "\n";
 }
 function generateRouterWireGuardClientScript(opts) {
   const {
@@ -6845,6 +8280,751 @@ ${firewall}
 :if ([:len [/ip ipsec policy find where comment="${tag} IPsec management policy"]] = 0) do={ :set ocholaVpnChildError "${tag}: IPsec policy was not verified."; :error $ocholaVpnChildError }
 :put "${tag}: IPsec management resources verified; waiting for authenticated heartbeat."
 :log info "${tag}: IPsec fallback configured via ${endpoint}"
+`;
+}
+var DEFAULT_ROUTER_API_NETWORKS = [
+  "10.8.0.0/24",
+  "10.8.5.0/24",
+  "10.8.6.0/24"
+];
+function generateNetworkSetupScript(options = {}) {
+  const { routerId, apiNetworks = DEFAULT_ROUTER_API_NETWORKS } = options;
+  const tag = `ochola-network-${routerId ?? "router"}`;
+  const safeNetworks = Array.from(new Set(apiNetworks)).filter(
+    (network) => /^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12]\d|3[0-2])$/.test(network)
+  );
+  if (safeNetworks.length === 0) {
+    throw new Error("At least one valid RouterOS API network is required.");
+  }
+  const apiRules = safeNetworks.map((network, index) => `:do { /ip firewall filter remove [find where comment="${tag}-api-${index}"] } on-error={}
+:local ocholaApiRuleError${index} ""
+:local ocholaApiRuleId${index} ""
+:do {
+    :set ocholaApiRuleId${index} [/ip firewall filter add chain=input action=accept protocol=tcp dst-port=8728,8729 src-address=${network} comment="${tag}-api-${index}"]
+    /ip firewall filter move $ocholaApiRuleId${index} destination=0
+} on-error={
+    :set ocholaApiRuleError${index} $error
+}
+:if ([:len $ocholaApiRuleError${index}] > 0) do={
+    :put ("${tag}: could not add API allow rule for ${network}: " . $ocholaApiRuleError${index})
+}`).join("\n");
+  return `# ===============================================================
+# OcholaSupernet - networksetup.rsc
+# Core firewall and NAT engine for the router
+# Generated  : ${(/* @__PURE__ */ new Date()).toISOString()}
+#
+# This file is intentionally separate from vpnsetup.rsc.
+# It only replaces rules carrying the ${tag} comments.
+# API source networks: ${safeNetworks.join(", ")}
+# ===============================================================
+
+:put "${tag}: starting core firewall and NAT setup."
+/ip firewall filter
+
+# Stateful baseline rules. These are safe to retry and do not delete
+# unrelated firewall policy.
+:do { remove [find where comment="${tag}-established-input"] } on-error={}
+:do { add chain=input action=accept connection-state=established,related comment="${tag}-established-input" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-invalid-input"] } on-error={}
+:do { add chain=input action=drop connection-state=invalid comment="${tag}-invalid-input" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-established-forward"] } on-error={}
+:do { add chain=forward action=accept connection-state=established,related comment="${tag}-established-forward" place-before=0 } on-error={}
+:do { remove [find where comment="${tag}-invalid-forward"] } on-error={}
+:do { add chain=forward action=drop connection-state=invalid comment="${tag}-invalid-forward" place-before=0 } on-error={}
+
+# Allow the management and legacy API pools before any existing WAN policy.
+${apiRules}
+
+# Permit ordinary LAN-to-WAN forwarding only when the standard interface
+# lists exist; Hotspot clients must be authenticated before they can use
+# this path. The non-Hotspot rule keeps ordinary LAN clients working.
+:local ocholaLanLists [/interface list find where name="LAN"]
+:local ocholaWanLists [/interface list find where name="WAN"]
+:if ([:len $ocholaLanLists] > 0 && [:len $ocholaWanLists] > 0) do={
+    :do { /ip firewall filter remove [find where comment="${tag}-lan-to-wan"] } on-error={}
+    :do { /ip firewall filter remove [find where comment="${tag}-lan-hotspot-auth"] } on-error={}
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN hotspot=auth comment="${tag}-lan-hotspot-auth" } on-error={
+        :put "${tag}: could not add authenticated Hotspot LAN-to-WAN rule."
+    }
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=LAN out-interface-list=WAN hotspot=!from-client comment="${tag}-lan-to-wan" } on-error={
+        :put "${tag}: could not add LAN-to-WAN forward rule."
+    }
+} else={
+    :put "${tag}: LAN/WAN interface lists are not both present; existing forwarding policy was preserved."
+}
+
+# Masquerade outbound traffic through the standard WAN interface list.
+/ip firewall nat
+:if ([:len $ocholaWanLists] > 0) do={
+    :do { remove [find where comment="${tag}-wan-masquerade"] } on-error={}
+    :do { add chain=srcnat action=masquerade out-interface-list=WAN comment="${tag}-wan-masquerade" } on-error={
+        :put "${tag}: could not add the WAN masquerade rule."
+    }
+} else={
+    :put "${tag}: WAN interface list is not present; existing NAT policy was preserved."
+}
+
+:put "${tag}: core firewall and NAT setup complete."
+`;
+}
+function validateCoexistenceRadiusIp(value) {
+  const endpoint = String(value ?? "").trim();
+  if (!endpoint || endpoint.length > 255 || !/^[A-Za-z0-9:._-]+$/.test(endpoint)) {
+    throw new Error("Coexistence RADIUS address must be a hostname or IP address.");
+  }
+  return endpoint;
+}
+function validateCoexistenceRadiusSecret(value) {
+  const secret = String(value ?? "");
+  if (!secret || /[\u0000-\u001F\u007F"]/u.test(secret)) {
+    throw new Error("Coexistence RADIUS secret is empty or contains unsafe characters.");
+  }
+  return secret;
+}
+function generateCoexistenceServiceSetupScript(options) {
+  const routerTag = options.routerId == null ? "router" : String(options.routerId);
+  const tag = `ochola-coexist-${routerTag}`;
+  const bridgeName = validateRouterOsResourceName(
+    options.bridgeName ?? "br-ochola-coexist",
+    "Coexistence bridge name"
+  );
+  const bridgePorts = Array.from(new Set((options.bridgePorts ?? []).map((port) => validateRouterOsResourceName(port, "Coexistence bridge port"))));
+  const portName = validateRouterOsResourceName(
+    options.portName ?? bridgePorts[0] ?? "service",
+    "Coexistence port name"
+  );
+  const radiusIp = options.radiusIp ? validateCoexistenceRadiusIp(options.radiusIp) : "";
+  const radiusSecret = options.radiusSecret ? validateCoexistenceRadiusSecret(options.radiusSecret) : "";
+  if (radiusIp && !radiusSecret || !radiusIp && radiusSecret) {
+    throw new Error("Coexistence RADIUS configuration must include both address and secret.");
+  }
+  const bridgeComment = `${tag} owned bridge`;
+  const portComment = `${tag} owned port`;
+  const poolComment = `${tag} owned pool`;
+  const dhcpComment = `${tag} owned DHCP network`;
+  const profileComment = `${tag} owned Hotspot profile`;
+  const pppoeProfileComment = `${tag} owned PPPoE profile`;
+  const radiusComment = "Ochola Platform Link - Coexist Mode";
+  const hotspotDirectory = `flash/hotspot/coexist_hs_${portName}`;
+  const hotspotPool = `${tag}-pool`;
+  const dhcpServer = `${tag}-dhcp`;
+  const hotspotProfile = `${tag}-hotspot-profile`;
+  const hotspotServer = `coexist_hs_${portName}`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const pppoeService = `pppoe_ochola_${portName}`;
+  const hotspotGateway = "172.16.99.1/24";
+  const coexistNetwork = "172.16.99.0/24";
+  const poolRange = "172.16.99.10-172.16.99.254";
+  const ownedOrConflict = (variableName, findPath, findClause, resourceName, comment, command) => `:local ${variableName}Ids [${findPath} find where ${findClause}]
+:if ([:len $${variableName}Ids] = 0) do={
+    ${command}
+} else={
+    :local ${variableName}Id [:pick $${variableName}Ids 0]
+    :local ${variableName}Comment [${findPath} get $${variableName}Id comment]
+    :if ($${variableName}Comment != ${routerOsString(comment)}) do={
+        :set coexistError ("${tag}: foreign resource named " . ${routerOsString(resourceName)} . " was preserved.")
+        :error $coexistError
+    }
+}`;
+  const blocks = [];
+  blocks.push(`# 1. Isolated coexistence bridge
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :do {
+        /interface bridge add name=${routerOsString(bridgeName)} comment=${routerOsString(bridgeComment)}
+    } on-error={
+        :set coexistError ("${tag}: coexistence bridge creation failed: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+    :set coexistError "${tag}: coexistence bridge was not verified."
+    :error $coexistError
+}`);
+  if (bridgePorts.length > 0) {
+    blocks.push(`# 2. Attach only unassigned mapped ports; foreign bridge membership is never moved
+${bridgePorts.map((port, index) => `:if ([:len [/interface find where name=${routerOsString(port)}]] = 0) do={
+    :set coexistError "${tag}: mapped port ${port} was not found and was not changed."
+    :error $coexistError
+}
+:local coexistPortIds${index} [/interface bridge port find where interface=${routerOsString(port)}]
+:if ([:len $coexistPortIds${index}] = 0) do={
+    :do {
+        /interface bridge port add bridge=${routerOsString(bridgeName)} interface=${routerOsString(port)} comment=${routerOsString(portComment)}
+    } on-error={
+        :set coexistError ("${tag}: mapped port ${port} could not be attached: " . $error)
+        :error $coexistError
+    }
+} else={
+    :local coexistPortId${index} [:pick $coexistPortIds${index} 0]
+    :local coexistPortBridge${index} [/interface bridge port get $coexistPortId${index} bridge]
+    :if ($coexistPortBridge${index} != ${routerOsString(bridgeName)}) do={
+        :set coexistError ("${tag}: mapped port ${port} belongs to foreign bridge " . $coexistPortBridge${index} . "; it was preserved.")
+        :error $coexistError
+    }
+}`).join("\n")}`);
+  }
+  blocks.push(`# 3. Isolated gateway and DHCP resources
+:if ([:len [/ip address find where address=${routerOsString(hotspotGateway)}]] = 0) do={
+    :do {
+        /ip address add address=${routerOsString(hotspotGateway)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} gateway`)}
+    } on-error={
+        :set coexistError ("${tag}: isolated gateway creation failed: " . $error)
+        :error $coexistError
+    }
+} else={
+    :if ([:len [/ip address find where address=${routerOsString(hotspotGateway)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :set coexistError "${tag}: 172.16.99.1/24 is already assigned to another interface; it was preserved."
+        :error $coexistError
+    }
+}
+:if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+    :do {
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=${routerOsString(poolRange)} comment=${routerOsString(poolComment)}
+    } on-error={
+        :set coexistError ("${tag}: isolated DHCP pool creation failed: " . $error)
+        :error $coexistError
+    }
+} else={
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)} && comment=${routerOsString(poolComment)}]] = 0) do={
+        :set coexistError "${tag}: a foreign DHCP pool already uses the coexistence pool name; it was preserved."
+        :error $coexistError
+    }
+}
+:if ([:len [/ip dhcp-server network find where address=${routerOsString(coexistNetwork)}]] = 0) do={
+    :do {
+        /ip dhcp-server network add address=${routerOsString(coexistNetwork)} gateway=${routerOsString("172.16.99.1")} dns-server=${routerOsString("172.16.99.1")} comment=${routerOsString(dhcpComment)}
+    } on-error={
+        :set coexistError ("${tag}: isolated DHCP network creation failed: " . $error)
+        :error $coexistError
+    }
+}
+${ownedOrConflict(
+    "coexistDhcp",
+    "/ip dhcp-server",
+    `name=${routerOsString(dhcpServer)}`,
+    dhcpServer,
+    dhcpComment,
+    `/ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(dhcpComment)}`
+  )}`);
+  blocks.push(`# 4. Isolated Hotspot files, profile, and server
+:if ([:len [/file find where name=${routerOsString(hotspotDirectory)}]] = 0) do={
+    :do { /file make-dir dir-name=${routerOsString(hotspotDirectory)} } on-error={
+        :set coexistError ("${tag}: Hotspot directory creation failed: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/file find where name=${routerOsString(hotspotDirectory)}]] = 0) do={
+    :set coexistError "${tag}: Hotspot directory was not verified."
+    :error $coexistError
+}
+${ownedOrConflict(
+    "coexistHotspotProfile",
+    "/ip hotspot profile",
+    `name=${routerOsString(hotspotProfile)}`,
+    hotspotProfile,
+    profileComment,
+    `/ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString("172.16.99.1")} html-directory=${routerOsString(hotspotDirectory)} login-by=${routerOsString("http-chap,http-pap,cookie")} use-radius=yes comment=${routerOsString(profileComment)}`
+  )}
+${ownedOrConflict(
+    "coexistHotspotServer",
+    "/ip hotspot",
+    `name=${routerOsString(hotspotServer)}`,
+    hotspotServer,
+    `${tag} owned Hotspot server`,
+    `/ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no comment=${routerOsString(`${tag} owned Hotspot server`)}`
+  )}`);
+  blocks.push(`# 5. Isolated PPPoE pool, profile, and server
+${ownedOrConflict(
+    "coexistPppoePool",
+    "/ip pool",
+    `name=${routerOsString(pppoePool)}`,
+    pppoePool,
+    `${tag} owned PPPoE pool`,
+    `/ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(poolRange)} comment=${routerOsString(`${tag} owned PPPoE pool`)}`
+  )}
+${ownedOrConflict(
+    "coexistPppoeProfile",
+    "/ppp profile",
+    `name=${routerOsString(pppoeProfile)}`,
+    pppoeProfile,
+    pppoeProfileComment,
+    `/ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString("172.16.99.1")} remote-address=${routerOsString(pppoePool)} use-radius=yes only-one=yes comment=${routerOsString(pppoeProfileComment)}`
+  )}
+${ownedOrConflict(
+    "coexistPppoeServer",
+    "/interface pppoe-server server",
+    `service-name=${routerOsString(pppoeService)}`,
+    pppoeService,
+    `${tag} owned PPPoE server`,
+    `/interface pppoe-server server add service-name=${routerOsString(pppoeService)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no comment=${routerOsString(`${tag} owned PPPoE server`)}`
+  )}`);
+  if (radiusIp && radiusSecret) {
+    blocks.push(`# 6. Append the platform RADIUS profile without removing any existing entries
+:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
+    :do {
+        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(radiusIp)} secret=${routerOsString(radiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(radiusComment)}
+    } on-error={
+        :set coexistError ("${tag}: platform RADIUS profile could not be added: " . $error)
+        :error $coexistError
+    }
+}
+:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
+    :set coexistError "${tag}: platform RADIUS profile was not verified."
+    :error $coexistError
+}`);
+  } else {
+    blocks.push(`# 6. RADIUS was not changed because no platform address and secret were supplied
+:put "${tag}: platform RADIUS profile skipped; existing RADIUS entries were preserved."`);
+  }
+  blocks.push(`# 7. Enable CoA on the RouterOS RADIUS listener, changing only the required fields
+:local coexistRadiusIncomingIds [/radius incoming find]
+:if ([:len $coexistRadiusIncomingIds] > 0) do={
+    :local coexistRadiusIncomingId [:pick $coexistRadiusIncomingIds 0]
+    :if ([/radius incoming get $coexistRadiusIncomingId accept] != true) do={
+        :do { /radius incoming set $coexistRadiusIncomingId accept=yes } on-error={
+            :set coexistError ("${tag}: inbound RADIUS CoA could not be enabled: " . $error)
+            :error $coexistError
+        }
+    }
+    :if ([/radius incoming get $coexistRadiusIncomingId port] != 3799) do={
+        :do { /radius incoming set $coexistRadiusIncomingId port=3799 } on-error={
+            :set coexistError ("${tag}: inbound RADIUS CoA port could not be set to 3799: " . $error)
+            :error $coexistError
+        }
+    }
+}
+:if ([:len [/radius incoming find where accept=yes && port=3799]] = 0) do={
+    :set coexistError "${tag}: inbound RADIUS CoA listener was not verified on UDP 3799."
+    :error $coexistError
+}`);
+  blocks.push(`# 8. Scoped forwarding, DNS, and NAT for the isolated virtual plane
+:if ([:len [/interface list find where name="WAN"]] > 0) do={
+    :if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} to-wan`)}]] = 0) do={
+        :do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} to-wan`)} place-before=0 } on-error={
+            :set coexistError ("${tag}: isolated WAN forwarding rule could not be added: " . $error)
+            :error $coexistError
+        }
+    }
+    :if ([:len [/ip firewall nat find where comment=${routerOsString(`${tag} masquerade`)}]] = 0) do={
+        :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} masquerade`)} } on-error={
+            :set coexistError ("${tag}: isolated NAT rule could not be added: " . $error)
+            :error $coexistError
+        }
+    }
+}
+:if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} allow-dns`)}]] = 0) do={
+    :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-dns`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: isolated DNS rule could not be added: " . $error)
+        :error $coexistError
+    }
+}`);
+  const renderedBlocks = blocks.map((block, index) => `${block.trim()}${index < blocks.length - 1 ? "\n:delay 2s;" : ""}`).join("\n\n");
+  return `# ===============================================================
+# OcholaSupernet - Brownfield Coexistence service plane
+# Generated  : ${(/* @__PURE__ */ new Date()).toISOString()}
+# This payload is isolated from the existing billing system.
+# It never resets bridges, interfaces, routes, or existing RADIUS entries.
+# Port label : ${portName}
+# Bridge     : ${bridgeName}
+# ===============================================================
+
+:global coexistError
+:set coexistError ""
+${renderedBlocks}
+:put "${tag}: complete isolated coexistence service plane verified."
+`;
+}
+function generateServiceSetupScript(options = {}) {
+  if (options.installationMode === "coexist") {
+    return generateCoexistenceServiceSetupScript(options);
+  }
+  const routerTag = options.routerId == null ? "router" : String(options.routerId);
+  const tag = `ochola-services-${routerTag}`;
+  const bridgeName = validateRouterOsResourceName(
+    options.bridgeName ?? "hotspot-bridge",
+    "Service bridge name"
+  );
+  const bridgePorts = Array.from(new Set((options.bridgePorts ?? []).map((port) => validateRouterOsResourceName(port, "Service bridge port"))));
+  const maxPortSpeedMbps = options.maxPortSpeedMbps === void 0 ? void 0 : Number(options.maxPortSpeedMbps);
+  if (maxPortSpeedMbps !== void 0 && (!Number.isFinite(maxPortSpeedMbps) || maxPortSpeedMbps <= 0 || maxPortSpeedMbps > 1e5)) {
+    throw new Error("Service queue speed must be a positive value no greater than 100000 Mbps.");
+  }
+  const portalHostnames = Array.from(new Set((options.portalHostnames ?? []).map((host) => String(host).trim().toLowerCase()).filter((host) => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
+  const paymentHostnames = Array.from(new Set((options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES).map((host) => String(host).trim().toLowerCase()).filter((host) => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host)).filter((host) => !portalHostnames.includes(host))));
+  const hotspotPool = SHARED_HOTSPOT_POOL_NAME;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const hotspotProfile = SHARED_HOTSPOT_PROFILE_NAME;
+  const hotspotServer = SHARED_HOTSPOT_SERVER_NAME;
+  const legacyHotspot = legacySharedHotspotResourceNames(routerTag);
+  const dhcpServer = `${tag}-dhcp`;
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
+  const pppoeGateway = "192.168.99.1";
+  const pppoeNetwork = "192.168.99.0/24";
+  const portalFileUrls = options.portalFileUrls ? {
+    login: validateRouterOpenVpnCaUrl(options.portalFileUrls.login),
+    roamingLogin: validateRouterOpenVpnCaUrl(options.portalFileUrls.roamingLogin),
+    md5: validateRouterOpenVpnCaUrl(options.portalFileUrls.md5)
+  } : null;
+  const bridgePortSetup = bridgePorts.map((port, index) => `:local servicePortIds${index} [/interface bridge port find where interface=${routerOsString(port)}]
+:if ([:len $servicePortIds${index}] > 0) do={
+    :local servicePortId${index} [:pick $servicePortIds${index} 0]
+    :local servicePortBridge${index} [/interface bridge port get $servicePortId${index} bridge]
+    :if ($servicePortBridge${index} != ${routerOsString(bridgeName)}) do={
+        :set serviceError ("${tag}: ${port} is already assigned to foreign bridge " . $servicePortBridge${index} . "; it was not moved.")
+        :error $serviceError
+    }
+} else={
+    :do { /interface bridge port add bridge=${routerOsString(bridgeName)} interface=${routerOsString(port)} comment=${routerOsString(`${tag} bridge port`)} } on-error={
+        :set serviceError ("${tag}: could not add bridge port ${port}: " . $error)
+        :error $serviceError
+    }
+}`).join("\n");
+  const walledGardenEntries = [
+    ...portalHostnames.map((hostname) => ({
+      hostname,
+      comment: `${tag} walled garden ${hostname}`
+    })),
+    ...paymentHostnames.map((hostname) => ({
+      hostname,
+      comment: `${tag} payment walled garden ${hostname}`
+    }))
+  ];
+  const walledGardenSetup = walledGardenEntries.length > 0 ? walledGardenEntries.map(({ hostname, comment }) => `:do {
+    /ip hotspot walled-garden ip add dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(comment)}
+} on-error={
+    :set serviceError ("${tag}: could not add walled-garden host ${hostname}: " . $error)
+    :error $serviceError
+}`).join("\n") : `:put "${tag}: no portal hostname was supplied; walled-garden host entries were not added."`;
+  const queueSetup = maxPortSpeedMbps === void 0 ? `:put "${tag}: no aggregate queue speed was supplied; existing bandwidth policy was preserved."` : `# Optional, tagged hierarchy for this shared service wire.
+:do { /queue simple remove [find where comment=${routerOsString(`${tag} queue`)}] } on-error={}
+:do { /queue simple add name=${routerOsString(`${tag}-root`)} target=${routerOsString(bridgeName)} max-limit=${routerOsString(`${maxPortSpeedMbps}M/${maxPortSpeedMbps}M`)} priority=2/2 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: aggregate queue could not be created: " . $error)
+    :error $serviceError
+}
+:do { /queue simple add name=${routerOsString(`${tag}-pppoe`)} target=${routerOsString(pppoeNetwork)} parent=${routerOsString(`${tag}-root`)} max-limit=${routerOsString(`${maxPortSpeedMbps}M/${maxPortSpeedMbps}M`)} priority=1/1 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: PPPoE queue could not be created: " . $error)
+    :error $serviceError
+}
+:do { /queue simple add name=${routerOsString(`${tag}-hotspot`)} target=${routerOsString(hotspotNetwork)} parent=${routerOsString(`${tag}-root`)} max-limit=${routerOsString(`${Math.max(1, Math.floor(maxPortSpeedMbps * 0.4))}M/${Math.max(1, Math.floor(maxPortSpeedMbps * 0.4))}M`)} priority=8/8 comment=${routerOsString(`${tag} queue`)} } on-error={
+    :set serviceError ("${tag}: Hotspot queue could not be created: " . $error)
+    :error $serviceError
+}`;
+  return `# ===============================================================
+# OcholaSupernet - servicessetup.rsc (Script 4)
+# Shared Hotspot and PPPoE service layer
+# Generated  : ${(/* @__PURE__ */ new Date()).toISOString()}
+#
+# Run after networksetup.rsc and vpnsetup.rsc.
+# This file owns only OcholaSupernet-tagged service resources:
+#   - service bridge and selected physical ports
+ #   - Hotspot gateway, DHCP, pool, profile, and server
+ #   - Hotspot walled garden for the portal/API and payment hostnames
+#   - PPPoE gateway, pool, profile, and server
+#   - customer NAT rules for both service networks
+# Existing foreign bridge memberships and unowned resources are preserved.
+# ===============================================================
+
+:global serviceError
+:set serviceError ""
+:local serviceFailures ""
+:local serviceStepFailed false
+:put "${tag}: starting Hotspot and PPPoE service setup."
+:put "${tag}: service steps: 1 portal files; 2 bridge; 3 gateways; 4 Hotspot; 5 walled garden; 6 PPPoE; 7 NAT."
+
+# 1. Install the default RouterOS Hotspot files only when they are absent.
+#    Existing tenant-branded files are never replaced by this bootstrap.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 1/7 - portal files starting."
+:do {
+    :do { /file make-dir dir-name="hotspot" } on-error={}
+${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.login)} dst-path="hotspot/login.html" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: default Hotspot login.html could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/file find where name="hotspot/rlogin.html"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.roamingLogin)} dst-path="hotspot/rlogin.html" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: default Hotspot rlogin.html could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/file find where name="hotspot/md5.js"]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.md5)} dst-path="hotspot/md5.js" mode=https check-certificate=yes } on-error={
+        :set serviceError ("${tag}: Hotspot login helper md5.js could not be downloaded: " . $error)
+        :error $serviceError
+    }
+}` : `:put "${tag}: no default portal sources were supplied; existing Hotspot files were left unchanged."`}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 1/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 1/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 1/7 complete - portal files ready." }
+
+# 2. Create the shared service bridge without taking ports away from another bridge.
+ :set serviceStepFailed false
+:put "${tag}: SERVICE STEP 2/7 - service bridge starting."
+:do {
+    :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+        :do {
+            /interface bridge add name=${routerOsString(bridgeName)}${bridgeName === "hotspot-bridge" ? "" : ` comment=${routerOsString(`${tag} service bridge`)}`}
+        } on-error={
+            :set serviceError ("${tag}: service bridge creation failed: " . $error)
+            :error $serviceError
+        }
+    }
+    ${bridgeName === "hotspot-bridge" ? `/interface bridge set [find where name=${routerOsString(bridgeName)}] comment=""` : ""}
+    ${bridgePortSetup}
+    :if ([:len [/interface bridge find where name=${routerOsString(bridgeName)}]] = 0) do={
+        :set serviceError "${tag}: service bridge was not verified."
+        :error $serviceError
+    }
+    :if ([:len [/interface list find where name="LAN"]] = 0) do={
+        :do { /interface list add name="LAN" } on-error={
+            :set serviceError ("${tag}: could not create the LAN interface list: " . $error)
+            :error $serviceError
+        }
+    }
+    :if ([:len [/interface list member find where list="LAN" && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /interface list member add list="LAN" interface=${routerOsString(bridgeName)} } on-error={
+            :set serviceError ("${tag}: could not add the service bridge to the LAN interface list: " . $error)
+            :error $serviceError
+        }
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 2/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 2/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 2/7 complete - service bridge and selected ports ready." }
+
+# 3. Add the Hotspot and PPPoE gateway addresses to the service bridge.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 3/7 - service gateways starting."
+:do {
+    :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/22`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(`${hotspotGateway}/22`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
+            :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
+            :error $serviceError
+        }
+    }
+    :if ([:len [/ip address find where address=${routerOsString(`${pppoeGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(`${pppoeGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
+            :set serviceError ("${tag}: PPPoE gateway creation failed: " . $error)
+            :error $serviceError
+        }
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 3/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 3/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 3/7 complete - Hotspot and PPPoE gateways ready." }
+
+# 4. Hotspot DHCP pool, network, server, and profile.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 4/7 - Hotspot DHCP, profile, and server starting."
+:do {
+    # Migrate the previous router-scoped names before applying the canonical
+    # shared service names. Only rename a legacy resource when its canonical
+    # name is not already occupied.
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+        :if ([:len [/ip pool find where name=${routerOsString(legacyHotspot.poolName)}]] > 0) do={
+            /ip pool set [find where name=${routerOsString(legacyHotspot.poolName)}] name=${routerOsString(hotspotPool)}
+        }
+    }
+    :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
+        :if ([:len [/ip hotspot profile find where name="hprofile"]] > 0) do={
+            /ip hotspot profile set [find where name="hprofile"] name=${routerOsString(hotspotProfile)}
+        }
+    }
+    :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
+        :if ([:len [/ip hotspot find where name=${routerOsString(legacyHotspot.serverName)}]] > 0) do={
+            /ip hotspot set [find where name=${routerOsString(legacyHotspot.serverName)}] name=${routerOsString(hotspotServer)}
+        }
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
+        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+    }
+    :if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
+        /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+    } else={
+        /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+    }
+    :if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
+        /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    } else={
+        /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    }
+    :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
+        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+    } else={
+        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+    }
+    :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
+        /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    } else={
+        /ip hotspot set [find where name=${routerOsString(hotspotServer)}] interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 4/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 4/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 4/7 complete - Hotspot service ready." }
+
+# 5. Only this installation's walled-garden entries are replaced.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 5/7 - walled garden starting."
+:do {
+    /ip hotspot walled-garden ip
+    :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
+    :do { remove [find where comment~${routerOsString(`${tag} payment walled garden `)}] } on-error={}
+    ${walledGardenSetup}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 5/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 5/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 5/7 complete - walled garden ready." }
+
+# 6. PPPoE pool, profile, and server on the same service bridge.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 6/7 - PPPoE starting."
+:do {
+    :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
+        /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
+        /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+    }
+    :if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
+        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+    } else={
+        /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+    }
+    :if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
+        /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
+    } else={
+        /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
+    }
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 6/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 6/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 6/7 complete - PPPoE service ready." }
+
+# 7. Customer NAT for both service networks, only when the standard WAN list exists.
+:set serviceStepFailed false
+:put "${tag}: SERVICE STEP 7/7 - customer NAT starting."
+:do {
+:local serviceWanLists [/interface list find where name="WAN"]
+:do { /ip dns set allow-remote-requests=yes } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: router DNS could not be enabled: " . $error . " | ")
+    :put ("${tag}: router DNS could not be enabled: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} service-to-wan`)}] } on-error={}
+:do { /ip firewall filter add chain=forward action=accept in-interface=${routerOsString(bridgeName)} out-interface-list=WAN hotspot=auth connection-state=new,established,related comment=${routerOsString(`${tag} service-to-wan`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: authenticated Hotspot forwarding could not be added: " . $error . " | ")
+    :put ("${tag}: authenticated Hotspot forwarding could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} pppoe-to-wan`)}] } on-error={}
+:do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} pppoe-to-wan`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE forwarding could not be added: " . $error . " | ")
+    :put ("${tag}: PPPoE forwarding could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-udp`)}] } on-error={}
+:do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-udp`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: UDP DNS access could not be added: " . $error . " | ")
+    :put ("${tag}: UDP DNS access could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-tcp`)}] } on-error={}
+:do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=tcp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-tcp`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: TCP DNS access could not be added: " . $error . " | ")
+    :put ("${tag}: TCP DNS access could not be added: " . $error)
+}
+:if ([:len $serviceWanLists] > 0) do={
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} block-wan-dns-udp`)}] } on-error={}
+    :do { /ip firewall filter add chain=input action=drop in-interface-list=WAN protocol=udp dst-port=53 comment=${routerOsString(`${tag} block-wan-dns-udp`)} place-before=0 } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: WAN UDP DNS protection could not be added: " . $error . " | ")
+        :put ("${tag}: WAN UDP DNS protection could not be added: " . $error)
+    }
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} block-wan-dns-tcp`)}] } on-error={}
+    :do { /ip firewall filter add chain=input action=drop in-interface-list=WAN protocol=tcp dst-port=53 comment=${routerOsString(`${tag} block-wan-dns-tcp`)} place-before=0 } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: WAN TCP DNS protection could not be added: " . $error . " | ")
+        :put ("${tag}: WAN TCP DNS protection could not be added: " . $error)
+    }
+}
+:if ([:len $serviceWanLists] > 0) do={
+    :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} Hotspot masquerade`)}] } on-error={}
+    :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(hotspotNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} Hotspot masquerade`)} } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: Hotspot NAT could not be added: " . $error . " | ")
+        :put ("${tag}: Hotspot NAT could not be added: " . $error)
+    }
+    :do { /ip firewall nat remove [find where comment=${routerOsString(`${tag} PPPoE masquerade`)}] } on-error={}
+    :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} PPPoE masquerade`)} } on-error={
+        :set serviceStepFailed true
+        :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE NAT could not be added: " . $error . " | ")
+        :put ("${tag}: PPPoE NAT could not be added: " . $error)
+    }
+} else={
+    :put "${tag}: WAN interface list is absent; customer NAT was not changed."
+}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: " . $serviceStepError . " | ")
+    :put ("${tag}: SERVICE STEP 7/7 FAILED: " . $serviceStepError)
+}
+:if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 7/7 complete - customer NAT ready or safely preserved." }
+
+:put "${tag}: SCRIPT 4 optional bandwidth tree starting."
+:do {
+    ${queueSetup}
+} on-error={
+    :set serviceStepFailed true
+    :local serviceStepError $error
+    :if ([:len $serviceStepError] = 0) do={ :set serviceStepError "RouterOS returned no diagnostic text" }
+    :set serviceFailures ($serviceFailures . "SCRIPT 4 bandwidth tree: " . $serviceStepError . " | ")
+    :put ("${tag}: SCRIPT 4 bandwidth tree failed: " . $serviceStepError)
+}
+
+:if ([:len $serviceFailures] > 0) do={
+    :put "${tag}: servicessetup.rsc finished with failed service steps:"
+    :put $serviceFailures
+    :put "${tag}: Fix the listed failures and rerun servicessetup.rsc; completed resources are reconciled safely."
+} else={
+    :put "${tag}: servicessetup.rsc complete - all seven service steps succeeded."
+}
 `;
 }
 function generateFirewallScript(vpsIp, options) {
@@ -7027,16 +9207,22 @@ async function createBridge(creds, bridgeName) {
   assignBridgePorts,
   changeHotspotUsername,
   changePPPSecretName,
+  classifyRouterConnectionFailure,
   connectHotspotUser,
   createBridge,
   deployRouterFile,
   detectBridgeInterfaces,
+  disableGeneratedHotspot,
   disconnectHotspotActiveUser,
   disconnectPPPActive,
   disconnectPPPActiveByName,
+  ensureHotspotServerAddressPool,
+  ensureHotspotUserProfile,
+  ensureHotspotUserRateQueue,
   ensureRouterHttpsTrust,
   ensureRouterManagementAccess,
   fetchBridgePortLayout,
+  fetchHotspotConnectedDevices,
   fetchHotspotUserList,
   fetchHotspotUsers,
   fetchInterfaces,
@@ -7050,10 +9236,13 @@ async function createBridge(creds, bridgeName) {
   fetchTraffic,
   fetchWireless,
   generateFirewallScript,
+  generateNetworkSetupScript,
   generateOvpnClientConfig,
   generateRouterAsClientScript,
   generateRouterIpsecClientScript,
+  generateRouterManagementVpnScript,
   generateRouterWireGuardClientScript,
+  generateServiceSetupScript,
   generateVpnSetupScript,
   getEnvCredentials,
   getHotspotUserIp,
@@ -7063,16 +9252,28 @@ async function createBridge(creds, bridgeName) {
   pingRouter,
   probeAllHosts,
   probePort,
+  reconcileGeneratedServiceConfiguration,
+  reconcileHotspotUserAccess,
+  reconcilePppoeUserAccess,
   removeDstNatByAddress,
+  removeHotspotIpBinding,
   removeHotspotUser,
+  removeHotspotUserExpiry,
   removeHotspotUserProfile,
+  removeHotspotUserRateQueue,
   removeIpFromAddressList,
   removeIpPool,
   removePPPProfile,
   removePPPSecret,
   removePPPSecretByName,
+  removePppUserExpiry,
+  repairGeneratedServiceNetworking,
+  requireHotspotUserProfile,
+  resetHotspotUserCounters,
   resolveHotspotClientMac,
   runRouterCommand,
+  scheduleHotspotUserExpiry,
+  schedulePppUserExpiry,
   setWirelessInterface,
   setWirelessSecurityProfile,
   syncHotspotPortalHostname,
