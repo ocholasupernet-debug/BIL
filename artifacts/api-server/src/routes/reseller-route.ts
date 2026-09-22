@@ -65,6 +65,11 @@ type ResellerCustomerMetricRow = {
   type: string | null;
   status: string | null;
   expires_at: string | null;
+  created_at: string;
+  name: string | null;
+  username: string | null;
+  data_used_mb: number | string | null;
+  data_used_bytes: number | string | null;
 };
 
 type ResellerAccountRow = {
@@ -1282,7 +1287,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
       sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=50`),
       sbSelectStrict("isp_reseller_gateways", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,is_active,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=50`),
-      sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at&limit=5000`),
+      sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at,created_at,name,username,data_used_mb,data_used_bytes&limit=5000`),
       sbRpc<{
         income_today: number | string;
         income_month: number | string;
@@ -1308,6 +1313,38 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
       const expiry = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
       return customer.status === "expired" || (Number.isFinite(expiry) && expiry <= now);
     }).length;
+    const monthKeys = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date();
+      date.setUTCDate(1);
+      date.setUTCMonth(date.getUTCMonth() - (5 - index));
+      return date.toISOString().slice(0, 7);
+    });
+    const monthLabels = monthKeys.map((key) => new Intl.DateTimeFormat("en-KE", { month: "short" }).format(new Date(`${key}-01T00:00:00Z`)));
+    const registeredCustomersByMonth = monthKeys.map((key, index) => ({
+      month: key,
+      label: monthLabels[index],
+      count: customers.filter((customer) => customer.created_at?.slice(0, 7) === key).length,
+    }));
+    const consumptionByMonth = monthKeys.map((key, index) => ({
+      month: key,
+      label: monthLabels[index],
+      dataUsedMb: customers
+        .filter((customer) => customer.created_at?.slice(0, 7) === key)
+        .reduce((sum, customer) => sum + (Number(customer.data_used_bytes) > 0
+          ? Number(customer.data_used_bytes) / 1_000_000
+          : Math.max(0, Number(customer.data_used_mb) || 0)), 0),
+    }));
+    const topConsumers = customers
+      .map((customer) => ({
+        id: customer.id,
+        name: customer.name || customer.username || `Customer #${customer.id}`,
+        type: customer.type || "unknown",
+        dataUsedMb: Number(customer.data_used_bytes) > 0
+          ? Number(customer.data_used_bytes) / 1_000_000
+          : Math.max(0, Number(customer.data_used_mb) || 0),
+      }))
+      .sort((a, b) => b.dataUsedMb - a.dataUsedMb)
+      .slice(0, 5);
     const [revenue] = revenueRows;
     res.json({
       ok: true,
@@ -1329,6 +1366,11 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
           hotspot: customers.filter((customer) => customer.type === "hotspot").length,
           pppoe: customers.filter((customer) => customer.type === "pppoe").length,
           static: customers.filter((customer) => customer.type === "static").length,
+        },
+        analytics: {
+          registeredCustomersByMonth,
+          consumptionByMonth,
+          topConsumers,
         },
       },
     });
@@ -1480,10 +1522,6 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
     }
     const portId = Number(req.body?.portId);
     const port = await ownedPort(req, portId);
-    if (port.handoff_mode === "isp_router") {
-      res.status(409).json({ ok: false, error: "This ISP router handoff is managed by the ISP router. The reseller does not provision RouterOS client queues on it." });
-      return;
-    }
     if (port.status !== "active" || port.link_status !== "active") {
       res.status(409).json({ ok: false, error: "This reseller link is not active." });
       return;
@@ -1491,7 +1529,9 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
     const clientReference = typeof req.body?.clientReference === "string" ? req.body.clientReference.trim() : "";
     const clientIp = typeof req.body?.clientIp === "string" ? req.body.clientIp.trim() : "";
     const paymentReference = typeof req.body?.paymentReference === "string" ? req.body.paymentReference.trim() : "";
-    const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";
+    const gatewayType = typeof req.body?.gatewayType === "string" && req.body.gatewayType.trim()
+      ? req.body.gatewayType.trim().toLowerCase()
+      : "manual";
     const amount = Number(req.body?.amount);
     const maxLimit = Number(req.body?.maxLimitMbps ?? port.bandwidth_cap_mbps);
     if (!clientReference || !paymentReference || !gatewayType || !Number.isFinite(amount) || amount < 0 || !/^(\d{1,3}\.){3}\d{1,3}$/.test(clientIp) || !Number.isFinite(maxLimit) || maxLimit <= 0 || maxLimit > port.bandwidth_cap_mbps) {
@@ -1499,21 +1539,6 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
       return;
     }
     const tenantId = account.parent_id ?? account.id;
-    const normalizedGatewayType = gatewayType === "mpesa_paybill" || gatewayType === "mpesa_till_push" ? "mpesa" : gatewayType;
-    const [gatewayRows, paymentGatewayRows] = await Promise.all([
-      sbSelectStrict<{ id: number }>(
-        "isp_reseller_gateways",
-        `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&gateway_type=eq.${encodeURIComponent(gatewayType)}&is_active=is.true&select=id&limit=1`,
-      ),
-      sbSelectStrict<{ id: number }>(
-        "payment_gateways",
-        `user_id=eq.${account.id}&gateway_type=eq.${encodeURIComponent(normalizedGatewayType)}&is_active=is.true&select=id&limit=1`,
-      ),
-    ]);
-    if (!gatewayRows[0] && !paymentGatewayRows[0]) {
-      res.status(409).json({ ok: false, error: "Configure and enable this payment gateway before recording a checkout." });
-      return;
-    }
     const saleRows = await sbInsertStrict<{ id: number }>("isp_reseller_sales", {
       admin_id: tenantId,
       reseller_id: account.id,
@@ -1523,9 +1548,13 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
       amount,
       gateway_type: gatewayType.slice(0, 32),
       payment_reference: paymentReference.slice(0, 160),
-      status: "pending",
+      status: port.handoff_mode === "isp_router" ? "completed" : "pending",
     });
     const saleId = Number(saleRows[0]?.id);
+    if (port.handoff_mode === "isp_router") {
+      res.status(201).json({ ok: true, saleId, queueName: null, status: "completed" });
+      return;
+    }
     const target = await tenantRouter(tenantId, port.router_id);
     const queueName = `CLIENT_${safeSegment(clientReference, `SALE_${saleId}`)}`;
     try {

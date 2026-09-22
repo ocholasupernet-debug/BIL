@@ -4,7 +4,6 @@ import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Logo } from "@/components/Logo";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
-import { ResellerPaymentSettingsTab } from "./ResellerWorkspace";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { useTypography } from "@/context/TypographyContext";
 import {
@@ -2302,13 +2301,14 @@ const TABS = [
 export default function AdminSettings() {
   const [location, setLocation] = useLocation();
   const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
-  const initialTab = TABS.some(item => item.id === requestedTab) ? requestedTab! : "profile";
-  const [tab, setTab] = useState(initialTab);
   const isReseller = getAdminRole() === "reseller";
+  const visibleTabs = isReseller ? TABS.filter(item => item.id !== "gateways") : TABS;
+  const initialTab = visibleTabs.some(item => item.id === requestedTab) ? requestedTab! : "profile";
+  const [tab, setTab] = useState(initialTab);
 
   useEffect(() => {
-    if (requestedTab && TABS.some(item => item.id === requestedTab)) setTab(requestedTab);
-  }, [requestedTab]);
+    if (requestedTab && visibleTabs.some(item => item.id === requestedTab)) setTab(requestedTab);
+  }, [requestedTab, isReseller]);
 
   const selectTab = (nextTab: string) => {
     setTab(nextTab);
@@ -2324,7 +2324,7 @@ export default function AdminSettings() {
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
             <p style={{ fontSize: "0.7rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", margin: 0 }}>Settings</p>
           </div>
-          {TABS.map(t => {
+            {visibleTabs.map(t => {
             const Icon = t.icon;
             const active = tab === t.id;
             return (
@@ -2356,13 +2356,13 @@ export default function AdminSettings() {
           </div>
           <div className="settings-mobile-nav">
             <Select value={tab} onChange={event => selectTab(event.target.value)} aria-label="Choose settings section">
-              {TABS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              {visibleTabs.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
             </Select>
           </div>
 
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
-          {tab === "gateways"      && (isReseller ? <ResellerPaymentSettingsTab /> : <PaymentGatewaysTab />)}
+          {tab === "gateways"      && !isReseller && <PaymentGatewaysTab />}
           {tab === "dashboard"     && <DashboardBuilderTab />}
           {tab === "typography"    && <TypographyTab />}
           {tab === "sms"           && <SmsEmailTab />}
