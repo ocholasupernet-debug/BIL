@@ -450,6 +450,16 @@ export default function AdminRegister() {
                 <div><strong>Built for reliable growth</strong><span>Secure infrastructure that keeps your business moving.</span></div>
               </div>
             </div>
+             <div className="register-proof-card">
+               <div className="register-proof-top">
+                 <span className="register-proof-status"><span /> READY TO SCALE</span>
+                 <ShieldCheck size={15} />
+               </div>
+               <strong>Everything your team needs, in one workspace.</strong>
+               <div className="register-proof-tags">
+                 <span>Billing</span><span>Access</span><span>Routers</span>
+               </div>
+             </div>
           </div>
           <div className="register-visual-footer">
             <span className="register-live-dot" /> <span>Trusted infrastructure for connected communities</span>
@@ -473,6 +483,7 @@ export default function AdminRegister() {
               <p className="register-kicker">START YOUR JOURNEY</p>
               <h1>Launch your ISP workspace</h1>
               <p>Set up your account in a few simple steps. You’ll be ready to manage your network in minutes.</p>
+               <div className="register-heading-meta"><ShieldCheck size={14} /> Secure onboarding with verified M-Pesa payments</div>
             </div>
 
             <div className="register-fee-card">
@@ -791,7 +802,66 @@ export default function AdminRegister() {
         .register-trust-row svg{color:#5a8cf4}
         .register-state-page .register-shell{display:none}
         @media(max-width:900px){.register-shell{display:block}.register-visual{display:none}.register-form-side{min-height:100vh;padding:28px 20px 40px}.register-mobile-brand{display:flex;margin-bottom:32px}.register-progress{margin-bottom:30px}.register-form-wrap{max-width:560px;margin:0 auto}.register-heading h1{font-size:2rem}}
-         @media(max-width:560px){.register-form-side{padding:23px 16px 32px}.register-mobile-brand{margin-bottom:27px}.register-progress-line{margin:0 7px;min-width:10px}.register-step{gap:5px}.register-step strong{display:none}.register-fee-card{grid-template-columns:38px 1fr;padding:14px}.register-fee-icon{width:38px;height:38px}.register-fee-copy{display:block}.register-fee-copy>b{display:block;margin-top:5px}.register-fee-note{grid-column:1 / -1}.register-two-col{grid-template-columns:1fr;gap:18px}.register-form{gap:22px}.register-payment-options{grid-template-columns:1fr}.register-paybill-row strong{font-size:.92rem}}
+          @media(max-width:560px){.register-form-side{padding:23px 16px 32px}.register-mobile-brand{margin-bottom:27px}.register-progress-line{margin:0 7px;min-width:10px}.register-step{gap:5px}.register-step strong{display:none}.register-fee-card{grid-template-columns:38px 1fr;padding:14px}.register-fee-icon{width:38px;height:38px}.register-fee-copy{display:block}.register-fee-copy>b{display:block;margin-top:5px}.register-fee-note{grid-column:1 / -1}.register-two-col{grid-template-columns:1fr;gap:18px}.register-form{gap:22px}.register-payment-options{grid-template-columns:1fr}.register-paybill-row strong{font-size:.92rem}}
+
+          .register-page{background:#edf2f8}
+          .register-shell{grid-template-columns:minmax(430px,.88fr) minmax(620px,1.12fr)}
+          .register-visual{padding:38px clamp(28px,5vw,76px) 34px;background:linear-gradient(145deg,#081326 0%,#101d3b 54%,#1a2860 100%);box-shadow:inset -1px 0 rgba(255,255,255,.08)}
+          .register-visual:before{content:"";position:absolute;inset:20px;border:1px solid rgba(169,193,255,.09);border-radius:24px;pointer-events:none;z-index:1}
+          .register-visual:after{background:radial-gradient(circle at 76% 12%,rgba(72,122,255,.34),transparent 31%),radial-gradient(circle at 4% 94%,rgba(74,222,169,.12),transparent 30%),linear-gradient(125deg,transparent 35%,rgba(114,144,255,.08) 100%)}
+          .register-visual-top{padding:0 2px}
+          .register-portal-pill{padding:8px 12px;border-color:rgba(173,193,240,.25);background:rgba(255,255,255,.035);box-shadow:inset 0 1px rgba(255,255,255,.06)}
+          .register-visual-copy{max-width:500px;margin:auto 0;padding:26px 0}
+          .register-eyebrow{color:#9abaff}
+          .register-visual-copy h2{margin:20px 0 20px;font-size:clamp(2.45rem,4.3vw,4.3rem);line-height:1.01}
+          .register-visual-copy>p{max-width:435px;color:#adbbd5;font-size:.93rem;line-height:1.72}
+          .register-benefits{gap:17px;margin-top:34px}
+          .register-benefit{gap:14px}
+          .register-benefit-icon{width:36px;height:36px;border-radius:11px;background:rgba(82,125,237,.18);box-shadow:inset 0 1px rgba(255,255,255,.08)}
+          .register-benefit strong{font-size:.79rem}
+          .register-benefit span{color:#91a2c2}
+          .register-proof-card{margin-top:34px;padding:16px 17px 15px;border:1px solid rgba(153,181,247,.19);border-radius:15px;background:linear-gradient(135deg,rgba(86,126,229,.16),rgba(255,255,255,.035));box-shadow:0 18px 34px rgba(1,8,25,.18),inset 0 1px rgba(255,255,255,.07)}
+          .register-proof-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;color:#89aefc}
+          .register-proof-top>svg{color:#72e0b1}
+          .register-proof-status{display:flex;align-items:center;gap:7px;color:#9dbaff;font-size:.59rem;font-weight:800;letter-spacing:.12em}
+          .register-proof-status>span{width:6px;height:6px;border-radius:50%;background:#57dfa8;box-shadow:0 0 0 4px rgba(87,223,168,.12)}
+          .register-proof-card>strong{display:block;color:#f0f5ff;font-size:.79rem;font-weight:700;line-height:1.45}
+          .register-proof-tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+          .register-proof-tags span{padding:5px 8px;border:1px solid rgba(166,191,247,.16);border-radius:7px;color:#a7b9d9;background:rgba(11,23,52,.28);font-size:.62rem;font-weight:700}
+          .register-visual-footer{padding:0 2px;color:#8d9fc0}
+          .register-form-side{padding:44px clamp(28px,6vw,88px) 56px;background:linear-gradient(180deg,#fbfcfe 0%,#f4f7fb 100%)}
+          .register-form-wrap{max-width:760px}
+          .register-progress{margin-bottom:42px}
+          .register-step span{width:27px;height:27px;background:rgba(255,255,255,.8)}
+          .register-step.active span{box-shadow:0 5px 14px rgba(37,99,235,.25)}
+          .register-progress-line{background:#d9e2ee}
+          .register-heading{margin-bottom:28px}
+          .register-kicker{margin-bottom:12px;letter-spacing:.16em}
+          .register-heading h1{font-size:clamp(2rem,3.2vw,2.75rem);letter-spacing:-.06em}
+          .register-heading>p:last-child{max-width:590px;font-size:.88rem;line-height:1.7}
+          .register-heading-meta{display:flex;align-items:center;gap:7px;width:fit-content;margin-top:14px;padding:7px 10px;border:1px solid #dce7f5;border-radius:8px;color:#61728c;background:#f5f8fd;font-size:.66rem;font-weight:700}
+          .register-heading-meta svg{color:#3e76df}
+          .register-fee-card{position:relative;grid-template-columns:46px 1fr auto;padding:18px 20px;margin-bottom:32px;border-color:#d7e3f2;border-radius:17px;background:linear-gradient(115deg,#edf4ff 0%,#f8fbff 72%,#ffffff 100%);box-shadow:0 12px 26px rgba(34,73,140,.07)}
+          .register-fee-card:after{content:"";position:absolute;top:0;right:20px;width:68px;height:2px;border-radius:0 0 4px 4px;background:linear-gradient(90deg,#5c8df1,#78dcb1)}
+          .register-fee-icon{width:46px;height:46px;border-radius:14px;background:#dce9ff;box-shadow:inset 0 1px rgba(255,255,255,.65)}
+          .register-fee-copy strong{font-size:.8rem}
+          .register-fee-copy>b{color:#245fd5;font-size:1.22rem}
+          .register-fee-note{margin-top:11px;color:#71819a}
+          .register-form{gap:28px}
+          .register-form-section{padding-bottom:28px;border-bottom-color:#e0e7f0}
+          .register-section-heading{gap:12px;margin-bottom:18px}
+          .register-section-heading>span{display:grid;place-items:center;width:25px;height:25px;border:1px solid #cfe0fb;border-radius:8px;background:#f0f5ff;color:#3b73dd}
+          .register-section-heading strong{font-size:.84rem}
+          .register-section-heading small{font-size:.69rem}
+          .register-label{margin-bottom:9px;color:#2f3d56;font-size:.72rem}
+          .register-submit{min-height:56px;border-radius:15px;background:linear-gradient(105deg,#245ed8,#4b82f4 72%,#5c9ef5);box-shadow:0 12px 25px rgba(37,99,235,.22);font-size:.84rem}
+          .register-submit:not(:disabled):hover{box-shadow:0 16px 30px rgba(37,99,235,.3)}
+          .register-sign-in{font-size:.77rem}
+          .register-trust-row{margin-top:20px;color:#8a99ad}
+          .register-trust-row svg{color:#39b985}
+          @media(max-width:900px){.register-form-side{padding:34px 26px 48px}.register-form-wrap{max-width:650px}.register-heading-meta{margin-top:15px}}
+          @media(max-width:560px){.register-form-side{padding:24px 16px 34px}.register-heading-meta{align-items:flex-start;line-height:1.4}.register-fee-card{grid-template-columns:38px 1fr;padding:15px}.register-fee-icon{width:38px;height:38px}.register-fee-card:after{right:15px}.register-progress{margin-bottom:31px}}
+          @media(prefers-reduced-motion:reduce){.register-submit,.register-input,.register-payment-option{transition:none!important}}
       `}</style>
     </div>
   );
