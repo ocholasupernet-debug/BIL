@@ -1554,12 +1554,22 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const sourceOrigin = managementScriptSourceOrigin(req);
     const serviceBridgeName = String(
       req.query.bridgeName
-      ?? (installationMode === "coexist" ? `co-hotspot-bridge-${id}` : "hotspot-bridge"),
+      ?? (installationMode === "coexist" ? "br-ochola-coexist" : "hotspot-bridge"),
     ).trim();
     const serviceBridgePorts = String(req.query.bridgePorts ?? "")
       .split(",")
       .map(port => port.trim())
       .filter(Boolean);
+    const platformRadiusIp = String(
+      req.query.radiusIp
+      ?? process.env["RADIUS_SERVER_IP"]
+      ?? routerManagementVpnContract("primary").gateway,
+    ).trim();
+    const platformRadiusSecret = String(
+      process.env["RADIUS_SHARED_SECRET"]
+      ?? process.env["RADIUS_SECRET"]
+      ?? "",
+    ).trim();
     const portalHostname = new URL(sourceOrigin).hostname;
     const defaultPortalFiles = [
       { routeName: "hotspot-login.html", fileName: "login.html", sourceName: "login.html" },
@@ -1598,8 +1608,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkScript = generateNetworkSetupScript({ routerId: id });
     const serviceScript = generateServiceSetupScript({
       routerId: id,
+      installationMode,
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
+      portName: serviceBridgePorts[0],
+      radiusIp: installationMode === "coexist" ? platformRadiusIp : undefined,
+      radiusSecret: installationMode === "coexist" ? platformRadiusSecret : undefined,
       /* The shared bridge is the single physical service wire. Bandwidth
          queues remain opt-in until a tenant supplies an aggregate speed. */
       maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))

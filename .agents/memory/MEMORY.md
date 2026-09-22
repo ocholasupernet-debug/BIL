@@ -2,6 +2,7 @@
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
+- [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use base64 Git blob payloads to preserve exact workspace bytes and verify each returned SHA.
 - [GitHub push path limitations](github-push-paths.md) — Connector writes can be endpoint/path limited; verify the remote tree instead of assuming blob success means a push completed.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Stage contents writes on a temporary branch; workflow files require Actions write permission and may be rejected with 403.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
@@ -11,6 +12,7 @@
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
+- [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
@@ -64,3 +66,4 @@
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
 - [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
+- [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
