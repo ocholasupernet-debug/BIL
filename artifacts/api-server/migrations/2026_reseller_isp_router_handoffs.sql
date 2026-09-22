@@ -24,7 +24,7 @@ alter table if exists public.isp_reseller_ports
 
 alter table if exists public.isp_reseller_ports
   add constraint isp_reseller_ports_handoff_mode_check
-  check (handoff_mode in ('services', 'isp_router'));
+  check (handoff_mode in ('services', 'isp_router', 'vlan_services'));
 
 alter table if exists public.isp_reseller_ports
   drop constraint if exists isp_reseller_ports_handoff_type_check;

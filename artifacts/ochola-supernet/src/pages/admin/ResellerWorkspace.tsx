@@ -12,7 +12,7 @@ type Assignment = {
   id: number; reseller_id?: number; router_id: number; interface_name: string; bridge_name?: string | null;
   assigned_reseller_id?: number | null; vlan_tag?: string | null; hotspot_enabled: boolean; pppoe_enabled: boolean; subnet_range?: string | null;
   bandwidth_cap_mbps: number; reseller_bandwidth_cap?: number | null; status: string; link_status?: "pending" | "active" | "suspended" | null;
-  handoff_mode?: "services" | "isp_router" | null; handoff_type?: "physical" | "vlan" | null;
+  handoff_mode?: "services" | "isp_router" | "vlan_services" | null; handoff_type?: "physical" | "vlan" | null;
   xpon_identifier?: string | null; link_detected?: boolean | null; last_link_checked_at?: string | null;
   link_detection_error?: string | null;
   provisioning_error?: string | null; link_provisioning_error?: string | null;
@@ -117,6 +117,7 @@ function AdminResellerManagement() {
   const [handoffRequestId, setHandoffRequestId] = useState<number | null>(null);
   const [handoffRouterId, setHandoffRouterId] = useState("");
   const [handoffType, setHandoffType] = useState<"physical" | "vlan">("physical");
+  const [handoffMode, setHandoffMode] = useState<"isp_router" | "vlan_services">("isp_router");
   const [handoffInterfaceName, setHandoffInterfaceName] = useState("");
   const [handoffVlanTag, setHandoffVlanTag] = useState("");
   const [xponIdentifier, setXponIdentifier] = useState("");
@@ -217,6 +218,7 @@ function AdminResellerManagement() {
           routerId: Number(handoffRouterId),
           interfaceName: handoffInterfaceName,
           handoffType,
+          handoffMode,
           vlanTag: handoffType === "vlan" ? handoffVlanTag : undefined,
           xponIdentifier,
           bandwidthCapMbps: Number(handoffCap),
@@ -324,7 +326,7 @@ function AdminResellerManagement() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
                   {request.status === "pending" && <><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "#16a34a", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "Saving…" : "Approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
-                  {request.status === "approved" && (assignment?.handoff_mode === "isp_router" ? <span style={{ color: "#15803d", fontSize: 12, fontWeight: 800 }}>Handoff assigned</span> : <button type="button" onClick={() => { setHandoffRequestId(request.id); setHandoffRouterId(routerId || String(routers[0]?.id || "")); setHandoffType("physical"); setHandoffCap("30"); }} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Assign ISP router handoff</button>)}
+                  {request.status === "approved" && (assignment?.handoff_mode === "isp_router" || assignment?.handoff_mode === "vlan_services" ? <span style={{ color: "#15803d", fontSize: 12, fontWeight: 800 }}>{assignment.handoff_mode === "vlan_services" ? "VLAN services assigned" : "Handoff assigned"}</span> : <button type="button" onClick={() => { setHandoffRequestId(request.id); setHandoffRouterId(routerId || String(routers[0]?.id || "")); setHandoffType("physical"); setHandoffMode("isp_router"); setHandoffCap("30"); }} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Assign ISP service</button>)}
                 </div>
               </div>;
             })}
@@ -343,30 +345,40 @@ function AdminResellerManagement() {
               <button type="button" onClick={() => setHandoffRequestId(null)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 10px", background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: 12 }}>Cancel</button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 16 }}>
+              <Field label="Service mode">
+                <select required style={inputStyle} value={handoffMode} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); }}>
+                  <option value="isp_router">Passive XPON handoff</option>
+                  <option value="vlan_services">VLAN Hotspot + PPPoE service</option>
+                </select>
+              </Field>
               <Field label="ISP router">
                 <select required style={inputStyle} value={handoffRouterId} onChange={(event) => { setHandoffRouterId(event.target.value); setHandoffInterfaceName(""); }}>
                   <option value="">Choose router</option>{routers.map((router) => <option key={router.id} value={router.id}>{router.name}{router.status ? ` · ${router.status}` : ""}</option>)}
                 </select>
               </Field>
-              <Field label="Handoff type">
-                <select required style={inputStyle} value={handoffType} onChange={(event) => { const value = event.target.value === "vlan" ? "vlan" : "physical"; setHandoffType(value); setHandoffInterfaceName(""); }}>
+              <Field label={handoffMode === "vlan_services" ? "ISP Hotspot bridge" : "Handoff type"}>
+                {handoffMode === "vlan_services" ? <select required style={inputStyle} value={handoffInterfaceName} onChange={(event) => setHandoffInterfaceName(event.target.value)} disabled={!handoffRouterId || handoffPortsLoading}>
+                  <option value="">Choose Hotspot bridge</option>{handoffPorts.filter((port) => port.type.toLowerCase() === "bridge").map((port) => <option key={port.name} value={port.name}>{port.name}{port.running ? " · running" : ""}</option>)}
+                </select> : <select required style={inputStyle} value={handoffType} onChange={(event) => { const value = event.target.value === "vlan" ? "vlan" : "physical"; setHandoffType(value); setHandoffInterfaceName(""); }}>
                   <option value="physical">Physical XPON port</option>
                   <option value="vlan">Tagged VLAN handoff</option>
-                </select>
+                </select>}
               </Field>
-              <Field label={handoffPortsLoading ? "XPON-facing interface (loading…)" : "XPON-facing interface"}>
+              {handoffMode === "isp_router" && <Field label={handoffPortsLoading ? "XPON-facing interface (loading…)" : "XPON-facing interface"}>
                 <select required style={inputStyle} value={handoffInterfaceName} onChange={(event) => setHandoffInterfaceName(event.target.value)} disabled={!handoffRouterId || handoffPortsLoading}>
                   <option value="">Choose interface</option>{handoffPorts.map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
                 </select>
-              </Field>
+              </Field>}
               {handoffType === "vlan" && <Field label="VLAN ID"><input required min="1" max="4094" type="number" style={inputStyle} value={handoffVlanTag} onChange={(event) => setHandoffVlanTag(event.target.value)} placeholder="e.g. 240" /></Field>}
               <Field label="XPON / ONU reference (optional)"><input style={inputStyle} value={xponIdentifier} onChange={(event) => setXponIdentifier(event.target.value)} placeholder="Serial or customer reference" /></Field>
               <Field label="Bandwidth cap (Mbps)"><input required min="1" max="100000" type="number" style={inputStyle} value={handoffCap} onChange={(event) => setHandoffCap(event.target.value)} /></Field>
             </div>
             <div style={{ marginTop: 13, padding: "10px 12px", borderRadius: 8, background: "rgba(245,158,11,.1)", color: "#92400e", fontSize: 12, lineHeight: 1.5 }}>
-              Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment.
+               {handoffMode === "vlan_services"
+                 ? "The ISP router will create a dedicated VLAN Hotspot and PPPoE service with the locked reseller cap. Configure this VLAN as a tagged WAN/Hotspot bridge on the reseller XPON router."
+                 : "Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment."}
             </div>
-            <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ marginTop: 15, border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning handoff…" : "Assign internet handoff"}</button>
+             <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ marginTop: 15, border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Provisioning…" : handoffMode === "vlan_services" ? "Provision VLAN services" : "Assign internet handoff"}</button>
           </form>
         )}
         <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>
@@ -442,7 +454,7 @@ function AdminResellerManagement() {
                return <tr key={reseller.id}>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td>
-                  <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}><code className="reseller-mono">{port?.interface_name || "—"}</code>{port?.handoff_mode === "isp_router" && <div style={{ marginTop: 5, color: port.link_detected ? "#15803d" : "#a16207", fontSize: 11, fontWeight: 750 }}>{port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "ISP router"} · {port.link_detected ? "XPON link detected" : "waiting for XPON"} </div>}</td>
+                   <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}><code className="reseller-mono">{port?.interface_name || "—"}</code>{port?.handoff_mode === "isp_router" && <div style={{ marginTop: 5, color: port.link_detected ? "#15803d" : "#a16207", fontSize: 11, fontWeight: 750 }}>{port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "ISP router"} · {port.link_detected ? "XPON link detected" : "waiting for XPON"} </div>}{port?.handoff_mode === "vlan_services" && <div style={{ marginTop: 5, color: "#15803d", fontSize: 11, fontWeight: 750 }}>VLAN {port.vlan_tag} · Hotspot + PPPoE service</div>}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port ? <div style={{ display: "flex", gap: 5, alignItems: "center" }}><input aria-label={`Maximum bandwidth for ${port.interface_name}`} type="number" min="1" max="100000" value={linkCapDraft[port.id] ?? String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)} onChange={(event) => setLinkCapDraft((current) => ({ ...current, [port.id]: event.target.value }))} style={{ ...inputStyle, width: 86, minHeight: 32, padding: "5px 7px" }} /><span>Mbps</span></div> : "—"}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={linkStatus} />{port?.link_provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.link_provisioning_error}</div> : null}</td>
@@ -492,9 +504,11 @@ function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
   const [telemetry, setTelemetry] = useState<ResellerTelemetry | null>(null);
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
+  const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "" });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pppoeSaving, setPppoeSaving] = useState(false);
 
   const load = async () => {
     try {
@@ -512,6 +526,20 @@ function ResellerDashboard() {
     event.preventDefault(); setSaving(true); setError(""); setSuccess("");
     try { await apiJson("/api/reseller/checkout", { method: "POST", body: JSON.stringify({ ...checkout, portId: Number(checkout.portId), amount: Number(checkout.amount), maxLimitMbps: checkout.maxLimitMbps ? Number(checkout.maxLimitMbps) : undefined, gatewayType: "manual" }) }); setSuccess(port?.handoff_mode === "isp_router" ? "Paid client session recorded." : "Paid client session recorded and client queue provisioned."); setCheckout((current) => ({ ...current, clientReference: "", clientIp: "", paymentReference: "" })); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Client queue provisioning failed."); } finally { setSaving(false); }
+  };
+  const assignPppoeClient = async (event: React.FormEvent) => {
+    event.preventDefault(); setPppoeSaving(true); setError(""); setSuccess("");
+    try {
+      await apiJson("/api/reseller/pppoe-clients", {
+        method: "POST",
+        body: JSON.stringify({ ...pppoeClient, portId: Number(port?.id) }),
+      });
+      setSuccess("PPPoE client assigned to your VLAN service.");
+      setPppoeClient({ name: "", phone: "", username: "", password: "" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to assign the PPPoE client.");
+    } finally { setPppoeSaving(false); }
   };
   const port = data?.ports?.[0];
   const linkStatus = port?.link_status ?? "pending";
@@ -552,9 +580,8 @@ function ResellerDashboard() {
            ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
          </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
-            {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[`${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
-             {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
+             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : port?.handoff_mode === "vlan_services" ? "VLAN Hotspot + PPPoE service" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : port?.handoff_mode === "vlan_services" ? "Add the assigned VLAN to your XPON hotspot bridge. The ISP router supplies the reseller portal and PPPoE service under the locked speed cap." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
+             {port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "vlan_services" ? `VLAN ${port.vlan_tag}` : port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
         </div>
          <section style={cardStyle}>
            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 13 }}>
@@ -603,6 +630,19 @@ function ResellerDashboard() {
            </div>
            <button disabled={saving || !port || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> Record paid session</button>
          </form>
+          {port?.handoff_mode === "vlan_services" && port.pppoe_enabled && (
+            <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>
+              <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="var(--isp-accent)" /> Assign a PPPoE client</div>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Create a client login on your assigned VLAN. The client receives the ISP-defined PPPoE profile and remains inside your locked reseller speed cap.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+                <Field label="Client name"><input required style={inputStyle} value={pppoeClient.name} onChange={(e) => setPppoeClient({ ...pppoeClient, name: e.target.value })} /></Field>
+                <Field label="Phone"><input required style={inputStyle} value={pppoeClient.phone} onChange={(e) => setPppoeClient({ ...pppoeClient, phone: e.target.value })} /></Field>
+                <Field label="PPPoE username"><input required pattern="[A-Za-z0-9._-]{3,64}" style={inputStyle} value={pppoeClient.username} onChange={(e) => setPppoeClient({ ...pppoeClient, username: e.target.value })} /></Field>
+                <Field label="PPPoE password"><input required minLength={8} type="password" style={inputStyle} value={pppoeClient.password} onChange={(e) => setPppoeClient({ ...pppoeClient, password: e.target.value })} /></Field>
+              </div>
+              <button disabled={pppoeSaving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {pppoeSaving ? "Assigning…" : "Assign PPPoE client"}</button>
+            </form>
+          )}
         <div style={cardStyle}>
           <div style={{ fontWeight: 800, color: "var(--isp-text)", marginBottom: 12 }}>Recent sales on your port</div>
           <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Client", "Address", "Gateway", "Amount", "Status", "Date"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>{data?.sales?.map((sale) => <tr key={sale.id}><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 600 }}>{sale.client_reference}</td><td style={{ padding: "10px 8px" }}><code className="reseller-mono">{sale.client_ip}</code></td><td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{sale.gateway_type}</td><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{money(sale.amount)}</td><td style={{ padding: "10px 8px" }}><StatusBadge status={sale.status} /></td><td style={{ padding: "10px 8px", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{new Date(sale.created_at).toLocaleString()}</td></tr>)}{!data?.sales?.length && <tr><td colSpan={6} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No sales recorded yet.</td></tr>}</tbody></table></div>
