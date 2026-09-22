@@ -1674,20 +1674,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
      * so each ordered step can be reviewed, copied, downloaded, or retried
      * independently.
      */
-    /*
-     * Brownfield routers may already contain generic scripts from another
-     * billing system. Keep the three downloaded files uniquely namespaced and
-     * stable per router so retries replace only the previous Ochola bundle.
-     */
-    const brownfieldFilePrefix = `ochola-brownfield-${id}`;
     const networkFileName = installationMode === "coexist"
-      ? `${brownfieldFilePrefix}-network.rsc`
+      ? "brownfield-network.rsc"
       : "networksetup.rsc";
     const vpnFileName = installationMode === "coexist"
-      ? `${brownfieldFilePrefix}-vpn.rsc`
+      ? "brownfield-vpn.rsc"
       : "vpnsetup.rsc";
     const serviceFileName = installationMode === "coexist"
-      ? `${brownfieldFilePrefix}-services.rsc`
+      ? "brownfield-services.rsc"
       : "servicessetup.rsc";
     createPublicRouterFileSource(id, networkFileName, {
       content: Buffer.from(networkScript, "utf8"),
