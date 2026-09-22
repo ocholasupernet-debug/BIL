@@ -83,6 +83,15 @@ export function shouldReuseRouterDnsEntry(row: Record<string, unknown>): boolean
   return dynamic === undefined || dynamic === null || dynamic === "" || routerBoolean(dynamic);
 }
 
+export function routerSetArguments(command: string[], property: string): string[] {
+  return command.slice(1).filter((arg) =>
+    !arg.startsWith(`=${property}=`)
+    // place-before is accepted by /add but is not a mutable firewall property
+    // on RouterOS /set commands.
+    && !arg.startsWith("=place-before="),
+  );
+}
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 48) || fallback;
@@ -643,7 +652,7 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     await runRouterCommand(creds, [
       addPath.replace(/\/add$/, "/set"),
       `=.id=${existing[".id"]}`,
-      ...command.slice(1).filter((arg) => !arg.startsWith(`=${property}=`)),
+      ...routerSetArguments(command, property),
     ]);
     return;
   }

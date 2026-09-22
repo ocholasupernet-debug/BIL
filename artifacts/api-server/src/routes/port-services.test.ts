@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildDualServiceCommands,
   normalizeApprovedAssetPath,
+  routerSetArguments,
   shouldReuseRouterDnsEntry,
 } from "./port-services-route.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
@@ -164,4 +165,20 @@ test("unknown RouterOS DNS entry flags are protected from static updates", () =>
   assert.equal(shouldReuseRouterDnsEntry({ ".id": "*1" }), true);
   assert.equal(shouldReuseRouterDnsEntry({ ".id": "*2", dynamic: "yes" }), true);
   assert.equal(shouldReuseRouterDnsEntry({ ".id": "*3", dynamic: "no" }), false);
+});
+
+test("RouterOS updates omit add-only firewall placement arguments", () => {
+  assert.deepEqual(
+    routerSetArguments(
+      [
+        "/ip/firewall/filter/add",
+        "=chain=forward",
+        "=action=accept",
+        "=place-before=0",
+        "=comment=service_rule",
+      ],
+      "comment",
+    ),
+    ["=chain=forward", "=action=accept"],
+  );
 });
