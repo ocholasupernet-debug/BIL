@@ -48,6 +48,7 @@ async function loadExportBuilder() {
               export const ADMIN_ID = 7;
               export function getAdminApiToken() { return ""; }
               export function getSelectedTenantId() { return 7; }
+              export function isLoggedIn() { return false; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
             `,
           };

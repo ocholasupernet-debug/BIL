@@ -355,15 +355,18 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
  * Returns the customer row (without password) on success.
  */
 router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
-  const { adminId, username, password } = req.body ?? {};
-  if (!username || !password) {
+  const adminId = Number(req.body?.adminId);
+  const username = String(req.body?.username ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  const requestedIp = normalisePortalIp(req.body?.client_ip);
+  const requestedMac = normalisePortalMac(req.body?.mac_address);
+  if (!Number.isSafeInteger(adminId) || adminId < 1 || !username || !password) {
     res.status(400).json({ error: "username and password are required" });
     return;
   }
-  const idFilter = adminId ? `admin_id=eq.${adminId}&` : "";
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_customers",
-    `${idFilter}username=eq.${encodeURIComponent(String(username))}&select=*&limit=1`,
+    `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(username)}&select=*&limit=1`,
   );
   const customer = rows[0];
   if (!customer) {
@@ -386,14 +389,96 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     res.status(403).json({ error: "Account has expired. Please renew your plan." });
     return;
   }
-  // Return customer without exposing password
+
+  const customerRow = customer as Partial<CustomerRow>;
+  const plan = customerRow.plan_id
+    ? (await sbSelect<PlanRow>(
+        "isp_plans",
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${adminId}&select=id,router_id&limit=1`,
+      ))[0]
+    : undefined;
+  const routerId = customerRow.router_id ?? plan?.router_id ?? null;
+  if (!routerId) {
+    res.status(409).json({ error: "Your active plan is not linked to a hotspot router yet." });
+    return;
+  }
+
+  const routerRow = (await sbSelect<RouterRow>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  ))[0];
+  if (!routerRow) {
+    res.status(409).json({ error: "Your active plan's hotspot router could not be found." });
+    return;
+  }
+
+  let creds: ReturnType<typeof routerCredentials>;
+  try {
+    creds = routerCredentials(routerRow);
+  } catch (error) {
+    res.status(503).json({
+      error: error instanceof Error ? error.message : "The hotspot router is not ready.",
+    });
+    return;
+  }
+
+  const customerMac = normalisePortalMac(customerRow.mac_address);
+  const targetMac = requestedMac || customerMac;
+  let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>> = [];
+  try {
+    activeUsers = await fetchHotspotUsers(creds);
+  } catch (error) {
+    logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not read hotspot sessions");
+    res.status(503).json({
+      error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
+    });
+    return;
+  }
+
+  const matchingDevice = activeUsers.find(user =>
+    (targetMac && normalisePortalMac(user.macAddress) === targetMac)
+    || (requestedIp && user.address === requestedIp)
+    || (!targetMac && !requestedIp && user.user === username),
+  );
+  const connected = activeUsers.some(user =>
+    user.user === username && (
+      (targetMac && normalisePortalMac(user.macAddress) === targetMac)
+      || (requestedIp && user.address === requestedIp)
+    ),
+  );
+  if (!connected) {
+    const ip = requestedIp || matchingDevice?.address || normalisePortalIp(customerRow.ip_address);
+    if (!ip || !targetMac) {
+      res.status(409).json({
+        error: "Credentials are valid, but this sign-in page did not provide the hotspot device context. Reopen it from the connected Wi-Fi network and try again.",
+      });
+      return;
+    }
+    try {
+      await connectHotspotUser(creds, {
+        user: username,
+        password,
+        ip,
+        macAddress: targetMac,
+      });
+    } catch (error) {
+      logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
+      res.status(503).json({
+        error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
+      });
+      return;
+    }
+  }
+
+  // Return customer without exposing password.
   const { password: _pw, ...safe } = customer;
   res.json({
     ok: true,
     customer: safe,
+    connected: true,
     session: {
       status: "active",
-      connected: false,
+      connected: true,
       expiresAt: typeof customer.expires_at === "string" ? customer.expires_at : null,
     },
   });

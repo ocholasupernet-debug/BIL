@@ -616,8 +616,44 @@ export default function HotspotLogin() {
     e.preventDefault();
     setLoginError(""); setLoginLoading(true);
     try {
-      await attemptHotspotConnection();
-    } catch { setLoginError("Could not reach the server. Please try again."); }
+      const res = await fetch("/api/customers/hotspot-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId,
+          username: loginUsername.trim(),
+          password: loginPassword,
+          ...(deviceMacAddress ? { mac_address: deviceMacAddress } : {}),
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        error?: string;
+        connected?: boolean;
+        customer?: { name?: string | null };
+        session?: { status?: "active" | "expired"; connected?: boolean; expiresAt?: string | null };
+      };
+      if (!res.ok || !data.ok || data.connected !== true) {
+        throw new Error(data.error || "Login failed. Please check your hotspot credentials.");
+      }
+
+      const credentials = { username: loginUsername.trim(), password: loginPassword };
+      setHotspotCredentials(credentials);
+      storeHotspotCredentials(loginCredentialsStorageKey, credentials);
+      setLoginCredentialsLocked(true);
+      setLoginSession({
+        status: data.session?.status === "expired" ? "expired" : "active",
+        connected: true,
+        expiresAt: data.session?.expiresAt ?? null,
+      });
+      setLoggedInName(data.customer?.name || credentials.username);
+      setLoginError("");
+      setTroubleshootMessage("");
+      setLoginSuccess(true);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Could not reach the server. Please try again.");
+    }
     finally { setLoginLoading(false); }
   };
 
