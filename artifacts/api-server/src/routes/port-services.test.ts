@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDualServiceCommands } from "./port-services-route.js";
+import { buildDualServiceCommands, normalizeApprovedAssetPath } from "./port-services-route.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const port = {
@@ -113,4 +113,11 @@ test("a VLAN service keeps reseller resources separate from shared hotspot files
   assert.equal(resources.hotspotDirectory, "flash/hotspot/hs_p12-ether2");
   assert.equal(resources.hotspotServer, "HS_RS42_VLAN210");
   assert.notEqual(resources.hotspotDirectory, "flash/hotspot");
+});
+
+test("legacy hotspot directory placeholders resolve to approved portal files", () => {
+  assert.equal(normalizeApprovedAssetPath("hotspot"), "login.html");
+  assert.equal(normalizeApprovedAssetPath("hotspot/login.html"), "login.html");
+  assert.equal(normalizeApprovedAssetPath("hotspot/rlogin.html"), "rlogin.html");
+  assert.equal(normalizeApprovedAssetPath("login.html"), "login.html");
 });

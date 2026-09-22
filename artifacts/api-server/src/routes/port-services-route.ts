@@ -53,6 +53,13 @@ function cleanPath(value: unknown): string | null {
   return clean;
 }
 
+export function normalizeApprovedAssetPath(value: unknown): string | null {
+  const clean = cleanPath(value);
+  if (clean === "hotspot" || clean === "hotspot/login.html") return "login.html";
+  if (clean === "hotspot/rlogin.html") return "rlogin.html";
+  return clean;
+}
+
 function validInterface(value: unknown): value is string {
   return typeof value === "string"
     && /^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(value.trim())
@@ -945,10 +952,10 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
       && req.body?.hotspotEnabled === true
       && (typeof requestedHotspotFolderPath !== "string" || !requestedHotspotFolderPath.trim())
       ? "login.html"
-      : requestedHotspotFolderPath === "" ? null : cleanPath(requestedHotspotFolderPath);
+      : requestedHotspotFolderPath === "" ? null : normalizeApprovedAssetPath(requestedHotspotFolderPath);
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
-    const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
+    const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : normalizeApprovedAssetPath(req.body?.pppoeFolderPath);
     const pppoeFolderPath = requestedPppoeFolderPath ?? (hotspotEnabled ? hotspotFolderPath : null);
     const requestedHotspotDnsName = req.body?.hotspotDnsName === undefined
       ? port.hotspot_dns_name
@@ -1073,9 +1080,11 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       res.status(400).json({ ok: false, error: "The reseller portal HTML is invalid or too large." });
       return;
     }
-    const hotspotSource = port.hotspot_enabled ? cleanPath(port.hotspot_folder_path ?? port.hotspot_template_path) : null;
+    const hotspotSource = port.hotspot_enabled
+      ? normalizeApprovedAssetPath(port.hotspot_folder_path ?? port.hotspot_template_path)
+      : null;
     const pppoeSource = port.pppoe_enabled
-      ? cleanPath(port.pppoe_folder_path ?? (port.hotspot_enabled ? port.hotspot_folder_path ?? port.hotspot_template_path : null))
+      ? normalizeApprovedAssetPath(port.pppoe_folder_path ?? (port.hotspot_enabled ? port.hotspot_folder_path ?? port.hotspot_template_path : null))
       : null;
     if ((port.hotspot_enabled && !hotspotSource) || (port.pppoe_enabled && !pppoeSource)) {
       res.status(409).json({ ok: false, error: "Both enabled services must have an approved asset binding." });
@@ -1108,17 +1117,30 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? sharedDnsName : null),
       pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? sharedDnsName : null),
     };
+    const assetPathsNeedNormalization = (
+      (port.hotspot_enabled && (
+        hotspotSource !== (port.hotspot_folder_path ?? port.hotspot_template_path)
+        || port.hotspot_folder_path !== hotspotSource
+        || port.hotspot_template_path !== hotspotSource
+      ))
+      || (port.pppoe_enabled && port.pppoe_folder_path !== pppoeSource)
+    );
     if (
       deploymentPort.bridge_name !== port.bridge_name
       || deploymentPort.subnet_range !== port.subnet_range
       || deploymentPort.hotspot_dns_name !== port.hotspot_dns_name
       || deploymentPort.pppoe_dns_name !== port.pppoe_dns_name
+      || assetPathsNeedNormalization
     ) {
       await sbUpdateStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${port.admin_id}`, {
         bridge_name: deploymentPort.bridge_name,
         subnet_range: deploymentPort.subnet_range,
         hotspot_dns_name: deploymentPort.hotspot_dns_name,
         pppoe_dns_name: deploymentPort.pppoe_dns_name,
+        ...(port.hotspot_enabled
+          ? { hotspot_folder_path: hotspotSource, hotspot_template_path: hotspotSource }
+          : {}),
+        ...(port.pppoe_enabled ? { pppoe_folder_path: pppoeSource } : {}),
         updated_at: new Date().toISOString(),
       });
     }
