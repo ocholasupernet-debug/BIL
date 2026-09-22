@@ -125,6 +125,7 @@ function AdminResellerManagement() {
   const [handoffPorts, setHandoffPorts] = useState<PortOption[]>([]);
   const [handoffPortsLoading, setHandoffPortsLoading] = useState(false);
   const [handoffSaving, setHandoffSaving] = useState(false);
+  const [handoffScriptSaving, setHandoffScriptSaving] = useState(false);
   const [linkChecking, setLinkChecking] = useState<number | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{
     companyName: string;
@@ -257,6 +258,37 @@ function AdminResellerManagement() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to download the VLAN interface script.");
     }
+  };
+  const generateVlanScript = async () => {
+    if (!handoffRequestId) return;
+    setHandoffScriptSaving(true); setError(""); setSuccess("");
+    try {
+      const response = await fetch(`/api/isp/reseller-connection-requests/${handoffRequestId}/vlan-script`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          routerId: Number(handoffRouterId),
+          bridgeName: handoffInterfaceName,
+          vlanTag: handoffVlanTag,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || "Unable to generate the VLAN interface script.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `reseller-vlan-${handoffVlanTag}.rsc`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setSuccess("VLAN interface script downloaded.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to generate the VLAN interface script.");
+    } finally { setHandoffScriptSaving(false); }
   };
   const checkHandoffLink = async (portId: number) => {
     setLinkChecking(portId); setError(""); setSuccess("");
@@ -404,7 +436,10 @@ function AdminResellerManagement() {
                  ? "The ISP router will create a dedicated VLAN Hotspot and PPPoE service with the locked reseller cap. Configure this VLAN as a tagged WAN/Hotspot bridge on the reseller XPON router."
                  : "Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment."}
             </div>
-             <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ marginTop: 15, border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Provisioning…" : handoffMode === "vlan_services" ? "Create VLAN service" : "Assign internet handoff"}</button>
+             <div style={{ display: "flex", flexWrap: "wrap", gap: 9, marginTop: 15 }}>
+               {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
+               <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Provisioning…" : handoffMode === "vlan_services" ? "Create VLAN service" : "Assign internet handoff"}</button>
+             </div>
           </form>
         )}
         <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>

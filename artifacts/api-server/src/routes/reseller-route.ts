@@ -1273,6 +1273,58 @@ router.get("/admin/reseller-handoffs/:portId/vlan-script", requireAdmin(), async
   }
 });
 
+router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the ISP administrator can generate VLAN setup scripts." });
+      return;
+    }
+    const requestId = Number(req.params.requestId);
+    const routerId = Number(req.body?.routerId);
+    const bridgeName = typeof req.body?.bridgeName === "string" ? req.body.bridgeName.trim() : "";
+    const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    if (!Number.isSafeInteger(requestId) || requestId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(bridgeName)) {
+      res.status(400).json({ ok: false, error: "Choose a valid router and ISP Hotspot bridge." });
+      return;
+    }
+    if (!/^\d{1,4}$/.test(vlanTag) || Number(vlanTag) < 1 || Number(vlanTag) > 4094) {
+      res.status(400).json({ ok: false, error: "Enter a VLAN ID between 1 and 4094." });
+      return;
+    }
+    const requests = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.approved&select=id,reseller_id&limit=1`,
+    );
+    const request = requests[0];
+    if (!request) {
+      res.status(404).json({ ok: false, error: "Approve the reseller connection before generating its VLAN script." });
+      return;
+    }
+    const resellerRows = await sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+    );
+    if (!resellerRows[0]) {
+      res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
+      return;
+    }
+    await tenantRouter(account.id, routerId);
+    const script = buildVlanInterfaceScript({
+      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag }),
+      bridge_name: bridgeName,
+      reseller_id: request.reseller_id,
+      vlan_tag: vlanTag,
+    });
+    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag }).toLowerCase()}-interface.rsc`;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(script);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to generate the VLAN interface script." });
+  }
+});
+
 router.get("/admin/reseller-handoffs/:portId/link", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const portId = Number(req.params.portId);
