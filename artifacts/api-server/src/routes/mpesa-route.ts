@@ -36,7 +36,14 @@ import {
 } from "../lib/mikrotik.js";
 import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { planValiditySeconds } from "../lib/plan-validity.js";
-import { paymentCollectionMode, servicePaymentConfigMap, type PaymentService } from "../lib/payment-routing.js";
+import {
+  collectionConfig,
+  gatewayConfigMap,
+  isGatewayConfigComplete,
+  paymentCollectionMode,
+  servicePaymentConfigMap,
+  type PaymentService,
+} from "../lib/payment-routing.js";
 import { reactivatePppoeAccess } from "../lib/auto-provision.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
@@ -412,9 +419,9 @@ async function getResellerPaymentRoute(
       "payment_gateways",
       `user_id=eq.${port.assigned_reseller_id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
     ),
-    sbSelectStrict<{ payment_gateway: string | null }>(
+    sbSelectStrict<{ payment_gateway: string | null; payment_gateway_config?: unknown }>(
       "isp_admins",
-      `id=eq.${port.assigned_reseller_id}&role=eq.reseller&select=payment_gateway&limit=1`,
+      `id=eq.${port.assigned_reseller_id}&role=eq.reseller&select=payment_gateway,payment_gateway_config&limit=1`,
     ),
   ]);
   const legacyMpesa = legacyRows.find(row => row.gateway_type === "mpesa");
@@ -426,6 +433,12 @@ async function getResellerPaymentRoute(
   const legacyMpesaConfig = legacyConfig(legacyMpesa);
   const legacyBankConfig = legacyConfig(legacyBank);
   const legacyPaymentGateway = getPaymentGateway(legacyAccountRows[0]?.payment_gateway);
+  const resellerGatewayConfigs = gatewayConfigMap(legacyAccountRows[0]?.payment_gateway_config);
+  const resellerSharedConfig = collectionConfig(
+    legacyPaymentGateway,
+    resellerGatewayConfigs[legacyPaymentGateway],
+  );
+  const hasSharedDestination = isGatewayConfigComplete(legacyPaymentGateway, resellerSharedConfig);
   const hasLegacyDestination = legacyPaymentGateway === "mpesa_till_push"
     ? legacyMpesa?.is_active === true && !!legacyMpesa.merchant_identifier
     : legacyPaymentGateway === "bank_stk_push"
@@ -435,12 +448,8 @@ async function getResellerPaymentRoute(
       : legacyPaymentGateway === "mpesa_paybill"
         ? legacyMpesa?.is_active === true && !!legacyMpesa.merchant_identifier && !!legacyMpesa.account_reference
         : false;
-  const parentSettings = route || hasLegacyDestination
-    ? null
-    : await getAdminPaymentSettings(adminId);
   const paymentGateway = (route?.gateway_type
-    ?? (hasLegacyDestination ? legacyPaymentGateway : parentSettings?.paymentGateway)
-    ?? "unconfigured") as PaymentGateway;
+    ?? (hasLegacyDestination || hasSharedDestination ? legacyPaymentGateway : "unconfigured")) as PaymentGateway;
   const routeConfig = route?.config ?? {};
   const legacyMpesaPaybill: MpesaPaybillConfig = legacyMpesa?.is_active === true
     ? {
@@ -459,12 +468,16 @@ async function getResellerPaymentRoute(
             accountNumber: legacyBank?.account_reference ?? "",
           },
         })
-      : parentSettings?.bankStkPush ?? bankStkPushConfig({});
+      : legacyPaymentGateway === "bank_stk_push" && hasSharedDestination
+        ? bankStkPushConfig({ bank_stk_push: resellerSharedConfig })
+        : bankStkPushConfig({});
   const mpesaTillPush = route
     ? resellerRouteMpesaTillConfig(routeConfig)
     : hasLegacyDestination && legacyPaymentGateway === "mpesa_till_push"
       ? { tillNumber: legacyMpesa?.merchant_identifier ?? "" }
-      : parentSettings?.mpesaTillPush ?? { tillNumber: "" };
+      : legacyPaymentGateway === "mpesa_till_push" && hasSharedDestination
+        ? { tillNumber: resellerSharedConfig.tillNumber ?? "" }
+        : { tillNumber: "" };
   const mpesaPaybill = route
     ? {
         /* A scoped route remains authoritative for gateway selection and
@@ -479,7 +492,12 @@ async function getResellerPaymentRoute(
           paybillNumber: legacyMpesa?.merchant_identifier ?? "",
           accountNumber: legacyMpesa?.account_reference ?? "",
         }
-      : parentSettings?.mpesaPaybill ?? { paybillNumber: "", accountNumber: "" };
+      : legacyPaymentGateway === "mpesa_paybill" && hasSharedDestination
+        ? {
+            paybillNumber: resellerSharedConfig.paybillNumber ?? "",
+            accountNumber: resellerSharedConfig.accountNumber ?? "",
+          }
+        : { paybillNumber: "", accountNumber: "" };
   const destination = paymentGateway === "mpesa_till_push"
     ? {
         merchantIdentifier: mpesaTillPush.tillNumber,
@@ -499,7 +517,7 @@ async function getResellerPaymentRoute(
         };
   if (!destination.merchantIdentifier
     || (destination.destinationType === "paybill" && !destination.accountReference)) {
-    throw new Error("Complete the ISP account payment gateway destination before accepting reseller payments.");
+    throw new Error("Complete your reseller payment gateway destination before accepting reseller payments.");
   }
 
   return {

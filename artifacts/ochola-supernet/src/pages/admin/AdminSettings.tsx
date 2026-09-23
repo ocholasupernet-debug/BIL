@@ -867,7 +867,14 @@ function BillingTab() {
           M-Pesa connection details and callback settings are managed centrally for this platform.
         </p>
       </Card>
-      <AdminPaymentTestCard currency={currency} />
+      {getAdminRole() !== "reseller" && <AdminPaymentTestCard currency={currency} />}
+      {getAdminRole() === "reseller" && (
+        <Card title="Reseller payment testing" desc="Your reseller gateway routes are managed independently in the Payment Gateways tab.">
+          <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
+            The ISP payment test is hidden for reseller accounts so it cannot use or test the connected ISP’s collection account.
+          </p>
+        </Card>
+      )}
 
       <Card title="Billing Preferences" desc="Currency, VAT, grace periods, and invoice configuration">
         <Grid2>
@@ -2117,7 +2124,7 @@ function PaymentGatewaysTab() {
     return (
       <>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-          This section is available for visibility, while payment ownership remains with your connected ISP.
+          Configure your own payment gateway here. Your collection account is independent from the connected ISP; only your assigned router and VLAN scope are shared.
         </div>
         <ResellerPaymentGatewayCard />
       </>
