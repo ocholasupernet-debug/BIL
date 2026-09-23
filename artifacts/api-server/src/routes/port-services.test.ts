@@ -138,6 +138,10 @@ test("a VLAN service uses editable non-overlapping Hotspot and PPPoE pool ranges
   assert.match(script, /name=HS_POOL_RS9_VLAN210 =ranges=192\.168\.30\.20-192\.168\.30\.120/);
   assert.match(script, /name=PPPOE_POOL_RS9_VLAN210 =ranges=192\.168\.30\.150-192\.168\.30\.220/);
   assert.match(script, /remote-address=PPPOE_POOL_RS9_VLAN210/);
+  assert.ok(
+    script.indexOf("name=PPPOE_POOL_RS9_VLAN210") < script.indexOf("remote-address=PPPOE_POOL_RS9_VLAN210"),
+    "the PPPoE pool must be created before the PPP profile references it",
+  );
 });
 
 test("legacy hotspot directory placeholders resolve to approved portal files", () => {

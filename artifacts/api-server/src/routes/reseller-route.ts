@@ -356,6 +356,12 @@ async function provisionVlanResellerServices(
     `=ranges=${hotspotPool}`,
     `=comment=${commentPrefix}_hotspot_pool`,
   ]);
+  await ensureNamed("/ip/pool/print", resources.pppoePool, [
+    "/ip/pool/add",
+    `=name=${resources.pppoePool}`,
+    `=ranges=${pppoePool}`,
+    `=comment=${commentPrefix}_pppoe_pool`,
+  ]);
   const dhcpNetworkRows = await runRouterCommand(creds, [
     "/ip/dhcp-server/network/print",
     "=.proplist=.id,address",
