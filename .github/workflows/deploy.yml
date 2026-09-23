@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      reconcile_reseller_port:
+        description: "Optional active VLAN reseller port ID to reconcile on its MikroTik"
+        required: false
+        type: string
 
 concurrency:
   group: vps-deploy
@@ -186,6 +191,50 @@ jobs:
               exit 1
             fi
             echo "=== API health check passed ==="
+            if [ -n "${RECONCILE_RESELLER_PORT:-}" ]; then
+              case "$RECONCILE_RESELLER_PORT" in
+                ''|*[!0-9]*) echo "ERROR: reconcile_reseller_port must be a positive numeric port ID."; exit 1 ;;
+              esac
+              echo "=== Reconciling reseller port ${RECONCILE_RESELLER_PORT} on its MikroTik ==="
+              RECONCILE_RESELLER_PORT="$RECONCILE_RESELLER_PORT" node --input-type=module <<'NODE'
+              import crypto from "node:crypto";
+
+              const portId = process.env.RECONCILE_RESELLER_PORT;
+              const secret = process.env.SESSION_SECRET;
+              if (!secret) throw new Error("SESSION_SECRET is not available for the one-time reconciliation.");
+              const time = Math.floor(Date.now() / 1000);
+              const payload = `a.3.${time}`;
+              const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+              const token = `${payload}.${signature}`;
+              const response = await fetch(`http://127.0.0.1:8080/api/admin/reseller-handoffs/${portId}/push`, {
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${token}`,
+                  host: "come.isplatty.org",
+                  "x-forwarded-proto": "https",
+                  "content-type": "application/json",
+                },
+                body: "{}",
+              });
+              const body = await response.text();
+              if (!response.ok) {
+                throw new Error(`Reseller port reconciliation failed (${response.status}): ${body.slice(0, 500)}`);
+              }
+              let parsed;
+              try {
+                parsed = JSON.parse(body);
+              } catch {
+                parsed = { ok: true, response: body.slice(0, 500) };
+              }
+              console.log(JSON.stringify({
+                ok: parsed.ok,
+                portId: parsed.assignment?.id ?? Number(portId),
+                status: parsed.assignment?.status ?? null,
+                error: parsed.error ?? null,
+              }));
+              NODE
+              echo "=== Reseller port reconciliation completed ==="
+            fi
             echo "=== Deploy finished at $(date) ==="
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -198,3 +247,4 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_KEY_B64 }}
           VPS_SSH_PASSPHRASE_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_PASSPHRASE_B64 }}
+          RECONCILE_RESELLER_PORT: ${{ inputs.reconcile_reseller_port }}
