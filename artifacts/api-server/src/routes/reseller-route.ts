@@ -16,6 +16,7 @@ import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
 import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
+import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
 import {
   cleanGatewayConfig,
   decryptGatewayConfig,
@@ -216,14 +217,6 @@ async function nextResellerSubdomain(values: string[]): Promise<string> {
   return candidate;
 }
 
-function resellerTenantOrigin(subdomain: string | null | undefined): string | null {
-  const value = String(subdomain ?? "").trim().toLowerCase();
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value) || RESERVED_SUBDOMAINS.has(value)) {
-    return null;
-  }
-  return `https://${value}.${TENANT_BASE_DOMAIN}`;
-}
-
 function validPortalHostname(value: unknown): string | null {
   const hostname = String(value ?? "").trim().toLowerCase();
   if (
@@ -417,7 +410,11 @@ async function provisionVlanResellerServices(
     "isp_admins",
     `id=eq.${port.assigned_reseller_id ?? port.reseller_id}&parent_id=eq.${port.admin_id}&role=eq.reseller&select=subdomain&limit=1`,
   );
-  const apiOrigin = resellerTenantOrigin(resellerRows[0]?.subdomain) ?? sourceOrigin;
+  const resellerHostname = resellerTenantHostname(resellerRows[0]?.subdomain);
+  const apiOrigin = resellerTenantOrigin(resellerRows[0]?.subdomain);
+  if (!resellerHostname || !apiOrigin) {
+    throw new Error("The assigned reseller does not have a valid tenant hostname.");
+  }
   const network = portServiceNetwork(port.id, port.subnet_range || "");
   const resources = portServiceResourceNames({
     id: port.id,
@@ -429,7 +426,10 @@ async function provisionVlanResellerServices(
     assigned_reseller_id: port.assigned_reseller_id,
     vlan_tag: port.vlan_tag,
   });
-  const hotspotDnsName = validPortalHostname(port.hotspot_dns_name) ?? resources.defaultDnsName;
+  // XPON/VLAN services belong to the assigned reseller. Do not fall back to
+  // the ISP/router resource identity (for example come.com), because that
+  // sends captive-portal clients to the ISP's sign-in hostname.
+  const hotspotDnsName = resellerHostname;
   const defaults = vlanServicePoolRanges(port.subnet_range);
   const poolRows = await sbSelectStrict<{ name: string; range_start: string; range_end: string }>(
     "isp_ip_pools",
