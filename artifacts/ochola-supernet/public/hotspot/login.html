@@ -642,16 +642,19 @@ function applyPortalTypography(data){
 function loadPortalTypography(done){
    /* Apply the service scope before a local typography request. A captive
       browser can keep that request pending while the walled garden is being
-      evaluated, but package lookup must still be port-scoped. */
+      evaluated, but package lookup must still be port-scoped. Typography is
+      served by the public API; reseller bundles do not include a local
+      typography.json file. */
    applyPortalConfig(EMBEDDED_CONFIG);
-  var request=fetch("typography.json",{cache:"no-store"})
+   var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"):"";
+   var request=typographyUrl?fetch(typographyUrl,{cache:"no-store"})
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
       if(data&&Number.isSafeInteger(Number(data.adminId)))PORTAL_ADMIN_ID=Number(data.adminId);
       applyPortalTypography(data);
       applyPortalConfig(EMBEDDED_CONFIG);
     })
-    .catch(function(){return null;});
+     .catch(function(){return null;}):Promise.resolve(null);
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
 }
