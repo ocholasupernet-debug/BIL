@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="refresh" content="0;url=$(link-login-only)">
   <title>$(login-title) — Hotspot Portal</title>
   <style>
     * { box-sizing: border-box; }
@@ -53,16 +54,8 @@
 <body>
   <main class="card">
     <p class="brand">$(login-title)</p>
-    <p class="hint">Sign in to continue to the hotspot.</p>
-    <form action="$(link-login-only)" method="post">
-      <input type="hidden" name="dst" value="$(link-orig)">
-      <input type="hidden" name="popup" value="true">
-      <label for="username">Username</label>
-      <input id="username" type="text" name="username" autocomplete="username" required>
-      <label for="password">Password</label>
-      <input id="password" type="password" name="password" autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
-    </form>
+    <p class="hint">Opening the payment portal…</p>
+    <a href="$(link-login-only)" style="display:block;margin-top:24px;text-align:center;color:#fff;text-decoration:none;font-weight:800">Continue</a>
   </main>
 </body>
 </html>
