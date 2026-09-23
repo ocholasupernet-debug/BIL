@@ -482,15 +482,26 @@ async function provisionVlanResellerServices(
   const ensureFilterComment = async (
     comment: string,
     addCommand: string[],
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     const rows = await runRouterCommand(creds, [
       "/ip/firewall/filter/print",
       "=.proplist=.id,comment",
       `?comment=${comment}`,
     ]);
-    if (!Array.isArray(rows) || !rows.some(row => String((row as Record<string, unknown>).comment ?? "") === comment)) {
-      await runRouterCommand(creds, addCommand);
-    }
+    const existing = Array.isArray(rows)
+      ? rows.find(row => String((row as Record<string, unknown>).comment ?? "") === comment) as Record<string, unknown> | undefined
+      : undefined;
+    if (existing?.[".id"]) return String(existing[".id"]);
+    await runRouterCommand(creds, addCommand);
+    const addedRows = await runRouterCommand(creds, [
+      "/ip/firewall/filter/print",
+      "=.proplist=.id,comment",
+      `?comment=${comment}`,
+    ]);
+    const added = Array.isArray(addedRows)
+      ? addedRows.find(row => String((row as Record<string, unknown>).comment ?? "") === comment) as Record<string, unknown> | undefined
+      : undefined;
+    return added?.[".id"] ? String(added[".id"]) : undefined;
   };
 
   const gateway = network.gateway;
@@ -717,7 +728,7 @@ async function provisionVlanResellerServices(
     "=place-before=0",
     `=comment=${commentPrefix}_allow_service_dns_tcp`,
   ]);
-  await ensureFilterComment(`${commentPrefix}_allow_service_forward`, [
+  const allowServiceForwardId = await ensureFilterComment(`${commentPrefix}_allow_service_forward`, [
     "/ip/firewall/filter/add",
     "=chain=forward",
     `=in-interface=${vlanInterface}`,
@@ -727,16 +738,36 @@ async function provisionVlanResellerServices(
     "=place-before=0",
     `=comment=${commentPrefix}_allow_service_forward`,
   ]);
-  await ensureFilterComment(`${commentPrefix}_block_unauth_service_forward`, [
+  /*
+   * RouterOS 6 does not accept hotspot=unauth as a filter flag. Keep the
+   * authenticated allow immediately above this scoped deny instead: auth
+   * traffic stops at the allow, while every other VLAN-to-WAN flow is denied.
+   */
+  const blockServiceForwardId = await ensureFilterComment(`${commentPrefix}_block_unauth_service_forward`, [
     "/ip/firewall/filter/add",
     "=chain=forward",
     `=in-interface=${vlanInterface}`,
     "=out-interface-list=WAN",
     "=action=drop",
-    "=hotspot=unauth",
     "=place-before=0",
     `=comment=${commentPrefix}_block_unauth_service_forward`,
   ]);
+  if (allowServiceForwardId && blockServiceForwardId) {
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/remove",
+      `=.id=${allowServiceForwardId}`,
+    ]);
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/add",
+      "=chain=forward",
+      `=in-interface=${vlanInterface}`,
+      "=out-interface-list=WAN",
+      "=action=accept",
+      "=hotspot=auth",
+      "=place-before=0",
+      `=comment=${commentPrefix}_allow_service_forward`,
+    ]);
+  }
   await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
     "/ip/firewall/filter/add",
     "=chain=input",
