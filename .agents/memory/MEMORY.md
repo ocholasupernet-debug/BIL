@@ -51,6 +51,7 @@
 - [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
 - [Router hotspot walled garden](router-hotspot-walled-garden.md) — Allow the tenant portal hostname before login and ignore default hotspot profiles with a 0.0.0.0 gateway.
 - [Hotspot service forwarding](hotspot-service-forwarding.md) — Service masquerade alone is insufficient; explicitly allow bridge forwarding and router DNS while protecting WAN DNS.
+- [Captive portal DHCP discovery](captive-portal-dhcp-discovery.md) — Advertise the portal URI through DHCP option 114 while keeping the MikroTik gateway as client DNS.
 - [Legacy proxy VPN provisioning](legacy-proxy-vpn-provisioning.md) — The legacy proxy VPN is separate from the 1196/1197 management instances and must be provisioned explicitly.
 - [Router script URL normalization](router-script-url-normalization.md) — Normalize complete URLs before replacement; host/path suffix replacement can otherwise emit `https://https://`.
 - [Production readiness audit](production-readiness-audit.md) — Healthy API/deploy status does not prove tenant TLS, OpenVPN, or RouterOS connectivity.
