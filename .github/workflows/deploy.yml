@@ -232,7 +232,7 @@ jobs:
                 status: parsed.assignment?.status ?? null,
                 error: parsed.error ?? null,
               }));
-              NODE
+            NODE
               echo "=== Reseller port reconciliation completed ==="
             fi
             echo "=== Deploy finished at $(date) ==="
