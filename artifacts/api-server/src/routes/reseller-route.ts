@@ -1850,58 +1850,22 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           assigned_reseller_id: port.assigned_reseller_id,
           vlan_tag: port.vlan_tag,
         });
-        const { parentBridge, vlanInterface } = vlanServiceResources(port);
-        const network = portServiceNetwork(port.id, port.subnet_range || "");
+        const { vlanInterface } = vlanServiceResources(port);
         const creds = routerCredentials(target);
         const read = async (command: string[]): Promise<Record<string, string>[]> => {
           const rows = await runRouterCommand(creds, command);
           return Array.isArray(rows) ? rows : [];
         };
-        const [
-          bridge,
-          bridgePorts,
-          bridgeVlans,
-          vlanInterfaces,
-          addresses,
-          dhcpServers,
-          dhcpNetworks,
-          leases,
-          hotspotHosts,
-          arp,
-          hotspotActive,
-          hotspotServers,
-          hotspotProfiles,
-          dnsStatic,
-        ] = await Promise.all([
-          read(["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`]),
-          read(["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`]),
-          read(["/interface/bridge/vlan/print", "=.proplist=.id,bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`]),
-          read(["/interface/vlan/print", "=.proplist=.id,name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`]),
-          read(["/ip/address/print", "=.proplist=.id,address,interface,disabled,comment", `?interface=${vlanInterface}`]),
-          read(["/ip/dhcp-server/print", "=.proplist=.id,name,interface,address-pool,disabled,running", `?name=${resources.hotspotDhcp}`]),
-          read(["/ip/dhcp-server/network/print", "=.proplist=.id,address,gateway,dns-server,comment", `?address=${network.network}`]),
-          read(["/ip/dhcp-server/lease/print", "=.proplist=.id,address,mac-address,host-name,status,server,active-address,active-mac-address,expires-after", `?server=${resources.hotspotDhcp}`]),
-          read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime,authorized,bypassed,blocked", `?server=${resources.hotspotServer}`]),
-          read(["/ip/arp/print", "=.proplist=.id,address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
-          read(["/ip/hotspot/active/print", "=.proplist=.id,address,mac-address,user,server,login-by,uptime", `?server=${resources.hotspotServer}`]),
-          read(["/ip/hotspot/print", "=.proplist=.id,name,interface,profile,address-pool,disabled,invalid", `?name=${resources.hotspotServer}`]),
-          read(["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory,dns-name,login-by,hotspot-address", `?name=${resources.hotspotProfile}`]),
-          read(["/ip/dns/static/print", "=.proplist=.id,name,address,type,disabled,comment"]),
-        ]);
+        const hotspotServers = await read(["/ip/hotspot/print", "=.proplist=.id,name,interface,profile,address-pool,disabled,invalid", `?name=${resources.hotspotServer}`]);
+        const hotspotProfiles = await read(["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory,dns-name,login-by,hotspot-address", `?name=${resources.hotspotProfile}`]);
+        const hotspotActive = await read(["/ip/hotspot/active/print", "=.proplist=.id,address,mac-address,user,server,login-by,uptime", `?server=${resources.hotspotServer}`]);
+        const hotspotHosts = await read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime,authorized,bypassed,blocked", `?server=${resources.hotspotServer}`]);
+        const dnsStatic = await read(["/ip/dns/static/print", "=.proplist=.id,name,address,type,disabled,comment"]);
         liveState = {
-          bridge,
-          bridgePorts,
-          bridgeVlans,
-          vlanInterfaces,
-          addresses,
-          dhcpServers,
-          dhcpNetworks,
-          leases,
-          hotspotHosts,
-          arp,
           hotspotActive,
           hotspotServers,
           hotspotProfiles,
+          hotspotHosts,
           dnsStatic,
         };
       }
