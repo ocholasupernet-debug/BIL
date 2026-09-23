@@ -77,3 +77,4 @@
 - [Reseller consumption reporting](reseller-consumption-reporting.md) — Cumulative customer usage is not a historical monthly series; label cohort charts honestly until snapshots exist.
 - [VLAN service resource identity](vlan-service-resource-identity.md) — Initial handoff and later hotspot deployment must update the same RouterOS resource family.
 - [Reseller payment routing](reseller-payment-routing.md) — Resolve collection accounts by active VLAN port, router, then reseller default; never fall back to the ISP gateway.
+- [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
