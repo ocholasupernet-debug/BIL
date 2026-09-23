@@ -495,87 +495,220 @@ function AdminPaymentGatewayCard() {
 }
 
 function ResellerPaymentGatewayCard() {
-  const [state, setState] = useState<{
-    paymentGateway: string;
-    mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
-    bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
-  } | null>(null);
+  type Route = {
+    id: number;
+    gatewayType: string;
+    routerId: number | null;
+    portId: number | null;
+    scopeType: "default" | "router" | "port";
+    scopeLabel: string;
+    config: Record<string, string>;
+    hasStoredSecrets: boolean;
+    isActive: boolean;
+  };
+  type ScopeData = {
+    routers: { id: number; name: string; status: string }[];
+    ports: { id: number; routerId: number; label: string }[];
+  };
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [scopes, setScopes] = useState<ScopeData>({ routers: [], ports: [] });
+  const [selectedRoute, setSelectedRoute] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    gatewayType: "mpesa_paybill",
+    scopeType: "default" as "default" | "router" | "port",
+    routerId: "",
+    portId: "",
+    config: {} as Record<string, string>,
+    isActive: true,
+  });
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
+  const load = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/reseller/payment-gateways", { headers: adminApiHeaders(), cache: "no-store" });
+      const data = await response.json() as { ok?: boolean; routes?: Route[]; scopes?: ScopeData; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not load reseller payment gateways.");
+      setRoutes(data.routes || []);
+      setScopes(data.scopes || { routers: [], ports: [] });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load reseller payment gateways.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetch("/api/reseller/payment-settings", { headers: adminApiHeaders(), cache: "no-store" })
-      .then(async response => {
-        const data = await response.json() as { settings?: ResellerPaymentSettings; error?: string };
-        if (!response.ok || !data.settings) throw new Error(data.error || "Could not load reseller payment settings.");
-        setState(data.settings);
-      })
-      .catch(error => setError(error instanceof Error ? error.message : "Could not load reseller payment settings."));
+    void load();
   }, []);
 
+  const editRoute = (route: Route) => {
+    setSelectedRoute(route.id);
+    setForm({
+      gatewayType: route.gatewayType,
+      scopeType: route.scopeType,
+      routerId: route.routerId ? String(route.routerId) : "",
+      portId: route.portId ? String(route.portId) : "",
+      config: { ...route.config },
+      isActive: route.isActive,
+    });
+    setSaved(false);
+    setError("");
+  };
+
+  const newRoute = () => {
+    setSelectedRoute(null);
+    setForm({ gatewayType: "mpesa_paybill", scopeType: "default", routerId: "", portId: "", config: {}, isActive: true });
+    setSaved(false);
+    setError("");
+  };
+
   const save = async () => {
-    if (!state) return;
     setSaving(true);
     setSaved(false);
     setError("");
     try {
-      const response = await fetch("/api/reseller/payment-settings", {
+      const response = await fetch("/api/reseller/payment-gateways", {
         method: "PUT",
         headers: adminApiHeaders(),
-        body: JSON.stringify(state),
+        body: JSON.stringify({
+          gatewayType: form.gatewayType,
+          scopeType: form.scopeType,
+          routerId: form.routerId ? Number(form.routerId) : undefined,
+          portId: form.portId ? Number(form.portId) : undefined,
+          config: form.config,
+          isActive: form.isActive,
+        }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the reseller payment method.");
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the reseller payment gateway.");
       setSaved(true);
+      await load();
       window.dispatchEvent(new Event("ochola-payment-gateway-change"));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Could not save the reseller payment method.");
+      setError(saveError instanceof Error ? saveError.message : "Could not save the reseller payment gateway.");
     } finally {
       setSaving(false);
     }
   };
 
+  const remove = async () => {
+    if (!selectedRoute || !window.confirm("Remove this reseller payment gateway route?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/reseller/payment-gateways/${selectedRoute}`, { method: "DELETE", headers: adminApiHeaders() });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not remove the reseller payment gateway.");
+      newRoute();
+      await load();
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Could not remove the reseller payment gateway.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const activeGateway = GATEWAYS.find(gateway => gateway.id === form.gatewayType);
+  const selectedExistingRoute = routes.find(route => route.id === selectedRoute);
+
   return (
-    <Card title="Reseller Payment Method" desc="Choose the payment method your reseller customers use.">
-      {error ? (
-        <p style={{ color: "#f87171", fontSize: "0.76rem", margin: "0 0 10px" }}>{error}</p>
-      ) : !state ? (
-        <p style={{ color: C.muted, fontSize: "0.76rem", margin: 0 }}>Loading payment methods…</p>
-      ) : (
-        <>
-          <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
-            Select the method to record for reseller customer payments. The connected ISP remains responsible for platform payment credentials and settlement.
-          </p>
-          <Field label="Payment method">
-            <Select
-              value={state.paymentGateway}
-              onChange={event => {
-                setState(current => current ? { ...current, paymentGateway: event.target.value } : current);
-                setSaved(false);
-              }}
-            >
-              {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </Select>
-          </Field>
-          <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
-            Current M-Pesa and bank destination details remain stored with this reseller account and are not changed by selecting a method.
-          </p>
-          {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>Payment method saved.</p>}
-          <Row>
-            <button
-              type="button"
-              onClick={save}
-              disabled={saving}
-              style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
-            >
-              <Save size={13} /> {saving ? "Saving…" : "Save Payment Method"}
-            </button>
-          </Row>
-        </>
+    <Card title="Reseller Payment Gateways" desc="Add your own collection accounts and route different accounts to each router or assigned VLAN port.">
+      <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
+        The route for a VLAN port takes priority, then its router route, then your reseller default. ISP gateway settings are never used as a fallback.
+      </p>
+      {loading ? <p style={{ color: C.muted, fontSize: "0.76rem" }}>Loading gateway routes…</p> : (
+        <div style={{ display: "grid", gap: 8, marginBottom: 18 }}>
+          {routes.length === 0 && <p style={{ color: C.muted, fontSize: "0.76rem", margin: 0 }}>No reseller gateway routes yet. Add a default route or choose a specific router/VLAN port.</p>}
+          {routes.map(route => {
+            const gateway = GATEWAYS.find(item => item.id === route.gatewayType);
+            return (
+              <button key={route.id} type="button" onClick={() => editRoute(route)} style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                textAlign: "left", padding: "10px 12px", borderRadius: 9, cursor: "pointer",
+                background: selectedRoute === route.id ? "rgba(8,145,178,.14)" : C.card,
+                color: C.text, border: `1px solid ${selectedRoute === route.id ? C.cyan : C.border}`,
+                fontFamily: "inherit",
+              }}>
+                <span>
+                  <strong style={{ display: "block", fontSize: "0.8rem" }}>{gateway?.name || route.gatewayType}</strong>
+                  <span style={{ display: "block", color: C.muted, fontSize: "0.7rem", marginTop: 2 }}>{route.scopeLabel}</span>
+                </span>
+                <span style={{ color: route.isActive ? "#34d399" : C.muted, fontSize: "0.68rem", fontWeight: 700 }}>{route.isActive ? "ACTIVE" : "DISABLED"}</span>
+              </button>
+            );
+          })}
+        </div>
       )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <p style={{ color: C.text, fontSize: "0.82rem", fontWeight: 700, margin: 0 }}>{selectedExistingRoute ? "Edit gateway route" : "Add gateway route"}</p>
+        {selectedExistingRoute && <button type="button" onClick={newRoute} style={{ background: "none", border: "none", color: C.cyan, cursor: "pointer", fontSize: "0.72rem", fontFamily: "inherit" }}>Add another</button>}
+      </div>
+      <Grid2>
+        <Field label="Payment gateway">
+          <Select value={form.gatewayType} onChange={event => { setForm(current => ({ ...current, gatewayType: event.target.value, config: {} })); setSaved(false); }}>
+            {GATEWAYS.map(gateway => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Collection scope">
+          <Select value={form.scopeType} onChange={event => setForm(current => ({ ...current, scopeType: event.target.value as typeof current.scopeType, routerId: "", portId: "" }))}>
+            <option value="default">Reseller default</option>
+            <option value="router">Specific router</option>
+            <option value="port">Specific VLAN / assigned port</option>
+          </Select>
+        </Field>
+      </Grid2>
+      {form.scopeType === "router" && <Field label="Router">
+        <Select value={form.routerId} onChange={event => setForm(current => ({ ...current, routerId: event.target.value }))}>
+          <option value="">Choose an assigned router</option>
+          {scopes.routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
+        </Select>
+      </Field>}
+      {form.scopeType === "port" && <Field label="Assigned VLAN / port">
+        <Select value={form.portId} onChange={event => {
+          const port = scopes.ports.find(item => String(item.id) === event.target.value);
+          setForm(current => ({ ...current, portId: event.target.value, routerId: port ? String(port.routerId) : "" }));
+        }}>
+          <option value="">Choose an assigned VLAN / port</option>
+          {scopes.ports.map(port => <option key={port.id} value={port.id}>{port.label}</option>)}
+        </Select>
+      </Field>}
+      {activeGateway && <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginTop: 2 }}>
+        {activeGateway.fields.map(field => {
+          const storedSecret = Boolean(selectedExistingRoute?.hasStoredSecrets && field.secret);
+          return <Field key={field.key} label={field.label} hint={storedSecret ? "A saved value is protected. Leave blank to keep it." : field.hint}>
+            {field.type === "select" && field.options ? (
+              <Select value={form.config[field.key] || ""} onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}>
+                <option value="">-- Select --</option>
+                {field.options.map(option => <option key={option} value={option}>{option}</option>)}
+              </Select>
+            ) : <Input
+              type={field.secret ? "password" : "text"}
+              value={form.config[field.key] || ""}
+              placeholder={storedSecret ? "Saved securely" : field.hint || `Enter ${field.label.toLowerCase()}`}
+              onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}
+            />}
+          </Field>;
+        })}
+      </div>}
+      <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.muted, fontSize: "0.75rem", marginTop: 12 }}>
+        <input type="checkbox" checked={form.isActive} onChange={event => setForm(current => ({ ...current, isActive: event.target.checked }))} />
+        Use this route for matching reseller payments
+      </label>
+      {activeGateway && !["mpesa_paybill", "mpesa_till_push", "bank_stk_push", "manual"].includes(activeGateway.id) && (
+        <p style={{ color: "#fbbf24", fontSize: "0.72rem", lineHeight: 1.45, margin: "12px 0 0" }}>
+          This gateway is saved and routed for your account. Automated checkout support for this provider is not connected yet.
+        </p>
+      )}
+      {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "12px 0 0" }}><AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />{error}</p>}
+      {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "12px 0 0" }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />Gateway route saved.</p>}
+      <Row style={{ gap: 8 }}>
+        {selectedExistingRoute && <button type="button" onClick={remove} disabled={saving} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid #ef4444`, cursor: saving ? "wait" : "pointer", color: "#f87171", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1rem", borderRadius: 8, fontFamily: "inherit" }}><Trash2 size={13} /> Remove</button>}
+        <button type="button" onClick={save} disabled={saving || (form.scopeType !== "default" && !form.routerId)} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}><Save size={13} /> {saving ? "Saving…" : "Save Gateway Route"}</button>
+      </Row>
     </Card>
   );
 }
