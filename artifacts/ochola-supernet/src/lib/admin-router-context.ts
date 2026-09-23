@@ -17,6 +17,7 @@ export interface AdminContextPort {
   id: number;
   router_id: number;
   interface_name: string;
+  vlan_tag?: string | null;
   status: string;
 }
 
@@ -29,6 +30,7 @@ export interface AdminRouterContext {
     range_start: string;
     range_end: string;
     router_id: number | null;
+    port_id: number | null;
     created_at?: string;
   }>;
   reseller?: boolean;

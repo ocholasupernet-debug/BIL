@@ -1,9 +1,19 @@
 import { Router, type IRouter } from "express";
-import { sbSelect, sbInsert, sbUpdate, sbDelete } from "../lib/supabase-client.js";
+import {
+  sbDelete,
+  sbDeleteStrict,
+  sbInsert,
+  sbInsertStrict,
+  sbSelect,
+  sbSelectStrict,
+  sbUpdate,
+  sbUpdateStrict,
+} from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
 
 const router: IRouter = Router();
 
@@ -96,10 +106,10 @@ async function planContextRows(context: PlanContext): Promise<{
     sbSelect<Record<string, unknown>>(
       "isp_reseller_ports",
       context.allowedPortIds
-        ? `admin_id=eq.${context.tenantId}&assigned_reseller_id=eq.${context.account.id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,interface_name,status&order=interface_name.asc`
-        : `admin_id=eq.${context.tenantId}&status=neq.disabled&select=id,router_id,interface_name,status&order=interface_name.asc`,
+        ? `admin_id=eq.${context.tenantId}&assigned_reseller_id=eq.${context.account.id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,interface_name,vlan_tag,assigned_reseller_id,status&order=interface_name.asc`
+        : `admin_id=eq.${context.tenantId}&status=neq.disabled&select=id,router_id,interface_name,vlan_tag,assigned_reseller_id,status&order=interface_name.asc`,
     ),
-    sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${context.tenantId}&select=id,name,range_start,range_end,router_id&order=name.asc`),
+    sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${context.tenantId}&select=id,name,range_start,range_end,router_id,port_id,created_at&order=name.asc`),
   ]);
   const plans = context.allowedRouterIds
     ? allPlans.filter(plan =>
@@ -110,8 +120,8 @@ async function planContextRows(context: PlanContext): Promise<{
   const filteredRouters = context.allowedRouterIds
     ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
     : routers;
-  const filteredPools = context.allowedRouterIds
-    ? pools.filter(pool => pool.router_id == null || context.allowedRouterIds!.has(Number(pool.router_id)))
+  const filteredPools = context.allowedPortIds
+    ? pools.filter(pool => context.allowedPortIds!.has(Number(pool.port_id)))
     : pools;
   return { plans, bandwidths, routers: filteredRouters, ports, pools: filteredPools };
 }
@@ -196,6 +206,183 @@ router.get("/plans/admin-context", requireAdmin(), async (req, res): Promise<voi
     res.json({ ...rows, tenantId: context.tenantId, reseller: context.account.role === "reseller" });
   } catch (error) {
     res.status(403).json({ error: error instanceof Error ? error.message : "Plan context could not be loaded." });
+  }
+});
+
+function validIpv4(value: unknown): boolean {
+  return typeof value === "string"
+    && /^(\d{1,3}\.){3}\d{1,3}$/.test(value.trim())
+    && value.trim().split(".").every(part => Number(part) >= 0 && Number(part) <= 255);
+}
+
+function poolPayload(
+  body: Record<string, unknown>,
+  routerId: number,
+  portId: number | null,
+): Record<string, unknown> {
+  const name = String(body.name ?? "").trim();
+  const rangeStart = String(body.rangeStart ?? body.range_start ?? "").trim();
+  const rangeEnd = String(body.rangeEnd ?? body.range_end ?? "").trim();
+  if (!name || name.length > 80 || !validIpv4(rangeStart) || !validIpv4(rangeEnd)) {
+    throw new Error("Enter a pool name and valid IPv4 start and end addresses.");
+  }
+  const toNumber = (value: string) => value.split(".").map(Number).reduce((sum, octet) => sum * 256 + octet, 0);
+  if (toNumber(rangeStart) > toNumber(rangeEnd)) {
+    throw new Error("The pool start address must not be after its end address.");
+  }
+  return {
+    name,
+    range_start: rangeStart,
+    range_end: rangeEnd,
+    router_id: routerId,
+    port_id: portId,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function scopedPoolContext(
+  req: Parameters<typeof authenticatedAccount>[0],
+  poolId?: number,
+): Promise<{
+  context: PlanContext;
+  routerId: number;
+  portId: number | null;
+  existing?: Record<string, unknown>;
+}> {
+  const context = await getPlanContext(req);
+  if (poolId) {
+    const rows = await sbSelectStrict<Record<string, unknown>>(
+      "isp_ip_pools",
+      `id=eq.${poolId}&admin_id=eq.${context.tenantId}&select=*&limit=1`,
+    );
+    const existing = rows[0];
+    if (!existing) throw new Error("IP pool not found.");
+    const routerId = Number(existing.router_id);
+    const portId = existing.port_id == null ? null : Number(existing.port_id);
+    if (context.allowedPortIds && (!portId || !context.allowedPortIds.has(portId))) {
+      throw new Error("This IP pool is outside your assigned VLAN service.");
+    }
+    return { context, routerId, portId, existing };
+  }
+
+  const body = req.body as Record<string, unknown>;
+  const routerId = Number(body.routerId);
+  const portId = body.portId === undefined || body.portId === null || body.portId === ""
+    ? null
+    : Number(body.portId);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || (portId !== null && (!Number.isSafeInteger(portId) || portId <= 0))) {
+    throw new Error("Choose a valid router and VLAN service.");
+  }
+  if (context.allowedRouterIds && !context.allowedRouterIds.has(routerId)) {
+    throw new Error("This router is outside your assigned VLAN service.");
+  }
+  if (context.allowedPortIds && (portId === null || !context.allowedPortIds.has(portId))) {
+    throw new Error("Reseller IP pools must belong to one of your assigned VLAN services.");
+  }
+  if (portId !== null) {
+    const ports = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `id=eq.${portId}&admin_id=eq.${context.tenantId}&router_id=eq.${routerId}&status=neq.disabled&select=id&limit=1`,
+    );
+    if (!ports[0]) throw new Error("The selected VLAN service was not found.");
+  }
+  return { context, routerId, portId };
+}
+
+router.post("/admin/ip-pools", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const { context, routerId, portId } = await scopedPoolContext(req);
+    const inserted = await sbInsertStrict<Record<string, unknown>>(
+      "isp_ip_pools",
+      { admin_id: context.tenantId, ...poolPayload(req.body as Record<string, unknown>, routerId, portId) },
+    );
+    res.status(201).json({ ok: true, pool: inserted[0] ?? null });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Unable to create IP pool." });
+  }
+});
+
+router.patch("/admin/ip-pools/:id", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const poolId = parseRequiredId(req.params.id);
+    if (!poolId) throw new Error("A valid IP pool is required.");
+    const { context, routerId, portId, existing } = await scopedPoolContext(req, poolId);
+    const updated = await sbUpdateStrict<Record<string, unknown>>(
+      "isp_ip_pools",
+      `id=eq.${poolId}&admin_id=eq.${context.tenantId}`,
+      poolPayload(req.body as Record<string, unknown>, routerId, portId),
+    );
+    res.json({ ok: true, pool: updated[0] ?? existing ?? null });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update IP pool." });
+  }
+});
+
+router.delete("/admin/ip-pools/:id", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const poolId = parseRequiredId(req.params.id);
+    if (!poolId) throw new Error("A valid IP pool is required.");
+    const { context } = await scopedPoolContext(req, poolId);
+    await sbDeleteStrict("isp_ip_pools", `id=eq.${poolId}&admin_id=eq.${context.tenantId}`);
+    res.sendStatus(204);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Unable to delete IP pool." });
+  }
+});
+
+router.put("/admin/ip-pools/vlan-service/:portId", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const portId = parseRequiredId(req.params.portId);
+    if (!portId) throw new Error("A valid VLAN service is required.");
+    const context = await getPlanContext(req);
+    const ports = await sbSelectStrict<Record<string, unknown>>(
+      "isp_reseller_ports",
+      `id=eq.${portId}&admin_id=eq.${context.tenantId}&status=neq.disabled&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range&limit=1`,
+    );
+    const port = ports[0];
+    if (!port || port.handoff_mode !== "vlan_services") throw new Error("The selected VLAN service was not found.");
+    if (context.allowedPortIds && !context.allowedPortIds.has(portId)) {
+      throw new Error("This VLAN service is outside your account.");
+    }
+    const routerId = Number(port.router_id);
+    const resources = portServiceResourceNames({
+      id: portId,
+      router_id: routerId,
+      interface_name: String(port.interface_name ?? ""),
+      bridge_name: port.bridge_name as string | null,
+      handoff_mode: "vlan_services",
+      reseller_id: Number(port.reseller_id) || null,
+      assigned_reseller_id: Number(port.assigned_reseller_id) || null,
+      vlan_tag: String(port.vlan_tag ?? ""),
+    });
+    const defaults = vlanServicePoolRanges(String(port.subnet_range ?? ""));
+    const values = [
+      {
+        name: resources.hotspotPool,
+        rangeStart: req.body?.hotspotRangeStart ?? defaults.hotspot.split("-")[0],
+        rangeEnd: req.body?.hotspotRangeEnd ?? defaults.hotspot.split("-")[1],
+      },
+      {
+        name: resources.pppoePool,
+        rangeStart: req.body?.pppoeRangeStart ?? defaults.pppoe.split("-")[0],
+        rangeEnd: req.body?.pppoeRangeEnd ?? defaults.pppoe.split("-")[1],
+      },
+    ];
+    const saved: Record<string, unknown>[] = [];
+    for (const value of values) {
+      const payload = { admin_id: context.tenantId, ...poolPayload(value, routerId, portId) };
+      const existing = await sbSelectStrict<Record<string, unknown>>(
+        "isp_ip_pools",
+        `admin_id=eq.${context.tenantId}&router_id=eq.${routerId}&port_id=eq.${portId}&name=eq.${encodeURIComponent(value.name)}&select=id&limit=1`,
+      );
+      const rows = existing[0]
+        ? await sbUpdateStrict<Record<string, unknown>>("isp_ip_pools", `id=eq.${existing[0].id}&admin_id=eq.${context.tenantId}`, payload)
+        : await sbInsertStrict<Record<string, unknown>>("isp_ip_pools", payload);
+      if (rows[0]) saved.push(rows[0]);
+    }
+    res.json({ ok: true, pools: saved });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Unable to save VLAN IP pools." });
   }
 });
 

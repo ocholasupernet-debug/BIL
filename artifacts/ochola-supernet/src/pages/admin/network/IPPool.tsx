@@ -2,14 +2,14 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle, X,
   Search, Plus, Trash2, Edit2, HelpCircle,
   ChevronDown, Server,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
-import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { fetchAdminRouterContext, type AdminContextPort, type AdminContextRouter } from "@/lib/admin-router-context";
 
 const PAGE_SIZE = 15;
 
@@ -20,6 +20,7 @@ interface DbPool {
   range_start: string;
   range_end: string;
   router_id: number | null;
+  port_id: number | null;
   created_at: string;
 }
 
@@ -75,19 +76,6 @@ function rangeError(range: { start: string; end: string }): string | null {
   return null;
 }
 
-/* ── Supabase helpers ── */
-async function fetchPools(): Promise<DbPool[]> {
-  const context = await fetchAdminRouterContext();
-  return context.pools.map(pool => ({
-    ...pool,
-    created_at: pool.created_at ?? "",
-  }));
-}
-
-async function fetchRouters(): Promise<DbRouter[]> {
-  return (await fetchAdminRouterContext()).routers;
-}
-
 /* ── Sync one router's pools ── */
 async function syncRouterPools(
   router: DbRouter, pools: DbPool[], log: (m: string) => void
@@ -131,16 +119,17 @@ function adminApiHeaders(): HeadersInit {
 export default function IPPool() {
   const qc = useQueryClient();
 
-  const { data: pools = [],   isLoading: poolsLoading  } = useQuery<DbPool[]>({
-    queryKey: ["isp_ip_pools", ADMIN_ID],
-    queryFn:  fetchPools,
-    staleTime: 10_000,
-  });
-  const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
-    queryKey: ["isp_routers_pools", ADMIN_ID],
-    queryFn:  fetchRouters,
+  const { data: context, isLoading: contextLoading } = useQuery({
+    queryKey: ["admin-router-context", ADMIN_ID],
+    queryFn: fetchAdminRouterContext,
     staleTime: 15_000,
   });
+  const pools = (context?.pools ?? []) as DbPool[];
+  const routers = (context?.routers ?? []) as DbRouter[];
+  const resellerPorts = (context?.ports ?? []) as AdminContextPort[];
+  const isReseller = context?.reseller === true;
+  const poolsLoading = contextLoading;
+  const routersLoading = contextLoading;
 
   const routerMap = useMemo(() =>
     Object.fromEntries(routers.map(r => [r.id, r])), [routers]);
@@ -176,6 +165,12 @@ export default function IPPool() {
   const [routerPoolForms, setRouterPoolForms] = useState<Record<number, RouterPoolForm>>({});
   const [savingRouterId, setSavingRouterId] = useState<number | null>(null);
   const [routerPoolErrors, setRouterPoolErrors] = useState<Record<number, string | null>>({});
+  const [vlanPoolForms, setVlanPoolForms] = useState<Record<number, {
+    hotspot: { start: string; end: string };
+    pppoe: { start: string; end: string };
+  }>>({});
+  const [vlanPoolErrors, setVlanPoolErrors] = useState<Record<number, string | null>>({});
+  const [savingVlanPortId, setSavingVlanPortId] = useState<number | null>(null);
 
   useEffect(() => {
     if (poolsLoading || routersLoading) return;
@@ -187,6 +182,26 @@ export default function IPPool() {
       return next;
     });
   }, [initialRouterPoolForms, poolsLoading, routers, routersLoading]);
+
+  useEffect(() => {
+    if (!isReseller || contextLoading) return;
+    setVlanPoolForms(current => {
+      const next = { ...current };
+      for (const port of resellerPorts) {
+        const portPools = pools.filter(pool => pool.port_id === port.id);
+        const findPool = (prefix: string) => portPools.find(pool => pool.name.startsWith(prefix));
+        const hotspot = findPool("HS_POOL_");
+        const pppoe = findPool("PPPOE_POOL_");
+        if (!next[port.id]) {
+          next[port.id] = {
+            hotspot: { start: hotspot?.range_start ?? "", end: hotspot?.range_end ?? "" },
+            pppoe: { start: pppoe?.range_start ?? "", end: pppoe?.range_end ?? "" },
+          };
+        }
+      }
+      return next;
+    });
+  }, [contextLoading, isReseller, pools, resellerPorts]);
 
   /* ── Filtered + paginated ── */
   const filtered = useMemo(() =>
@@ -217,24 +232,26 @@ export default function IPPool() {
     }
     setSaving(true); setSaveErr(null);
     const row = {
-      admin_id:    ADMIN_ID,
-      name:        fName.trim(),
-      range_start: fStart.trim(),
-      range_end:   fEnd.trim(),
-      router_id:   fRouterId ? Number(fRouterId) : null,
-      updated_at:  new Date().toISOString(),
+      name: fName.trim(),
+      rangeStart: fStart.trim(),
+      rangeEnd: fEnd.trim(),
+      routerId: fRouterId ? Number(fRouterId) : null,
+      portId: editPool?.port_id ?? null,
     };
-    const { error } = editPool
-      ? await supabase.from("isp_ip_pools").update(row).eq("id", editPool.id)
-      : await supabase.from("isp_ip_pools").insert({ ...row, created_at: new Date().toISOString() });
-    if (error) { setSaveErr(error.message); setSaving(false); return; }
-    qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+    const response = await fetch(editPool ? `/api/admin/ip-pools/${editPool.id}` : "/api/admin/ip-pools", {
+      method: editPool ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json", ...adminApiHeaders() },
+      body: JSON.stringify(row),
+    });
+    const data = await parseJsonResponse<{ error?: string }>(response);
+    if (!response.ok) { setSaveErr(data.error || "Unable to save this pool."); setSaving(false); return; }
+    qc.invalidateQueries({ queryKey: ["admin-router-context", ADMIN_ID] });
     setShowForm(false); setSaving(false);
   }
   async function deletePool(id: number) {
     setDeleting(id);
-    await supabase.from("isp_ip_pools").delete().eq("id", id);
-    qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+    await fetch(`/api/admin/ip-pools/${id}`, { method: "DELETE", headers: adminApiHeaders() });
+    qc.invalidateQueries({ queryKey: ["admin-router-context", ADMIN_ID] });
     setDeleting(null);
   }
 
@@ -273,7 +290,6 @@ export default function IPPool() {
     setSavingRouterId(routerId);
     setRouterPoolErrors(current => ({ ...current, [routerId]: null }));
     try {
-      const now = new Date().toISOString();
       for (const type of REQUIRED_POOL_TYPES) {
         const range = form[type];
         const existing = pools.find(p =>
@@ -281,19 +297,21 @@ export default function IPPool() {
           && (p.name.trim().toLowerCase() === type
             || (type === "hotspot pool" && p.name.trim().toLowerCase() === "active"))
         );
-        const payload = {
-          name: type,
-          range_start: range.start.trim(),
-          range_end: range.end.trim(),
-          router_id: routerId,
-          updated_at: now,
-        };
-        const result = existing
-          ? await supabase.from("isp_ip_pools").update(payload).eq("id", existing.id)
-          : await supabase.from("isp_ip_pools").insert({ ...payload, admin_id: ADMIN_ID, created_at: now });
-        if (result.error) throw result.error;
+        const response = await fetch(existing ? `/api/admin/ip-pools/${existing.id}` : "/api/admin/ip-pools", {
+          method: existing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json", ...adminApiHeaders() },
+          body: JSON.stringify({
+            name: type,
+            rangeStart: range.start.trim(),
+            rangeEnd: range.end.trim(),
+            routerId,
+            portId: null,
+          }),
+        });
+        const result = await parseJsonResponse<{ error?: string }>(response);
+        if (!response.ok) throw new Error(result.error || "Could not save this pool.");
       }
-      await qc.invalidateQueries({ queryKey: ["isp_ip_pools", ADMIN_ID] });
+      await qc.invalidateQueries({ queryKey: ["admin-router-context", ADMIN_ID] });
     } catch (error) {
       setRouterPoolErrors(current => ({
         ...current,
@@ -301,6 +319,53 @@ export default function IPPool() {
       }));
     } finally {
       setSavingRouterId(null);
+    }
+  }
+
+  function updateVlanPoolField(portId: number, type: "hotspot" | "pppoe", field: RangeField, value: string) {
+    setVlanPoolForms(current => ({
+      ...current,
+      [portId]: {
+        ...(current[portId] ?? { hotspot: { start: "", end: "" }, pppoe: { start: "", end: "" } }),
+        [type]: { ...(current[portId]?.[type] ?? { start: "", end: "" }), [field]: value },
+      },
+    }));
+  }
+
+  async function saveVlanPools(port: AdminContextPort) {
+    const form = vlanPoolForms[port.id];
+    if (!form) return;
+    const types = ["hotspot", "pppoe"] as const;
+    const missing = types.find(type => !form[type].start.trim() || !form[type].end.trim());
+    if (missing) {
+      setVlanPoolErrors(current => ({ ...current, [port.id]: `${missing === "hotspot" ? "Hotspot" : "PPPoE"} pool start and end IPs are required.` }));
+      return;
+    }
+    const invalid = types.find(type => rangeError(form[type]));
+    if (invalid) {
+      setVlanPoolErrors(current => ({ ...current, [port.id]: `${invalid === "hotspot" ? "Hotspot" : "PPPoE"} pool ${rangeError(form[invalid])}.` }));
+      return;
+    }
+    setSavingVlanPortId(port.id);
+    setVlanPoolErrors(current => ({ ...current, [port.id]: null }));
+    try {
+      const response = await fetch(`/api/admin/ip-pools/vlan-service/${port.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...adminApiHeaders() },
+        body: JSON.stringify({
+          hotspotRangeStart: form.hotspot.start.trim(),
+          hotspotRangeEnd: form.hotspot.end.trim(),
+          pppoeRangeStart: form.pppoe.start.trim(),
+          pppoeRangeEnd: form.pppoe.end.trim(),
+        }),
+      });
+      const data = await parseJsonResponse<{ error?: string }>(response);
+      if (!response.ok) throw new Error(data.error || "Could not save the VLAN pools.");
+      await qc.invalidateQueries({ queryKey: ["admin-router-context", ADMIN_ID] });
+    } catch (error) {
+      setVlanPoolErrors(current => ({ ...current, [port.id]: error instanceof Error ? error.message : "Could not save the VLAN pools." }));
+    } finally {
+      setSavingVlanPortId(null);
     }
   }
 
@@ -371,14 +436,14 @@ export default function IPPool() {
           </h1>
 
           {/* Sync All */}
-          <button onClick={handleSyncAll} disabled={syncingAll || pools.length === 0}
+          {!isReseller && <button onClick={handleSyncAll} disabled={syncingAll || pools.length === 0}
             style={{ ...btn("linear-gradient(135deg,#f43f5e,#e11d48)"), opacity: syncingAll ? 0.7 : 1 }}>
             {syncingAll ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={13} />}
             Sync All
-          </button>
+          </button>}
 
           {/* Sync by Router */}
-          <div style={{ position: "relative" }}>
+          {!isReseller && <div style={{ position: "relative" }}>
             <button onClick={() => setShowRouterPicker(v => !v)} disabled={syncingRouter}
               style={btn("var(--isp-accent)")}>
               {syncingRouter ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Server size={13} />}
@@ -411,7 +476,7 @@ export default function IPPool() {
                 </button>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Need Help */}
           <button onClick={() => setShowHelp(v => !v)}
@@ -423,7 +488,7 @@ export default function IPPool() {
         <NetworkTabs active="ip-pools" />
 
         {/* ── Required per-router PPPoE pools ── */}
-        <div style={{
+        {!isReseller && <div style={{
           background: "var(--isp-card)", border: "1px solid var(--isp-border)",
           borderRadius: 10, padding: "1rem",
         }}>
@@ -520,7 +585,73 @@ export default function IPPool() {
               })}
             </div>
           )}
-        </div>
+        </div>}
+
+        {isReseller && (
+          <div style={{
+            background: "var(--isp-card)", border: "1px solid var(--isp-border)",
+            borderRadius: 10, padding: "1rem",
+          }}>
+            <div style={{ marginBottom: "0.8rem" }}>
+              <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "0.95rem", fontWeight: 800 }}>
+                Assigned VLAN service pools
+              </h2>
+              <p style={{ margin: "0.3rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.75rem" }}>
+                Set separate Hotspot and PPPoE address ranges for each VLAN assigned to this reseller. Saving updates the matching RouterOS pools.
+              </p>
+            </div>
+            {resellerPorts.length === 0 ? (
+              <div style={{ color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
+                No VLAN service has been assigned to this reseller yet.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: "0.75rem" }}>
+                {resellerPorts.map(port => {
+                  const form = vlanPoolForms[port.id] ?? { hotspot: { start: "", end: "" }, pppoe: { start: "", end: "" } };
+                  const isSaving = savingVlanPortId === port.id;
+                  return (
+                    <div key={port.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, background: "var(--isp-section)", padding: "0.8rem" }}>
+                      <div style={{ color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 800 }}>
+                        {port.interface_name}{port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}
+                      </div>
+                      <div style={{ color: "var(--isp-text-muted)", fontSize: "0.68rem", margin: "0.2rem 0 0.7rem" }}>
+                        Router #{port.router_id} · service #{port.id}
+                      </div>
+                      {(["hotspot", "pppoe"] as const).map(type => (
+                        <div key={type} style={{ marginTop: type === "pppoe" ? "0.7rem" : 0 }}>
+                          <div style={{ color: type === "hotspot" ? "#22c55e" : "var(--isp-accent)", fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", marginBottom: "0.25rem" }}>
+                            {type === "hotspot" ? "Hotspot pool" : "PPPoE pool"}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem" }}>
+                            {(["start", "end"] as const).map(field => (
+                              <input
+                                key={field}
+                                value={form[type][field]}
+                                onChange={event => updateVlanPoolField(port.id, type, field, event.target.value)}
+                                placeholder={field === "start" ? "Start IP" : "End IP"}
+                                aria-label={`${type} ${field} IP for ${port.interface_name}`}
+                                style={{ ...INPUT, fontFamily: "monospace", fontSize: "0.75rem", boxSizing: "border-box" }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      {vlanPoolErrors[port.id] && <div style={{ marginTop: "0.65rem", color: "#f87171", fontSize: "0.7rem" }}>{vlanPoolErrors[port.id]}</div>}
+                      <button
+                        onClick={() => void saveVlanPools(port)}
+                        disabled={isSaving}
+                        style={{ ...btn("var(--isp-accent)"), width: "100%", justifyContent: "center", marginTop: "0.75rem", opacity: isSaving ? 0.7 : 1 }}
+                      >
+                        {isSaving ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <CheckCircle2 size={12} />}
+                        {isSaving ? "Saving ranges…" : "Save VLAN pools"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Help panel ── */}
         {showHelp && (
@@ -565,9 +696,9 @@ export default function IPPool() {
               style={{ ...INPUT, paddingLeft: "2.25rem" }}
             />
           </div>
-          <button onClick={openAdd} style={btn("var(--isp-accent)")}>
+          {!isReseller && <button onClick={openAdd} style={btn("var(--isp-accent)")}>
             <Plus size={14} /> New Pool
-          </button>
+          </button>}
         </div>
 
         {/* ── Table ── */}

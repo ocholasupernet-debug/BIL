@@ -24,6 +24,7 @@ export type PortServiceResourceNames = {
   pppoeDirectory: string;
   bridgeName: string;
   hotspotPool: string;
+  pppoePool: string;
   hotspotServer: string;
   hotspotProfile: string;
   hotspotDhcp: string;
@@ -40,6 +41,21 @@ function resourceSegment(value: string, fallback: string, maxLength = 24): strin
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return result.slice(0, maxLength) || fallback;
+}
+
+export function vlanServicePoolRanges(subnetRange: string | null | undefined): {
+  hotspot: string;
+  pppoe: string;
+} {
+  const octets = String(subnetRange ?? "").split("/")[0]?.split(".").map(Number) ?? [];
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    throw new Error("A VLAN service requires a valid private /24 network before its IP pools can be configured.");
+  }
+  const prefix = octets.slice(0, 3).join(".");
+  return {
+    hotspot: `${prefix}.10-${prefix}.199`,
+    pppoe: `${prefix}.200-${prefix}.254`,
+  };
 }
 
 export function portServiceResourceNames(
@@ -70,10 +86,13 @@ export function portServiceResourceNames(
       resourceName: segment,
       defaultDnsName: `${dnsLabel}.com`,
       assetKey,
-      hotspotDirectory: `flash/hotspot/hs_${assetKey}`,
-      pppoeDirectory: `flash/hotspot/pppoe_${assetKey}`,
+      /* All VLAN services on one MikroTik intentionally point to one portal
+         directory. Their Hotspot/PPPoE servers and profiles remain unique. */
+      hotspotDirectory: `flash/hotspot/ochola_shared_r${port.router_id}`,
+      pppoeDirectory: `flash/hotspot/ochola_shared_r${port.router_id}`,
       bridgeName,
       hotspotPool: `HS_POOL_${segment}`,
+      pppoePool: `PPPOE_POOL_${segment}`,
       hotspotServer: `HS_${segment}`,
       hotspotProfile: `HS_PROFILE_${segment}`,
       hotspotDhcp: `HS_DHCP_${segment}`,
@@ -94,6 +113,7 @@ export function portServiceResourceNames(
     pppoeDirectory: `flash/hotspot/pppoe_${assetKey}`,
     bridgeName,
     hotspotPool: `HS_POOL_${resourceName}`,
+    pppoePool: `PPPOE_POOL_${resourceName}`,
     hotspotServer: `HS_${resourceName}`,
     hotspotProfile: `HS_PROFILE_${resourceName}`,
     hotspotDhcp: `HS_DHCP_${resourceName}`,
