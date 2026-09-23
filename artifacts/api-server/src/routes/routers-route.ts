@@ -81,7 +81,7 @@ router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
   const resellerRouterIds = account?.role === "reseller"
     ? await sbSelect<{ router_id: number }>(
       "isp_reseller_ports",
-      `admin_id=eq.${adminId}&assigned_reseller_id=eq.${account.id}&status=neq.disabled&select=router_id&limit=100`,
+      `admin_id=eq.${adminId}&assigned_reseller_id=eq.${account.id}&status=neq.disabled&select=router_id&limit=1000`,
     )
     : [];
   if (account?.role === "reseller" && resellerRouterIds.length === 0) {
