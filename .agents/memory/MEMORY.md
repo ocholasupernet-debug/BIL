@@ -79,3 +79,4 @@
 - [Plan service pool binding](plan-service-pool-binding.md) — Plans reference the existing scoped VLAN pool; Hotspot uses address-pool and PPPoE uses remote-address.
 - [Reseller payment routing](reseller-payment-routing.md) — Resolve collection accounts by active VLAN port, router, then reseller default; never fall back to the ISP gateway.
 - [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
+- [VLAN handoff portal files](vlan-handoff-portal-files.md) — Direct VLAN provisioning must install login.html and rlogin.html before declaring Hotspot active.

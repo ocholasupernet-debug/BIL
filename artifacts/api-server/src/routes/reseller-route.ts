@@ -110,6 +110,14 @@ type ResellerConnectionRequestRow = {
   updated_at: string;
 };
 
+type ResellerPortalSourceEntry = {
+  content: Buffer;
+  expiresAt: number;
+};
+
+const resellerPortalSourceEntries = new Map<string, ResellerPortalSourceEntry>();
+const RESELLER_PORTAL_SOURCE_TTL_MS = 5 * 60 * 1000;
+
 function safeSegment(value: string, fallback: string): string {
   const result = value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
   return result.slice(0, 55) || fallback;
@@ -171,6 +179,12 @@ function requestHostname(req: Request): string {
   return new URL(`${protocol}://${req.get("host")}`).hostname;
 }
 
+function requestOrigin(req: Request): string {
+  const forwarded = req.headers["x-forwarded-proto"];
+  const protocol = typeof forwarded === "string" ? forwarded.split(",")[0].trim() : req.protocol;
+  return `${protocol}://${req.get("host")}`;
+}
+
 function validInterface(value: unknown): value is string {
   return typeof value === "string"
     && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim())
@@ -218,6 +232,46 @@ function routerScriptValue(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
 }
 
+async function deployDefaultResellerPortalFile(
+  creds: RouterCredentials,
+  sourceOrigin: string,
+  sourceName: "login.html" | "rlogin.html",
+  destinationPath: string,
+): Promise<void> {
+  const source = getDeployableSource("hotspot", sourceName);
+  if (!source) throw new Error(`The default reseller portal asset "${sourceName}" is unavailable.`);
+  const token = randomBytes(24).toString("hex");
+  resellerPortalSourceEntries.set(token, {
+    content: source.content,
+    expiresAt: Date.now() + RESELLER_PORTAL_SOURCE_TTL_MS,
+  });
+  try {
+    await deployRouterFile(creds, {
+      destinationPath,
+      sourceUrl: `${sourceOrigin}/api/reseller-portal-source/${token}`,
+      overwrite: false,
+      uploadId: token.slice(0, 16),
+    });
+  } finally {
+    resellerPortalSourceEntries.delete(token);
+  }
+}
+
+router.get("/reseller-portal-source/:token", (req, res): void => {
+  const token = String(req.params.token);
+  const entry = resellerPortalSourceEntries.get(token);
+  if (!entry || entry.expiresAt < Date.now()) {
+    resellerPortalSourceEntries.delete(token);
+    res.status(404).end();
+    return;
+  }
+  resellerPortalSourceEntries.delete(token);
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Length", String(entry.content.length));
+  res.setHeader("Cache-Control", "no-store");
+  res.send(entry.content);
+});
+
 function buildVlanInterfaceScript(
   port: Pick<ResellerPortRow, "interface_name" | "bridge_name" | "reseller_id" | "vlan_tag">,
 ): string {
@@ -247,6 +301,7 @@ async function provisionVlanResellerServices(
   target: RouterRow,
   port: ResellerPortRow,
   warningHostname: string,
+  sourceOrigin: string,
 ): Promise<void> {
   const tag = Number(port.vlan_tag);
   if (!Number.isSafeInteger(tag) || tag < 1 || tag > 4094) {
@@ -375,6 +430,25 @@ async function provisionVlanResellerServices(
       `=dns-server=${gateway},8.8.8.8`,
       `=comment=${commentPrefix}_hotspot_network`,
     ]);
+  }
+  await runRouterCommand(creds, [
+    "/file/make-dir",
+    `=dir-name=${resources.hotspotDirectory}`,
+  ]).catch(() => undefined);
+  const portalRows = await runRouterCommand(creds, [
+    "/file/print",
+    "=.proplist=name,type",
+  ]);
+  const existingPortalFiles = new Set(
+    (Array.isArray(portalRows) ? portalRows : [])
+      .filter((row) => String((row as Record<string, unknown>).type ?? "").toLowerCase() !== "directory")
+      .map((row) => String((row as Record<string, unknown>).name ?? "")),
+  );
+  for (const sourceName of ["login.html", "rlogin.html"] as const) {
+    const destinationPath = `${resources.hotspotDirectory}/${sourceName}`;
+    if (!existingPortalFiles.has(destinationPath)) {
+      await deployDefaultResellerPortalFile(creds, sourceOrigin, sourceName, destinationPath);
+    }
   }
   await ensureNamed("/ip/dhcp-server/print", resources.hotspotDhcp, [
     "/ip/dhcp-server/add",
@@ -1390,7 +1464,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
     const assignment = inserted[0];
     if (handoffMode === "vlan_services" && assignment) {
       try {
-        await provisionVlanResellerServices(target, assignment, requestHostname(req));
+        await provisionVlanResellerServices(target, assignment, requestHostname(req), requestOrigin(req));
       } catch (error) {
         const message = error instanceof Error ? error.message : "VLAN Hotspot service provisioning failed.";
         await sbUpdateStrict("isp_reseller_ports", `id=eq.${assignment.id}&admin_id=eq.${account.id}`, {
@@ -1595,7 +1669,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
     }
     const target = await tenantRouter(port.admin_id, port.router_id);
     try {
-      await provisionVlanResellerServices(target, port, requestHostname(req));
+      await provisionVlanResellerServices(target, port, requestHostname(req), requestOrigin(req));
       const updated = await sbUpdateStrict<ResellerPortRow>(
         "isp_reseller_ports",
         `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
