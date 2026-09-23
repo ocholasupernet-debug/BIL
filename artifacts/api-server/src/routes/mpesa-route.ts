@@ -44,6 +44,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { resolveResellerGatewayRoute } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
 
@@ -325,12 +326,13 @@ async function getResellerPaymentRoute(
   adminId: number,
   planId: number,
 ): Promise<ResellerPaymentRoute | null> {
-  const plans = await sbSelectStrict<{ port_id: number | null }>(
+  const plans = await sbSelectStrict<{ port_id: number | null; router_id: number | null }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&select=port_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&select=port_id,router_id&limit=1`,
   );
   const portId = Number(plans[0]?.port_id);
-  if (!Number.isSafeInteger(portId) || portId <= 0) return null;
+  const routerId = Number(plans[0]?.router_id);
+  if (!Number.isSafeInteger(portId) || portId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0) return null;
 
   const ports = await sbSelectStrict<{
     id: number;
@@ -347,35 +349,40 @@ async function getResellerPaymentRoute(
     throw new Error("This reseller link is not active for checkout.");
   }
 
-  /*
-   * Reseller checkout uses the parent ISP account's payment settings. The
-   * merchant gateway belongs to the ISP tenant, just like other ISP billing
-   * settings; reseller accounts must not maintain a second destination that
-   * can drift from the account serving the assigned VLAN.
-   */
-  const [settings, fallback] = await Promise.all([
-    getAdminPaymentSettings(adminId, "hotspot"),
+  const [route, fallback] = await Promise.all([
+    resolveResellerGatewayRoute(adminId, port.assigned_reseller_id, routerId, portId),
     getMpesaSettings(),
   ]);
-  if (!isDarajaGateway(settings.paymentGateway)) {
-    throw new Error("The ISP account has not selected a supported automated payment gateway.");
+  if (!route) {
+    throw new Error("The reseller has not configured a payment gateway for this VLAN port, router, or default route.");
   }
-
-  const destination = settings.paymentGateway === "mpesa_till_push"
+  const paymentGateway = route.gateway_type as PaymentGateway;
+  const routeConfig = route.config;
+  const bankStkPush = {
+    bankName: routeConfig.bankName ?? "",
+    paybillNumber: routeConfig.paybillNumber ?? "",
+    accountNumber: routeConfig.accountNumber ?? "",
+  };
+  const mpesaTillPush = { tillNumber: routeConfig.tillNumber ?? "" };
+  const mpesaPaybill = {
+    paybillNumber: routeConfig.paybillNumber ?? "",
+    accountNumber: routeConfig.accountNumber ?? "",
+  };
+  const destination = paymentGateway === "mpesa_till_push"
     ? {
-        merchantIdentifier: settings.mpesaTillPush.tillNumber,
+        merchantIdentifier: mpesaTillPush.tillNumber,
         accountReference: "",
         destinationType: "till" as const,
       }
-    : settings.paymentGateway === "bank_stk_push"
+    : paymentGateway === "bank_stk_push"
       ? {
-          merchantIdentifier: settings.bankStkPush.paybillNumber,
-          accountReference: settings.bankStkPush.accountNumber,
+          merchantIdentifier: bankStkPush.paybillNumber,
+          accountReference: bankStkPush.accountNumber,
           destinationType: "paybill" as const,
         }
       : {
-          merchantIdentifier: settings.mpesaPaybill.paybillNumber,
-          accountReference: settings.mpesaPaybill.accountNumber,
+          merchantIdentifier: mpesaPaybill.paybillNumber,
+          accountReference: mpesaPaybill.accountNumber,
           destinationType: "paybill" as const,
         };
   if (!destination.merchantIdentifier
@@ -386,11 +393,11 @@ async function getResellerPaymentRoute(
   return {
     resellerId: port.assigned_reseller_id,
     portId,
-    paymentGateway: settings.paymentGateway,
+    paymentGateway,
     settings: fallback,
-    bankStkPush: settings.bankStkPush,
-    mpesaTillPush: settings.mpesaTillPush,
-    mpesaPaybill: settings.mpesaPaybill,
+    bankStkPush,
+    mpesaTillPush,
+    mpesaPaybill,
     merchantIdentifier: destination.merchantIdentifier,
     accountReference: destination.accountReference,
   };
