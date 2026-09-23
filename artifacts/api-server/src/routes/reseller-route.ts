@@ -853,7 +853,7 @@ async function updateResellerLink(req: Request, res: Response): Promise<void> {
 
     const ports = await sbSelectStrict<ResellerPortRow>(
       "isp_reseller_ports",
-      `admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}&select=*&limit=100`,
+      `admin_id=eq.${account.id}&assigned_reseller_id=eq.${resellerId}&select=*&limit=1000`,
     );
     const port = ports.find(row => (targetPortName && row.interface_name === targetPortName) || (vlanTag && row.vlan_tag === vlanTag));
     if (!port) {
@@ -1305,14 +1305,6 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       res.status(409).json({ ok: false, error: link.error || "The selected interface is unavailable on the ISP router." });
       return;
     }
-    const existingForReseller = await sbSelectStrict<{ id: number }>(
-      "isp_reseller_ports",
-      `admin_id=eq.${account.id}&assigned_reseller_id=eq.${request.reseller_id}&status=neq.disabled&select=id&limit=1`,
-    );
-    if (existingForReseller[0]) {
-      res.status(409).json({ ok: false, error: "This reseller already has an active router handoff or port assignment." });
-      return;
-    }
     const collisionFilter = handoffType === "vlan"
       ? `&vlan_tag=eq.${encodeURIComponent(vlanTag)}`
       : "&vlan_tag=is.null";
@@ -1445,7 +1437,9 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
         checkedAt: now,
       },
       message: handoffMode === "vlan_services"
-         ? `VLAN ${vlanTag} was pushed directly to the MikroTik with Hotspot and PPPoE services. The reseller connection is now approved.`
+         ? request.status === "pending"
+           ? `VLAN ${vlanTag} was pushed directly to the MikroTik with Hotspot and PPPoE services. The reseller connection is now approved.`
+           : `VLAN ${vlanTag} was added directly to the MikroTik with Hotspot and PPPoE services.`
         : link.running
           ? "ISP router handoff assigned and the XPON link is detected."
           : "ISP router handoff assigned. Connect the XPON router, then refresh link status.",
@@ -2071,7 +2065,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const tenantId = account.parent_id ?? account.id;
     const [users, portRows, gateways, sales, customers, revenueRows] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
-      sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `assigned_reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=100`),
+      sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `assigned_reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=1000`),
       sbSelectStrict("reseller_payment_gateway_routes", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,router_id,port_id,is_active,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `reseller_id=eq.${account.id}&select=id,admin_id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=100`),
       sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at,created_at,name,username,data_used_mb,data_used_bytes&limit=5000`),
