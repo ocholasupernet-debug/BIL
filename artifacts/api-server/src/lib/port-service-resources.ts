@@ -105,10 +105,11 @@ export function portServiceResourceNames(
       resourceName: segment,
       defaultDnsName: `${dnsLabel}.com`,
       assetKey,
-      /* All VLAN services on one MikroTik intentionally point to one portal
-         directory. Their Hotspot/PPPoE servers and profiles remain unique. */
-      hotspotDirectory: `flash/hotspot/ochola_shared_r${port.router_id}`,
-      pppoeDirectory: `flash/hotspot/ochola_shared_r${port.router_id}`,
+      /* Keep each VLAN service's portal files isolated. RouterOS selects the
+         Hotspot server by interface, not by the requested DNS hostname, so a
+         shared directory would make the last deployed portal appear everywhere. */
+      hotspotDirectory: `flash/hotspot/ochola_${segment}`,
+      pppoeDirectory: `flash/hotspot/ochola_${segment}`,
       bridgeName,
       hotspotPool: `HS_POOL_${segment}`,
       pppoePool: `PPPOE_POOL_${segment}`,
