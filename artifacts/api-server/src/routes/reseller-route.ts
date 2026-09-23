@@ -1848,7 +1848,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           "?name=co-hotspot-bridge",
         ]);
         const bridge = bridgeRows[0];
-        if (!bridge || String(bridge.type ?? "").toLowerCase() !== "bridge" || String(bridge.disabled ?? "").toLowerCase() === "true") {
+        if (!bridge || String(bridge.disabled ?? "").toLowerCase() === "true") {
           throw new Error("The confirmed reseller access port cannot be repaired because co-hotspot-bridge is unavailable.");
         }
         const bridgePortRows = await runRouterCommand(creds, [
