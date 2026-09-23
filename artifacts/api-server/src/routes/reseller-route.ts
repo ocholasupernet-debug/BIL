@@ -92,6 +92,7 @@ type ResellerAccountRow = {
   company_name?: string | null;
   username: string;
   email?: string | null;
+  phone?: string | null;
   status?: string | null;
   is_active: boolean;
   created_at: string;
@@ -1057,7 +1058,7 @@ router.get("/isp/reseller-connection-requests", requireAdmin(), async (req, res)
     const resellers = resellerIds.length
       ? await sbSelectStrict<ResellerAccountRow>(
         "isp_admins",
-        `id=in.(${resellerIds.join(",")})&role=eq.reseller&select=id,name,company_name,username,email,status,is_active,created_at`,
+        `id=in.(${resellerIds.join(",")})&role=eq.reseller&select=id,name,company_name,username,email,phone,status,is_active,created_at`,
       )
       : [];
     res.json({ ok: true, requests, resellers });
