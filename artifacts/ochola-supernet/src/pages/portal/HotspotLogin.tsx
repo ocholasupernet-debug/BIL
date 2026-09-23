@@ -217,6 +217,7 @@ export default function HotspotLogin() {
     env: string;
     shortcode: string;
     hasTillNumber: boolean;
+    destinationConfigured: boolean;
     paymentGateway: string;
   } | null>(null);
   const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
@@ -242,7 +243,11 @@ export default function HotspotLogin() {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
           fetch(`/api/plans?type=hotspot&activeOnly=true&purchasableOnly=true${planScopeQuery}`),
-          fetch(`/api/settings/mpesa${adminId ? `?adminId=${encodeURIComponent(String(adminId))}` : ""}`).catch(() => null),
+          fetch(`/api/settings/mpesa?${[
+            adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+            portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+            portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
+          ].filter(Boolean).join("&")}`).catch(() => null),
         ]);
         const plansData: Plan[] = await plansRes.json();
         setPlans(plansData);
@@ -254,6 +259,7 @@ export default function HotspotLogin() {
             env: mpesaData.settings?.env ?? "sandbox",
             shortcode: mpesaData.settings?.shortcode ?? "",
             hasTillNumber: mpesaData.settings?.hasTillNumber === true,
+            destinationConfigured: mpesaData.settings?.destinationConfigured === true,
             paymentGateway: typeof mpesaData.settings?.paymentGateway === "string" ? mpesaData.settings.paymentGateway : "mpesa_paybill",
           });
         }
@@ -1434,15 +1440,15 @@ export default function HotspotLogin() {
                                     )}
                                   </div>
 
-                                   {mpesaStatus && (!mpesaStatus.configured || !isDarajaGateway(mpesaStatus.paymentGateway) || (mpesaStatus.paymentGateway === "mpesa_till_push" && !mpesaStatus.hasTillNumber)) ? (
+                                    {mpesaStatus && (!mpesaStatus.configured || !isDarajaGateway(mpesaStatus.paymentGateway) || !mpesaStatus.destinationConfigured) ? (
                                     <div style={{
                                       padding: 14, borderRadius: 10, textAlign: "center",
                                       background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
                                       fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
                                     }}>
                                       <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
-                                       <p style={{ margin: 0 }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? `${PAYMENT_GATEWAY_LABELS[mpesaStatus.paymentGateway] || "Selected payment gateway"} is not connected for automated payments yet.` : mpesaStatus.paymentGateway === "mpesa_till_push" && !mpesaStatus.hasTillNumber ? "M-Pesa Till Push is not configured yet." : "M-Pesa Daraja API is not configured yet."}</p>
-                                        <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? "Choose a connected payment gateway to continue." : "Complete the required M-Pesa connection settings to continue."}</p>
+                                        <p style={{ margin: 0 }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? `${PAYMENT_GATEWAY_LABELS[mpesaStatus.paymentGateway] || "Selected payment gateway"} is not connected for automated payments yet.` : !mpesaStatus.destinationConfigured ? "The M-Pesa collection destination is not configured yet." : "M-Pesa Daraja API is not configured yet."}</p>
+                                         <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? "Choose a connected payment gateway to continue." : !mpesaStatus.destinationConfigured ? "Ask the Super Admin to assign an active Till or PayBill destination to this reseller service." : "Complete the required M-Pesa connection settings to continue."}</p>
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>

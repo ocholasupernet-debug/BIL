@@ -76,6 +76,22 @@ export function decryptGatewayConfig(value: unknown): Record<string, string> {
   }
 }
 
+export function resellerDestinationConfigured(
+  gatewayType: string,
+  config: Record<string, string>,
+): boolean {
+  if (gatewayType === "mpesa_till_push") {
+    return !!(config.tillNumber || config.merchantIdentifier || config.merchant_identifier);
+  }
+  if (gatewayType === "mpesa_paybill") {
+    return !!(
+      (config.paybillNumber || config.merchantIdentifier || config.merchant_identifier) &&
+      (config.accountNumber || config.accountReference || config.account_reference)
+    );
+  }
+  return false;
+}
+
 export type ResellerGatewayRouteRow = {
   id: number;
   admin_id: number;

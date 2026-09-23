@@ -34,6 +34,7 @@ import {
   type PaymentService,
   type ServicePaymentConfig,
 } from "../lib/payment-routing.js";
+import { resolveResellerGatewayRoute, resellerDestinationConfigured } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
 const MPESA_CALLBACK_PATH = "/api/mpesa/callback";
@@ -200,6 +201,59 @@ function adminIdFromRequest(req: Request): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function positiveQueryId(value: unknown): number | null {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+async function resellerPortalPaymentStatus(
+  adminId: number | null,
+  routerId: number | null,
+  portId: number | null,
+): Promise<{
+  paymentGateway: string;
+  destinationConfigured: boolean;
+} | null> {
+  if (!adminId || !portId) return null;
+
+  const ports = await sbSelect<{
+    id: number;
+    admin_id: number;
+    router_id: number;
+    assigned_reseller_id: number | null;
+    status: string;
+    link_status: string | null;
+  }>(
+    "isp_reseller_ports",
+    `id=eq.${portId}&admin_id=eq.${adminId}&select=id,admin_id,router_id,assigned_reseller_id,status,link_status&limit=1`,
+  );
+  const port = ports[0];
+  if (
+    !port ||
+    !port.assigned_reseller_id ||
+    port.status !== "active" ||
+    port.link_status !== "active" ||
+    (routerId !== null && port.router_id !== routerId)
+  ) {
+    return null;
+  }
+
+  const route = await resolveResellerGatewayRoute(
+    adminId,
+    port.assigned_reseller_id,
+    port.router_id,
+    port.id,
+  );
+  if (!route) return null;
+
+  const config = route.config;
+
+  return {
+    paymentGateway: route.gateway_type,
+    destinationConfigured: resellerDestinationConfigured(route.gateway_type, config),
+  };
+}
+
 async function accountFromRequest(req: Request) {
   if (!req.authUser) {
     const auth = validateToken(extractToken(req));
@@ -273,15 +327,31 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
-  const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
+  const { paymentGateway: adminPaymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
     await getAdminPaymentSettings(await paymentAdminIdFromRequest(req));
+  const portalRoute = await resellerPortalPaymentStatus(
+    adminIdFromRequest(req),
+    positiveQueryId(req.query.routerId),
+    positiveQueryId(req.query.portId),
+  );
+  const paymentGateway = portalRoute?.paymentGateway ?? adminPaymentGateway;
+  const destinationConfigured = portalRoute?.destinationConfigured ?? (
+    paymentGateway === "mpesa_till_push"
+      ? !!mpesaTillPush.tillNumber
+      : paymentGateway === "mpesa_paybill"
+        ? !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber)
+        : paymentGateway === "bank_stk_push"
+          ? isBankStkPushConfigured(bankStkPush)
+          : false
+  );
   res.json({
     ok: true,
     configured: isMpesaConfigured(s),
     settings: {
       shortcode:      s.shortcode,
       env:            s.env,
-      hasTillNumber:  !!s.tillNumber,
+      hasTillNumber:  paymentGateway === "mpesa_till_push" && destinationConfigured,
+      destinationConfigured,
       paymentGateway,
       bankStkPushConfigured: isBankStkPushConfigured(bankStkPush),
       adminTillPushConfigured: !!mpesaTillPush.tillNumber,
