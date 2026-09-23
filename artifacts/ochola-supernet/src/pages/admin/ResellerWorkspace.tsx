@@ -133,7 +133,7 @@ function AdminResellerManagement() {
   const [handoffMode, setHandoffMode] = useState<"isp_router" | "vlan_services">("isp_router");
   const [handoffInterfaceName, setHandoffInterfaceName] = useState("");
   const [handoffVlanTag, setHandoffVlanTag] = useState("");
-  const [handoffVlanName, setHandoffVlanName] = useState("");
+  const [handoffUsername, setHandoffUsername] = useState("");
   const [xponIdentifier, setXponIdentifier] = useState("");
   const [handoffCap, setHandoffCap] = useState("30");
   const [handoffPorts, setHandoffPorts] = useState<PortOption[]>([]);
@@ -141,6 +141,7 @@ function AdminResellerManagement() {
   const [handoffSaving, setHandoffSaving] = useState(false);
   const [handoffScriptSaving, setHandoffScriptSaving] = useState(false);
   const [linkChecking, setLinkChecking] = useState<number | null>(null);
+  const [linkDeleting, setLinkDeleting] = useState<number | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{
     companyName: string;
     username: string;
@@ -236,6 +237,7 @@ function AdminResellerManagement() {
             : { interfaceName: handoffInterfaceName }),
           handoffType,
           handoffMode,
+          resellerUsername: handoffUsername,
           vlanTag: handoffType === "vlan" ? handoffVlanTag : undefined,
           xponIdentifier,
           bandwidthCapMbps: Number(handoffCap),
@@ -245,7 +247,7 @@ function AdminResellerManagement() {
       setHandoffRequestId(null);
       setHandoffInterfaceName("");
       setHandoffVlanTag("");
-      setHandoffVlanName("");
+      setHandoffUsername("");
       setXponIdentifier("");
       await load();
     } catch (e) {
@@ -285,6 +287,7 @@ function AdminResellerManagement() {
           routerId: Number(handoffRouterId),
           bridgeName: handoffInterfaceName,
           vlanTag: handoffVlanTag,
+          resellerUsername: handoffUsername,
         }),
       });
       if (!response.ok) {
@@ -350,6 +353,22 @@ function AdminResellerManagement() {
       setError(e instanceof Error ? e.message : "Unable to push the VLAN service to the MikroTik.");
     } finally { setLinkSaving(null); }
   };
+  const deleteAssignment = async (port: Assignment) => {
+    const label = port.handoff_mode === "vlan_services"
+      ? `VLAN ${port.vlan_tag || "service"}`
+      : port.interface_name;
+    if (!window.confirm(`Delete ${label} for this reseller? RouterOS service resources will be removed. Recorded sales are retained and keep the database row disabled.`)) {
+      return;
+    }
+    setLinkDeleting(port.id); setError(""); setSuccess("");
+    try {
+      const result = await apiJson<{ message?: string }>(`/api/admin/reseller-handoffs/${port.id}`, { method: "DELETE" });
+      setSuccess(result.message || "The reseller assignment was deleted.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to delete the reseller assignment.");
+    } finally { setLinkDeleting(null); }
+  };
   const openAssignment = (requestId: number, mode: "isp_router" | "vlan_services" = "vlan_services") => {
     const candidate = requestResellers.find((item) => item.id === connectionRequests.find((request) => request.id === requestId)?.reseller_id);
     setHandoffRequestId(requestId);
@@ -358,16 +377,22 @@ function AdminResellerManagement() {
     setHandoffMode(mode);
     setHandoffInterfaceName("");
     setHandoffVlanTag("");
-    setHandoffVlanName(candidate?.username || "");
+    setHandoffUsername(candidate?.username || "");
     setXponIdentifier("");
     setHandoffCap("30");
     setError("");
     setSuccess("");
   };
-  const approvedUnassignedRequests = connectionRequests.filter((request) =>
-    request.status === "approved"
-    && !assignments.some((assignment) => (assignment.assigned_reseller_id ?? assignment.reseller_id) === request.reseller_id),
+  const pendingUnassignedRequests = connectionRequests.filter((request) =>
+    request.status === "pending"
+    && !assignments.some((assignment) =>
+      (assignment.assigned_reseller_id ?? assignment.reseller_id) === request.reseller_id
+      && assignment.status !== "disabled"
+      && assignment.status !== "failed",
+    ),
   );
+  const selectedHandoffRequest = connectionRequests.find((request) => request.id === handoffRequestId);
+  const pendingHandoff = selectedHandoffRequest?.status === "pending";
 
   return (
     <AdminLayout>
@@ -406,24 +431,24 @@ function AdminResellerManagement() {
         <a href="/admin/network/carrier-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "start", width: "fit-content", padding: "10px 13px", borderRadius: 9, background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 800 }}>
           Open carrier link approvals
         </a>
-        {approvedUnassignedRequests.length > 0 && (
+        {pendingUnassignedRequests.length > 0 && (
           <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.4)", background: "linear-gradient(135deg, rgba(37,99,235,.12), var(--isp-card) 65%)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 900 }}><RouterIcon size={18} /> Approved resellers ready for VLAN assignment</div>
-                <div style={{ marginTop: 5, color: "var(--isp-text-muted)", fontSize: 13 }}>Choose a reseller below to assign the ISP router, VLAN, and bandwidth settings.</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 900 }}><RouterIcon size={18} /> Pending resellers ready for VLAN approval</div>
+                <div style={{ marginTop: 5, color: "var(--isp-text-muted)", fontSize: 13 }}>Assign and successfully provision the VLAN service to approve the connection.</div>
               </div>
-              <span className="isp-badge isp-badge-amber">{approvedUnassignedRequests.length} ready</span>
+              <span className="isp-badge isp-badge-amber">{pendingUnassignedRequests.length} ready</span>
             </div>
             <div style={{ display: "grid", gap: 8, marginTop: 13 }}>
-              {approvedUnassignedRequests.map((request) => {
+              {pendingUnassignedRequests.map((request) => {
                 const reseller = requestResellers.find((candidate) => candidate.id === request.reseller_id);
                 return <div key={request.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 12px", border: "1px solid var(--isp-border)", borderRadius: 9, background: "var(--isp-card)" }}>
                   <div>
                     <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>{reseller?.company_name || reseller?.name || `Reseller #${request.reseller_id}`}</div>
                     <div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 3 }}>@{reseller?.username || "unknown"} · {reseller?.email || reseller?.phone || "Account details available"}</div>
                   </div>
-                  <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "9px 12px", background: "var(--isp-accent)", color: "#fff", fontWeight: 850, cursor: "pointer" }}>Assign VLAN / reseller</button>
+                  <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "9px 12px", background: "var(--isp-accent)", color: "#fff", fontWeight: 850, cursor: "pointer" }}>Assign VLAN / approve</button>
                 </div>;
               })}
             </div>
@@ -431,7 +456,7 @@ function AdminResellerManagement() {
         )}
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14 }}>
-            <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Approve an account connection before assigning a physical port or enabling wholesale traffic.</div></div>
+            <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Reject requests immediately, or assign and provision a VLAN before approving the connection.</div></div>
             <span className="isp-badge isp-badge-amber">{connectionRequests.filter((request) => request.status === "pending").length} pending</span>
           </div>
           <div style={{ display: "grid", gap: 10 }}>
@@ -447,7 +472,7 @@ function AdminResellerManagement() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
-                  {request.status === "pending" && <><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "#16a34a", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "Saving…" : "Approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
+                  {request.status === "pending" && <><button type="button" disabled={busy || linkSaving === assignment?.id} onClick={() => assignment?.status === "failed" ? void retryVlanPush(assignment.id) : openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy || linkSaving === assignment?.id ? "Working…" : assignment?.status === "failed" ? "Push VLAN again" : "Assign VLAN / approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
                   {request.status === "approved" && (assignment?.handoff_mode === "isp_router" || assignment?.handoff_mode === "vlan_services" ? <span style={{ color: "#15803d", fontSize: 12, fontWeight: 800 }}>{assignment.handoff_mode === "vlan_services" ? "Reseller assigned · VLAN pushed" : "Reseller assigned · handoff ready"}</span> : <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Assign VLAN / reseller</button>)}
                 </div>
               </div>;
@@ -472,7 +497,7 @@ function AdminResellerManagement() {
               const reseller = requestResellers.find((candidate) => connectionRequests.find((request) => request.id === handoffRequestId)?.reseller_id === candidate.id);
               if (!reseller) return null;
               return <div style={{ marginTop: 16, padding: 13, border: "1px solid rgba(37,99,235,.25)", borderRadius: 9, background: "var(--isp-card)" }}>
-                <div style={{ color: "var(--isp-text)", fontSize: 12, fontWeight: 850, letterSpacing: ".06em", textTransform: "uppercase" }}>Accepted reseller</div>
+                <div style={{ color: "var(--isp-text)", fontSize: 12, fontWeight: 850, letterSpacing: ".06em", textTransform: "uppercase" }}>{pendingHandoff ? "Requested reseller" : "Accepted reseller"}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginTop: 11 }}>
                   {[
                     ["Name", reseller.name],
@@ -488,8 +513,8 @@ function AdminResellerManagement() {
             })()}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 16 }}>
               <Field label="Service mode">
-                <select required style={inputStyle} value={handoffMode} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); }}>
-                  <option value="isp_router">Passive XPON handoff</option>
+                <select required style={inputStyle} value={handoffMode} disabled={pendingHandoff} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); }}>
+                  {!pendingHandoff && <option value="isp_router">Passive XPON handoff</option>}
                   <option value="vlan_services">VLAN Hotspot + PPPoE service</option>
                 </select>
               </Field>
@@ -511,7 +536,7 @@ function AdminResellerManagement() {
                   <option value="">Choose interface</option>{handoffPorts.map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
                 </select>
               </Field>}
-               {handoffMode === "vlan_services" && <Field label="VLAN interface name"><input required readOnly style={{ ...inputStyle, opacity: .8 }} value={handoffVlanName} placeholder="Reseller username" /></Field>}
+               {handoffMode === "vlan_services" && <Field label="Reseller username / VLAN identity"><input required minLength={3} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" style={inputStyle} value={handoffUsername} onChange={(event) => setHandoffUsername(event.target.value)} placeholder="username used for the VLAN identity" /></Field>}
                {handoffType === "vlan" && <Field label="VLAN ID"><input required min="1" max="4094" type="number" style={inputStyle} value={handoffVlanTag} onChange={(event) => setHandoffVlanTag(event.target.value)} placeholder="e.g. 240" /></Field>}
                {handoffMode === "isp_router" && <Field label="XPON / ONU reference (optional)"><input style={inputStyle} value={xponIdentifier} onChange={(event) => setXponIdentifier(event.target.value)} placeholder="Serial or customer reference" /></Field>}
               <Field label="Bandwidth cap (Mbps)"><input required min="1" max="100000" type="number" style={inputStyle} value={handoffCap} onChange={(event) => setHandoffCap(event.target.value)} /></Field>
@@ -523,7 +548,7 @@ function AdminResellerManagement() {
             </div>
              <div style={{ display: "flex", flexWrap: "wrap", gap: 9, marginTop: 15 }}>
                {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
-                <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning and pushing…" : handoffMode === "vlan_services" ? "Assign reseller & push VLAN service" : "Assign reseller & push handoff"}</button>
+               <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName || !handoffUsername} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning and pushing…" : handoffMode === "vlan_services" && pendingHandoff ? "Assign VLAN, push service & approve" : handoffMode === "vlan_services" ? "Assign reseller & push VLAN service" : "Assign reseller & push handoff"}</button>
              </div>
           </form>
         )}
@@ -599,7 +624,7 @@ function AdminResellerManagement() {
              {resellers.map((reseller) => {
                const port = assignments.find((item) => (item.assigned_reseller_id ?? item.reseller_id) === reseller.id);
                const linkStatus = port?.link_status ?? "pending";
-               const busy = port ? linkSaving === port.id : false;
+               const busy = port ? linkSaving === port.id || linkDeleting === port.id : false;
                return <tr key={reseller.id}>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td>
@@ -607,7 +632,7 @@ function AdminResellerManagement() {
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port ? <div style={{ display: "flex", gap: 5, alignItems: "center" }}><input aria-label={`Maximum bandwidth for ${port.interface_name}`} type="number" min="1" max="100000" value={linkCapDraft[port.id] ?? String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)} onChange={(event) => setLinkCapDraft((current) => ({ ...current, [port.id]: event.target.value }))} style={{ ...inputStyle, width: 86, minHeight: 32, padding: "5px 7px" }} /><span>Mbps</span></div> : "—"}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={linkStatus} />{port?.link_provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.link_provisioning_error}</div> : null}</td>
-                  <td style={{ padding: "10px 8px" }}>{port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{port.handoff_mode === "vlan_services" && <>{(port.status === "failed" || port.provisioning_error) && <button type="button" disabled={busy} onClick={() => void retryVlanPush(port.id)} style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{busy ? "Pushing…" : "Push again"}</button>}<button type="button" onClick={() => void downloadVlanScript(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: "pointer", fontSize: 12, fontWeight: 750 }}>Download VLAN script</button></>}{port.handoff_mode === "isp_router" && <button type="button" disabled={linkChecking === port.id} onClick={() => void checkHandoffLink(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: linkChecking === port.id ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{linkChecking === port.id ? "Checking…" : "Check XPON link"}</button>}<button type="button" disabled={busy || port.status !== "active"} onClick={() => void updateLink(port, linkStatus === "active" ? "suspended" : "active")} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy || port.status !== "active" ? "not-allowed" : "pointer", display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, fontWeight: 750 }}>{linkStatus === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}{busy ? "Saving…" : linkStatus === "active" ? "Suspend" : "Activate"}</button></div> : "—"}</td>
+                  <td style={{ padding: "10px 8px" }}>{port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{port.handoff_mode === "vlan_services" && <>{(port.status === "failed" || port.provisioning_error) && <button type="button" disabled={busy} onClick={() => void retryVlanPush(port.id)} style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{busy ? "Pushing…" : "Push again"}</button>}<button type="button" onClick={() => void downloadVlanScript(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: "pointer", fontSize: 12, fontWeight: 750 }}>Download VLAN script</button></>}{port.handoff_mode === "isp_router" && <button type="button" disabled={linkChecking === port.id} onClick={() => void checkHandoffLink(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: linkChecking === port.id ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{linkChecking === port.id ? "Checking…" : "Check XPON link"}</button>}<button type="button" disabled={busy || port.status !== "active"} onClick={() => void updateLink(port, linkStatus === "active" ? "suspended" : "active")} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy || port.status !== "active" ? "not-allowed" : "pointer", display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, fontWeight: 750 }}>{linkStatus === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}{busy ? "Saving…" : linkStatus === "active" ? "Suspend" : "Activate"}</button><button type="button" disabled={busy} onClick={() => void deleteAssignment(port)} style={{ border: "1px solid rgba(220,38,38,.3)", borderRadius: 8, padding: "7px 9px", background: "rgba(239,68,68,.07)", color: "#b91c1c", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{linkDeleting === port.id ? "Deleting…" : "Delete link"}</button></div> : "—"}</td>
                </tr>;
              })}
              {!resellers.length && <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No reseller accounts yet.</td></tr>}

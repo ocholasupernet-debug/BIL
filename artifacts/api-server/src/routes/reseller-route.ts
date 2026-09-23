@@ -534,6 +534,62 @@ function routerResourceId(row: Record<string, unknown>): string {
   return typeof row[".id"] === "string" ? row[".id"] : "";
 }
 
+type RouterResourceRow = Record<string, string>;
+
+async function removeVlanResourceRows(
+  creds: RouterCredentials,
+  printPath: string,
+  proplist: string,
+  matches: (row: RouterResourceRow) => boolean,
+): Promise<void> {
+  const rows = await runRouterCommand(creds, [printPath, `=.proplist=${proplist}`]);
+  const removePath = printPath.replace(/\/print$/, "/remove");
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row[".id"] && matches(row as RouterResourceRow)) {
+      await runRouterCommand(creds, [removePath, `=.id=${row[".id"]}`]);
+    }
+  }
+}
+
+async function removeVlanResellerServices(
+  target: RouterRow,
+  port: ResellerPortRow,
+): Promise<void> {
+  const resources = portServiceResourceNames({
+    id: port.id,
+    router_id: port.router_id,
+    interface_name: port.interface_name,
+    bridge_name: port.bridge_name,
+    handoff_mode: "vlan_services",
+    reseller_id: port.reseller_id,
+    assigned_reseller_id: port.assigned_reseller_id,
+    vlan_tag: port.vlan_tag,
+  });
+  const vlanInterface = vlanServiceResources(port).vlanInterface;
+  const ownedComment = (row: RouterResourceRow) =>
+    String(row.comment ?? "").startsWith(`${resources.commentPrefix}_`);
+  const creds = routerCredentials(target);
+
+  // Remove dependants first. Never remove the ISP-owned parent bridge.
+  await removeVlanResourceRows(creds, "/interface/pppoe-server/server/print", ".id,service-name,comment", row =>
+    row["service-name"] === resources.pppoeService && ownedComment(row));
+  await removeVlanResourceRows(creds, "/ip/hotspot/print", ".id,name,comment", row =>
+    row.name === resources.hotspotServer && ownedComment(row));
+  await removeVlanResourceRows(creds, "/ip/dhcp-server/print", ".id,name,interface,comment", row =>
+    row.name === resources.hotspotDhcp && row.interface === vlanInterface && (ownedComment(row) || !row.comment));
+  await removeVlanResourceRows(creds, "/queue/simple/print", ".id,name,comment", ownedComment);
+  await removeVlanResourceRows(creds, "/ip/firewall/nat/print", ".id,comment", ownedComment);
+  await removeVlanResourceRows(creds, "/ip/hotspot/walled-garden/ip/print", ".id,comment", ownedComment);
+  await removeVlanResourceRows(creds, "/ip/hotspot/profile/print", ".id,name,comment", row =>
+    [resources.hotspotProfile, resources.pppoeProfile].includes(row.name) && (ownedComment(row) || !row.comment));
+  await removeVlanResourceRows(creds, "/ip/address/print", ".id,comment", ownedComment);
+  await removeVlanResourceRows(creds, "/ip/dhcp-server/network/print", ".id,comment", ownedComment);
+  await removeVlanResourceRows(creds, "/ip/pool/print", ".id,name,comment", row =>
+    [resources.hotspotPool, resources.pppoePool].includes(row.name) && (ownedComment(row) || !row.comment));
+  await removeVlanResourceRows(creds, "/interface/vlan/print", ".id,name,comment", row =>
+    row.name === vlanInterface && (ownedComment(row) || !row.comment));
+}
+
 async function deployServicesProvisionLayer(
   router: RouterRow,
   port: ResellerPortRow,
@@ -1081,6 +1137,13 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       res.status(400).json({ ok: false, error: "Provide a valid request and choose approve or reject." });
       return;
     }
+    if (action === "approved") {
+      res.status(409).json({
+        ok: false,
+        error: "Assign and successfully provision the reseller VLAN before approving this connection.",
+      });
+      return;
+    }
     const requestRows = await sbSelectStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
       `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.pending&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&limit=1`,
@@ -1109,21 +1172,6 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       return;
     }
     const now = new Date().toISOString();
-    if (action === "approved") {
-      if (!reseller.parent_id) {
-        await sbUpdateStrict(
-          "isp_admins",
-          `id=eq.${reseller.id}&role=eq.reseller&parent_id=is.null`,
-          { parent_id: account.id, status: "active", updated_at: now },
-        );
-      } else {
-        await sbUpdateStrict(
-          "isp_admins",
-          `id=eq.${reseller.id}&role=eq.reseller`,
-          { status: "active", updated_at: now },
-        );
-      }
-    }
     const updated = await sbUpdateStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
       `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.pending`,
@@ -1133,9 +1181,7 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       ok: true,
       request: updated[0] ?? { ...request, status: action, responded_at: now, updated_at: now },
       reseller,
-      message: action === "approved"
-        ? "Reseller connected. Assign and provision a physical port when ready."
-        : "Reseller connection request rejected.",
+      message: "Reseller connection request rejected.",
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update the reseller connection request." });
@@ -1162,6 +1208,9 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
     const handoffType = req.body?.handoffType === "vlan" ? "vlan" : "physical";
     const handoffMode = req.body?.handoffMode === "vlan_services" ? "vlan_services" : "isp_router";
     const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    const requestedUsername = typeof req.body?.resellerUsername === "string"
+      ? req.body.resellerUsername.trim()
+      : "";
     const xponIdentifier = typeof req.body?.xponIdentifier === "string"
       ? req.body.xponIdentifier.trim().slice(0, 120)
       : "";
@@ -1190,14 +1239,18 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       res.status(400).json({ ok: false, error: "The bandwidth cap must be between 1 and 100000 Mbps." });
       return;
     }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$/.test(requestedUsername)) {
+      res.status(400).json({ ok: false, error: "Use a reseller username with 3-64 letters, numbers, dots, underscores, or hyphens." });
+      return;
+    }
 
     const requests = await sbSelectStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
-      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.approved&select=id,reseller_id,isp_admin_id,status&limit=1`,
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=in.(pending,approved)&select=id,reseller_id,isp_admin_id,status&limit=1`,
     );
     const request = requests[0];
     if (!request) {
-      res.status(404).json({ ok: false, error: "Approve the reseller connection before assigning an ISP router handoff." });
+       res.status(404).json({ ok: false, error: "This reseller connection request was not found or is no longer assignable." });
       return;
     }
     const resellerRows = await sbSelectStrict<{ id: number; parent_id: number | null; role: string; company_name: string | null; username: string }>(
@@ -1208,8 +1261,20 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
       return;
     }
-    if (!(await resellerCanUseIsp(request.reseller_id, resellerRows[0].parent_id, account.id))) {
+    if (request.status === "approved" && !(await resellerCanUseIsp(request.reseller_id, resellerRows[0].parent_id, account.id))) {
       res.status(409).json({ ok: false, error: "Approve the reseller connection before assigning an ISP router handoff." });
+      return;
+    }
+    if (request.status === "pending" && handoffMode !== "vlan_services") {
+      res.status(409).json({ ok: false, error: "A pending connection must be approved through successful VLAN service provisioning." });
+      return;
+    }
+    const duplicateUsername = await sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=neq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&username=eq.${encodeURIComponent(requestedUsername)}&select=id&limit=1`,
+    );
+    if (duplicateUsername[0]) {
+      res.status(409).json({ ok: false, error: "That reseller username is already in use in this ISP account." });
       return;
     }
 
@@ -1271,7 +1336,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       assigned_reseller_id: request.reseller_id,
       router_id: routerId,
       interface_name: handoffMode === "vlan_services"
-        ? vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username })
+         ? vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: requestedUsername })
         : interfaceName,
       vlan_tag: handoffType === "vlan" ? vlanTag : null,
       bridge_name: handoffMode === "vlan_services" ? bridgeName : null,
@@ -1328,13 +1393,6 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
     if (handoffMode === "vlan_services" && assignment) {
       try {
         await provisionVlanResellerServices(target, assignment, requestHostname(req));
-        await sbUpdateStrict("isp_reseller_ports", `id=eq.${assignment.id}&admin_id=eq.${account.id}`, {
-          status: "active",
-          link_status: "active",
-          link_provisioning_error: null,
-          provisioning_error: null,
-          updated_at: new Date().toISOString(),
-        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "VLAN Hotspot service provisioning failed.";
         await sbUpdateStrict("isp_reseller_ports", `id=eq.${assignment.id}&admin_id=eq.${account.id}`, {
@@ -1344,6 +1402,35 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
           updated_at: new Date().toISOString(),
         }).catch(() => undefined);
         res.status(502).json({ ok: false, error: `The VLAN assignment was saved, but RouterOS services were not applied: ${message}` });
+        return;
+      }
+      try {
+        await sbUpdateStrict("isp_reseller_ports", `id=eq.${assignment.id}&admin_id=eq.${account.id}`, {
+          status: "active",
+          link_status: "active",
+          link_provisioning_error: null,
+          provisioning_error: null,
+          updated_at: new Date().toISOString(),
+        });
+        const updatedAt = new Date().toISOString();
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${request.reseller_id}&role=eq.reseller`,
+          {
+            username: requestedUsername,
+            parent_id: account.id,
+            status: "active",
+            updated_at: updatedAt,
+          },
+        );
+        await sbUpdateStrict(
+          "isp_reseller_connection_requests",
+          `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.pending`,
+          { status: "approved", responded_at: updatedAt, updated_at: updatedAt },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "VLAN Hotspot service provisioning failed.";
+        res.status(502).json({ ok: false, error: `VLAN services were applied, but the approval record could not be finalized: ${message}` });
         return;
       }
     }
@@ -1358,7 +1445,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
         checkedAt: now,
       },
       message: handoffMode === "vlan_services"
-        ? `VLAN ${vlanTag} was pushed directly to the MikroTik with Hotspot and PPPoE services.`
+         ? `VLAN ${vlanTag} was pushed directly to the MikroTik with Hotspot and PPPoE services. The reseller connection is now approved.`
         : link.running
           ? "ISP router handoff assigned and the XPON link is detected."
           : "ISP router handoff assigned. Connect the XPON router, then refresh link status.",
@@ -1410,6 +1497,9 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
     const routerId = Number(req.body?.routerId);
     const bridgeName = typeof req.body?.bridgeName === "string" ? req.body.bridgeName.trim() : "";
     const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    const requestedUsername = typeof req.body?.resellerUsername === "string"
+      ? req.body.resellerUsername.trim()
+      : "";
     if (!Number.isSafeInteger(requestId) || requestId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(bridgeName)) {
       res.status(400).json({ ok: false, error: "Choose a valid router and ISP Hotspot bridge." });
       return;
@@ -1418,31 +1508,36 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
       res.status(400).json({ ok: false, error: "Enter a VLAN ID between 1 and 4094." });
       return;
     }
+    if (requestedUsername && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$/.test(requestedUsername)) {
+      res.status(400).json({ ok: false, error: "Use a reseller username with 3-64 letters, numbers, dots, underscores, or hyphens." });
+      return;
+    }
     const requests = await sbSelectStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
-      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.approved&select=id,reseller_id&limit=1`,
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=in.(pending,approved)&select=id,reseller_id&limit=1`,
     );
     const request = requests[0];
     if (!request) {
-      res.status(404).json({ ok: false, error: "Approve the reseller connection before generating its VLAN script." });
+      res.status(404).json({ ok: false, error: "This reseller connection request was not found or is no longer assignable." });
       return;
     }
     const resellerRows = await sbSelectStrict<{ id: number; username: string }>(
       "isp_admins",
-      `id=eq.${request.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller&is_active=is.true&select=id,username&limit=1`,
+      `id=eq.${request.reseller_id}&role=eq.reseller&is_active=is.true&select=id,username&limit=1`,
     );
     if (!resellerRows[0]) {
       res.status(409).json({ ok: false, error: "The reseller is no longer connected to this ISP account." });
       return;
     }
     await tenantRouter(account.id, routerId);
+    const effectiveUsername = requestedUsername || resellerRows[0].username;
     const script = buildVlanInterfaceScript({
-      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username }),
+      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: effectiveUsername }),
       bridge_name: bridgeName,
       reseller_id: request.reseller_id,
       vlan_tag: vlanTag,
     });
-    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: resellerRows[0].username }).toLowerCase()}-interface.rsc`;
+    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: effectiveUsername }).toLowerCase()}-interface.rsc`;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(script);
@@ -1513,6 +1608,28 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           updated_at: new Date().toISOString(),
         },
       );
+      const pendingRequests = await sbSelectStrict<{ id: number; reseller_id: number }>(
+        "isp_reseller_connection_requests",
+        `reseller_id=eq.${port.assigned_reseller_id ?? port.reseller_id}&isp_admin_id=eq.${port.admin_id}&status=eq.pending&select=id,reseller_id&limit=1`,
+      );
+      if (pendingRequests[0]) {
+        const finalizedAt = new Date().toISOString();
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${pendingRequests[0].reseller_id}&role=eq.reseller`,
+          {
+            username: port.interface_name,
+            parent_id: port.admin_id,
+            status: "active",
+            updated_at: finalizedAt,
+          },
+        );
+        await sbUpdateStrict(
+          "isp_reseller_connection_requests",
+          `id=eq.${pendingRequests[0].id}&isp_admin_id=eq.${port.admin_id}&status=eq.pending`,
+          { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
+        );
+      }
       res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
@@ -1525,6 +1642,88 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
     }
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to push the VLAN service to the MikroTik." });
+  }
+});
+
+router.delete("/admin/reseller-handoffs/:portId", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot delete ISP-managed VLAN assignments." });
+      return;
+    }
+    const portId = Number(req.params.portId);
+    if (!Number.isSafeInteger(portId) || portId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid reseller assignment." });
+      return;
+    }
+    const portRows = await sbSelectStrict<ResellerPortRow>(
+      "isp_reseller_ports",
+      `id=eq.${portId}&admin_id=eq.${account.id}&select=*&limit=1`,
+    );
+    const port = portRows[0];
+    if (!port) {
+      res.status(404).json({ ok: false, error: "This reseller assignment was not found for your ISP account." });
+      return;
+    }
+    const target = await tenantRouter(account.id, port.router_id);
+    if (port.handoff_mode === "vlan_services") {
+      await removeVlanResellerServices(target, port);
+    }
+
+    const sales = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_sales",
+      `reseller_port_id=eq.${port.id}&select=id&limit=1`,
+    );
+    if (sales[0]) {
+      await sbUpdateStrict(
+        "isp_reseller_ports",
+        `id=eq.${port.id}&admin_id=eq.${account.id}`,
+        {
+          status: "disabled",
+          link_status: "suspended",
+          assigned_reseller_id: null,
+          provisioning_error: null,
+          link_provisioning_error: null,
+          updated_at: new Date().toISOString(),
+        },
+      );
+    } else {
+      await sbDeleteStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${account.id}`);
+    }
+
+    const otherAssignments = await sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `id=neq.${port.id}&admin_id=eq.${account.id}&assigned_reseller_id=eq.${port.assigned_reseller_id ?? port.reseller_id}&status=neq.disabled&select=id&limit=1`,
+    );
+    if (!otherAssignments[0]) {
+      const now = new Date().toISOString();
+      await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${port.assigned_reseller_id ?? port.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller`,
+        { parent_id: null, status: "pending", updated_at: now },
+      );
+      await sbUpdateStrict(
+        "isp_reseller_connection_requests",
+        `reseller_id=eq.${port.assigned_reseller_id ?? port.reseller_id}&isp_admin_id=eq.${account.id}&status=eq.approved`,
+        { status: "pending", responded_at: null, updated_at: now },
+      );
+    }
+
+    res.json({
+      ok: true,
+      retainedForSales: Boolean(sales[0]),
+      message: sales[0]
+        ? "The VLAN service was removed and the assignment was disabled because it has recorded sales."
+        : "The VLAN service and reseller assignment were deleted. The reseller can be provisioned again.",
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      error: error instanceof Error
+        ? `The VLAN cleanup failed; the assignment was kept so it can be retried: ${error.message}`
+        : "The VLAN cleanup failed; the assignment was kept so it can be retried.",
+    });
   }
 });
 
