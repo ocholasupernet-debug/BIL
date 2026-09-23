@@ -274,7 +274,7 @@ jobs:
                 throw new Error(`Reseller port inspection failed (${response.status}): ${body.slice(0, 1000)}`);
               }
               console.log(JSON.stringify(JSON.parse(body), null, 2));
-              NODE
+            NODE
               echo "=== Reseller port inspection completed ==="
             fi
             echo "=== Deploy finished at $(date) ==="
