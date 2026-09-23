@@ -253,6 +253,7 @@ type ExportConfig = {
   adminId: number;
   routerId: number;
   portId: number;
+  previewOnly: boolean;
   apiBase: string;
   plans: PortalPlan[];
   ispName: string;
@@ -326,6 +327,7 @@ function makeExportConfig(
   plans: PortalPlan[],
   appearance: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
   portId = 0,
+  previewOnly = false,
 ): ExportConfig {
   return {
     adminId,
@@ -333,6 +335,7 @@ function makeExportConfig(
       ? Number(settings.routerId)
       : 0,
     portId: Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? Number(portId) : 0,
+    previewOnly,
     apiBase,
     plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
@@ -478,7 +481,7 @@ export async function buildPortalHtml(
   } catch {
     /* The API fallback remains available when the admin panel is offline. */
   }
-  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance, scope.portId);
+  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);

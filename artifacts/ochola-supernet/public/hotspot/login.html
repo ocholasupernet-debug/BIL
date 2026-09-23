@@ -451,7 +451,7 @@ var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
 var ROUTER_CHAP_ID="$(chap-id)";
 var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
- var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded";
+  var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 
 function normaliseMac(value){
@@ -554,6 +554,7 @@ function applyPortalConfig(data){
   if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
    if(Number.isSafeInteger(Number(data.routerId))&&Number(data.routerId)>0)PORTAL_ROUTER_ID=Number(data.routerId);
    if(Number.isSafeInteger(Number(data.portId))&&Number(data.portId)>0)PORTAL_PORT_ID=Number(data.portId);
+   PORTAL_PREVIEW_ONLY=data.previewOnly===true;
   var configuredPlans=normalisePlanList(data.plans);
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
   var name=typeof data.ispName==="string"&&data.ispName.trim()?data.ispName.trim():"OcholaSupernet";
@@ -668,7 +669,7 @@ function loadPortalTypography(done){
    }).join("|");
  }
  function refreshPlansFromApi(){
-   if(planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
+    if(PORTAL_PREVIEW_ONLY||planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
    planRequestInFlight=true;
     var query=(PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"")+
        (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")+

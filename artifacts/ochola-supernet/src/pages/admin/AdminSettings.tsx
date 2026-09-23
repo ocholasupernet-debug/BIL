@@ -261,6 +261,7 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
   const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
   const [bankStkPushConfigured, setBankStkPushConfigured] = useState(false);
   const [adminTillPushConfigured, setAdminTillPushConfigured] = useState(false);
+  const [adminPaybillConfigured, setAdminPaybillConfigured] = useState(false);
   const [status, setStatus] = useState<PaymentTestStatus>("idle");
   const [checkoutId, setCheckoutId] = useState("");
   const [error, setError] = useState("");
@@ -269,13 +270,14 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
     const loadMpesaSettings = () => {
       fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`)
         .then(response => response.json())
-        .then((data: { configured?: boolean; settings?: { env?: "sandbox" | "production"; shortcode?: string; hasTillNumber?: boolean; bankStkPushConfigured?: boolean; adminTillPushConfigured?: boolean; paymentGateway?: string } }) => {
+        .then((data: { configured?: boolean; settings?: { env?: "sandbox" | "production"; shortcode?: string; hasTillNumber?: boolean; bankStkPushConfigured?: boolean; adminTillPushConfigured?: boolean; adminPaybillConfigured?: boolean; paymentGateway?: string } }) => {
           setConfigured(data.configured === true);
           setEnvironment(data.settings?.env === "production" ? "production" : "sandbox");
           setShortcode(data.settings?.shortcode?.trim() || "");
           setPaymentGateway(ADMIN_PAYMENT_GATEWAY_OPTIONS.some(option => option.id === data.settings?.paymentGateway) ? data.settings?.paymentGateway || "mpesa_paybill" : "mpesa_paybill");
           setBankStkPushConfigured(data.settings?.bankStkPushConfigured === true);
           setAdminTillPushConfigured(data.settings?.adminTillPushConfigured === true);
+          setAdminPaybillConfigured(data.settings?.adminPaybillConfigured === true);
         })
         .catch(() => setConfigured(false));
     };
@@ -331,6 +333,10 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
     }
     if (paymentGateway === "mpesa_till_push" && !adminTillPushConfigured) {
       setError("Save this ISP’s Buy Goods Till Number before sending a Till Push test.");
+      return;
+    }
+    if (paymentGateway === "mpesa_paybill" && !adminPaybillConfigured) {
+      setError("Save this ISP’s receiving PayBill Number and Account / Business Number before sending a PayBill test.");
       return;
     }
 
@@ -414,6 +420,11 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
             Complete and save this ISP’s Buy Goods Till Number before sending a test.
           </p>
         )}
+        {paymentGateway === "mpesa_paybill" && !adminPaybillConfigured && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            Complete and save this ISP’s receiving PayBill Number and Account / Business Number before sending a test.
+          </p>
+        )}
         {error && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}><AlertTriangle size={13} aria-hidden="true" /> {error}</p>}
         {statusMessage && (
           <p style={{ color: status === "paid" ? "#34d399" : status === "failed" || status === "expired" ? "#fbbf24" : C.muted, fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
@@ -421,7 +432,7 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
           </p>
         )}
         <Row>
-           <button type="submit" disabled={configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending"} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending" ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || status === "sending" || status === "pending" ? 0.55 : 1 }}>
+           <button type="submit" disabled={configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || (paymentGateway === "mpesa_paybill" && !adminPaybillConfigured) || status === "sending" || status === "pending"} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || (paymentGateway === "mpesa_paybill" && !adminPaybillConfigured) || status === "sending" || status === "pending" ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: configured !== true || !usingDarajaGateway || (usingBankStkPush && !bankStkPushConfigured) || (usingTillPush && !adminTillPushConfigured) || (paymentGateway === "mpesa_paybill" && !adminPaybillConfigured) || status === "sending" || status === "pending" ? 0.55 : 1 }}>
              {status === "sending" ? "Sending…" : status === "pending" ? "Waiting for approval…" : "Send STK Prompt"}
           </button>
         </Row>

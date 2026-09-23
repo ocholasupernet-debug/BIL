@@ -76,3 +76,14 @@ test("service routing strips fields that are not collection destinations", () =>
     { paybillNumber: "123456", accountNumber: "ISP" },
   );
 });
+
+test("service routing accepts legacy PayBill destination field names", () => {
+  assert.deepEqual(
+    routing.collectionConfig("mpesa_paybill", {
+      merchantIdentifier: "123456",
+      accountReference: "ISP",
+      clientSecret: "must-not-leak",
+    }),
+    { paybillNumber: "123456", accountNumber: "ISP" },
+  );
+});

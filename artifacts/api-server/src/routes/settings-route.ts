@@ -173,21 +173,23 @@ function bankStkPushConfig(value: unknown): BankStkPushConfig {
   const config = gatewayConfigMap(value).bank_stk_push ?? {};
   return {
     bankName: config.bankName ?? "",
-    paybillNumber: config.paybillNumber ?? "",
-    accountNumber: config.accountNumber ?? "",
+    paybillNumber: config.paybillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+    accountNumber: config.accountNumber || config.accountReference || config.account_reference || "",
   };
 }
 
 function mpesaTillPushConfig(value: unknown): MpesaTillPushConfig {
   const config = gatewayConfigMap(value).mpesa_till_push ?? {};
-  return { tillNumber: config.tillNumber ?? "" };
+  return {
+    tillNumber: config.tillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+  };
 }
 
 function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
   const config = gatewayConfigMap(value).mpesa_paybill ?? {};
   return {
-    paybillNumber: config.paybillNumber ?? "",
-    accountNumber: config.accountNumber ?? "",
+    paybillNumber: config.paybillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+    accountNumber: config.accountNumber || config.accountReference || config.account_reference || "",
   };
 }
 

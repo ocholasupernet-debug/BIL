@@ -71,10 +71,19 @@ export function collectionConfig(gatewayId: string, value: unknown): Record<stri
     : gatewayId === "mpesa_till_push"
     ? ["tillNumber"]
     : [];
+  const aliases: Record<string, string[]> = {
+    paybillNumber: ["paybillNumber", "merchantIdentifier", "merchant_identifier"],
+    accountNumber: ["accountNumber", "accountReference", "account_reference"],
+    tillNumber: ["tillNumber", "merchantIdentifier", "merchant_identifier"],
+    bankName: ["bankName"],
+  };
   return Object.fromEntries(
     allowed
-      .filter(field => typeof raw[field] === "string")
-      .map(field => [field, (raw[field] as string).trim()]),
+      .map(field => {
+        const source = aliases[field]?.find(key => typeof raw[key] === "string");
+        return [field, source ? (raw[source] as string).trim() : ""];
+      })
+      .filter(([, value]) => Boolean(value)),
   );
 }
 

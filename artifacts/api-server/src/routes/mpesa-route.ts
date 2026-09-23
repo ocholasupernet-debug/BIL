@@ -200,8 +200,14 @@ function bankStkPushConfig(value: unknown): BankStkPushConfig {
   const paybillNumber = typeof config.paybillNumber === "string" ? config.paybillNumber.trim() : "";
   return {
     bankName,
-    paybillNumber: paybillNumber || bankBusinessNumberFor(bankName),
-    accountNumber: typeof config.accountNumber === "string" ? config.accountNumber.trim() : "",
+    paybillNumber: paybillNumber
+      || (typeof config.merchantIdentifier === "string" ? config.merchantIdentifier.trim() : "")
+      || bankBusinessNumberFor(bankName),
+    accountNumber: typeof config.accountNumber === "string"
+      ? config.accountNumber.trim()
+      : typeof config.accountReference === "string"
+        ? config.accountReference.trim()
+        : "",
   };
 }
 
@@ -220,14 +226,26 @@ function gatewayConfig(value: unknown, gatewayId: string): Record<string, string
 }
 
 function mpesaTillPushConfig(value: unknown): MpesaTillPushConfig {
-  return { tillNumber: gatewayConfig(value, "mpesa_till_push").tillNumber ?? "" };
+  const config = gatewayConfig(value, "mpesa_till_push");
+  return {
+    tillNumber: config.tillNumber
+      || config.merchantIdentifier
+      || config.merchant_identifier
+      || "",
+  };
 }
 
 function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
   const config = gatewayConfig(value, "mpesa_paybill");
   return {
-    paybillNumber: config.paybillNumber ?? "",
-    accountNumber: config.accountNumber ?? "",
+    paybillNumber: config.paybillNumber
+      || config.merchantIdentifier
+      || config.merchant_identifier
+      || "",
+    accountNumber: config.accountNumber
+      || config.accountReference
+      || config.account_reference
+      || "",
   };
 }
 
@@ -1258,7 +1276,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
         res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
        return;
      }
-      const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
+       const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
       const { businessShortcode, destination } = payment;
       if (!destination) {
         res.status(400).json({
@@ -1583,7 +1601,13 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
        return;
      }
-       if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
+       const resolvedPaybill = paymentGateway === "mpesa_paybill"
+         ? {
+             paybillNumber: mpesaPaybill.paybillNumber || resellerRoute?.merchantIdentifier || "",
+             accountNumber: mpesaPaybill.accountNumber || resellerRoute?.accountReference || "",
+           }
+         : mpesaPaybill;
+        if (paymentGateway === "mpesa_paybill" && (!resolvedPaybill.paybillNumber || !resolvedPaybill.accountNumber)) {
         res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
         return;
       }
@@ -1591,7 +1615,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
         res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });
         return;
       }
-      const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, mpesaPaybill);
+      const payment = resolveDarajaPayment(paymentGateway, cfg, bankStkPush, mpesaTillPush, resolvedPaybill);
       const { businessShortcode, destination } = payment;
      if (paymentGateway === "mpesa_till_push" && !destination) {
        res.status(400).json({ ok: false, error: "Buy Goods Till is not configured for this ISP. Add it in Admin Settings → Payment Gateways." });

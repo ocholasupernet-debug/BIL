@@ -181,6 +181,52 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
   }
 });
 
+test("local hotspot preview keeps embedded plans instead of refreshing them away", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    if (url.pathname === "/hotspot/login.html") return new Response(template, { status: 200 });
+    if (url.pathname === "/api/public/typography") {
+      return new Response(JSON.stringify({ apiBase: "https://tenant.example.test" }), { status: 200 });
+    }
+    if (url.pathname === "/api/plans") {
+      return new Response(JSON.stringify([{
+        id: 41,
+        name: "Preview 10 Mbps",
+        price: 50,
+        validity: 1,
+        validity_unit: "days",
+      }]), { status: 200 });
+    }
+    throw new Error(`unexpected preview request: ${String(input)}`);
+  };
+
+  try {
+    const html = await builder.buildPortalHtml(stagingSettings(), "tenant", {}, {
+      portId: 88,
+      previewOnly: true,
+    });
+    const configMatch = html.match(/window\.__HOTSPOT_CONFIG__=(.*);<\/script>/);
+    assert.ok(configMatch, "preview config bootstrap is present");
+    const config = JSON.parse(configMatch[1]);
+    assert.equal(config.previewOnly, true);
+    assert.deepEqual(config.plans, [{
+      id: 41,
+      name: "Preview 10 Mbps",
+      price: 50,
+      validity: 1,
+      validity_unit: "days",
+    }]);
+    assert.match(html, /data-plan-id="41"/);
+    assert.match(await readFile(templatePath, "utf8"), /PORTAL_PREVIEW_ONLY\|\|planRequestInFlight/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
 test("invalid or internal API origins fall back to the public tenant HTTPS origin", async () => {
   const template = await readFile(templatePath, "utf8");
   const builder = await loadExportBuilder();
