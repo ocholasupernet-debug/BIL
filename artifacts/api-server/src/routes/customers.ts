@@ -41,6 +41,7 @@ type CustomerRow = {
   type: string | null;
   plan_id: number | null;
   router_id: number | null;
+  port_id: number | null;
   ip_address: string | null;
   status: string;
   expires_at: string | null;
@@ -53,6 +54,7 @@ type PlanRow = {
   type: string | null;
   plan_type: string | null;
   router_id: number | null;
+  port_id: number | null;
   speed_down: number | null;
   speed_up: number | null;
   speed_down_unit: string | null;
@@ -134,7 +136,7 @@ async function reconcileCustomerAccess(
   const plan = nextPlanId
     ? (await sbSelect<PlanRow>(
         "isp_plans",
-        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,plan_type,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
       ))[0]
     : undefined;
   const planType = String(plan?.plan_type || plan?.type || nextType).toLowerCase();
@@ -204,7 +206,7 @@ async function reconcileCustomerAccess(
       await reconcileHotspotUserAccess(creds, {
         name: nextName,
         password: nextPassword,
-        profile: hotspotPlanProfileName(plan.name),
+        profile: hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id),
         comment: nextName,
         expiresAt: nextExpiry,
         enabled,

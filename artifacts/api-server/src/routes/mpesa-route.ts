@@ -1959,7 +1959,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
 
   try {
-    const hotspotProfile = hotspotPlanProfileName(plan.name);
+    const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
     await syncRadiusCustomer({
@@ -2305,7 +2305,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
 
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
-  const hotspotProfile = hotspotPlanProfileName(plan.name);
+  const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   const dataLimitMb = Number(plan.data_limit_mb);
   const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
     ? String(Math.floor(dataLimitMb * 1_000_000))

@@ -47,12 +47,24 @@ export function isPrepaidHotspotUsername(value: unknown): boolean {
 }
 
 /**
- * The admin plan sync uses the normalized plan name as the RouterOS hotspot
- * user profile. Paid-user provisioning must reference that existing profile
- * instead of inventing an ID-based profile.
+ * The admin plan sync uses a normalized, service-scoped plan name as the
+ * RouterOS hotspot user profile. The scope prevents same-named plans on
+ * separate routers or physical service ports from sharing a profile.
  */
-export function hotspotPlanProfileName(planName: unknown): string {
-  return String(planName ?? "").trim().replace(/\s+/g, "-").toLowerCase();
+export function hotspotPlanProfileName(
+  planName: unknown,
+  routerId?: unknown,
+  portId?: unknown,
+): string {
+  const base = String(planName ?? "").trim().replace(/\s+/g, "-").toLowerCase();
+  const router = Number(routerId);
+  const port = Number(portId);
+  const scope = Number.isSafeInteger(port) && port > 0
+    ? `r${Number.isSafeInteger(router) && router > 0 ? router : "x"}-p${port}`
+    : Number.isSafeInteger(router) && router > 0
+      ? `r${router}`
+      : "";
+  return scope ? `${base}-${scope}` : base;
 }
 
 export function routerRateLimit(

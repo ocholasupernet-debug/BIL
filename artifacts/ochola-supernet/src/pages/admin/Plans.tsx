@@ -1066,6 +1066,8 @@ export default function Plans() {
                 id:            p.id,
                 name:          p.name,
                 type:          p.type,
+                router_id:     p.router_id,
+                port_id:       p.port_id,
                 speed_down:    p.speed_down,
                 speed_up:      p.speed_up,
                 speed_down_unit: "Mbps",

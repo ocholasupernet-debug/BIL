@@ -322,7 +322,13 @@ export function PPPoELogin({
   const [code, setCode] = useState("");
   const [activating, setActivating] = useState(false);
   const [activated, setActivated] = useState(false);
-  const [customerContext, setCustomerContext] = useState<{ customerId: number; adminId: number; phone: string } | null>(null);
+  const [customerContext, setCustomerContext] = useState<{
+    customerId: number;
+    adminId: number;
+    routerId: number | null;
+    portId: number | null;
+    phone: string;
+  } | null>(null);
   const [packages, setPackages] = useState<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>>([]);
   const [packagesLoading, setPackagesLoading] = useState(false);
   const [purchasePlanId, setPurchasePlanId] = useState<number | null>(null);
@@ -382,7 +388,7 @@ export function PPPoELogin({
     })
       .then(response => {
         if (!response.ok) throw new Error("Portal access was denied.");
-        return response.json() as Promise<{ ok?: boolean; customer?: { customerId?: number; adminId?: number; phone?: string | null } }>;
+        return response.json() as Promise<{ ok?: boolean; customer?: { customerId?: number; adminId?: number; routerId?: number | null; portId?: number | null; phone?: string | null } }>;
       })
       .then(result => {
         if (!result.ok) throw new Error("Portal access was denied.");
@@ -390,6 +396,8 @@ export function PPPoELogin({
           setCustomerContext({
             customerId: result.customer.customerId,
             adminId: result.customer.adminId,
+            routerId: result.customer.routerId ?? null,
+            portId: result.customer.portId ?? null,
             phone: result.customer.phone ?? "",
           });
         }
@@ -408,7 +416,10 @@ export function PPPoELogin({
   useEffect(() => {
     if (!customerContext) return;
     setPackagesLoading(true);
-    fetch(`/api/plans?adminId=${encodeURIComponent(String(customerContext.adminId))}&type=pppoe&activeOnly=true&purchasableOnly=true`)
+    const scope = customerContext.routerId
+      ? `&routerId=${encodeURIComponent(String(customerContext.routerId))}${customerContext.portId ? `&portId=${encodeURIComponent(String(customerContext.portId))}` : ""}`
+      : "";
+    fetch(`/api/plans?adminId=${encodeURIComponent(String(customerContext.adminId))}&type=pppoe&activeOnly=true&purchasableOnly=true${scope}`)
       .then(response => response.ok ? response.json() as Promise<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>> : [])
       .then(rows => setPackages(rows.filter(plan => plan.id)))
       .catch(() => setPackages([]))

@@ -180,18 +180,33 @@ router.get("/plans", async (req, res): Promise<void> => {
     : "";
   const requestedRouterId = parseOptionalId(req.query.routerId);
   const requestedPortId = parseOptionalId(req.query.portId);
+  /*
+   * Customer portals are always tied to one RouterOS service. Do not return
+   * router-wide or sibling-port packages when a physical port was supplied,
+   * and do not return every router's packages when the scope is absent.
+   */
   const scopeFilter = requestedRouterId
     ? requestedPortId
-      ? `&router_id=eq.${requestedRouterId}&or=(port_id.eq.${requestedPortId},port_id.is.null)`
-      : `&router_id=eq.${requestedRouterId}`
-    : "&router_id=not.is.null";
+      ? `&router_id=eq.${requestedRouterId}&port_id=eq.${requestedPortId}`
+      : `&router_id=eq.${requestedRouterId}&port_id=is.null`
+    : "";
   const activeOnly = req.query.activeOnly === "true";
   const purchasableOnly = req.query.purchasableOnly === "true";
   const availabilityFilters = [
     activeOnly ? "is_active=is.true" : "",
     purchasableOnly ? "client_can_purchase=is.true" : "",
   ].filter(Boolean).map(filter => `&${filter}`).join("");
-  const rows = adminId
+  if (adminId && requestedPortId) {
+    const ports = await sbSelect<{ id: number }>(
+      "isp_reseller_ports",
+      `id=eq.${requestedPortId}&router_id=eq.${requestedRouterId ?? 0}&admin_id=eq.${adminId}&status=neq.disabled&select=id&limit=1`,
+    );
+    if (!ports[0]) {
+      res.json([]);
+      return;
+    }
+  }
+  const rows = adminId && requestedRouterId
     ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
     : [];
   res.json(rows);
