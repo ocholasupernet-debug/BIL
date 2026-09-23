@@ -479,6 +479,19 @@ async function provisionVlanResellerServices(
       await runRouterCommand(creds, addCommand);
     }
   };
+  const ensureFilterComment = async (
+    comment: string,
+    addCommand: string[],
+  ): Promise<void> => {
+    const rows = await runRouterCommand(creds, [
+      "/ip/firewall/filter/print",
+      "=.proplist=.id,comment",
+      `?comment=${comment}`,
+    ]);
+    if (!Array.isArray(rows) || !rows.some(row => String((row as Record<string, unknown>).comment ?? "") === comment)) {
+      await runRouterCommand(creds, addCommand);
+    }
+  };
 
   const gateway = network.gateway;
   const addressRows = await runRouterCommand(creds, [
@@ -633,6 +646,66 @@ async function provisionVlanResellerServices(
       `=comment=${commentPrefix}_hotspot_nat`,
     ]);
   }
+  await ensureFilterComment(`${commentPrefix}_allow_service_dhcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=udp",
+    "=dst-port=67",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dhcp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_dns_udp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=udp",
+    "=dst-port=53",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dns_udp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_dns_tcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=tcp",
+    "=dst-port=53",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dns_tcp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_forward`, [
+    "/ip/firewall/filter/add",
+    "=chain=forward",
+    `=in-interface=${vlanInterface}`,
+    "=out-interface-list=WAN",
+    "=action=accept",
+    "=hotspot=auth",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_forward`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    "=in-interface-list=WAN",
+    "=protocol=udp",
+    "=dst-port=53",
+    "=action=drop",
+    "=place-before=0",
+    `=comment=${commentPrefix}_block_wan_dns_udp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_block_wan_dns_tcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    "=in-interface-list=WAN",
+    "=protocol=tcp",
+    "=dst-port=53",
+    "=action=drop",
+    "=place-before=0",
+    `=comment=${commentPrefix}_block_wan_dns_tcp`,
+  ]);
   await ensureNamed("/ppp/profile/print", resources.pppoeProfile, [
     "/ppp/profile/add",
     `=name=${resources.pppoeProfile}`,
