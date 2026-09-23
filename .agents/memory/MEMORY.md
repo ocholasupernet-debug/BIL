@@ -72,6 +72,7 @@
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
 - [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
+- [Hotspot template macro contract](hotspot-template-macro-contract.md) — Keep required RouterOS tokens in exported templates, even when local fallbacks make the preview readable.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
 - [Reseller connection approval](reseller-connection-approval.md) — Approving an ISP connection links accounts; port assignment and RouterOS activation remain explicit ISP actions.
