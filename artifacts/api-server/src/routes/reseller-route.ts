@@ -739,35 +739,50 @@ async function provisionVlanResellerServices(
     `=comment=${commentPrefix}_allow_service_forward`,
   ]);
   /*
-   * RouterOS 6 does not accept hotspot=unauth as a filter flag. Keep the
-   * authenticated allow immediately above this scoped deny instead: auth
-   * traffic stops at the allow, while every other VLAN-to-WAN flow is denied.
+   * Keep the deny below RouterOS' built-in Hotspot jump rules. If it is
+   * placed first, clients lose Internet access but HTTP requests never reach
+   * the Hotspot redirect.
    */
-  const blockServiceForwardId = await ensureFilterComment(`${commentPrefix}_block_unauth_service_forward`, [
+  const blockComment = `${commentPrefix}_block_unauth_service_forward`;
+  const existingBlockRows = await runRouterCommand(creds, [
+    "/ip/firewall/filter/print",
+    "=.proplist=.id,comment",
+    `?comment=${blockComment}`,
+  ]);
+  if (Array.isArray(existingBlockRows)) {
+    for (const row of existingBlockRows) {
+      const id = (row as Record<string, unknown>)[".id"];
+      if (id) {
+        await runRouterCommand(creds, ["/ip/firewall/filter/remove", `=.id=${id}`]);
+      }
+    }
+  }
+  const forwardingFilterRows = await runRouterCommand(creds, [
+    "/ip/firewall/filter/print",
+    "=.proplist=.id,chain,action,hotspot,out-interface-list,in-interface,comment",
+  ]);
+  const forwardingRows = Array.isArray(forwardingFilterRows)
+    ? forwardingFilterRows as Array<Record<string, unknown>>
+    : [];
+  const isWanForwardAccept = (row: Record<string, unknown>): boolean =>
+    String(row.chain ?? "") === "forward"
+    && String(row.action ?? "") === "accept"
+    && String(row["out-interface-list"] ?? "").split(",").map(value => value.trim()).includes("WAN")
+    && String(row[".id"] ?? "") !== String(allowServiceForwardId ?? "");
+  const hotspotWanAccept = forwardingRows.find(row =>
+    isWanForwardAccept(row) && String(row.hotspot ?? "") === "!from-client");
+  const genericWanAccept = forwardingRows.find(isWanForwardAccept);
+  const placeBefore = String((hotspotWanAccept ?? genericWanAccept)?.[".id"] ?? "0");
+  await runRouterCommand(creds, [
     "/ip/firewall/filter/add",
     "=chain=forward",
     `=in-interface=${vlanInterface}`,
     "=out-interface-list=WAN",
     "=action=drop",
-    "=place-before=0",
-    `=comment=${commentPrefix}_block_unauth_service_forward`,
+    "=hotspot=!auth",
+    `=place-before=${placeBefore}`,
+    `=comment=${blockComment}`,
   ]);
-  if (allowServiceForwardId && blockServiceForwardId) {
-    await runRouterCommand(creds, [
-      "/ip/firewall/filter/remove",
-      `=.id=${allowServiceForwardId}`,
-    ]);
-    await runRouterCommand(creds, [
-      "/ip/firewall/filter/add",
-      "=chain=forward",
-      `=in-interface=${vlanInterface}`,
-      "=out-interface-list=WAN",
-      "=action=accept",
-      "=hotspot=auth",
-      "=place-before=0",
-      `=comment=${commentPrefix}_allow_service_forward`,
-    ]);
-  }
   await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
     "/ip/firewall/filter/add",
     "=chain=input",
