@@ -213,12 +213,10 @@ jobs:
               const payload = `a.3.${time}`;
               const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
               const token = `${payload}.${signature}`;
-              const response = await fetch(`http://127.0.0.1:8080/api/admin/reseller-handoffs/${portId}/push`, {
+              const response = await fetch(`https://come.isplatty.org/api/admin/reseller-handoffs/${portId}/push`, {
                 method: "POST",
                 headers: {
                   authorization: `Bearer ${token}`,
-                  host: "come.isplatty.org",
-                  "x-forwarded-proto": "https",
                   "content-type": "application/json",
                 },
                 body: "{}",
