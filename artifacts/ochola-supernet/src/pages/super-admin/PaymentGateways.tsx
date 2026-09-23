@@ -73,6 +73,24 @@ interface ManualRegistrationPayment {
   notes: string | null;
   created_at: string;
 }
+interface ResellerRouteDestination {
+  id: string;
+  type: "till" | "paybill";
+  name: string;
+  number: string;
+  accountReference: string;
+}
+interface ResellerRouteReseller { id: number; name: string; username: string | null; }
+interface ResellerRoutePort { id: number; resellerId: number; routerId: number; label: string; status: string; }
+interface ResellerRoute {
+  id: number;
+  resellerId: number;
+  routerId: number | null;
+  portId: number | null;
+  gatewayType: string;
+  config: Record<string, string>;
+  isActive: boolean;
+}
 
 const emptyDestination = (): Omit<PaymentDestination, "id"> & { id?: string } => ({
   type: "paybill",
@@ -156,6 +174,16 @@ export default function SuperAdminPaymentGateways() {
   const [destinationSaving, setDestinationSaving] = useState(false);
   const [registrationReplacePassword, setRegistrationReplacePassword] = useState("");
   const [manualRegistrations, setManualRegistrations] = useState<ManualRegistrationPayment[]>([]);
+  const [routeDestinations, setRouteDestinations] = useState<ResellerRouteDestination[]>([]);
+  const [routeResellers, setRouteResellers] = useState<ResellerRouteReseller[]>([]);
+  const [routePorts, setRoutePorts] = useState<ResellerRoutePort[]>([]);
+  const [resellerRoutes, setResellerRoutes] = useState<ResellerRoute[]>([]);
+  const [routeResellerId, setRouteResellerId] = useState("");
+  const [routePortId, setRoutePortId] = useState("");
+  const [routeDestinationId, setRouteDestinationId] = useState("");
+  const [routeActive, setRouteActive] = useState(true);
+  const [routeError, setRouteError] = useState("");
+  const [routeSaving, setRouteSaving] = useState(false);
   const token = useMemo(() => {
     try { return localStorage.getItem("ochola_superadmin_token") || ""; } catch { return ""; }
   }, []);
@@ -198,6 +226,71 @@ export default function SuperAdminPaymentGateways() {
   useEffect(() => {
     void loadManualRegistrations();
   }, [token]);
+
+  const loadResellerRoutes = async () => {
+    try {
+      const response = await fetch("/api/super-admin/reseller-payment-routes", { headers: { "x-sa-token": token } });
+      const data = await response.json() as {
+        ok: boolean; error?: string; destinations?: ResellerRouteDestination[];
+        resellers?: ResellerRouteReseller[]; ports?: ResellerRoutePort[]; routes?: ResellerRoute[];
+      };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not load reseller payment routes.");
+      setRouteDestinations(data.destinations ?? []);
+      setRouteResellers(data.resellers ?? []);
+      setRoutePorts(data.ports ?? []);
+      setResellerRoutes(data.routes ?? []);
+    } catch (error) {
+      setRouteError(error instanceof Error ? error.message : "Could not load reseller payment routes.");
+    }
+  };
+
+  useEffect(() => {
+    void loadResellerRoutes();
+  }, [token]);
+
+  const saveResellerRoute = async () => {
+    setRouteError("");
+    setRouteSaving(true);
+    try {
+      if (!routeResellerId || !routeDestinationId) throw new Error("Choose a reseller and an active Till or PayBill destination.");
+      const response = await fetch("/api/super-admin/reseller-payment-routes", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify({
+          resellerId: Number(routeResellerId),
+          portId: routePortId ? Number(routePortId) : null,
+          destinationId: routeDestinationId,
+          isActive: routeActive,
+        }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save reseller payment route.");
+      await loadResellerRoutes();
+    } catch (error) {
+      setRouteError(error instanceof Error ? error.message : "Could not save reseller payment route.");
+    } finally {
+      setRouteSaving(false);
+    }
+  };
+
+  const removeResellerRoute = async (id: number) => {
+    if (!window.confirm("Remove this reseller payment route? Purchases on that VLAN will stop until another applicable route is assigned.")) return;
+    setRouteError("");
+    setRouteSaving(true);
+    try {
+      const response = await fetch(`/api/super-admin/reseller-payment-routes/${id}`, {
+        method: "DELETE",
+        headers: { "x-sa-token": token },
+      });
+      const data = await response.json() as { ok: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not remove reseller payment route.");
+      await loadResellerRoutes();
+    } catch (error) {
+      setRouteError(error instanceof Error ? error.message : "Could not remove reseller payment route.");
+    } finally {
+      setRouteSaving(false);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/super-admin/mpesa", { headers: { "x-sa-token": token } })
@@ -560,6 +653,68 @@ export default function SuperAdminPaymentGateways() {
               </div>
             </div>
           )}
+        </section>
+
+        <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: "1.1rem" }}>🔐</span>
+            <div style={{ color: "white", fontWeight: 750 }}>Reseller VLAN M-Pesa routes</div>
+          </div>
+          <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.5, margin: "0 0 16px" }}>
+            Assign an active Super Admin collection destination to a reseller or one of its hotspot VLANs. Daraja credentials stay global and are never exposed to reseller accounts.
+          </p>
+          {routeError && <div style={{ color: "#fca5a5", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 14 }}>{routeError}</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+            <Field label="Reseller">
+              <select style={inp} value={routeResellerId} onChange={event => { setRouteResellerId(event.target.value); setRoutePortId(""); }}>
+                <option value="">Choose reseller</option>
+                {routeResellers.map(reseller => <option key={reseller.id} value={reseller.id}>{reseller.name}{reseller.username ? ` · ${reseller.username}` : ""}</option>)}
+              </select>
+            </Field>
+            <Field label="Scope" hint="A VLAN route takes priority over router and reseller defaults.">
+              <select style={inp} value={routePortId} onChange={event => setRoutePortId(event.target.value)} disabled={!routeResellerId}>
+                <option value="">Reseller default</option>
+                {routePorts.filter(port => String(port.resellerId) === routeResellerId).map(port => <option key={port.id} value={port.id}>{port.label}</option>)}
+              </select>
+            </Field>
+            <Field label="M-Pesa destination">
+              <select style={inp} value={routeDestinationId} onChange={event => setRouteDestinationId(event.target.value)}>
+                <option value="">Choose active destination</option>
+                {routeDestinations.map(destination => <option key={destination.id} value={destination.id}>{destination.name} · {destination.type === "till" ? "Till" : "PayBill"} · {destination.number}</option>)}
+              </select>
+            </Field>
+            <Field label="Route status">
+              <div style={{ display: "flex", alignItems: "center", gap: 10, height: 36 }}>
+                <Toggle on={routeActive} onChange={setRouteActive} />
+                <span style={{ color: routeActive ? "#4ade80" : C.sub, fontSize: "0.76rem" }}>{routeActive ? "Active for checkout" : "Inactive"}</span>
+              </div>
+            </Field>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+            <button onClick={saveResellerRoute} disabled={routeSaving} style={{ border: 0, borderRadius: 8, background: C.accent, color: "white", padding: "9px 13px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer", opacity: routeSaving ? 0.6 : 1 }}>
+              {routeSaving ? "Saving…" : "Assign M-Pesa route"}
+            </button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+            {resellerRoutes.length === 0 ? (
+              <div style={{ color: C.muted, fontSize: "0.74rem" }}>No reseller routes have been assigned yet.</div>
+            ) : resellerRoutes.map(route => {
+              const reseller = routeResellers.find(item => item.id === route.resellerId);
+              const port = routePorts.find(item => item.id === route.portId);
+              const destination = route.config?.destinationId
+                ? routeDestinations.find(item => item.id === route.config.destinationId)
+                : undefined;
+              return (
+                <div key={route.id} style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 11px" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: "white", fontWeight: 700, fontSize: "0.78rem" }}>{reseller?.name ?? `Reseller #${route.resellerId}`} <span style={{ color: C.sub, fontWeight: 500 }}>· {port?.label ?? "Reseller default"}</span></div>
+                    <div style={{ color: C.sub, fontSize: "0.7rem", marginTop: 3 }}>{destination?.name ?? (route.config?.tillNumber || route.config?.paybillNumber || "Destination")} · {route.isActive ? "active" : "inactive"}</div>
+                  </div>
+                  <button onClick={() => void removeResellerRoute(route.id)} disabled={routeSaving} style={{ border: 0, background: "transparent", color: "#fca5a5", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer" }}>Remove</button>
+                </div>
+              );
+            })}
+          </div>
         </section>
 
         {GATEWAYS.filter(gw => gw.id !== "mpesa").map(gw => {

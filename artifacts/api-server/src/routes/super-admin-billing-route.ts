@@ -1,7 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
-import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict } from "../lib/supabase-client.js";
-import { getMpesaSettings, isMpesaConfigured } from "../lib/settings-store.js";
+import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict, sbDeleteStrict, sbInsertStrict, sbUpdateStrict } from "../lib/supabase-client.js";
+import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
+import { encryptGatewayConfig, gatewayConfigPreview, isResellerGatewayId, type ResellerGatewayRouteRow } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
 const PLAN_TYPES = new Set(["hotspot", "pppoe", "static"]);
@@ -36,6 +37,185 @@ function parseNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function positiveId(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function routeScopeQuery(routerId: number | null, portId: number | null): string {
+  if (portId) return `port_id=eq.${portId}`;
+  if (routerId) return `router_id=eq.${routerId}&port_id=is.null`;
+  return "router_id=is.null&port_id=is.null";
+}
+
+/*
+ * Super Admin owns the Daraja credentials and the collection destinations.
+ * These routes only copy a selected destination's non-secret metadata into
+ * the encrypted reseller route record; no reseller can edit this boundary.
+ */
+router.get("/super-admin/reseller-payment-routes", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const [resellers, ports, routers, routes] = await Promise.all([
+      sbSelectStrict<{ id: number; parent_id: number | null; name: string; company_name: string | null; username: string | null }>(
+        "isp_admins",
+        "role=eq.reseller&is_active=is.true&select=id,parent_id,name,company_name,username&order=name.asc,id.asc",
+      ),
+      sbSelectStrict<{ id: number; admin_id: number; assigned_reseller_id: number | null; router_id: number; interface_name: string; vlan_tag: string | null; status: string; handoff_mode: string }>(
+        "isp_reseller_ports",
+        "handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,assigned_reseller_id,router_id,interface_name,vlan_tag,status,handoff_mode&order=interface_name.asc,id.asc",
+      ),
+      sbSelectStrict<{ id: number; admin_id: number; name: string }>("isp_routers", "select=id,admin_id,name&order=name.asc,id.asc"),
+      sbSelectStrict<ResellerGatewayRouteRow>(
+        "reseller_payment_gateway_routes",
+        "select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_preview,is_active,created_at,updated_at&order=updated_at.desc",
+      ),
+    ]);
+    const resellerIds = new Set(resellers.map(row => row.id));
+    const routerNames = new Map(routers.map(row => [row.id, row.name]));
+    const destinations = getPaymentDestinations().destinations
+      .filter(destination => destination.active && (destination.type === "till" || destination.type === "paybill"))
+      .map(destination => ({
+        id: destination.id,
+        type: destination.type,
+        name: destination.name,
+        number: destination.number,
+        accountReference: destination.accountReference,
+      }));
+    res.json({
+      ok: true,
+      destinations,
+      resellers: resellers.map(reseller => ({
+        id: reseller.id,
+        parentId: reseller.parent_id,
+        name: reseller.company_name || reseller.name || reseller.username || `Reseller #${reseller.id}`,
+        username: reseller.username,
+      })),
+      ports: ports
+        .filter(port => port.assigned_reseller_id && resellerIds.has(port.assigned_reseller_id))
+        .map(port => ({
+          id: port.id,
+          resellerId: port.assigned_reseller_id,
+          routerId: port.router_id,
+          label: `${routerNames.get(port.router_id) ?? "Router"} · ${port.interface_name}${port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}`,
+          status: port.status,
+        })),
+      routes: routes
+        .filter(route => resellerIds.has(route.reseller_id))
+        .map(route => ({
+          id: route.id,
+          resellerId: route.reseller_id,
+          routerId: route.router_id,
+          portId: route.port_id,
+          gatewayType: route.gateway_type,
+          config: route.config_preview ?? {},
+          isActive: route.is_active,
+        })),
+    });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error instanceof Error ? error.message : "Could not load reseller payment routes." });
+  }
+});
+
+router.put("/super-admin/reseller-payment-routes", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const resellerId = positiveId(req.body?.resellerId);
+    const portId = positiveId(req.body?.portId);
+    const requestedRouterId = positiveId(req.body?.routerId);
+    const destinationId = typeof req.body?.destinationId === "string" ? req.body.destinationId.trim() : "";
+    const isActive = req.body?.isActive !== false;
+    if (!resellerId || !destinationId) {
+      res.status(400).json({ ok: false, error: "Choose a reseller and an active M-Pesa destination." });
+      return;
+    }
+    const resellers = await sbSelectStrict<{ id: number; parent_id: number | null }>(
+      "isp_admins",
+      `id=eq.${resellerId}&role=eq.reseller&is_active=is.true&select=id,parent_id&limit=1`,
+    );
+    const reseller = resellers[0];
+    if (!reseller?.parent_id) {
+      res.status(404).json({ ok: false, error: "The selected reseller was not found." });
+      return;
+    }
+    const destination = getPaymentDestinations().destinations.find(row => row.id === destinationId && row.active);
+    if (!destination || (destination.type !== "till" && destination.type !== "paybill")) {
+      res.status(400).json({ ok: false, error: "Choose an active Till or PayBill destination managed by Super Admin." });
+      return;
+    }
+    let routerId: number | null = requestedRouterId;
+    if (portId) {
+      const ports = await sbSelectStrict<{ id: number; router_id: number; admin_id: number; assigned_reseller_id: number | null; handoff_mode: string; status: string }>(
+        "isp_reseller_ports",
+        `id=eq.${portId}&admin_id=eq.${reseller.parent_id}&assigned_reseller_id=eq.${resellerId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,admin_id,assigned_reseller_id,handoff_mode,status&limit=1`,
+      );
+      if (!ports[0]) {
+        res.status(403).json({ ok: false, error: "That VLAN port is not assigned to the selected reseller." });
+        return;
+      }
+      routerId = ports[0].router_id;
+    } else if (routerId) {
+      const routers = await sbSelectStrict<{ id: number }>(
+        "isp_routers",
+        `id=eq.${routerId}&admin_id=eq.${reseller.parent_id}&select=id&limit=1`,
+      );
+      if (!routers[0]) {
+        res.status(403).json({ ok: false, error: "That router does not belong to the reseller's ISP account." });
+        return;
+      }
+    }
+    if (portId && !routerId) {
+      res.status(400).json({ ok: false, error: "The selected VLAN port has no linked router." });
+      return;
+    }
+    const gatewayType = destination.type === "till" ? "mpesa_till_push" : "mpesa_paybill";
+    if (!isResellerGatewayId(gatewayType)) throw new Error("Unsupported M-Pesa route type.");
+    const config: Record<string, string> = destination.type === "till"
+      ? { destinationId, tillNumber: destination.number }
+      : { destinationId, paybillNumber: destination.number, accountNumber: destination.accountReference };
+    if (destination.type === "paybill" && !destination.accountReference) {
+      res.status(400).json({ ok: false, error: "The selected PayBill destination has no account reference." });
+      return;
+    }
+    const existing = await sbSelectStrict<ResellerGatewayRouteRow>(
+      "reseller_payment_gateway_routes",
+      `admin_id=eq.${reseller.parent_id}&reseller_id=eq.${resellerId}&${routeScopeQuery(routerId, portId)}&select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_ciphertext,config_preview,is_active&limit=1`,
+    );
+    const payload = {
+      admin_id: reseller.parent_id,
+      reseller_id: resellerId,
+      router_id: routerId,
+      port_id: portId,
+      gateway_type: gatewayType,
+      config_ciphertext: encryptGatewayConfig(config),
+      config_preview: gatewayConfigPreview(gatewayType, config),
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
+    };
+    const saved = existing[0]
+      ? await sbUpdateStrict<{ id: number }>("reseller_payment_gateway_routes", `id=eq.${existing[0].id}`, payload)
+      : await sbInsertStrict<{ id: number }>("reseller_payment_gateway_routes", { ...payload, created_at: new Date().toISOString() });
+    res.json({ ok: true, routeId: saved[0]?.id ?? existing[0]?.id });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Could not save the reseller payment route." });
+  }
+});
+
+router.delete("/super-admin/reseller-payment-routes/:id", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  const routeId = positiveId(req.params.id);
+  if (!routeId) {
+    res.status(400).json({ ok: false, error: "Invalid payment route." });
+    return;
+  }
+  try {
+    await sbDeleteStrict("reseller_payment_gateway_routes", `id=eq.${routeId}`);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Could not remove the reseller payment route." });
+  }
+});
 
 function cleanPlanInput(body: PlanInput, partial = false): Record<string, unknown> | { error: string } {
   const updates: Record<string, unknown> = {};
