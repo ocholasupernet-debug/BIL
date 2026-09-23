@@ -107,7 +107,7 @@ test("different assigned ports receive different service identities", () => {
   assert.notEqual(firstScript, secondScript);
 });
 
-test("a VLAN service keeps reseller resources separate from shared hotspot files", () => {
+test("a VLAN service keeps its portal files separate from other VLAN services", () => {
   const resources = portServiceResourceNames({
     ...port,
     handoff_mode: "vlan_services",
@@ -116,7 +116,7 @@ test("a VLAN service keeps reseller resources separate from shared hotspot files
     assigned_reseller_id: 42,
   });
 
-  assert.equal(resources.hotspotDirectory, "flash/hotspot/ochola_shared_r3");
+  assert.equal(resources.hotspotDirectory, "flash/hotspot/ochola_RS42_VLAN210");
   assert.equal(resources.pppoeDirectory, resources.hotspotDirectory);
   assert.equal(resources.pppoePool, "PPPOE_POOL_RS42_VLAN210");
   assert.equal(resources.hotspotServer, "HS_RS42_VLAN210");
@@ -126,8 +126,8 @@ test("a VLAN service keeps reseller resources separate from shared hotspot files
 test("a VLAN service uses editable non-overlapping Hotspot and PPPoE pool ranges", () => {
   const commands = buildDualServiceCommands(
     { ...port, handoff_mode: "vlan_services", vlan_tag: "210", bridge_name: "isp-bridge" },
-    "flash/hotspot/ochola_shared_r3",
-    "flash/hotspot/ochola_shared_r3",
+    "flash/hotspot/ochola_RS42_VLAN210",
+    "flash/hotspot/ochola_RS42_VLAN210",
     "10.8.5.2",
     {
       hotspotPoolRange: "192.168.30.20-192.168.30.120",
