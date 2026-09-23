@@ -62,6 +62,7 @@
 - [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
+- [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.

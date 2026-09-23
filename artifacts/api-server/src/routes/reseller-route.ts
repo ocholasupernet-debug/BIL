@@ -239,19 +239,50 @@ async function deployDefaultResellerPortalFile(
   sourceOrigin: string,
   sourceName: "login.html" | "rlogin.html",
   destinationPath: string,
+  scope?: {
+    adminId: number;
+    routerId: number;
+    portId: number;
+    plans: Array<{
+      id: number;
+      name: string;
+      price: number | string;
+      validity: number;
+      validity_unit: string;
+    }>;
+  },
 ): Promise<void> {
   const source = getDeployableSource("hotspot", sourceName);
   if (!source) throw new Error(`The default reseller portal asset "${sourceName}" is unavailable.`);
+  let content = source.content;
+  if (scope && sourceName === "login.html") {
+    const config = JSON.stringify({
+      apiBase: sourceOrigin,
+      adminId: scope.adminId,
+      routerId: scope.routerId,
+      portId: scope.portId,
+      plans: scope.plans,
+    }).replace(/</g, "\\u003c");
+    const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${config};</script>`;
+    const html = source.content.toString("utf8");
+    const existingConfig = /<script>window\.__HOTSPOT_CONFIG__\s*=[\s\S]*?<\/script>/;
+    content = Buffer.from(
+      existingConfig.test(html)
+        ? html.replace(existingConfig, bootstrap)
+        : html.replace("</head>", `${bootstrap}\n</head>`),
+      "utf8",
+    );
+  }
   const token = randomBytes(24).toString("hex");
   resellerPortalSourceEntries.set(token, {
-    content: source.content,
+    content,
     expiresAt: Date.now() + RESELLER_PORTAL_SOURCE_TTL_MS,
   });
   try {
     await deployRouterFile(creds, {
       destinationPath,
       sourceUrl: `${sourceOrigin}/api/reseller-portal-source/${token}`,
-      overwrite: false,
+      overwrite: true,
       uploadId: token.slice(0, 16),
     });
   } finally {
@@ -437,20 +468,34 @@ async function provisionVlanResellerServices(
     "/file/make-dir",
     `=dir-name=${resources.hotspotDirectory}`,
   ]).catch(() => undefined);
-  const portalRows = await runRouterCommand(creds, [
-    "/file/print",
-    "=.proplist=name,type",
-  ]);
-  const existingPortalFiles = new Set(
-    (Array.isArray(portalRows) ? portalRows : [])
-      .filter((row) => String((row as Record<string, unknown>).type ?? "").toLowerCase() !== "directory")
-      .map((row) => String((row as Record<string, unknown>).name ?? "")),
-  );
   for (const sourceName of ["login.html", "rlogin.html"] as const) {
     const destinationPath = `${resources.hotspotDirectory}/${sourceName}`;
-    if (!existingPortalFiles.has(destinationPath)) {
-      await deployDefaultResellerPortalFile(creds, sourceOrigin, sourceName, destinationPath);
-    }
+    await deployDefaultResellerPortalFile(
+      creds,
+      sourceOrigin,
+      sourceName,
+      destinationPath,
+      sourceName === "login.html"
+        ? {
+          adminId: port.admin_id,
+          routerId: port.router_id,
+          portId: port.id,
+          plans: (await sbSelectStrict<{
+            id: number;
+            name: string;
+            price: number | string;
+            validity: number;
+            validity_unit: string;
+          }>(
+            "isp_plans",
+            `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
+          )).map(plan => ({
+            ...plan,
+            price: Number(plan.price),
+          })),
+        }
+        : undefined,
+    );
   }
   await ensureNamed("/ip/dhcp-server/print", resources.hotspotDhcp, [
     "/ip/dhcp-server/add",

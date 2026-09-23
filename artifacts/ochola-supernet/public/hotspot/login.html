@@ -640,6 +640,10 @@ function applyPortalTypography(data){
 }
 
 function loadPortalTypography(done){
+   /* Apply the service scope before a local typography request. A captive
+      browser can keep that request pending while the walled garden is being
+      evaluated, but package lookup must still be port-scoped. */
+   applyPortalConfig(EMBEDDED_CONFIG);
   var request=fetch("typography.json",{cache:"no-store"})
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
@@ -861,6 +865,8 @@ function renderModal(){
        checkout_id:checkoutId,
         ...(forceRouterRetry?{retry:true}:{}),
        adminId:PORTAL_ADMIN_ID,
+        ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+        ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{}),
        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
         ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{}),
        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
@@ -891,7 +897,9 @@ function sendStk(){
   if(!phone.trim())return;
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
   stkPhone=phone; stkError=""; stkState="loading"; renderModal();
-   var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID};
+    var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID,
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})};
   if(DEVICE_MAC)checkout.mac_address=DEVICE_MAC;
    if(tvPurchase&&tvDeviceName)checkout.device_name=tvDeviceName;
    if(tvPurchase&&tvDeviceRouterId)checkout.device_router_id=tvDeviceRouterId;
@@ -906,7 +914,9 @@ function sendStk(){
       }
       var intentData=data.data;
       return fetch(apiUrl("/api/mpesa/stk"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:intentData.amount,adminId:PORTAL_ADMIN_ID,
+         phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:intentData.amount,adminId:PORTAL_ADMIN_ID,
+          ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+          ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{}),
          account_ref:"Hotspot",paymentIntent:intentData.paymentIntent,
          ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{})
       })}).then(function(r){return r.json().then(function(response){return{ok:r.ok,data:response};});});

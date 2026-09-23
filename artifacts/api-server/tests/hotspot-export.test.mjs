@@ -17,6 +17,8 @@ const webRoot = resolve(apiRoot, "../ochola-supernet");
 const entry = resolve(webRoot, "src/pages/admin/HotspotSettings.tsx");
 const templatePath = resolve(webRoot, "public/hotspot/login.html");
 const mikrotikRoutePath = resolve(apiRoot, "src/routes/mikrotik-route.ts");
+const resellerRoutePath = resolve(apiRoot, "src/routes/reseller-route.ts");
+const mpesaRoutePath = resolve(apiRoot, "src/routes/mpesa-route.ts");
 
 async function loadExportBuilder() {
   const outdir = await mkdtemp(resolve(webRoot, ".hotspot-export-"));
@@ -254,4 +256,30 @@ test("generated portal route keeps tenant scope and one-time source cleanup", as
   const sourceHandler = source.slice(source.indexOf('router.get("/router-file-source/:token"'), routeStart);
   assert.match(sourceHandler, /expiresAt <= Date\.now\(\)/);
   assert.match(sourceHandler, /pendingRouterFileSources\.delete\(token\)/);
+});
+
+test("default reseller portal deployment embeds the assigned router and port scope", async () => {
+  const source = await readFile(resellerRoutePath, "utf8");
+  const deployStart = source.indexOf("async function deployDefaultResellerPortalFile");
+  const provisionStart = source.indexOf("async function provisionVlanResellerServices");
+  assert.ok(deployStart >= 0 && provisionStart > deployStart, "default reseller portal deployment is present");
+  const deploy = source.slice(deployStart, provisionStart);
+  const provision = source.slice(provisionStart);
+
+  assert.match(deploy, /window\\.__HOTSPOT_CONFIG__/);
+  assert.match(deploy, /adminId: scope\.adminId/);
+  assert.match(deploy, /routerId: scope\.routerId/);
+  assert.match(deploy, /portId: scope\.portId/);
+  assert.match(deploy, /overwrite: true/);
+  assert.match(provision, /admin_id=eq\.\$\{port\.admin_id\}&router_id=eq\.\$\{port\.router_id\}&port_id=eq\.\$\{port\.id\}/);
+});
+
+test("hotspot checkout carries and validates the service scope", async () => {
+  const route = await readFile(mpesaRoutePath, "utf8");
+  const portal = await readFile(templatePath, "utf8");
+  assert.match(route, /planMatchesHotspotPortalScope/);
+  assert.match(route, /The selected package does not belong to this hotspot service/);
+  assert.match(route, /intent\.portId.*portalPortId/);
+  assert.match(portal, /router_id:PORTAL_ROUTER_ID/);
+  assert.match(portal, /port_id:PORTAL_PORT_ID/);
 });

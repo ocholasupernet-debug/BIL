@@ -232,16 +232,12 @@ router.get("/plans", async (req, res): Promise<void> => {
     : "";
   const requestedRouterId = parseOptionalId(req.query.routerId);
   const requestedPortId = parseOptionalId(req.query.portId);
+  let scopedRouterId = requestedRouterId;
   /*
    * Customer portals are always tied to one RouterOS service. Do not return
    * router-wide or sibling-port packages when a physical port was supplied,
    * and do not return every router's packages when the scope is absent.
    */
-  const scopeFilter = requestedRouterId
-    ? requestedPortId
-      ? `&router_id=eq.${requestedRouterId}&port_id=eq.${requestedPortId}`
-      : `&router_id=eq.${requestedRouterId}&port_id=is.null`
-    : "";
   const activeOnly = req.query.activeOnly === "true";
   const purchasableOnly = req.query.purchasableOnly === "true";
   const availabilityFilters = [
@@ -249,16 +245,25 @@ router.get("/plans", async (req, res): Promise<void> => {
     purchasableOnly ? "client_can_purchase=is.true" : "",
   ].filter(Boolean).map(filter => `&${filter}`).join("");
   if (adminId && requestedPortId) {
-    const ports = await sbSelect<{ id: number }>(
+    const ports = await sbSelect<{ id: number; router_id: number }>(
       "isp_reseller_ports",
-      `id=eq.${requestedPortId}&router_id=eq.${requestedRouterId ?? 0}&admin_id=eq.${adminId}&status=neq.disabled&select=id&limit=1`,
+      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&status=neq.disabled&select=id,router_id&limit=1`,
     );
-    if (!ports[0]) {
+    if (!ports[0] || (requestedRouterId !== null && ports[0].router_id !== requestedRouterId)) {
       res.json([]);
       return;
     }
+    // The assigned port is authoritative. This also supports callers that
+    // know the port from the RouterOS service but do not have to duplicate
+    // its router id in the browser request.
+    scopedRouterId = ports[0].router_id;
   }
-  const rows = adminId && requestedRouterId
+  const scopeFilter = scopedRouterId
+    ? requestedPortId
+      ? `&router_id=eq.${scopedRouterId}&port_id=eq.${requestedPortId}`
+      : `&router_id=eq.${scopedRouterId}&port_id=is.null`
+    : "";
+  const rows = adminId && scopedRouterId
     ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
     : [];
   res.json(rows);
