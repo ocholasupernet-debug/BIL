@@ -5114,6 +5114,14 @@ function generateCoexistenceServiceSetupScript(
   const hotspotGateway = "172.16.99.1/24";
   const coexistNetwork = "172.16.99.0/24";
   const poolRange = "172.16.99.10-172.16.99.254";
+  const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
+    .map(host => String(host).trim().toLowerCase())
+    .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
+  const paymentHostnames = Array.from(new Set((options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
+    .map(host => String(host).trim().toLowerCase())
+    .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))
+    .filter(host => !portalHostnames.includes(host))));
+  const walledGardenHostnames = Array.from(new Set([...portalHostnames, ...paymentHostnames]));
 
   const ownedOrConflict = (
     variableName: string,
@@ -5251,7 +5259,19 @@ ${ownedOrConflict(
   `/ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no`,
 )}`);
 
-  blocks.push(`# 5. Isolated PPPoE pool, profile, and server
+  if (walledGardenHostnames.length > 0) {
+    blocks.push(`# 5. Allow the isolated Hotspot portal and payment providers before login
+${walledGardenHostnames.map(hostname => `:if ([:len [/ip hotspot walled-garden ip find where server=${routerOsString(hotspotServer)} && dst-host=${routerOsString(hostname)}]] = 0) do={
+    :do {
+        /ip hotspot walled-garden ip add server=${routerOsString(hotspotServer)} dst-host=${routerOsString(hostname)} action=accept comment=${routerOsString(`${tag} walled garden ${hostname}`)}
+    } on-error={
+        :set coexistError ("${tag}: walled-garden host ${hostname} could not be added: " . $error)
+        :error $coexistError
+    }
+}`).join("\n")}`);
+  }
+
+  blocks.push(`# 6. Isolated PPPoE pool, profile, and server
 ${ownedOrConflict(
   "coexistPppoePool",
   "/ip pool",
@@ -5278,7 +5298,7 @@ ${ownedOrConflict(
 )}`);
 
   if (radiusIp && radiusSecret) {
-    blocks.push(`# 6. Append the platform RADIUS profile without removing any existing entries
+    blocks.push(`# 7. Append the platform RADIUS profile without removing any existing entries
 :if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
     :do {
         /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(radiusIp)} secret=${routerOsString(radiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(radiusComment)}
@@ -5292,11 +5312,11 @@ ${ownedOrConflict(
     :error $coexistError
 }`);
   } else {
-    blocks.push(`# 6. RADIUS was not changed because no platform address and secret were supplied
+    blocks.push(`# 7. RADIUS was not changed because no platform address and secret were supplied
 :put "${tag}: platform RADIUS profile skipped; existing RADIUS entries were preserved."`);
   }
 
-  blocks.push(`# 7. Enable CoA on the RouterOS RADIUS listener, changing only the required fields
+  blocks.push(`# 8. Enable CoA on the RouterOS RADIUS listener, changing only the required fields
 :local coexistRadiusIncomingIds [/radius incoming find]
 :if ([:len $coexistRadiusIncomingIds] > 0) do={
     :local coexistRadiusIncomingId [:pick $coexistRadiusIncomingIds 0]
@@ -5318,10 +5338,10 @@ ${ownedOrConflict(
     :error $coexistError
 }`);
 
-  blocks.push(`# 8. Scoped forwarding, DNS, and NAT for the isolated virtual plane
+  blocks.push(`# 9. Scoped forwarding, DNS, and NAT for the isolated virtual plane
 :if ([:len [/interface list find where name="WAN"]] > 0) do={
     :if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} to-wan`)}]] = 0) do={
-        :do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} to-wan`)} place-before=0 } on-error={
+        :do { /ip firewall filter add chain=forward action=accept in-interface=${routerOsString(bridgeName)} out-interface-list=WAN hotspot=auth connection-state=new,established,related comment=${routerOsString(`${tag} to-wan`)} place-before=0 } on-error={
             :set coexistError ("${tag}: isolated WAN forwarding rule could not be added: " . $error)
             :error $coexistError
         }
@@ -5333,12 +5353,25 @@ ${ownedOrConflict(
         }
     }
 }
+:if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} allow-dhcp`)}]] = 0) do={
+    :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=67 comment=${routerOsString(`${tag} allow-dhcp`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: isolated DHCP rule could not be added: " . $error)
+        :error $coexistError
+    }
+}
 :if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} allow-dns`)}]] = 0) do={
     :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-dns`)} place-before=0 } on-error={
         :set coexistError ("${tag}: isolated DNS rule could not be added: " . $error)
         :error $coexistError
+}
+}
+:if ([:len [/ip firewall filter find where comment=${routerOsString(`${tag} allow-dns-tcp`)}]] = 0) do={
+    :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=tcp dst-port=53 comment=${routerOsString(`${tag} allow-dns-tcp`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: isolated TCP DNS rule could not be added: " . $error)
+        :error $coexistError
     }
-}`);
+}
+`);
 
   const renderedBlocks = blocks
     .map((block, index) => `${block.trim()}${index < blocks.length - 1 ? "\n:delay 2s;" : ""}`)
