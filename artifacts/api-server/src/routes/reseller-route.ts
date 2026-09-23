@@ -1838,39 +1838,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      let diagnosticSummary: Record<string, unknown>;
-      try {
-        const creds = routerCredentials(target);
-        const captures: Record<string, unknown> = {};
-        for (const interfaceName of ["ether3", "ether4", "ether5", "wlan2"]) {
-          try {
-            captures[interfaceName] = await runRouterCommand(creds, [
-              "/tool/sniffer/quick",
-              "=.proplist=interface,direction,src-mac-address,dst-mac-address,ip-protocol,src-address,dst-address,src-port,dst-port",
-              `=interface=${interfaceName}`,
-              "=ip-protocol=udp",
-              "=port=67,68",
-              "=duration=8s",
-            ]);
-          } catch (captureError) {
-            captures[interfaceName] = {
-              error: captureError instanceof Error ? captureError.message.slice(0, 500) : String(captureError),
-            };
-          }
-        }
-        diagnosticSummary = { dhcpCaptures: captures };
-      } catch (diagnosticError) {
-        diagnosticSummary = {
-          error: diagnosticError instanceof Error ? diagnosticError.message.slice(0, 500) : String(diagnosticError),
-        };
-      }
-      res.json({
-        ok: true,
-        handoff: updated[0] ?? port,
-        // Temporary response-only field for the one-time live handoff capture.
-        assignment: { id: port.id, status: JSON.stringify(diagnosticSummary) },
-        message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
-      });
+      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
       await sbUpdateStrict(
