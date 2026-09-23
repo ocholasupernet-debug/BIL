@@ -10,6 +10,10 @@ on:
         description: "Optional active VLAN reseller port ID to reconcile on its MikroTik"
         required: false
         type: string
+      inspect_reseller_port:
+        description: "Optional active VLAN reseller port ID to inspect on its MikroTik"
+        required: false
+        type: string
 
 concurrency:
   group: vps-deploy
@@ -109,7 +113,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,INSPECT_RESELLER_PORT
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -240,6 +244,39 @@ jobs:
             NODE
               echo "=== Reseller port reconciliation completed ==="
             fi
+            if [ -n "${INSPECT_RESELLER_PORT:-}" ]; then
+              case "$INSPECT_RESELLER_PORT" in
+                ''|*[!0-9]*) echo "ERROR: inspect_reseller_port must be a positive numeric port ID."; exit 1 ;;
+              esac
+              echo "=== Inspecting reseller port ${INSPECT_RESELLER_PORT} on its MikroTik ==="
+              INSPECT_RESELLER_PORT="$INSPECT_RESELLER_PORT" node --input-type=module <<'NODE'
+              import crypto from "node:crypto";
+
+              import fs from "node:fs";
+
+              const portId = process.env.INSPECT_RESELLER_PORT;
+              const dotenv = fs.readFileSync("/var/www/ocholasupernet/.env", "utf8");
+              const dotenvValue = (name) => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
+              const secret = dotenvValue("TOKEN_SIGNING_SECRET")
+                || process.env.TOKEN_SIGNING_SECRET
+                || dotenvValue("SESSION_SECRET")
+                || process.env.SESSION_SECRET;
+              if (!secret) throw new Error("SESSION_SECRET is not available for the one-time inspection.");
+              const time = Math.floor(Date.now() / 1000);
+              const payload = `a.3.${time}`;
+              const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+              const token = `${payload}.${signature}`;
+              const response = await fetch(`https://come.isplatty.org/api/admin/reseller-handoffs/${portId}/diagnostics`, {
+                headers: { authorization: `Bearer ${token}` },
+              });
+              const body = await response.text();
+              if (!response.ok) {
+                throw new Error(`Reseller port inspection failed (${response.status}): ${body.slice(0, 1000)}`);
+              }
+              console.log(JSON.stringify(JSON.parse(body), null, 2));
+              NODE
+              echo "=== Reseller port inspection completed ==="
+            fi
             echo "=== Deploy finished at $(date) ==="
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -253,3 +290,4 @@ jobs:
           VPS_SSH_KEY_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_KEY_B64 }}
           VPS_SSH_PASSPHRASE_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_PASSPHRASE_B64 }}
           RECONCILE_RESELLER_PORT: ${{ inputs.reconcile_reseller_port }}
+          INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}
