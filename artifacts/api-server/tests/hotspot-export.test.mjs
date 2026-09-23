@@ -47,6 +47,7 @@ async function loadExportBuilder() {
             "supabase": `
               export const ADMIN_ID = 7;
               export function getAdminApiToken() { return ""; }
+              export function getAdminRole() { return "isp_admin"; }
               export function getSelectedTenantId() { return 7; }
               export function isLoggedIn() { return false; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
@@ -136,7 +137,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
   };
 
   try {
-    const html = await builder.buildPortalHtml(stagingSettings(), "tenant");
+    const html = await builder.buildPortalHtml(stagingSettings(), "tenant", {}, { portId: 88 });
     for (const macro of [
       "$(link-login-only)",
       "$(link-orig)",
@@ -154,6 +155,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     const config = JSON.parse(configMatch[1]);
     assert.equal(config.apiBase, "https://tenant.example.test");
     assert.equal(config.routerId, 3);
+    assert.equal(config.portId, 88);
     assert.equal(config.ispName, stagingSettings().ispName);
     assert.equal(config.freeTrialEnabled, true);
     assert.equal(config.vouchersEnabled, true);
@@ -168,6 +170,8 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
 
     for (const value of sensitiveFixtures) assert.doesNotMatch(html, new RegExp(value));
     assert.equal(calls.length, 3);
+    assert.match(calls.find(url => url.includes("/api/plans")) || "", /routerId=3/);
+    assert.match(calls.find(url => url.includes("/api/plans")) || "", /portId=88/);
     assert.ok(calls.every(url => !/\/api\/admin|\/router|\/sync|\/upload/i.test(url)));
   } finally {
     globalThis.fetch = realFetch;

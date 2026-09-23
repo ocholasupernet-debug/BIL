@@ -252,6 +252,7 @@ function validateSettings(settings: HSettings): string | null {
 type ExportConfig = {
   adminId: number;
   routerId: number;
+  portId: number;
   apiBase: string;
   plans: PortalPlan[];
   ispName: string;
@@ -324,12 +325,14 @@ function makeExportConfig(
   apiBase: string,
   plans: PortalPlan[],
   appearance: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+  portId = 0,
 ): ExportConfig {
   return {
     adminId,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
       ? Number(settings.routerId)
       : 0,
+    portId: Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? Number(portId) : 0,
     apiBase,
     plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
@@ -389,6 +392,7 @@ export async function buildPortalHtml(
   settings: HSettings,
   domain: string,
   appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+  scope: { portId?: number } = {},
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
@@ -406,7 +410,11 @@ export async function buildPortalHtml(
     const routerQuery = Number.isSafeInteger(routerId) && routerId > 0
       ? `&routerId=${encodeURIComponent(String(routerId))}`
       : "";
-    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}`, {
+    const portId = Number(scope.portId);
+    const portQuery = Number.isSafeInteger(portId) && portId > 0
+      ? `&portId=${encodeURIComponent(String(portId))}`
+      : "";
+    const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}${portQuery}`, {
       cache: "no-store",
     });
     if (plansResponse.ok) {
@@ -427,7 +435,7 @@ export async function buildPortalHtml(
   } catch {
     /* The API fallback remains available when the admin panel is offline. */
   }
-  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance);
+  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance, scope.portId);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
@@ -830,7 +838,7 @@ export default function HotspotSettings() {
     setNotice(null);
     try {
       const resellerPortalHtml = isResellerAccount && draft.hotspotEnabled
-        ? await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape })
+        ? await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, { portId: port.id })
         : "";
       const response = await fetch(`/api/admin/port-services/${port.id}`, {
         method: "PUT",
@@ -946,7 +954,7 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
       if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
-        const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape });
+        const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, { portId: Number(selectedAssignedPortId) });
         const headers = new Headers({ "Content-Type": "application/json" });
         let token = "";
         let role = "";
@@ -1002,7 +1010,9 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error });
       return null;
     }
-    return buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape });
+    return buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
+      portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
+    });
   };
 
   const handleDownload = async () => {
