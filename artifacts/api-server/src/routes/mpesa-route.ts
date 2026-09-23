@@ -231,6 +231,31 @@ function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
   };
 }
 
+function resellerRouteMpesaPaybillConfig(config: Record<string, string>): MpesaPaybillConfig {
+  return {
+    /* The scoped route UI uses paybillNumber/accountNumber. These aliases
+       preserve compatibility with the older reseller payment-settings rows
+       and previously saved route payloads. */
+    paybillNumber: config.paybillNumber
+      || config.merchantIdentifier
+      || config.merchant_identifier
+      || "",
+    accountNumber: config.accountNumber
+      || config.accountReference
+      || config.account_reference
+      || "",
+  };
+}
+
+function resellerRouteMpesaTillConfig(config: Record<string, string>): MpesaTillPushConfig {
+  return {
+    tillNumber: config.tillNumber
+      || config.merchantIdentifier
+      || config.merchant_identifier
+      || "",
+  };
+}
+
 function isBankStkPushConfigured(config: BankStkPushConfig): boolean {
   return !!(config.bankName && config.paybillNumber && config.accountNumber);
 }
@@ -394,6 +419,13 @@ async function getResellerPaymentRoute(
     ?? (hasLegacyDestination ? legacyPaymentGateway : parentSettings?.paymentGateway)
     ?? "unconfigured") as PaymentGateway;
   const routeConfig = route?.config ?? {};
+  const legacyMpesaPaybill: MpesaPaybillConfig = legacyMpesa?.is_active === true
+    ? {
+        paybillNumber: legacyMpesa.merchant_identifier ?? "",
+        accountNumber: legacyMpesa.account_reference ?? "",
+      }
+    : { paybillNumber: "", accountNumber: "" };
+  const routeMpesaPaybill = resellerRouteMpesaPaybillConfig(routeConfig);
   const bankStkPush = route
     ? bankStkPushConfig({ bank_stk_push: routeConfig })
     : hasLegacyDestination && legacyPaymentGateway === "bank_stk_push"
@@ -406,14 +438,18 @@ async function getResellerPaymentRoute(
         })
       : parentSettings?.bankStkPush ?? bankStkPushConfig({});
   const mpesaTillPush = route
-    ? { tillNumber: routeConfig.tillNumber ?? "" }
+    ? resellerRouteMpesaTillConfig(routeConfig)
     : hasLegacyDestination && legacyPaymentGateway === "mpesa_till_push"
       ? { tillNumber: legacyMpesa?.merchant_identifier ?? "" }
       : parentSettings?.mpesaTillPush ?? { tillNumber: "" };
   const mpesaPaybill = route
     ? {
-        paybillNumber: routeConfig.paybillNumber ?? "",
-        accountNumber: routeConfig.accountNumber ?? "",
+        /* A scoped route remains authoritative for gateway selection and
+           scope. If its destination was saved through the legacy reseller
+           settings screen, complete the missing fields from that same
+           reseller's active destination rather than the ISP's settings. */
+        paybillNumber: routeMpesaPaybill.paybillNumber || legacyMpesaPaybill.paybillNumber,
+        accountNumber: routeMpesaPaybill.accountNumber || legacyMpesaPaybill.accountNumber,
       }
     : hasLegacyDestination && legacyPaymentGateway === "mpesa_paybill"
       ? {
@@ -1504,7 +1540,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(400).json({ ok: false, error: "BankStkPush is missing the selected bank, PayBill Number, or Account / Business Number." });
        return;
      }
-       if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || (!resellerRoute && !mpesaPaybill.accountNumber))) {
+       if (paymentGateway === "mpesa_paybill" && (!mpesaPaybill.paybillNumber || !mpesaPaybill.accountNumber)) {
         res.status(400).json({ ok: false, error: "M-Pesa PayBill is missing its receiving PayBill Number or Account / Business Number." });
         return;
       }
