@@ -6,6 +6,7 @@
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use base64 Git blob payloads to preserve exact workspace bytes and verify each returned SHA.
 - [GitHub push path limitations](github-push-paths.md) — Connector writes can be endpoint/path limited; verify the remote tree instead of assuming blob success means a push completed.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Stage contents writes on a temporary branch; workflow files require Actions write permission and may be rejected with 403.
+- [GitHub workflow SSH heredocs](github-workflow-heredoc.md) — Heredoc terminators in Actions SSH scripts must align exactly with the YAML block indentation.
 - [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs or truncate full Git trees; compare compact paths and verify changed blobs individually.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
 - [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
