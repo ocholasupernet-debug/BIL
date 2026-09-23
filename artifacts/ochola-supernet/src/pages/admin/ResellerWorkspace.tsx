@@ -14,6 +14,7 @@ type Assignment = {
   assigned_reseller_id?: number | null; vlan_tag?: string | null; hotspot_enabled: boolean; pppoe_enabled: boolean; subnet_range?: string | null;
   bandwidth_cap_mbps: number; reseller_bandwidth_cap?: number | null; status: string; link_status?: "pending" | "active" | "suspended" | null;
   handoff_mode?: "services" | "isp_router" | "vlan_services" | null; handoff_type?: "physical" | "vlan" | null;
+  handoff_interface?: string | null;
   xpon_identifier?: string | null; link_detected?: boolean | null; last_link_checked_at?: string | null;
   link_detection_error?: string | null;
   provisioning_error?: string | null; link_provisioning_error?: string | null;
@@ -132,6 +133,7 @@ function AdminResellerManagement() {
   const [handoffType, setHandoffType] = useState<"physical" | "vlan">("physical");
   const [handoffMode, setHandoffMode] = useState<"isp_router" | "vlan_services">("isp_router");
   const [handoffInterfaceName, setHandoffInterfaceName] = useState("");
+  const [handoffIngressInterface, setHandoffIngressInterface] = useState("");
   const [handoffVlanTag, setHandoffVlanTag] = useState("");
   const [handoffUsername, setHandoffUsername] = useState("");
   const [xponIdentifier, setXponIdentifier] = useState("");
@@ -235,6 +237,7 @@ function AdminResellerManagement() {
           ...(handoffMode === "vlan_services"
             ? { bridgeName: handoffInterfaceName }
             : { interfaceName: handoffInterfaceName }),
+           ...(handoffMode === "vlan_services" ? { handoffInterface: handoffIngressInterface } : {}),
           handoffType,
           handoffMode,
           resellerUsername: handoffUsername,
@@ -246,6 +249,7 @@ function AdminResellerManagement() {
       setSuccess(result.message || "ISP router handoff assigned.");
       setHandoffRequestId(null);
       setHandoffInterfaceName("");
+       setHandoffIngressInterface("");
       setHandoffVlanTag("");
       setHandoffUsername("");
       setXponIdentifier("");
@@ -513,13 +517,13 @@ function AdminResellerManagement() {
             })()}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 16 }}>
               <Field label="Service mode">
-                <select required style={inputStyle} value={handoffMode} disabled={pendingHandoff} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); }}>
+                <select required style={inputStyle} value={handoffMode} disabled={pendingHandoff} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); setHandoffIngressInterface(""); }}>
                   {!pendingHandoff && <option value="isp_router">Passive XPON handoff</option>}
                   <option value="vlan_services">VLAN Hotspot + PPPoE service</option>
                 </select>
               </Field>
               <Field label="ISP router">
-                <select required style={inputStyle} value={handoffRouterId} onChange={(event) => { setHandoffRouterId(event.target.value); setHandoffInterfaceName(""); }}>
+                <select required style={inputStyle} value={handoffRouterId} onChange={(event) => { setHandoffRouterId(event.target.value); setHandoffInterfaceName(""); setHandoffIngressInterface(""); }}>
                   <option value="">Choose router</option>{routers.map((router) => <option key={router.id} value={router.id}>{router.name}{router.status ? ` · ${router.status}` : ""}</option>)}
                 </select>
               </Field>
@@ -536,7 +540,10 @@ function AdminResellerManagement() {
                   <option value="">Choose interface</option>{handoffPorts.map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
                 </select>
               </Field>}
-               {handoffMode === "vlan_services" && <Field label="Reseller username / VLAN identity"><input required minLength={3} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" style={inputStyle} value={handoffUsername} onChange={(event) => setHandoffUsername(event.target.value)} placeholder="username used for the VLAN identity" /></Field>}
+                {handoffMode === "vlan_services" && <Field label={handoffPortsLoading ? "Tagged XPON uplink (loading…)" : "Tagged XPON uplink"}><select required style={inputStyle} value={handoffIngressInterface} onChange={(event) => setHandoffIngressInterface(event.target.value)} disabled={!handoffRouterId || handoffPortsLoading}>
+                  <option value="">Choose physical uplink</option>{handoffPorts.filter((port) => port.type.toLowerCase() !== "bridge" && port.type.toLowerCase() !== "vlan").map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
+                </select></Field>}
+                {handoffMode === "vlan_services" && <Field label="Reseller username / VLAN identity"><input required minLength={3} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" style={inputStyle} value={handoffUsername} onChange={(event) => setHandoffUsername(event.target.value)} placeholder="username used for the VLAN identity" /></Field>}
                {handoffType === "vlan" && <Field label="VLAN ID"><input required min="1" max="4094" type="number" style={inputStyle} value={handoffVlanTag} onChange={(event) => setHandoffVlanTag(event.target.value)} placeholder="e.g. 240" /></Field>}
                {handoffMode === "isp_router" && <Field label="XPON / ONU reference (optional)"><input style={inputStyle} value={xponIdentifier} onChange={(event) => setXponIdentifier(event.target.value)} placeholder="Serial or customer reference" /></Field>}
               <Field label="Bandwidth cap (Mbps)"><input required min="1" max="100000" type="number" style={inputStyle} value={handoffCap} onChange={(event) => setHandoffCap(event.target.value)} /></Field>
@@ -547,8 +554,8 @@ function AdminResellerManagement() {
                  : "Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment."}
             </div>
              <div style={{ display: "flex", flexWrap: "wrap", gap: 9, marginTop: 15 }}>
-               {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
-               <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName || !handoffUsername} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning and pushing…" : handoffMode === "vlan_services" && pendingHandoff ? "Assign VLAN, push service & approve" : handoffMode === "vlan_services" ? "Assign reseller & push VLAN service" : "Assign reseller & push handoff"}</button>
+                {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
+                <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName || (handoffMode === "vlan_services" && !handoffIngressInterface) || !handoffUsername} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning and pushing…" : handoffMode === "vlan_services" && pendingHandoff ? "Assign VLAN, push service & approve" : handoffMode === "vlan_services" ? "Assign reseller & push VLAN service" : "Assign reseller & push handoff"}</button>
              </div>
           </form>
         )}

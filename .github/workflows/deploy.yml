@@ -10,6 +10,10 @@ on:
         description: "Optional active VLAN reseller port ID to reconcile on its MikroTik"
         required: false
         type: string
+      reconcile_reseller_interface:
+        description: "Optional physical tagged XPON uplink for the reseller reconciliation"
+        required: false
+        type: string
       inspect_reseller_port:
         description: "Optional active VLAN reseller port ID to inspect on its MikroTik"
         required: false
@@ -113,7 +117,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,INSPECT_RESELLER_PORT
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -223,7 +227,9 @@ jobs:
                   authorization: `Bearer ${token}`,
                   "content-type": "application/json",
                 },
-                body: "{}",
+                body: JSON.stringify({
+                  ingressInterface: process.env.RECONCILE_RESELLER_INTERFACE || undefined,
+                }),
               });
               const body = await response.text();
               if (!response.ok) {
@@ -290,4 +296,5 @@ jobs:
           VPS_SSH_KEY_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_KEY_B64 }}
           VPS_SSH_PASSPHRASE_B64: ${{ steps.encode_runtime_ssh.outputs.VPS_SSH_PASSPHRASE_B64 }}
           RECONCILE_RESELLER_PORT: ${{ inputs.reconcile_reseller_port }}
+          RECONCILE_RESELLER_INTERFACE: ${{ inputs.reconcile_reseller_interface }}
           INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}

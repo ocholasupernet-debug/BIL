@@ -3,6 +3,7 @@
 alter table if exists public.isp_reseller_ports
   add column if not exists handoff_mode text not null default 'services',
   add column if not exists handoff_type text not null default 'physical',
+  add column if not exists handoff_interface text,
   add column if not exists xpon_identifier text,
   add column if not exists link_detected boolean not null default false,
   add column if not exists last_link_checked_at timestamptz,
