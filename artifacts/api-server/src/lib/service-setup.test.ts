@@ -122,7 +122,7 @@ test("coexistence service setup compiles one isolated, delayed payload", () => {
   assert.match(script, /radius incoming set .*accept=yes/);
   assert.match(script, /radius incoming set .*port=3799/);
   assert.match(script, /:delay 2s;/);
-  assert.equal((script.match(/:delay 2s;/g) ?? []).length, 7);
+  assert.equal((script.match(/:delay 2s;/g) ?? []).length, 8);
   assert.equal(script.endsWith("\n"), true);
 });
 
@@ -140,7 +140,7 @@ test("coexistence never removes defaults or moves foreign resources", () => {
   assert.match(script, /platform RADIUS profile skipped; existing RADIUS entries were preserved/);
 });
 
-test("coexistence compiles without a platform RADIUS pair", () => {
+test("coexistence keeps portal access scoped and requires Hotspot authentication", () => {
   const script = generateServiceSetupScript({
     installationMode: "coexist",
     routerId: 91,
@@ -149,9 +149,16 @@ test("coexistence compiles without a platform RADIUS pair", () => {
     portName: "ether4",
     radiusIp: undefined,
     radiusSecret: undefined,
+    portalHostnames: ["come.isplatty.org"],
+    paymentHostnames: ["api.safaricom.co.ke"],
   });
 
   assert.match(script, /platform RADIUS profile skipped; existing RADIUS entries were preserved/);
+  assert.match(script, /walled-garden ip add server="coexist_hs_ether4" dst-host="come\.isplatty\.org" action=accept/);
+  assert.match(script, /walled-garden ip add server="coexist_hs_ether4" dst-host="api\.safaricom\.co\.ke" action=accept/);
+  assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge" out-interface-list=WAN hotspot=auth/);
+  assert.doesNotMatch(script, /chain=forward action=accept src-address="172\.16\.99\.0\/24" out-interface-list=WAN/);
+  assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge" protocol=tcp dst-port=53/);
 });
 
 test("coexistence rejects incomplete or unsafe RADIUS configuration", () => {
