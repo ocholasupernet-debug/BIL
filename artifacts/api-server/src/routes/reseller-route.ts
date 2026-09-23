@@ -537,19 +537,60 @@ async function provisionVlanResellerServices(
     `=ranges=${pppoePool}`,
     `=comment=${commentPrefix}_pppoe_pool`,
   ]);
+  const captivePortalOption = `${commentPrefix}_captive_portal`;
+  const captivePortalUrl = `http://${hotspotDnsName}/`;
+  const dhcpOptionRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/option/print",
+    "=.proplist=.id,name,code,value",
+    `?name=${captivePortalOption}`,
+  ]);
+  const captivePortalRow = Array.isArray(dhcpOptionRows)
+    ? dhcpOptionRows[0] as Record<string, unknown> | undefined
+    : undefined;
+  if (captivePortalRow?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/option/set",
+      `=.id=${captivePortalRow[".id"]}`,
+      "=code=114",
+      `=value=${routerScriptValue(`'${captivePortalUrl}'`)}`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/option/add",
+      `=name=${captivePortalOption}`,
+      "=code=114",
+      `=value=${routerScriptValue(`'${captivePortalUrl}'`)}`,
+    ]);
+  }
   const dhcpNetworkRows = await runRouterCommand(creds, [
     "/ip/dhcp-server/network/print",
-    "=.proplist=.id,address",
+    "=.proplist=.id,address,dhcp-option",
     `?address=${network.network}`,
   ]);
-  if (!Array.isArray(dhcpNetworkRows) || !dhcpNetworkRows.length) {
+  const dhcpNetwork = Array.isArray(dhcpNetworkRows)
+    ? dhcpNetworkRows[0] as Record<string, unknown> | undefined
+    : undefined;
+  if (!dhcpNetwork) {
     await runRouterCommand(creds, [
       "/ip/dhcp-server/network/add",
       `=address=${network.network}`,
       `=gateway=${gateway}`,
       `=dns-server=${gateway}`,
+      `=dhcp-option=${captivePortalOption}`,
       `=comment=${commentPrefix}_hotspot_network`,
     ]);
+  } else if (dhcpNetwork[".id"]) {
+    const existingOptions = String(dhcpNetwork["dhcp-option"] ?? "")
+      .split(",")
+      .map(option => option.trim())
+      .filter(Boolean);
+    if (!existingOptions.includes(captivePortalOption)) {
+      await runRouterCommand(creds, [
+        "/ip/dhcp-server/network/set",
+        `=.id=${dhcpNetwork[".id"]}`,
+        `=dhcp-option=${[...existingOptions, captivePortalOption].join(",")}`,
+      ]);
+    }
   }
   await runRouterCommand(creds, [
     "/file/make-dir",
