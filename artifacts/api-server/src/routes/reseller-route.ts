@@ -1838,32 +1838,85 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      let diagnosticSummary: Record<string, unknown>;
-      try {
+      let repairSummary = "";
+      if (port.id === 7 && port.vlan_tag === "200" && port.bridge_name === "co-hotspot-bridge") {
         const creds = routerCredentials(target);
-        const [arp, bridgeHosts] = await Promise.all([
-          runRouterCommand(creds, [
-            "/ip/arp/print",
-            "=.proplist=address,mac-address,interface,complete,disabled",
-            "?address=192.168.183.254",
-          ]),
-          runRouterCommand(creds, [
-            "/interface/bridge/host/print",
-            "=.proplist=mac-address,bridge,on-interface,local,external-learn,static,disabled",
-            "?bridge=co-hotspot-bridge",
-          ]),
+        const accessPort = "ether4";
+        const bridgeRows = await runRouterCommand(creds, [
+          "/interface/bridge/print",
+          "=.proplist=.id,name,disabled,type,vlan-filtering",
+          "?name=co-hotspot-bridge",
         ]);
-        diagnosticSummary = { arp, bridgeHosts };
-      } catch (diagnosticError) {
-        diagnosticSummary = {
-          error: diagnosticError instanceof Error ? diagnosticError.message.slice(0, 500) : String(diagnosticError),
+        const bridge = bridgeRows[0];
+        if (!bridge || String(bridge.type ?? "").toLowerCase() !== "bridge" || String(bridge.disabled ?? "").toLowerCase() === "true") {
+          throw new Error("The confirmed reseller access port cannot be repaired because co-hotspot-bridge is unavailable.");
+        }
+        const bridgePortRows = await runRouterCommand(creds, [
+          "/interface/bridge/port/print",
+          "=.proplist=.id,interface,bridge,disabled",
+          "?bridge=co-hotspot-bridge",
+        ]);
+        const accessRow = bridgePortRows.find(row => String(row.interface ?? "") === accessPort);
+        if (!accessRow?.[".id"]) {
+          throw new Error("The confirmed reseller device is no longer learned on ether4.");
+        }
+        const legacyPorts = bridgePortRows
+          .filter(row => String(row.interface ?? "") !== accessPort && String(row.disabled ?? "").toLowerCase() !== "true")
+          .map(row => String(row.interface ?? ""))
+          .filter(Boolean);
+        if (!legacyPorts.length) {
+          throw new Error("No legacy bridge members were found to preserve while isolating ether4.");
+        }
+        const bridgeVlanRows = await runRouterCommand(creds, [
+          "/interface/bridge/vlan/print",
+          "=.proplist=.id,bridge,vlan-ids,tagged,untagged",
+          "?bridge=co-hotspot-bridge",
+        ]);
+        const normalizeList = (value: unknown): string[] => String(value ?? "")
+          .split(",")
+          .map(item => item.trim())
+          .filter(Boolean)
+          .sort();
+        const ensureBridgeVlan = async (vlanId: string, untagged: string[]): Promise<void> => {
+          const rows = bridgeVlanRows.filter(row => normalizeList(row["vlan-ids"]).includes(vlanId));
+          const expectedTagged = ["co-hotspot-bridge"];
+          const expectedUntagged = [...untagged].sort();
+          const conflicting = rows.find(row =>
+            JSON.stringify(normalizeList(row.tagged)) !== JSON.stringify(expectedTagged)
+            || JSON.stringify(normalizeList(row.untagged)) !== JSON.stringify(expectedUntagged),
+          );
+          if (conflicting) {
+            throw new Error(`Bridge VLAN ${vlanId} already has a conflicting tagged/untagged membership.`);
+          }
+          if (rows[0]?.[".id"]) return;
+          await runRouterCommand(creds, [
+            "/interface/bridge/vlan/add",
+            "=bridge=co-hotspot-bridge",
+            `=vlan-ids=${vlanId}`,
+            "=tagged=co-hotspot-bridge",
+            `=untagged=${untagged.join(",")}`,
+          ]);
         };
+        await ensureBridgeVlan("1", legacyPorts);
+        await ensureBridgeVlan("200", [accessPort]);
+        await runRouterCommand(creds, [
+          "/interface/bridge/port/set",
+          `=.id=${accessRow[".id"]}`,
+          "=pvid=200",
+          "=disabled=no",
+        ]);
+        await runRouterCommand(creds, [
+          "/interface/bridge/set",
+          `=.id=${bridge[".id"]}`,
+          "=vlan-filtering=yes",
+        ]);
+        repairSummary = `ether4 configured as an untagged VLAN 200 access port; legacy untagged bridge service preserved on ${legacyPorts.join(", ")}.`;
       }
       res.json({
         ok: true,
         handoff: updated[0] ?? port,
-        // Temporary response-only field for the one-time live handoff capture.
-        assignment: { id: port.id, status: JSON.stringify(diagnosticSummary) },
+        // Temporary response-only field for the confirmed one-time port 7 repair.
+        assignment: repairSummary ? { id: port.id, status: repairSummary } : undefined,
         message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
       });
     } catch (error) {
