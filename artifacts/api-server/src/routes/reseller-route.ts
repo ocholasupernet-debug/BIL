@@ -20,6 +20,7 @@ import {
   decryptGatewayConfig,
   encryptGatewayConfig,
   gatewayConfigPreview,
+  bankBusinessNumberFor,
   isResellerGatewayId,
   resolveResellerGatewayRoute,
   resellerGatewayScope,
@@ -2349,9 +2350,13 @@ async function saveResellerPaymentSettings(account: { id: number; parent_id: num
   const mpesaDestinationType = mpesa.destinationType === "till" ? "till" : "paybill";
   const mpesaMerchant = cleanGatewayIdentifier(mpesa.merchantIdentifier, "M-Pesa Till / PayBill number", mpesaEnabled);
   const mpesaAccount = cleanGatewayIdentifier(mpesa.accountReference, "M-Pesa account reference", mpesaEnabled && mpesaDestinationType === "paybill");
-  const bankMerchant = cleanGatewayIdentifier(bank.merchantIdentifier, "Bank merchant number", bankEnabled);
-  const bankAccount = cleanGatewayIdentifier(bank.accountReference, "Bank account number", bankEnabled);
   const bankName = cleanGatewayIdentifier(bank.bankName, "Bank name", bankEnabled);
+  const bankMerchant = cleanGatewayIdentifier(
+    bank.merchantIdentifier || bankBusinessNumberFor(bankName),
+    "Bank merchant number",
+    bankEnabled,
+  );
+  const bankAccount = cleanGatewayIdentifier(bank.accountReference, "Bank account number", bankEnabled);
   const allowedPaymentGateways = new Set([
     "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "airtel", "azampay",
     "custom_paybill", "dpo_payments", "flutterwave", "intasend", "pesapal",

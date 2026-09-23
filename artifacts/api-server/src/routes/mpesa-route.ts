@@ -44,7 +44,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
-import { resolveResellerGatewayRoute } from "../lib/reseller-payment-gateway.js";
+import { bankBusinessNumberFor, resolveResellerGatewayRoute } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
 
@@ -196,9 +196,11 @@ function bankStkPushConfig(value: unknown): BankStkPushConfig {
   const config = map.bank_stk_push && typeof map.bank_stk_push === "object" && !Array.isArray(map.bank_stk_push)
     ? map.bank_stk_push as Record<string, unknown>
     : {};
+  const bankName = typeof config.bankName === "string" ? config.bankName.trim() : "";
+  const paybillNumber = typeof config.paybillNumber === "string" ? config.paybillNumber.trim() : "";
   return {
-    bankName: typeof config.bankName === "string" ? config.bankName.trim() : "",
-    paybillNumber: typeof config.paybillNumber === "string" ? config.paybillNumber.trim() : "",
+    bankName,
+    paybillNumber: paybillNumber || bankBusinessNumberFor(bankName),
     accountNumber: typeof config.accountNumber === "string" ? config.accountNumber.trim() : "",
   };
 }
@@ -349,25 +351,76 @@ async function getResellerPaymentRoute(
     throw new Error("This reseller link is not active for checkout.");
   }
 
-  const [route, fallback] = await Promise.all([
+  const [route, fallback, legacyRows, legacyAccountRows] = await Promise.all([
     resolveResellerGatewayRoute(adminId, port.assigned_reseller_id, routerId, portId),
     getMpesaSettings(),
+    sbSelectStrict<{
+      gateway_type: string;
+      merchant_identifier: string | null;
+      account_reference: string | null;
+      config_json: unknown;
+      is_active: boolean;
+    }>(
+      "payment_gateways",
+      `user_id=eq.${port.assigned_reseller_id}&gateway_type=in.(mpesa,bank)&select=gateway_type,merchant_identifier,account_reference,config_json,is_active`,
+    ),
+    sbSelectStrict<{ payment_gateway: string | null }>(
+      "isp_admins",
+      `id=eq.${port.assigned_reseller_id}&role=eq.reseller&select=payment_gateway&limit=1`,
+    ),
   ]);
-  if (!route) {
-    throw new Error("The reseller has not configured a payment gateway for this VLAN port, router, or default route.");
-  }
-  const paymentGateway = route.gateway_type as PaymentGateway;
-  const routeConfig = route.config;
-  const bankStkPush = {
-    bankName: routeConfig.bankName ?? "",
-    paybillNumber: routeConfig.paybillNumber ?? "",
-    accountNumber: routeConfig.accountNumber ?? "",
-  };
-  const mpesaTillPush = { tillNumber: routeConfig.tillNumber ?? "" };
-  const mpesaPaybill = {
-    paybillNumber: routeConfig.paybillNumber ?? "",
-    accountNumber: routeConfig.accountNumber ?? "",
-  };
+  const legacyMpesa = legacyRows.find(row => row.gateway_type === "mpesa");
+  const legacyBank = legacyRows.find(row => row.gateway_type === "bank");
+  const legacyConfig = (row: typeof legacyRows[number] | undefined): Record<string, unknown> =>
+    row?.config_json && typeof row.config_json === "object" && !Array.isArray(row.config_json)
+      ? row.config_json as Record<string, unknown>
+      : {};
+  const legacyMpesaConfig = legacyConfig(legacyMpesa);
+  const legacyBankConfig = legacyConfig(legacyBank);
+  const legacyPaymentGateway = getPaymentGateway(legacyAccountRows[0]?.payment_gateway);
+  const hasLegacyDestination = legacyPaymentGateway === "mpesa_till_push"
+    ? legacyMpesa?.is_active === true && !!legacyMpesa.merchant_identifier
+    : legacyPaymentGateway === "bank_stk_push"
+      ? legacyBank?.is_active === true
+        && !!(legacyBank.merchant_identifier || bankBusinessNumberFor(legacyBankConfig.bankName))
+        && !!legacyBank.account_reference
+      : legacyPaymentGateway === "mpesa_paybill"
+        ? legacyMpesa?.is_active === true && !!legacyMpesa.merchant_identifier && !!legacyMpesa.account_reference
+        : false;
+  const parentSettings = route || hasLegacyDestination
+    ? null
+    : await getAdminPaymentSettings(adminId);
+  const paymentGateway = (route?.gateway_type
+    ?? (hasLegacyDestination ? legacyPaymentGateway : parentSettings?.paymentGateway)
+    ?? "unconfigured") as PaymentGateway;
+  const routeConfig = route?.config ?? {};
+  const bankStkPush = route
+    ? bankStkPushConfig({ bank_stk_push: routeConfig })
+    : hasLegacyDestination && legacyPaymentGateway === "bank_stk_push"
+      ? bankStkPushConfig({
+          bank_stk_push: {
+            bankName: legacyBankConfig.bankName,
+            paybillNumber: legacyBank?.merchant_identifier ?? "",
+            accountNumber: legacyBank?.account_reference ?? "",
+          },
+        })
+      : parentSettings?.bankStkPush ?? bankStkPushConfig({});
+  const mpesaTillPush = route
+    ? { tillNumber: routeConfig.tillNumber ?? "" }
+    : hasLegacyDestination && legacyPaymentGateway === "mpesa_till_push"
+      ? { tillNumber: legacyMpesa?.merchant_identifier ?? "" }
+      : parentSettings?.mpesaTillPush ?? { tillNumber: "" };
+  const mpesaPaybill = route
+    ? {
+        paybillNumber: routeConfig.paybillNumber ?? "",
+        accountNumber: routeConfig.accountNumber ?? "",
+      }
+    : hasLegacyDestination && legacyPaymentGateway === "mpesa_paybill"
+      ? {
+          paybillNumber: legacyMpesa?.merchant_identifier ?? "",
+          accountNumber: legacyMpesa?.account_reference ?? "",
+        }
+      : parentSettings?.mpesaPaybill ?? { paybillNumber: "", accountNumber: "" };
   const destination = paymentGateway === "mpesa_till_push"
     ? {
         merchantIdentifier: mpesaTillPush.tillNumber,
