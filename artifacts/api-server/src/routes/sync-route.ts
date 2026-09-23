@@ -584,14 +584,54 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
    Body: { host, bridgeIp?, username, password,
            pools: [{ name, rangeStart, rangeEnd }] }
 ═══════════════════════════════════════════════════════════════ */
-router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
-  const { host, bridgeIp, username, password, pools } = req.body as {
+router.post("/admin/sync/ip-pools", requireAdmin(), async (req, res): Promise<void> => {
+  let { host, bridgeIp, username, password, pools } = req.body as {
     host: string; bridgeIp?: string; username: string; password: string;
+    routerId?: number;
     pools: Array<{ name: string; rangeStart: string; rangeEnd: string }>;
   };
 
   if ((!host && !bridgeIp) || !pools?.length) {
     res.status(400).json({ ok: false, error: "host/bridgeIp and pools are required" });
+    return;
+  }
+
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(403).json({ ok: false, error: "A valid signed-in account is required." });
+    return;
+  }
+  const requestedRouterId = Number(req.body?.routerId);
+  if (Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0) {
+    const tenantId = account.parent_id ?? account.id;
+    const routerRows = await sbSelect<{
+      id: number; host: string; bridge_ip: string | null; vpn_ip: string | null;
+      router_username: string | null; router_secret: string | null;
+    }>(
+      "isp_routers",
+      `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const routerRow = routerRows[0];
+    if (!routerRow) {
+      res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
+      return;
+    }
+    if (account.role === "reseller") {
+      const assignedPorts = await sbSelect<{ id: number }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${requestedRouterId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
+      );
+      if (!assignedPorts.length) {
+        res.status(403).json({ ok: false, error: "Only routers assigned to your approved VLAN service can be synced." });
+        return;
+      }
+    }
+    host = routerRow.host || "";
+    bridgeIp = routerRow.vpn_ip || undefined;
+    username = routerRow.router_username || "admin";
+    password = routerRow.router_secret || "";
+  } else if (account.role === "reseller") {
+    res.status(400).json({ ok: false, error: "A router assigned to your VLAN service is required." });
     return;
   }
 
@@ -640,7 +680,7 @@ router.post("/admin/sync/ip-pools", async (req, res): Promise<void> => {
                mac_address, ip_address, comment? }]
    }
 ═══════════════════════════════════════════════════════════════ */
-router.post("/admin/sync/users", async (req, res): Promise<void> => {
+router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void> => {
   const { host: bodyHost, bridgeIp: bodyBridgeIp, username: bodyUsername, password: bodyPassword, routerId, adminId, users } = req.body as {
     host?: string; bridgeIp?: string; username?: string; password?: string;
     routerId?: number; adminId?: number;
@@ -668,11 +708,16 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
   let bridgeIp = bodyBridgeIp;
   let username = bodyUsername || "";
   let password = bodyPassword || "";
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(403).json({ ok: false, error: "A valid signed-in account is required." });
+    return;
+  }
   if (routerId !== undefined) {
     const id = Number(routerId);
-    const tenantId = Number(adminId);
-    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(tenantId) || tenantId < 1) {
-      res.status(400).json({ ok: false, error: "A valid router and ISP account are required" });
+    const tenantId = account.parent_id ?? account.id;
+    if (!Number.isSafeInteger(id) || id < 1) {
+      res.status(400).json({ ok: false, error: "A valid router is required" });
       return;
     }
     const rows = await sbSelect<{
@@ -684,12 +729,28 @@ router.post("/admin/sync/users", async (req, res): Promise<void> => {
       res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
       return;
     }
+    if (account.role === "reseller") {
+      const assignedPorts = await sbSelect<{ id: number }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
+      );
+      if (!assignedPorts.length) {
+        res.status(403).json({ ok: false, error: "Only routers assigned to your approved VLAN service can be synced." });
+        return;
+      }
+    }
     host = routerRow.host || "";
     /* bridge_ip is the router LAN/hotspot gateway. Use only the dedicated
        persistent management address for a server-side RouterOS fallback. */
     bridgeIp = routerRow.vpn_ip || undefined;
     username = routerRow.router_username || "admin";
     password = routerRow.router_secret || "";
+  } else if (account.role === "reseller") {
+    res.status(400).json({ ok: false, error: "A router assigned to your VLAN service is required." });
+    return;
+  } else if (adminId !== undefined && Number(adminId) !== (account.parent_id ?? account.id)) {
+    res.status(403).json({ ok: false, error: "The selected ISP account does not match the signed-in account." });
+    return;
   }
 
   if ((!host && !bridgeIp) || !users?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and users are required" }); return; }
