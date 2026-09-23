@@ -1838,56 +1838,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      let diagnosticSummary: Record<string, unknown>;
-      try {
-        const resources = portServiceResourceNames({
-          id: port.id,
-          router_id: port.router_id,
-          interface_name: port.interface_name,
-          bridge_name: port.bridge_name,
-          handoff_mode: "vlan_services",
-          reseller_id: port.reseller_id,
-          assigned_reseller_id: port.assigned_reseller_id,
-          vlan_tag: port.vlan_tag,
-        });
-        const { parentBridge, vlanInterface } = vlanServiceResources(port);
-        const creds = routerCredentials(target);
-        const read = (command: string[]) => runRouterCommand(creds, command);
-        const [bridge, bridgePorts, bridgeVlans, vlanInterfaces, dhcpServers, leases, arp] = await Promise.all([
-          read(["/interface/bridge/print", "=.proplist=name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`]),
-          read(["/interface/bridge/port/print", "=.proplist=interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`]),
-          read(["/interface/bridge/vlan/print", "=.proplist=bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`]),
-          read(["/interface/vlan/print", "=.proplist=name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`]),
-          read(["/ip/dhcp-server/print", "=.proplist=name,interface,address-pool,disabled,running", `?name=${resources.hotspotDhcp}`]),
-          read(["/ip/dhcp-server/lease/print", "=.proplist=address,mac-address,host-name,status,server,active-address,active-mac-address,expires-after", `?server=${resources.hotspotDhcp}`]),
-          read(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
-        ]);
-        diagnosticSummary = {
-          parentBridge,
-          vlanInterface,
-          vlanTag: port.vlan_tag,
-          bridge,
-          bridgePorts,
-          bridgeVlans,
-          vlanInterfaces,
-          dhcpServers,
-          leases,
-          arp,
-        };
-      } catch (diagnosticError) {
-        diagnosticSummary = {
-          error: diagnosticError instanceof Error ? diagnosticError.message.slice(0, 500) : String(diagnosticError),
-        };
-      }
-      res.json({
-        ok: true,
-        handoff: updated[0] ?? port,
-        // The deployment workflow prints assignment.status. Keep this
-        // response-only field temporary for live port-handoff diagnosis; it
-        // does not change the persisted assignment status.
-        assignment: { id: port.id, status: JSON.stringify(diagnosticSummary) },
-        message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
-      });
+      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
       await sbUpdateStrict(
