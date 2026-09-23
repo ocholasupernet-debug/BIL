@@ -831,6 +831,27 @@ export default function HotspotSettings() {
     setNotice(null);
   };
 
+  const waitForPortDeployment = async (portId: number): Promise<AssignedHotspotPort | null> => {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 2000));
+      const response = await fetch("/api/admin/port-services", {
+        headers: adminApiHeaders(),
+        cache: "no-store",
+      });
+      const data = await parseApiResponse<{ ok?: boolean; ports?: AssignedHotspotPort[] }>(
+        response,
+        "The router deployment status could not be loaded.",
+      );
+      if (!response.ok) throw new Error(data.error || "The router deployment status could not be loaded.");
+      const latest = (data.ports ?? []).find(item => item.id === portId);
+      if (!latest) continue;
+      setAssignedPorts(previous => previous.map(item => item.id === latest.id ? latest : item));
+      setPortDrafts(previous => ({ ...previous, [latest.id]: draftFromAssignedHotspotPort(latest) }));
+      if (["active", "completed", "failed", "error"].includes(latest.status)) return latest;
+    }
+    return null;
+  };
+
   const saveAssignedPort = async (port: AssignedHotspotPort) => {
     const draft = portDrafts[port.id];
     if (!draft) return;
@@ -863,12 +884,34 @@ export default function HotspotSettings() {
           headers: adminApiHeaders(),
           body: JSON.stringify(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
         });
-        const deployData = await parseApiResponse<{}>(deployResponse, "The assigned hotspot port deployment failed.");
+        const deployData = await parseApiResponse<{ status?: string; accepted?: boolean }>(
+          deployResponse,
+          "The assigned hotspot port deployment failed.",
+        );
         if (!deployResponse.ok) throw new Error(deployData.error || "The router service deployment failed.");
+        if (deployResponse.status === 202 || deployData.accepted || deployData.status === "provisioning") {
+          const completed = await waitForPortDeployment(port.id);
+          if (completed?.status === "failed" || completed?.status === "error") {
+            throw new Error(completed.provisioning_error || "The router service deployment failed.");
+          }
+          if (!completed) {
+            setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
+            setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
+            setNotice({
+              type: "info",
+              text: "The router deployment is still running. This page will show the final result after the next refresh.",
+            });
+            return;
+          }
+          data.port = completed;
+        }
       }
       setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
       setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
-      setNotice({ type: "success", text: `${port.interface_name} hotspot settings were saved and deployed to the router.` });
+      setNotice({
+        type: "success",
+        text: `${port.interface_name} hotspot settings were saved and deployed to the router.`,
+      });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
     } finally {

@@ -65,6 +65,7 @@ export function routerIdentityProperty(addPath: string): string | null {
 type SourceEntry = { content: Buffer; contentType: string; fileName: string; expiresAt: number };
 const sourceEntries = new Map<string, SourceEntry>();
 const SOURCE_TTL_MS = 5 * 60 * 1000;
+const activePortDeployments = new Map<number, Promise<void>>();
 
 function requestOrigin(req: Request): string {
   const forwarded = req.headers["x-forwarded-proto"];
@@ -302,7 +303,7 @@ function sourceNameFromPath(path: string): string {
 
 async function deployApprovedSource(
   creds: RouterCredentials,
-  req: Request,
+  sourceOrigin: string,
   sourcePath: string,
   destinationPath: string,
 ): Promise<void> {
@@ -318,7 +319,7 @@ async function deployApprovedSource(
   try {
     await deployRouterFile(creds, {
       destinationPath,
-      sourceUrl: `${requestOrigin(req)}/api/port-service-source/${token}`,
+      sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
       overwrite: true,
       uploadId: token.slice(0, 16),
     });
@@ -329,7 +330,7 @@ async function deployApprovedSource(
 
 async function deployPortalContent(
   creds: RouterCredentials,
-  req: Request,
+  sourceOrigin: string,
   html: string,
   destinationPath: string,
 ): Promise<void> {
@@ -344,7 +345,7 @@ async function deployPortalContent(
   try {
     await deployRouterFile(creds, {
       destinationPath,
-      sourceUrl: `${requestOrigin(req)}/api/port-service-source/${token}`,
+      sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
       overwrite: true,
       uploadId: token.slice(0, 16),
     });
@@ -1155,6 +1156,130 @@ router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess
   }
 });
 
+async function executePortServiceDeployment(
+  port: PortServiceRow,
+  portalHtml: string,
+  sourceOrigin: string,
+): Promise<void> {
+  const found = await getRouterCreds(port.router_id, port.admin_id);
+  if (!found) throw new Error("Router credentials are unavailable for this port.");
+
+  const identity = await resourceIdentityForPort(port);
+  const resources = portServiceResourceNames(port, identity);
+  const hotspotSource = port.hotspot_enabled
+    ? normalizeApprovedAssetPath(port.hotspot_folder_path ?? port.hotspot_template_path)
+    : null;
+  const pppoeSource = port.pppoe_enabled
+    ? normalizeApprovedAssetPath(port.pppoe_folder_path ?? (port.hotspot_enabled ? port.hotspot_folder_path ?? port.hotspot_template_path : null))
+    : null;
+  if ((port.hotspot_enabled && !hotspotSource) || (port.pppoe_enabled && !pppoeSource)) {
+    throw new Error("Both enabled services must have an approved asset binding.");
+  }
+
+  const needsDefaultDns = (port.hotspot_enabled && !port.hotspot_dns_name)
+    || (port.pppoe_enabled && !port.pppoe_dns_name);
+  const peers = !port.subnet_range || needsDefaultDns
+    ? await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
+    )
+    : [];
+  const defaultDnsName = nextAvailableCompanyDns(resources.defaultDnsName, peers);
+  const sharedDnsName = port.hotspot_dns_name ?? port.pppoe_dns_name ?? defaultDnsName;
+  const deploymentPort: PortServiceRow = {
+    ...port,
+    bridge_name: port.bridge_name ?? resources.bridgeName,
+    subnet_range: port.subnet_range ?? nextAvailableSubnet(peers),
+    hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? sharedDnsName : null),
+    pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? sharedDnsName : null),
+  };
+  const assetPathsNeedNormalization = (
+    (port.hotspot_enabled && (
+      hotspotSource !== (port.hotspot_folder_path ?? port.hotspot_template_path)
+      || port.hotspot_folder_path !== hotspotSource
+      || port.hotspot_template_path !== hotspotSource
+    ))
+    || (port.pppoe_enabled && port.pppoe_folder_path !== pppoeSource)
+  );
+  if (
+    deploymentPort.bridge_name !== port.bridge_name
+    || deploymentPort.subnet_range !== port.subnet_range
+    || deploymentPort.hotspot_dns_name !== port.hotspot_dns_name
+    || deploymentPort.pppoe_dns_name !== port.pppoe_dns_name
+    || assetPathsNeedNormalization
+  ) {
+    await sbUpdateStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${port.admin_id}`, {
+      bridge_name: deploymentPort.bridge_name,
+      subnet_range: deploymentPort.subnet_range,
+      hotspot_dns_name: deploymentPort.hotspot_dns_name,
+      pppoe_dns_name: deploymentPort.pppoe_dns_name,
+      ...(port.hotspot_enabled
+        ? { hotspot_folder_path: hotspotSource, hotspot_template_path: hotspotSource }
+        : {}),
+      ...(port.pppoe_enabled ? { pppoe_folder_path: pppoeSource } : {}),
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  const sharedPortalDirectory = resources.hotspotDirectory;
+  const hotspotDestination = portalHtml
+    ? `${sharedPortalDirectory}/login.html`
+    : hotspotSource ? `${sharedPortalDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
+  const pppoeDestination = pppoeSource ? `${sharedPortalDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
+  for (const directory of [...new Set([resources.hotspotDirectory, resources.pppoeDirectory])]) {
+    await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
+  }
+  const deployedDestinations = new Set<string>();
+  const deploySourceOnce = async (sourcePath: string, destinationPath: string): Promise<void> => {
+    if (deployedDestinations.has(destinationPath)) return;
+    await deployApprovedSource(found.creds, sourceOrigin, sourcePath, destinationPath);
+    deployedDestinations.add(destinationPath);
+  };
+  if (portalHtml && hotspotDestination) {
+    await deployPortalContent(found.creds, sourceOrigin, portalHtml, hotspotDestination);
+    deployedDestinations.add(hotspotDestination);
+    const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
+    await deployPortalContent(found.creds, sourceOrigin, portalHtml, rloginDestination);
+    deployedDestinations.add(rloginDestination);
+  } else if (hotspotSource && hotspotDestination) {
+    await deploySourceOnce(hotspotSource, hotspotDestination);
+    const selectedHotspotName = sourceNameFromPath(hotspotSource);
+    const companionPortal = selectedHotspotName === "rlogin.html"
+      ? getDeployableSource("hotspot", "login.html")
+      : getDeployableSource("hotspot", "rlogin.html");
+    if (companionPortal) {
+      await deploySourceOnce(companionPortal.source.name, `${sharedPortalDirectory}/${sourceNameFromPath(companionPortal.source.name)}`);
+    }
+  }
+  if (pppoeSource && pppoeDestination) await deploySourceOnce(pppoeSource, pppoeDestination);
+  const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
+  const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
+  const poolRanges = deploymentPort.handoff_mode === "vlan_services"
+    ? await vlanPoolRangesForDeployment(deploymentPort, resources)
+    : null;
+  const portalHostname = new URL(sourceOrigin).hostname;
+  const commands = buildDualServiceCommands(
+    deploymentPort,
+    hotspotPath,
+    pppoePath,
+    found.row.bridge_ip || found.row.vpn_ip || "127.0.0.1",
+    {
+      portalHostname,
+      hotspotDnsName: deploymentPort.hotspot_dns_name,
+      pppoeDnsName: deploymentPort.pppoe_dns_name,
+      companyName: identity.companyName,
+      routerName: identity.routerName,
+      paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
+      ...(poolRanges ? {
+        hotspotPoolRange: poolRanges.hotspot,
+        pppoePoolRange: poolRanges.pppoe,
+      } : {}),
+    },
+  );
+  for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);
+  await updatePortProvisioningState(port, "active");
+}
+
 router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortAccess, async (req, res): Promise<void> => {
   try {
     const port = portFromLocals(res);
@@ -1182,132 +1307,43 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       res.status(409).json({ ok: false, error: "Both enabled services must have an approved asset binding." });
       return;
     }
-    await updatePortProvisioningState(port, "provisioning");
-    const found = await getRouterCreds(port.router_id, port.admin_id);
-    if (!found) {
-      const errorMessage = "Router credentials are unavailable for this port.";
-      await updatePortProvisioningState(port, "failed", errorMessage);
-      res.status(404).json({ ok: false, error: errorMessage });
+    if (activePortDeployments.has(port.id)) {
+      res.status(202).json({
+        ok: true,
+        accepted: true,
+        status: "provisioning",
+        portId: port.id,
+        message: "This router deployment is already in progress.",
+      });
       return;
     }
-    const identity = await resourceIdentityForPort(port);
-    const resources = portServiceResourceNames(port, identity);
-    const needsDefaultDns = (port.hotspot_enabled && !port.hotspot_dns_name)
-      || (port.pppoe_enabled && !port.pppoe_dns_name);
-    const peers = !port.subnet_range || needsDefaultDns
-      ? await sbSelectStrict<PortDnsRow & { subnet_range: string | null }>(
-        "isp_reseller_ports",
-        `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&id=neq.${port.id}&status=neq.disabled&select=subnet_range,hotspot_dns_name,pppoe_dns_name`,
-      )
-      : [];
-    const defaultDnsName = nextAvailableCompanyDns(resources.defaultDnsName, peers);
-    const sharedDnsName = port.hotspot_dns_name ?? port.pppoe_dns_name ?? defaultDnsName;
-    const deploymentPort: PortServiceRow = {
-      ...port,
-      bridge_name: port.bridge_name ?? resources.bridgeName,
-      subnet_range: port.subnet_range ?? nextAvailableSubnet(peers),
-      hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? sharedDnsName : null),
-      pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? sharedDnsName : null),
-    };
-    const assetPathsNeedNormalization = (
-      (port.hotspot_enabled && (
-        hotspotSource !== (port.hotspot_folder_path ?? port.hotspot_template_path)
-        || port.hotspot_folder_path !== hotspotSource
-        || port.hotspot_template_path !== hotspotSource
-      ))
-      || (port.pppoe_enabled && port.pppoe_folder_path !== pppoeSource)
-    );
-    if (
-      deploymentPort.bridge_name !== port.bridge_name
-      || deploymentPort.subnet_range !== port.subnet_range
-      || deploymentPort.hotspot_dns_name !== port.hotspot_dns_name
-      || deploymentPort.pppoe_dns_name !== port.pppoe_dns_name
-      || assetPathsNeedNormalization
-    ) {
-      await sbUpdateStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${port.admin_id}`, {
-        bridge_name: deploymentPort.bridge_name,
-        subnet_range: deploymentPort.subnet_range,
-        hotspot_dns_name: deploymentPort.hotspot_dns_name,
-        pppoe_dns_name: deploymentPort.pppoe_dns_name,
-        ...(port.hotspot_enabled
-          ? { hotspot_folder_path: hotspotSource, hotspot_template_path: hotspotSource }
-          : {}),
-        ...(port.pppoe_enabled ? { pppoe_folder_path: pppoeSource } : {}),
-        updated_at: new Date().toISOString(),
+
+    await updatePortProvisioningState(port, "provisioning");
+    const sourceOrigin = requestOrigin(req);
+    const job = executePortServiceDeployment(port, portalHtml, sourceOrigin)
+      .catch(async (error) => {
+        const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";
+        try {
+          await updatePortProvisioningState(port, "failed", errorMessage);
+        } catch (stateError) {
+          logger.error({ err: stateError, portId: port.id, deploymentError: errorMessage }, "[port-services] failed to persist provisioning error");
+        }
+        logger.error({ err: error, portId: port.id }, "[port-services] background deployment failed");
+      })
+      .finally(() => {
+        activePortDeployments.delete(port.id);
       });
-    }
-    const sharedPortalDirectory = resources.hotspotDirectory;
-    const hotspotDestination = portalHtml
-      ? `${sharedPortalDirectory}/login.html`
-      : hotspotSource ? `${sharedPortalDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
-    const pppoeDestination = pppoeSource ? `${sharedPortalDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
-    for (const directory of [...new Set([resources.hotspotDirectory, resources.pppoeDirectory])]) {
-      await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
-    }
-    const deployedDestinations = new Set<string>();
-    const deploySourceOnce = async (sourcePath: string, destinationPath: string): Promise<void> => {
-      if (deployedDestinations.has(destinationPath)) return;
-      await deployApprovedSource(found.creds, req, sourcePath, destinationPath);
-      deployedDestinations.add(destinationPath);
-    };
-    if (portalHtml && hotspotDestination) {
-      await deployPortalContent(found.creds, req, portalHtml, hotspotDestination);
-      deployedDestinations.add(hotspotDestination);
-      const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
-      await deployPortalContent(found.creds, req, portalHtml, rloginDestination);
-      deployedDestinations.add(rloginDestination);
-    } else if (hotspotSource && hotspotDestination) {
-      await deploySourceOnce(hotspotSource, hotspotDestination);
-      const selectedHotspotName = sourceNameFromPath(hotspotSource);
-      const companionPortal = selectedHotspotName === "rlogin.html"
-        ? getDeployableSource("hotspot", "login.html")
-        : getDeployableSource("hotspot", "rlogin.html");
-      if (companionPortal) {
-        await deploySourceOnce(companionPortal.source.name, `${sharedPortalDirectory}/${sourceNameFromPath(companionPortal.source.name)}`);
-      }
-    }
-    if (pppoeSource && pppoeDestination) await deploySourceOnce(pppoeSource, pppoeDestination);
-    const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
-    const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
-    const poolRanges = deploymentPort.handoff_mode === "vlan_services"
-      ? await vlanPoolRangesForDeployment(deploymentPort, resources)
-      : null;
-    const portalHostname = new URL(requestOrigin(req)).hostname;
-    const commands = buildDualServiceCommands(
-      deploymentPort,
-      hotspotPath,
-      pppoePath,
-      found.row.bridge_ip || found.row.vpn_ip || "127.0.0.1",
-      {
-        portalHostname,
-        hotspotDnsName: deploymentPort.hotspot_dns_name,
-        pppoeDnsName: deploymentPort.pppoe_dns_name,
-        companyName: identity.companyName,
-        routerName: identity.routerName,
-        paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
-        ...(poolRanges ? {
-          hotspotPoolRange: poolRanges.hotspot,
-          pppoePoolRange: poolRanges.pppoe,
-        } : {}),
-      },
-    );
-    for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);
-    const scriptPayload = [
-      `# ${resources.resourceName} dual-service deployment for ${port.interface_name}`,
-      ...commands.map(([path, ...args]) => `${path.replaceAll("/", " ")} ${args.join(" ")}`),
-    ].join("\n");
-    await updatePortProvisioningState(port, "active");
-    res.status(201).json({ ok: true, portId: port.id, hotspotDestination, pppoeDestination, scriptPayload });
+    activePortDeployments.set(port.id, job);
+
+    res.status(202).json({
+      ok: true,
+      accepted: true,
+      status: "provisioning",
+      portId: port.id,
+      message: "Router deployment started. The port status will update when RouterOS finishes.",
+    });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";
-    const port = res.locals.resellerPort as PortServiceRow | undefined;
-    if (port) {
-      try {
-        await updatePortProvisioningState(port, "failed", errorMessage);
-      } catch (stateError) {
-        logger.error({ err: stateError, portId: port.id, deploymentError: errorMessage }, "[port-services] failed to persist provisioning error");
-      }
-    }
+    const errorMessage = error instanceof Error ? error.message : "Dual-service deployment could not be started.";
     res.status(502).json({ ok: false, error: errorMessage });
   }
 });
