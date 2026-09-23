@@ -115,12 +115,12 @@ async function planContextRows(context: PlanContext): Promise<{
     ),
     sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${context.tenantId}&select=id,name,range_start,range_end,router_id,port_id,created_at&order=name.asc`),
   ]);
-  const plans = context.allowedRouterIds
+  const plans = context.account.role === "reseller"
     ? allPlans.filter(plan =>
         context.allowedRouterIds!.has(Number(plan.router_id))
         && context.allowedPortIds!.has(Number(plan.port_id)),
       )
-    : allPlans;
+    : allPlans.filter(plan => plan.port_id == null);
   const filteredRouters = context.allowedRouterIds
     ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
     : routers;

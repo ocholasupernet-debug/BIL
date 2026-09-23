@@ -997,7 +997,9 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
       if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
-        const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, { portId: Number(selectedAssignedPortId) });
+         const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
+           portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
+         });
         const headers = new Headers({ "Content-Type": "application/json" });
         let token = "";
         let role = "";

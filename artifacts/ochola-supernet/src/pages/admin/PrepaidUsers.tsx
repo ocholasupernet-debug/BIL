@@ -229,7 +229,8 @@ async function fetchPlans(): Promise<Plan[]> {
   const { data } = await supabase
     .from("isp_plans")
     .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id")
-    .eq("admin_id", ADMIN_ID);
+    .eq("admin_id", ADMIN_ID)
+    .is("port_id", null);
   return (data ?? []) as Plan[];
 }
 async function fetchRouters(): Promise<Router[]> {

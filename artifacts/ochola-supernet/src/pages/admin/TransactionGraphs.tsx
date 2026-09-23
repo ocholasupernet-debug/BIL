@@ -27,7 +27,8 @@ async function fetchTransactions(): Promise<DbTransaction[]> {
 async function fetchPlans(): Promise<PlanRow[]> {
   const { data, error } = await supabase
     .from("isp_plans")
-    .select("id,router_id");
+    .select("id,router_id")
+    .is("port_id", null);
   if (error) throw error;
   return (data ?? []) as PlanRow[];
 }
