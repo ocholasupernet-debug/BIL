@@ -392,7 +392,7 @@ export async function buildPortalHtml(
   settings: HSettings,
   domain: string,
   appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
-  scope: { portId?: number } = {},
+  scope: { portId?: number; previewOnly?: boolean } = {},
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
@@ -430,6 +430,49 @@ export async function buildPortalHtml(
             validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
           }))
           .filter((plan) => plan.id > 0 && plan.name);
+      }
+    }
+
+    /*
+     * The generated router file must stay strictly scoped to its router or
+     * VLAN port. The admin preview is different: it should still show an
+     * existing package when the selected router has no router-wide package
+     * (for example, when the package was created against another assigned
+     * hotspot port). Use the authenticated admin plan context only for that
+     * local preview fallback; never use it for an exported/deployed bundle.
+     */
+    if (!plans.length && scope.previewOnly) {
+      const contextResponse = await fetch("/api/plans/admin-context", {
+        headers: adminApiHeaders(),
+        cache: "no-store",
+      });
+      if (contextResponse.ok) {
+        const context = await contextResponse.json() as {
+          plans?: Array<Record<string, unknown>>;
+        };
+        const selectedRouterId = Number(settings.routerId);
+        const selectedPortId = Number(scope.portId);
+        const candidates = (context.plans ?? [])
+          .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
+          .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
+          .sort((a, b) => {
+            const score = (plan: Record<string, unknown>) => {
+              let value = 0;
+              if (selectedRouterId > 0 && Number(plan.router_id) === selectedRouterId) value += 4;
+              if (selectedPortId > 0 && Number(plan.port_id) === selectedPortId) value += 8;
+              return value;
+            };
+            return score(b) - score(a);
+          });
+        plans = candidates
+          .map(plan => ({
+            id: Number(plan.id) || 0,
+            name: typeof plan.name === "string" ? plan.name : "",
+            price: Number(plan.price) || 0,
+            validity: Number(plan.validity) || 0,
+            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+          }))
+          .filter(plan => plan.id > 0 && plan.name);
       }
     }
   } catch {
@@ -1215,11 +1258,19 @@ export default function HotspotSettings() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     try {
-      const html = await createExport();
-      if (!html) {
-        setShowPreview(false);
-        return;
-      }
+       const html = await buildPortalHtml(
+         settings,
+         brand.domain,
+         { portalBackground, portalPackageShape },
+         {
+           portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
+           previewOnly: true,
+         },
+       );
+       if (!html) {
+         setShowPreview(false);
+         return;
+       }
       setPreviewUrl(URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })));
     } catch (error) {
       setShowPreview(false);

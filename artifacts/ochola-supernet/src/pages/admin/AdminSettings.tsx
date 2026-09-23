@@ -525,6 +525,7 @@ function ResellerPaymentGatewayCard() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     setLoading(true);
@@ -532,8 +533,22 @@ function ResellerPaymentGatewayCard() {
       const response = await fetch("/api/reseller/payment-gateways", { headers: adminApiHeaders(), cache: "no-store" });
       const data = await response.json() as { ok?: boolean; routes?: Route[]; scopes?: ScopeData; error?: string };
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not load reseller payment gateways.");
-      setRoutes(data.routes || []);
+      const nextRoutes = data.routes || [];
+      setRoutes(nextRoutes);
       setScopes(data.scopes || { routers: [], ports: [] });
+      if (selectedRoute === null) {
+        const defaultRoute = nextRoutes.find(route => route.scopeType === "default");
+        if (defaultRoute) {
+          setForm({
+            gatewayType: defaultRoute.gatewayType,
+            scopeType: defaultRoute.scopeType,
+            routerId: "",
+            portId: "",
+            config: { ...defaultRoute.config },
+            isActive: defaultRoute.isActive,
+          });
+        }
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load reseller payment gateways.");
     } finally {
@@ -616,10 +631,49 @@ function ResellerPaymentGatewayCard() {
   const selectedExistingRoute = routes.find(route => route.id === selectedRoute);
 
   return (
-    <Card title="Reseller Payment Gateways" desc="Add your own collection accounts and route different accounts to each router or assigned VLAN port.">
-      <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
-        The route for a VLAN port takes priority, then its router route, then your reseller default. ISP gateway settings are never used as a fallback.
-      </p>
+    <Card title="Payment Gateways" desc="Choose a gateway, configure its collection account, and route it to your reseller services.">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
+        Your reseller gateway routes are independent from ISP gateway settings. A matching VLAN port route takes priority, then its router route, then your reseller default.
+      </div>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
+        marginBottom: 20,
+      }}>
+        {GATEWAYS.map(gateway => {
+          const isSelected = form.gatewayType === gateway.id;
+          return (
+            <button
+              key={gateway.id}
+              type="button"
+              onClick={() => {
+                setForm(current => ({ ...current, gatewayType: gateway.id, config: {} }));
+                setSaved(false);
+                setError("");
+              }}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "10px 14px", borderRadius: 10, cursor: "pointer",
+                fontFamily: "inherit", fontSize: "0.8rem", fontWeight: 600,
+                transition: "all 0.2s",
+                background: isSelected ? C.cyan : C.card,
+                color: isSelected ? "white" : C.text,
+                border: `1.5px solid ${isSelected ? C.cyan : C.border}`,
+              }}
+            >
+              <span style={{
+                width: 16, height: 16, borderRadius: "50%",
+                border: `2px solid ${isSelected ? "white" : C.border}`,
+                background: isSelected ? "white" : "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0,
+              }}>
+                {isSelected && <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.cyan }} />}
+              </span>
+              {gateway.name}
+            </button>
+          );
+        })}
+      </div>
       {loading ? <p style={{ color: C.muted, fontSize: "0.76rem" }}>Loading gateway routes…</p> : (
         <div style={{ display: "grid", gap: 8, marginBottom: 18 }}>
           {routes.length === 0 && <p style={{ color: C.muted, fontSize: "0.76rem", margin: 0 }}>No reseller gateway routes yet. Add a default route or choose a specific router/VLAN port.</p>}
@@ -644,15 +698,10 @@ function ResellerPaymentGatewayCard() {
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <p style={{ color: C.text, fontSize: "0.82rem", fontWeight: 700, margin: 0 }}>{selectedExistingRoute ? "Edit gateway route" : "Add gateway route"}</p>
+        <p style={{ color: C.text, fontSize: "0.82rem", fontWeight: 700, margin: 0 }}>{selectedExistingRoute ? "Edit collection route" : "Add collection route"}</p>
         {selectedExistingRoute && <button type="button" onClick={newRoute} style={{ background: "none", border: "none", color: C.cyan, cursor: "pointer", fontSize: "0.72rem", fontFamily: "inherit" }}>Add another</button>}
       </div>
       <Grid2>
-        <Field label="Payment gateway">
-          <Select value={form.gatewayType} onChange={event => { setForm(current => ({ ...current, gatewayType: event.target.value, config: {} })); setSaved(false); }}>
-            {GATEWAYS.map(gateway => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
-          </Select>
-        </Field>
         <Field label="Collection scope">
           <Select value={form.scopeType} onChange={event => setForm(current => ({ ...current, scopeType: event.target.value as typeof current.scopeType, routerId: "", portId: "" }))}>
             <option value="default">Reseller default</option>
@@ -676,24 +725,101 @@ function ResellerPaymentGatewayCard() {
           {scopes.ports.map(port => <option key={port.id} value={port.id}>{port.label}</option>)}
         </Select>
       </Field>}
-      {activeGateway && <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginTop: 2 }}>
-        {activeGateway.fields.map(field => {
-          const storedSecret = Boolean(selectedExistingRoute?.hasStoredSecrets && field.secret);
-          return <Field key={field.key} label={field.label} hint={storedSecret ? "A saved value is protected. Leave blank to keep it." : field.hint}>
-            {field.type === "select" && field.options ? (
-              <Select value={form.config[field.key] || ""} onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}>
-                <option value="">-- Select --</option>
-                {field.options.map(option => <option key={option} value={option}>{option}</option>)}
-              </Select>
-            ) : <Input
-              type={field.secret ? "password" : "text"}
-              value={form.config[field.key] || ""}
-              placeholder={storedSecret ? "Saved securely" : field.hint || `Enter ${field.label.toLowerCase()}`}
-              onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}
-            />}
-          </Field>;
-        })}
-      </div>}
+      {activeGateway && (
+        <div style={{
+          background: C.card, border: `1px solid ${C.border}`, borderRadius: 12,
+          overflow: "hidden", marginTop: 4,
+        }}>
+          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
+            <p style={{ fontSize: "1rem", fontWeight: 800, color: C.text, margin: 0 }}>
+              {activeGateway.name} Configuration
+            </p>
+          </div>
+          <div style={{ padding: "20px" }}>
+            {activeGateway.id === "bank_stk_push" && (
+              <div style={{
+                background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)",
+                borderRadius: 8, padding: "12px 16px", marginBottom: 20,
+                borderLeft: `3px solid ${C.cyan}`,
+              }}>
+                <p style={{ fontSize: "0.82rem", fontWeight: 600, color: C.text, margin: 0 }}>
+                  Fill the details below to complete Bank STK Push setup
+                </p>
+              </div>
+            )}
+            {activeGateway.fields.map(field => {
+              const selectedBank = form.config.bankName || "";
+              const storedSecret = Boolean(selectedExistingRoute?.hasStoredSecrets && field.secret);
+              if (activeGateway.id === "bank_stk_push" && (field.key === "paybillNumber" || field.key === "accountNumber") && !selectedBank) return null;
+              const fieldLabel = field.key === "paybillNumber" && selectedBank
+                ? `${selectedBank} Business / PayBill Number`
+                : field.key === "accountNumber" && selectedBank
+                ? `${selectedBank} Account / Business Number`
+                : field.label;
+              return (
+                <div key={field.key} style={{
+                  display: "flex", alignItems: "center", gap: 16,
+                  padding: "12px 0", borderBottom: `1px solid ${C.border}`,
+                }}>
+                  <label style={{
+                    width: 180, flexShrink: 0, fontSize: "0.8rem", fontWeight: 600,
+                    color: C.muted, textAlign: "right",
+                  }}>
+                    {fieldLabel}
+                  </label>
+                  <div style={{ flex: 1 }}>
+                    {field.type === "select" && field.options ? (
+                      <Select
+                        value={form.config[field.key] || ""}
+                        onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}
+                      >
+                        <option value="">-- Select --</option>
+                        {field.options.map(option => <option key={option} value={option}>{option}</option>)}
+                      </Select>
+                    ) : field.secret ? (
+                      <div style={{ position: "relative" }}>
+                        <Input
+                          type={showSecrets[`${activeGateway.id}_${field.key}`] ? "text" : "password"}
+                          value={form.config[field.key] || ""}
+                          placeholder={storedSecret ? "Saved securely" : "••••••••••••••••"}
+                          onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}
+                          style={{ paddingRight: 36 }}
+                        />
+                        <button
+                          type="button"
+                          aria-label={showSecrets[`${activeGateway.id}_${field.key}`] ? "Hide secret" : "Show secret"}
+                          onClick={() => setShowSecrets(previous => ({ ...previous, [`${activeGateway.id}_${field.key}`]: !previous[`${activeGateway.id}_${field.key}`] }))}
+                          style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 2 }}
+                        >
+                          {showSecrets[`${activeGateway.id}_${field.key}`] ? <EyeOff size={13} /> : <Eye size={13} />}
+                        </button>
+                      </div>
+                    ) : (
+                      <Input
+                        value={form.config[field.key] || ""}
+                        onChange={event => setForm(current => ({ ...current, config: { ...current.config, [field.key]: event.target.value } }))}
+                        placeholder={field.hint || (storedSecret ? "Saved securely" : `Enter ${field.label.toLowerCase()}`)}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {activeGateway.id === "bank_stk_push" && (
+              <div style={{
+                background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
+                borderRadius: 8, padding: "12px 16px", marginTop: 20,
+              }}>
+                <p style={{ fontSize: "0.78rem", color: "#f59e0b", margin: 0, lineHeight: 1.6 }}>
+                  <AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 6 }} />
+                  BankStkPush sends a Daraja PayBill prompt using the chosen bank’s PayBill Number.
+                  The Account / Business Number is included as the payment reference.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.muted, fontSize: "0.75rem", marginTop: 12 }}>
         <input type="checkbox" checked={form.isActive} onChange={event => setForm(current => ({ ...current, isActive: event.target.checked }))} />
         Use this route for matching reseller payments
