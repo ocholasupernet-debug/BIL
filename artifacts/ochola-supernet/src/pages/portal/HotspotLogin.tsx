@@ -14,6 +14,15 @@ interface Plan {
   description: string | null; plan_type?: string; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
+
+interface HotspotRuntimeConfig {
+  apiBase: string;
+  adminId: number | null;
+  routerId: number | null;
+  portId: number | null;
+  previewOnly: boolean;
+  plans: Plan[];
+}
 interface HotspotCredentials {
   username: string;
   password: string;
@@ -31,6 +40,59 @@ interface ConnectedDevice {
   routerName: string;
 }
 type Tab = "plans" | "tv" | "login" | "voucher";
+
+function positivePortalId(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeRuntimePlan(value: unknown): Plan | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const id = positivePortalId(row.id);
+  const name = typeof row.name === "string" ? row.name.trim() : "";
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    price: Number(row.price) || 0,
+    validity: Number(row.validity) || 0,
+    validity_unit: typeof row.validity_unit === "string" ? row.validity_unit : "days",
+    validity_days: Number(row.validity_days ?? row.validity) || 0,
+    speed_down: Number(row.speed_down) || 0,
+    speed_up: Number(row.speed_up) || 0,
+    description: typeof row.description === "string" ? row.description : null,
+    plan_type: typeof row.plan_type === "string" ? row.plan_type : undefined,
+    type: typeof row.type === "string" ? row.type : undefined,
+    router_id: positivePortalId(row.router_id),
+    port_id: positivePortalId(row.port_id),
+  };
+}
+
+function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
+  const raw = typeof window !== "undefined"
+    ? (window as Window & { __HOTSPOT_CONFIG__?: Record<string, unknown> }).__HOTSPOT_CONFIG__
+    : undefined;
+  const apiBase = typeof raw?.apiBase === "string" && /^https?:\/\//i.test(raw.apiBase.trim())
+    ? raw.apiBase.trim().replace(/\/+$/, "")
+    : "";
+  return {
+    apiBase,
+    adminId: positivePortalId(raw?.adminId),
+    routerId: positivePortalId(raw?.routerId),
+    portId: positivePortalId(raw?.portId),
+    previewOnly: raw?.previewOnly === true,
+    plans: Array.isArray(raw?.plans)
+      ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
+      : [],
+  };
+}
+
+const HOTSPOT_RUNTIME_CONFIG = readHotspotRuntimeConfig();
+
+function hotspotApiUrl(path: string): string {
+  return `${HOTSPOT_RUNTIME_CONFIG.apiBase}${path}`;
+}
 
 function formatValidity(plan: Plan): string {
   const days = plan.validity_days ?? plan.validity ?? 0;
@@ -163,8 +225,7 @@ export default function HotspotLogin() {
     try {
       const params = new URLSearchParams(window.location.search);
       const qId = params.get("adminId") ?? params.get("ispId");
-      const parsedId = qId ? parseInt(qId, 10) : NaN;
-      return Number.isFinite(parsedId) && parsedId > 0 ? parsedId : null;
+      return positivePortalId(qId) ?? HOTSPOT_RUNTIME_CONFIG.adminId;
     } catch { return null; }
   })();
   const portalScope = (() => {
@@ -173,11 +234,14 @@ export default function HotspotLogin() {
       const routerId = Number(params.get("routerId") ?? "");
       const portId = Number(params.get("portId") ?? "");
       return {
-        routerId: Number.isSafeInteger(routerId) && routerId > 0 ? routerId : null,
-        portId: Number.isSafeInteger(portId) && portId > 0 ? portId : null,
+        routerId: positivePortalId(routerId) ?? HOTSPOT_RUNTIME_CONFIG.routerId,
+        portId: positivePortalId(portId) ?? HOTSPOT_RUNTIME_CONFIG.portId,
       };
     } catch {
-      return { routerId: null, portId: null };
+      return {
+        routerId: HOTSPOT_RUNTIME_CONFIG.routerId,
+        portId: HOTSPOT_RUNTIME_CONFIG.portId,
+      };
     }
   })();
   const planScopeQuery = [
@@ -186,8 +250,10 @@ export default function HotspotLogin() {
     portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
   ].filter(Boolean).map(value => `&${value}`).join("");
 
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [plansLoading, setPlansLoading] = useState(true);
+  const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
+  const [plansLoading, setPlansLoading] = useState(
+    HOTSPOT_RUNTIME_CONFIG.previewOnly !== true && HOTSPOT_RUNTIME_CONFIG.plans.length === 0,
+  );
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
   const [phone, setPhone] = useState("");
@@ -239,18 +305,26 @@ export default function HotspotLogin() {
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
 
   useEffect(() => {
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setPlansLoading(false);
+      return;
+    }
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
-          fetch(`/api/plans?type=hotspot&activeOnly=true&purchasableOnly=true${planScopeQuery}`),
-          fetch(`/api/settings/mpesa?${[
+          fetch(hotspotApiUrl(`/api/plans?type=hotspot&activeOnly=true&purchasableOnly=true${planScopeQuery}`)),
+          fetch(hotspotApiUrl(`/api/settings/mpesa?${[
             adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
             portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
             portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
-          ].filter(Boolean).join("&")}`).catch(() => null),
+          ].filter(Boolean).join("&")}`)).catch(() => null),
         ]);
-        const plansData: Plan[] = await plansRes.json();
-        setPlans(plansData);
+        if (plansRes.ok) {
+          const plansData = await plansRes.json() as unknown;
+          if (Array.isArray(plansData)) {
+            setPlans(plansData.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan)));
+          }
+        }
 
         if (mpesaRes?.ok) {
           const mpesaData = await mpesaRes.json();
@@ -263,7 +337,10 @@ export default function HotspotLogin() {
             paymentGateway: typeof mpesaData.settings?.paymentGateway === "string" ? mpesaData.settings.paymentGateway : "mpesa_paybill",
           });
         }
-      } catch { setPlans([]); }
+      } catch {
+        // Keep the package list embedded during deployment if the live API is
+        // temporarily unreachable from the RouterOS client network.
+      }
       finally { setPlansLoading(false); }
     })();
   }, [adminId, planScopeQuery]);
@@ -276,7 +353,7 @@ export default function HotspotLogin() {
       adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
       portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
     ].filter(Boolean).join("&");
-    fetch(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`)
+    fetch(hotspotApiUrl(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`))
       .then(async response => {
         const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
         if (!response.ok || !data.ok) throw new Error(data.error || "Connected devices could not be loaded.");
@@ -294,7 +371,7 @@ export default function HotspotLogin() {
   const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string, retryRouter = false): Promise<boolean> => {
     setAccessRetrying(true);
     try {
-      const accessResponse = await fetch("/api/mpesa/hotspot-mac-access", {
+      const accessResponse = await fetch(hotspotApiUrl("/api/mpesa/hotspot-mac-access"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -348,7 +425,7 @@ export default function HotspotLogin() {
         return;
       }
       try {
-        const res = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`);
+        const res = await fetch(hotspotApiUrl(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`));
         const data = await res.json();
         if (data.paid && !bindingInFlight.current) {
           bindingInFlight.current = true;
@@ -400,7 +477,7 @@ export default function HotspotLogin() {
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setHotspotCredentials(null); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
-      const intentResponse = await fetch("/api/mpesa/intent", {
+      const intentResponse = await fetch(hotspotApiUrl("/api/mpesa/intent"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -421,7 +498,7 @@ export default function HotspotLogin() {
         return;
       }
       if (intentData.deviceMacAddress) setDeviceMacAddress(intentData.deviceMacAddress);
-      const res = await fetch("/api/mpesa/stk", {
+      const res = await fetch(hotspotApiUrl("/api/mpesa/stk"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -547,7 +624,7 @@ export default function HotspotLogin() {
       return null;
     }
     try {
-      const res = await fetch("/api/customers/hotspot-troubleshoot", {
+      const res = await fetch(hotspotApiUrl("/api/customers/hotspot-troubleshoot"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -628,7 +705,7 @@ export default function HotspotLogin() {
     e.preventDefault();
     setLoginError(""); setLoginLoading(true);
     try {
-      const res = await fetch("/api/customers/hotspot-login", {
+      const res = await fetch(hotspotApiUrl("/api/customers/hotspot-login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -676,7 +753,7 @@ export default function HotspotLogin() {
     setMpesaReconnectError("");
     setMpesaReconnectLoading(true);
     try {
-      const res = await fetch("/api/mpesa/verify", {
+      const res = await fetch(hotspotApiUrl("/api/mpesa/verify"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -720,7 +797,7 @@ export default function HotspotLogin() {
     e.preventDefault();
     setVoucherError(""); setVoucherLoading(true);
     try {
-      const res = await fetch("/api/vouchers/redeem", {
+      const res = await fetch(hotspotApiUrl("/api/vouchers/redeem"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...(adminId ? { adminId } : {}), code: voucherCode.trim().toUpperCase() }),
