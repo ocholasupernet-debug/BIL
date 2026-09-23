@@ -439,7 +439,7 @@ export function buildDualServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${network.bridgeName}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${network.bridgeName}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
@@ -577,7 +577,7 @@ function buildVlanServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${vlanInterface}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${hotspotPoolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${vlanInterface}`, `=profile=${resources.hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],

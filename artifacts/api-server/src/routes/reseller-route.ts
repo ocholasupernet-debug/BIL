@@ -427,7 +427,7 @@ async function provisionVlanResellerServices(
       "/ip/dhcp-server/network/add",
       `=address=${network.network}`,
       `=gateway=${gateway}`,
-      `=dns-server=${gateway},8.8.8.8`,
+      `=dns-server=${gateway}`,
       `=comment=${commentPrefix}_hotspot_network`,
     ]);
   }

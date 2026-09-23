@@ -18,6 +18,7 @@
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
+- [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
