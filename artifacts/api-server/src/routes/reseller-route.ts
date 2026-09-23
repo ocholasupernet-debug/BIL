@@ -2153,7 +2153,7 @@ async function resellerGatewayResources(account: { id: number; parent_id: number
     link_status: string | null;
   }>(
     "isp_reseller_ports",
-    `assigned_reseller_id=eq.${account.id}&status=eq.active&link_status=eq.active&select=id,router_id,interface_name,vlan_tag,status,link_status&order=router_id.asc,id.asc`,
+    `assigned_reseller_id=eq.${account.id}&status=eq.active&select=id,router_id,interface_name,vlan_tag,status,link_status&order=router_id.asc,id.asc`,
   );
   const routerIds = [...new Set(ports.map((port) => Number(port.router_id)).filter((id) => Number.isSafeInteger(id) && id > 0))];
   const routers = routerIds.length
@@ -2226,20 +2226,30 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
     const scopeType = req.body?.scopeType === "port" || req.body?.scopeType === "router"
       ? req.body.scopeType
       : "default";
-    const routerId = Number(req.body?.routerId);
+    const requestedRouterId = Number(req.body?.routerId);
     const portId = Number(req.body?.portId);
     const { ports, routers } = await resellerGatewayResources(account);
-    const routerAllowed = routers.some((router) => Number(router.id) === routerId);
+    const routerAllowed = routers.some((router) => Number(router.id) === requestedRouterId);
     const port = ports.find((item) => Number(item.id) === portId);
     if (scopeType === "router" && !routerAllowed) {
       res.status(403).json({ ok: false, error: "That router is not assigned to your reseller account." });
       return;
     }
-    if (scopeType === "port" && (!port || Number(port.router_id) !== routerId)) {
+    if (scopeType === "port" && !port) {
       res.status(403).json({ ok: false, error: "That VLAN port is not assigned to your reseller account." });
       return;
     }
-    const scopedRouterId = scopeType === "default" ? null : routerId;
+    // The selected assigned port owns its router relationship. Do not trust a
+    // stale or missing browser routerId when saving a port-scoped route.
+    const scopedRouterId = scopeType === "default"
+      ? null
+      : scopeType === "port"
+        ? Number(port?.router_id)
+        : requestedRouterId;
+    if (scopeType !== "default" && (typeof scopedRouterId !== "number" || !Number.isSafeInteger(scopedRouterId) || scopedRouterId <= 0)) {
+      res.status(400).json({ ok: false, error: "Choose a valid assigned router or VLAN port." });
+      return;
+    }
     const scopedPortId = scopeType === "port" ? portId : null;
     const existingRows = await sbSelectStrict<ResellerGatewayRouteRow>(
       "reseller_payment_gateway_routes",

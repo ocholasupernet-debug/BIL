@@ -707,7 +707,7 @@ function ResellerPaymentGatewayCard() {
       {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "12px 0 0" }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />Gateway route saved.</p>}
       <Row style={{ gap: 8 }}>
         {selectedExistingRoute && <button type="button" onClick={remove} disabled={saving} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid #ef4444`, cursor: saving ? "wait" : "pointer", color: "#f87171", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1rem", borderRadius: 8, fontFamily: "inherit" }}><Trash2 size={13} /> Remove</button>}
-        <button type="button" onClick={save} disabled={saving || (form.scopeType !== "default" && !form.routerId)} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}><Save size={13} /> {saving ? "Saving…" : "Save Gateway Route"}</button>
+        <button type="button" onClick={save} disabled={saving || (form.scopeType === "router" && !form.routerId) || (form.scopeType === "port" && !form.portId)} style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}><Save size={13} /> {saving ? "Saving…" : "Save Gateway Route"}</button>
       </Row>
     </Card>
   );
