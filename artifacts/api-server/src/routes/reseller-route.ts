@@ -1838,7 +1838,47 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
+      let probe: Record<string, unknown> | undefined;
+      if (port.id === 7) {
+        const resources = portServiceResourceNames({
+          id: port.id,
+          router_id: port.router_id,
+          interface_name: port.interface_name,
+          bridge_name: port.bridge_name,
+          handoff_mode: "vlan_services",
+          reseller_id: port.reseller_id,
+          assigned_reseller_id: port.assigned_reseller_id,
+          vlan_tag: port.vlan_tag,
+        });
+        const creds = routerCredentials(target);
+        const read = async (command: string[]): Promise<Record<string, string>[]> => {
+          const rows = await runRouterCommand(creds, command);
+          return Array.isArray(rows) ? rows : [];
+        };
+        const portalFiles = await read([
+          "/file/print",
+          "=.proplist=name,size,creation-time",
+          `?name=${resources.hotspotDirectory}/login.html`,
+        ]);
+        const redirectFiles = await read([
+          "/file/print",
+          "=.proplist=name,size,creation-time",
+          `?name=${resources.hotspotDirectory}/rlogin.html`,
+        ]);
+        const nat = await read([
+          "/ip/firewall/nat/print",
+          "=.proplist=.id,chain,action,src-address,out-interface-list,disabled,comment",
+          `?comment=OcholaSupernet_RS${port.reseller_id}_VLAN${port.vlan_tag}_hotspot_nat`,
+        ]);
+        probe = { portalFiles, redirectFiles, nat };
+      }
+      res.json({
+        ok: true,
+        handoff: updated[0] ?? port,
+        // Temporary response-only field for the one-time live portal diagnosis.
+        assignment: probe ? { id: port.id, status: JSON.stringify(probe) } : undefined,
+        message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
       await sbUpdateStrict(
