@@ -268,7 +268,7 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
 
   useEffect(() => {
     const loadMpesaSettings = () => {
-      fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`)
+      fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}&adminTest=true`)
         .then(response => response.json())
         .then((data: { configured?: boolean; settings?: { env?: "sandbox" | "production"; shortcode?: string; hasTillNumber?: boolean; bankStkPushConfigured?: boolean; adminTillPushConfigured?: boolean; adminPaybillConfigured?: boolean; paymentGateway?: string } }) => {
           setConfigured(data.configured === true);

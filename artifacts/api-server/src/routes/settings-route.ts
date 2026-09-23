@@ -280,7 +280,7 @@ async function rejectResellerPaymentChange(req: Request, res: Response): Promise
   return false;
 }
 
-async function getAdminPaymentSettings(adminId: number | null): Promise<{
+async function getAdminPaymentSettings(adminId: number | null, options: { useSharedGateway?: boolean } = {}): Promise<{
   paymentGateway: string;
   bankStkPush: BankStkPushConfig;
   mpesaTillPush: MpesaTillPushConfig;
@@ -311,9 +311,9 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
   const serviceConfigs = servicePaymentConfigMap(rows[0]?.payment_service_config);
   const sharedGatewayId = getPaymentGateway(rows[0]?.payment_gateway);
   const sharedConfigs = gatewayConfigMap(rows[0]?.payment_gateway_config);
-  const selected = mode === "separate" ? undefined : sharedConfigs;
+  const selected = mode === "separate" && options.useSharedGateway !== true ? undefined : sharedConfigs;
   return {
-    paymentGateway: mode === "separate"
+    paymentGateway: mode === "separate" && options.useSharedGateway !== true
       ? (serviceConfigs.hotspot?.gatewayId ?? "unconfigured")
       : sharedGatewayId,
     bankStkPush: selected ? bankStkPushConfig(selected) : serviceConfigs.hotspot?.gatewayId === "bank_stk_push"
@@ -329,13 +329,16 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
+  const adminTest = req.query.adminTest === "true";
   const { paymentGateway: adminPaymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
-    await getAdminPaymentSettings(await paymentAdminIdFromRequest(req));
-  const portalRoute = await resellerPortalPaymentStatus(
-    adminIdFromRequest(req),
-    positiveQueryId(req.query.routerId),
-    positiveQueryId(req.query.portId),
-  );
+    await getAdminPaymentSettings(await paymentAdminIdFromRequest(req), { useSharedGateway: adminTest });
+  const portalRoute = adminTest
+    ? null
+    : await resellerPortalPaymentStatus(
+        adminIdFromRequest(req),
+        positiveQueryId(req.query.routerId),
+        positiveQueryId(req.query.portId),
+      );
   const paymentGateway = portalRoute?.paymentGateway ?? adminPaymentGateway;
   const destinationConfigured = portalRoute?.destinationConfigured ?? (
     paymentGateway === "mpesa_till_push"

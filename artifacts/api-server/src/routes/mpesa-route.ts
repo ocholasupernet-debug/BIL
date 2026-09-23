@@ -313,7 +313,11 @@ function isDarajaGateway(paymentGateway: PaymentGateway): boolean {
   return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push" || paymentGateway === "bank_stk_push";
 }
 
-async function getAdminPaymentSettings(adminId: number | undefined, serviceType: PaymentService = "hotspot"): Promise<{
+async function getAdminPaymentSettings(
+  adminId: number | undefined,
+  serviceType: PaymentService = "hotspot",
+  options: { useSharedGateway?: boolean } = {},
+): Promise<{
   paymentGateway: PaymentGateway;
   bankStkPush: BankStkPushConfig;
   mpesaTillPush: MpesaTillPushConfig;
@@ -340,10 +344,11 @@ async function getAdminPaymentSettings(adminId: number | undefined, serviceType:
   );
   const mode = paymentCollectionMode(rows[0]?.payment_collection_mode);
   const service = servicePaymentConfigMap(rows[0]?.payment_service_config)[serviceType];
-  const config = mode === "separate" && service
+  const useSharedGateway = options.useSharedGateway === true;
+  const config = !useSharedGateway && mode === "separate" && service
     ? { [service.gatewayId]: service.config }
     : rows[0]?.payment_gateway_config;
-  const paymentGateway = mode === "separate"
+  const paymentGateway = !useSharedGateway && mode === "separate"
     ? (service?.gatewayId ?? "unconfigured")
     : getPaymentGateway(rows[0]?.payment_gateway);
   return {
@@ -1259,7 +1264,11 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     : `254${raw}`;
 
   try {
-    const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(scopedAdminId);
+    const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(
+      scopedAdminId,
+      "hotspot",
+      { useSharedGateway: true },
+    );
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
@@ -1592,7 +1601,11 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       const serviceType = intent?.serviceType ?? (service_type === "pppoe" ? "pppoe" : "hotspot");
        const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = resellerRoute
          ? resellerRoute
-         : await getAdminPaymentSettings(scopedAdminId, serviceType);
+        : await getAdminPaymentSettings(
+          scopedAdminId,
+          serviceType,
+          { useSharedGateway: hasAdminSession && !Number.isSafeInteger(requestedPlanId) },
+        );
       if (!isDarajaGateway(paymentGateway)) {
        res.status(409).json({ ok: false, error: `${paymentGatewayLabel(paymentGateway)} is selected, but automated payment prompts are not connected for this gateway yet.` });
        return;
