@@ -1847,6 +1847,10 @@ const KENYAN_BANKS = [
   "Victoria Commercial Bank",
 ];
 
+const KENYAN_BANK_BUSINESS_NUMBERS: Record<string, string> = {
+  "KCB Bank": "533533",
+};
+
 const GATEWAYS: GatewayDef[] = [
   {
     id: "mpesa_paybill", name: "M-Pesa PayBill", category: "Mobile Money", color: "#00a651", icon: Phone,
@@ -2040,10 +2044,15 @@ function PaymentGatewaysTab() {
   }, []);
 
   const updateField = (gwId: string, fieldKey: string, value: string) => {
-    setFields(prev => ({
-      ...prev,
-      [gwId]: { ...(prev[gwId] || {}), [fieldKey]: value },
-    }));
+    setFields(prev => {
+      const current = prev[gwId] || {};
+      const next = { ...current, [fieldKey]: value };
+      if (gwId === "bank_stk_push" && fieldKey === "bankName" && !current.paybillNumber) {
+        const defaultNumber = KENYAN_BANK_BUSINESS_NUMBERS[value];
+        if (defaultNumber) next.paybillNumber = defaultNumber;
+      }
+      return { ...prev, [gwId]: next };
+    });
   };
 
   const saveGateway = async (gwId: string) => {
@@ -2273,7 +2282,7 @@ function PaymentGatewaysTab() {
                 const selectedBank = fields[activeGw.id]?.bankName || "";
                 if (activeGw.id === "bank_stk_push" && (f.key === "paybillNumber" || f.key === "accountNumber") && !selectedBank) return null;
                 const fieldLabel = f.key === "paybillNumber" && selectedBank
-                  ? `${selectedBank} PayBill Number`
+                  ? `${selectedBank} Business / PayBill Number`
                   : f.key === "accountNumber" && selectedBank
                   ? `${selectedBank} Account / Business Number`
                   : f.label;

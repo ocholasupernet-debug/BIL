@@ -10,6 +10,21 @@ export const RESELLER_GATEWAY_IDS = [
 export type ResellerGatewayId = typeof RESELLER_GATEWAY_IDS[number];
 export type ResellerGatewayScope = "default" | "router" | "port";
 
+const KENYAN_BANK_BUSINESS_NUMBERS: Record<string, string> = {
+  "kcb bank": "533533",
+};
+
+/**
+ * Return a bank-provided business number when the bank has a known standard
+ * destination. A saved/manual number always remains authoritative.
+ */
+export function bankBusinessNumberFor(bankName: unknown): string {
+  const normalized = typeof bankName === "string"
+    ? bankName.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    : "";
+  return KENYAN_BANK_BUSINESS_NUMBERS[normalized] ?? "";
+}
+
 const SECRET_FIELDS: Record<string, Set<string>> = {
   airtel: new Set(["clientId", "clientSecret"]),
   azampay: new Set(["clientId", "clientSecret"]),
