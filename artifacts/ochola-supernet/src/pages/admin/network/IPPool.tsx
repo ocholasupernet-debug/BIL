@@ -2,13 +2,14 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { supabase, ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle, X,
   Search, Plus, Trash2, Edit2, HelpCircle,
   ChevronDown, Server,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
 
 const PAGE_SIZE = 15;
 
@@ -22,16 +23,7 @@ interface DbPool {
   created_at: string;
 }
 
-interface DbRouter {
-  id: number;
-  name: string;
-  host: string;
-  bridge_ip: string | null;
-  vpn_ip: string | null;
-  router_username: string;
-  router_secret: string | null;
-  status: string;
-}
+type DbRouter = AdminContextRouter;
 
 const REQUIRED_POOL_TYPES = ["hotspot pool", "pppoe", "expired"] as const;
 type RequiredPoolType = typeof REQUIRED_POOL_TYPES[number];
@@ -85,22 +77,15 @@ function rangeError(range: { start: string; end: string }): string | null {
 
 /* ── Supabase helpers ── */
 async function fetchPools(): Promise<DbPool[]> {
-  const { data } = await supabase
-    .from("isp_ip_pools")
-    .select("id,name,range_start,range_end,router_id,created_at")
-    .eq("admin_id", ADMIN_ID)
-    .order("id", { ascending: false });
-  return (data ?? []) as DbPool[];
+  const context = await fetchAdminRouterContext();
+  return context.pools.map(pool => ({
+    ...pool,
+    created_at: pool.created_at ?? "",
+  }));
 }
 
 async function fetchRouters(): Promise<DbRouter[]> {
-  const { data } = await supabase
-    .from("isp_routers")
-    .select("id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-    .order("name");
-  return (data ?? []) as DbRouter[];
+  return (await fetchAdminRouterContext()).routers;
 }
 
 /* ── Sync one router's pools ── */
@@ -114,13 +99,14 @@ async function syncRouterPools(
   log(`\n▶ ${router.name} (${host})`);
   const payload = {
     host, bridgeIp: router.vpn_ip || undefined,
+    routerId: router.id,
     username: router.router_username || "admin",
     password: router.router_secret || "",
     pools: rPools.map(p => ({ name: p.name, rangeStart: p.range_start, rangeEnd: p.range_end })),
   };
   try {
     const res  = await fetch(apiUrl("/api/admin/sync/ip-pools"), {
-      method: "POST", headers: { "Content-Type": "application/json" },
+       method: "POST", headers: { "Content-Type": "application/json", ...adminApiHeaders() },
       body: JSON.stringify(payload),
     });
     const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
@@ -134,6 +120,11 @@ async function syncRouterPools(
     log(`  ✗ ${e instanceof Error ? e.message : e}`);
     return false;
   }
+}
+
+function adminApiHeaders(): HeadersInit {
+  const token = getAdminApiToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /* ══════════════════════════════════════════════════════════ */

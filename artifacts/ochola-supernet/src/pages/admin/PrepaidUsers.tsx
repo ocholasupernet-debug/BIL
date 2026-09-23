@@ -10,6 +10,7 @@ import {
   Power, Trash2, MoreHorizontal, Database, Save,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
 
 const PAGE_SIZE = 20;
 
@@ -232,12 +233,10 @@ async function fetchPlans(): Promise<Plan[]> {
   return (data ?? []) as Plan[];
 }
 async function fetchRouters(): Promise<Router[]> {
-  const { data } = await supabase
-    .from("isp_routers")
-    .select("id,name,host,status,bridge_ip")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  return (data ?? []) as Router[];
+  return (await fetchAdminRouterContext()).routers.map(router => ({
+    ...router,
+    bridge_ip: router.bridge_ip,
+  }));
 }
 async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
   if (!customerIds.length) return [];
@@ -286,7 +285,10 @@ async function syncUsersToRouter(
   try {
     const res  = await fetch(apiUrl("/api/admin/sync/users"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
+      },
       body: JSON.stringify(payload),
     });
     const data = await parseJsonResponse<{ ok: boolean; error?: string; logs?: string[] }>(res);

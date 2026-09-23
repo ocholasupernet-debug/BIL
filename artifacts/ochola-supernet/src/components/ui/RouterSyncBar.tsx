@@ -1,16 +1,13 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { getAdminApiToken } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
   ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { useAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
 
-interface DbRouterMin {
-  id: number; name: string; host: string; bridge_ip: string | null; vpn_ip: string | null; status: string;
-  router_username: string; router_secret: string | null;
-}
+type DbRouterMin = AdminContextRouter;
 
 /* ── Tiny copy button (only used in the manual-fallback) ── */
 function CopyBtn({ text }: { text: string }) {
@@ -331,18 +328,13 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
   const [result,     setResult]     = useState<{ logs: string[]; ok: boolean; error?: string } | null>(null);
   const [showMeta,   setShowMeta]   = useState(false);
 
-  const { data: routers = [] } = useQuery<DbRouterMin[]>({
-    queryKey: ["isp_routers_sync"],
-    queryFn: async () => {
-      const token = getAdminApiToken();
-      const response = await fetch("/api/plans/admin-context", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: "no-store",
-      });
-      const data = await response.json() as { routers?: DbRouterMin[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "Routers could not be loaded.");
-      return data.routers ?? [];
-    },
+  const { data: context, isLoading: routersLoading, error: routersError } = useAdminRouterContext();
+  const routers = context?.routers ?? [];
+  const assignedPortsByRouter = new Map<number, string[]>();
+  (context?.ports ?? []).forEach(port => {
+    const current = assignedPortsByRouter.get(port.router_id) ?? [];
+    current.push(port.interface_name);
+    assignedPortsByRouter.set(port.router_id, current);
   });
 
   const selectedRouter = routers.find(r => r.id === selectedId) ?? null;
@@ -409,14 +401,21 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted,#94a3b8)" }}>{description}</div>
         </div>
 
-        <select
+         <select
           value={selectedId ?? ""}
           onChange={e => { setSelectedId(Number(e.target.value)); setResult(null); }}
           style={selStyle}
+           disabled={routersLoading || !!routersError}
         >
-          <option value="" disabled>Select router…</option>
+          <option value="" disabled>
+            {routersLoading ? "Loading assigned routers…" : routersError ? "Routers unavailable" : "Select router…"}
+           </option>
           {routers.map(r => (
-            <option key={r.id} value={r.id}>{r.name} — {r.host || r.vpn_ip || "?"} [{r.status === "online" || r.status === "connected" ? "online" : "offline"}]</option>
+            <option key={r.id} value={r.id}>
+              {r.name}{context?.reseller && assignedPortsByRouter.get(r.id)?.length
+                ? ` · VLAN ${assignedPortsByRouter.get(r.id)!.join(", ")}`
+                : ""} — {r.host || r.vpn_ip || "?"} [{r.status === "online" || r.status === "connected" ? "online" : "offline"}]
+            </option>
           ))}
         </select>
 
@@ -442,6 +441,19 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           }
         </button>
       </div>
+
+      {routersError && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(248,113,113,0.07)", border: "1px solid rgba(248,113,113,0.22)", borderRadius: 8, fontSize: "0.75rem", color: "#f87171" }}>
+          <AlertTriangle size={13} />
+          <span>{routersError instanceof Error ? routersError.message : "Assigned routers could not be loaded."}</span>
+        </div>
+      )}
+      {!routersLoading && !routersError && routers.length === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.625rem", padding: "0.5rem 0.875rem", background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8, fontSize: "0.75rem", color: "#fbbf24" }}>
+          <AlertTriangle size={13} />
+          <span>No active router is available for this account&apos;s assigned VLAN service.</span>
+        </div>
+      )}
 
       {/* Warnings */}
       {selectedRouter && !selectedRouter.host && !selectedRouter.vpn_ip && (
