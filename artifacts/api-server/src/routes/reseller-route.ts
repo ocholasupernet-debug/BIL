@@ -486,11 +486,29 @@ async function provisionVlanResellerServices(
     "=.proplist=.id,address,interface,comment",
     `?comment=${commentPrefix}_gateway`,
   ]);
-  if (!Array.isArray(addressRows) || !addressRows.length) {
+  const gatewayAddress = `${gateway}/24`;
+  const existingGatewayRows = await runRouterCommand(creds, [
+    "/ip/address/print",
+    "=.proplist=.id,address,interface,comment",
+    `?address=${gatewayAddress}`,
+  ]);
+  const existingGateway = Array.isArray(existingGatewayRows)
+    ? existingGatewayRows.find((row) => String((row as Record<string, unknown>).address ?? "") === gatewayAddress) as Record<string, unknown> | undefined
+    : undefined;
+  if (existingGateway && String(existingGateway.interface ?? "") !== vlanInterface) {
+    throw new Error(`The reseller gateway ${gatewayAddress} already belongs to interface ${String(existingGateway.interface ?? "another interface")}, not ${vlanInterface}.`);
+  }
+  if (!existingGateway && (!Array.isArray(addressRows) || !addressRows.length)) {
     await runRouterCommand(creds, [
       "/ip/address/add",
-      `=address=${gateway}/24`,
+      `=address=${gatewayAddress}`,
       `=interface=${vlanInterface}`,
+      `=comment=${commentPrefix}_gateway`,
+    ]);
+  } else if (existingGateway?.[".id"] && String(existingGateway.comment ?? "") !== `${commentPrefix}_gateway`) {
+    await runRouterCommand(creds, [
+      "/ip/address/set",
+      `=.id=${existingGateway[".id"]}`,
       `=comment=${commentPrefix}_gateway`,
     ]);
   }
