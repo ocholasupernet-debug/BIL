@@ -15,6 +15,7 @@ import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
 import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
+import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import {
   cleanGatewayConfig,
   decryptGatewayConfig,
@@ -94,6 +95,7 @@ type ResellerAccountRow = {
   username: string;
   email?: string | null;
   phone?: string | null;
+  subdomain?: string | null;
   status?: string | null;
   is_active: boolean;
   created_at: string;
@@ -187,6 +189,39 @@ function requestOrigin(req: Request): string {
   return `${protocol}://${req.get("host")}`;
 }
 
+function resellerSubdomainBase(value: string): string {
+  const base = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 58);
+  return !base || RESERVED_SUBDOMAINS.has(base) ? "reseller" : base;
+}
+
+async function nextResellerSubdomain(values: string[]): Promise<string> {
+  const rows = await sbSelectStrict<{ subdomain: string | null }>(
+    "isp_admins",
+    "subdomain=not.is.null&select=subdomain&limit=5000",
+  );
+  const used = new Set(rows.map((row) => String(row.subdomain ?? "").trim().toLowerCase()).filter(Boolean));
+  const base = resellerSubdomainBase(values.find((value) => value.trim()) ?? "reseller");
+  let candidate = base;
+  for (let suffix = 2; used.has(candidate) || RESERVED_SUBDOMAINS.has(candidate); suffix += 1) {
+    const suffixText = `-${suffix}`;
+    candidate = `${base.slice(0, 63 - suffixText.length)}${suffixText}`;
+  }
+  return candidate;
+}
+
+function resellerTenantOrigin(subdomain: string | null | undefined): string | null {
+  const value = String(subdomain ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value) || RESERVED_SUBDOMAINS.has(value)) {
+    return null;
+  }
+  return `https://${value}.${TENANT_BASE_DOMAIN}`;
+}
+
 function validInterface(value: unknown): value is string {
   return typeof value === "string"
     && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim())
@@ -237,6 +272,7 @@ function routerScriptValue(value: string): string {
 async function deployDefaultResellerPortalFile(
   creds: RouterCredentials,
   sourceOrigin: string,
+  apiOrigin: string,
   sourceName: "login.html" | "rlogin.html",
   destinationPath: string,
   scope?: {
@@ -257,7 +293,7 @@ async function deployDefaultResellerPortalFile(
   let content = source.content;
   if (scope && sourceName === "login.html") {
     const config = JSON.stringify({
-      apiBase: sourceOrigin,
+      apiBase: apiOrigin,
       adminId: scope.adminId,
       routerId: scope.routerId,
       portId: scope.portId,
@@ -345,6 +381,11 @@ async function provisionVlanResellerServices(
     throw new Error("The VLAN assignment is missing its parent ISP Hotspot bridge.");
   }
   const segment = vlanServiceSegment(port);
+  const resellerRows = await sbSelectStrict<{ subdomain: string | null }>(
+    "isp_admins",
+    `id=eq.${port.assigned_reseller_id ?? port.reseller_id}&parent_id=eq.${port.admin_id}&role=eq.reseller&select=subdomain&limit=1`,
+  );
+  const apiOrigin = resellerTenantOrigin(resellerRows[0]?.subdomain) ?? sourceOrigin;
   const network = portServiceNetwork(port.id, port.subnet_range || "");
   const resources = portServiceResourceNames({
     id: port.id,
@@ -473,6 +514,7 @@ async function provisionVlanResellerServices(
     await deployDefaultResellerPortalFile(
       creds,
       sourceOrigin,
+      apiOrigin,
       sourceName,
       destinationPath,
       sourceName === "login.html"
@@ -883,7 +925,7 @@ router.get("/admin/resellers", requireAdmin(), async (req, res): Promise<void> =
     }
     const rows = await sbSelectStrict(
       "isp_admins",
-      `parent_id=eq.${account.id}&role=eq.reseller&select=id,name,company_name,username,email,phone,is_active,status,earnings_balance,created_at&order=created_at.desc`,
+      `parent_id=eq.${account.id}&role=eq.reseller&select=id,name,company_name,username,email,phone,subdomain,is_active,status,earnings_balance,created_at&order=created_at.desc`,
     );
     const ports = await sbSelectStrict(
       "isp_reseller_ports",
@@ -2005,7 +2047,7 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       password: await hashIspAdminPassword(cleanPassword),
       parent_id: account.id,
       role: "reseller",
-      subdomain: null,
+      subdomain: await nextResellerSubdomain([cleanCompany, cleanName, cleanUsername]),
       is_active: true,
       status: "active",
       earnings_balance: 0,
