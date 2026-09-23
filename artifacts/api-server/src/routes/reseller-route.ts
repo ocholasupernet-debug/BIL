@@ -479,6 +479,19 @@ async function provisionVlanResellerServices(
       await runRouterCommand(creds, addCommand);
     }
   };
+  const ensureFilterComment = async (
+    comment: string,
+    addCommand: string[],
+  ): Promise<void> => {
+    const rows = await runRouterCommand(creds, [
+      "/ip/firewall/filter/print",
+      "=.proplist=.id,comment",
+      `?comment=${comment}`,
+    ]);
+    if (!Array.isArray(rows) || !rows.some(row => String((row as Record<string, unknown>).comment ?? "") === comment)) {
+      await runRouterCommand(creds, addCommand);
+    }
+  };
 
   const gateway = network.gateway;
   const addressRows = await runRouterCommand(creds, [
@@ -633,6 +646,66 @@ async function provisionVlanResellerServices(
       `=comment=${commentPrefix}_hotspot_nat`,
     ]);
   }
+  await ensureFilterComment(`${commentPrefix}_allow_service_dhcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=udp",
+    "=dst-port=67",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dhcp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_dns_udp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=udp",
+    "=dst-port=53",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dns_udp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_dns_tcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    `=in-interface=${vlanInterface}`,
+    "=protocol=tcp",
+    "=dst-port=53",
+    "=action=accept",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_dns_tcp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_allow_service_forward`, [
+    "/ip/firewall/filter/add",
+    "=chain=forward",
+    `=in-interface=${vlanInterface}`,
+    "=out-interface-list=WAN",
+    "=action=accept",
+    "=hotspot=auth",
+    "=place-before=0",
+    `=comment=${commentPrefix}_allow_service_forward`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    "=in-interface-list=WAN",
+    "=protocol=udp",
+    "=dst-port=53",
+    "=action=drop",
+    "=place-before=0",
+    `=comment=${commentPrefix}_block_wan_dns_udp`,
+  ]);
+  await ensureFilterComment(`${commentPrefix}_block_wan_dns_tcp`, [
+    "/ip/firewall/filter/add",
+    "=chain=input",
+    "=in-interface-list=WAN",
+    "=protocol=tcp",
+    "=dst-port=53",
+    "=action=drop",
+    "=place-before=0",
+    `=comment=${commentPrefix}_block_wan_dns_tcp`,
+  ]);
   await ensureNamed("/ppp/profile/print", resources.pppoeProfile, [
     "/ppp/profile/add",
     `=name=${resources.pppoeProfile}`,
@@ -1838,47 +1911,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      let probe: Record<string, unknown> | undefined;
-      if (port.id === 7) {
-        const resources = portServiceResourceNames({
-          id: port.id,
-          router_id: port.router_id,
-          interface_name: port.interface_name,
-          bridge_name: port.bridge_name,
-          handoff_mode: "vlan_services",
-          reseller_id: port.reseller_id,
-          assigned_reseller_id: port.assigned_reseller_id,
-          vlan_tag: port.vlan_tag,
-        });
-        const creds = routerCredentials(target);
-        const read = async (command: string[]): Promise<Record<string, string>[]> => {
-          const rows = await runRouterCommand(creds, command);
-          return Array.isArray(rows) ? rows : [];
-        };
-        const portalFiles = await read([
-          "/file/print",
-          "=.proplist=name,size,creation-time",
-          `?name=${resources.hotspotDirectory}/login.html`,
-        ]);
-        const redirectFiles = await read([
-          "/file/print",
-          "=.proplist=name,size,creation-time",
-          `?name=${resources.hotspotDirectory}/rlogin.html`,
-        ]);
-        const nat = await read([
-          "/ip/firewall/nat/print",
-          "=.proplist=.id,chain,action,src-address,out-interface-list,disabled,comment",
-          `?comment=OcholaSupernet_RS${port.reseller_id}_VLAN${port.vlan_tag}_hotspot_nat`,
-        ]);
-        probe = { portalFiles, redirectFiles, nat };
-      }
-      res.json({
-        ok: true,
-        handoff: updated[0] ?? port,
-        // Temporary response-only field for the one-time live portal diagnosis.
-        assignment: probe ? { id: port.id, status: JSON.stringify(probe) } : undefined,
-        message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
-      });
+      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
       await sbUpdateStrict(
