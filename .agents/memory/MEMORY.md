@@ -83,3 +83,4 @@
 - [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
 - [VLAN handoff portal files](vlan-handoff-portal-files.md) — Direct VLAN provisioning must install login.html and rlogin.html before declaring Hotspot active.
 - [Async port deployment](async-port-deployment.md) — Long-running assigned-port RouterOS work must return quickly and expose persisted completion status.
+- [Reseller portal hostname boundary](reseller-portal-hostname-boundary.md) — Fetch portal files from the ISP origin, but embed the reseller tenant/API origin and apply the reseller Hotspot DNS to RouterOS.
