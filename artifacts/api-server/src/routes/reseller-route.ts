@@ -302,10 +302,15 @@ async function deployDefaultResellerPortalFile(
     }>;
   },
 ): Promise<void> {
-  const source = getDeployableSource("hotspot", sourceName);
+  // RouterOS can enter a hotspot through either login.html or rlogin.html.
+  // The reseller fallback must show the same payment-first portal; serving the
+  // generic credential-only rlogin page makes a new customer stop at a
+  // username/password form before they can choose a plan.
+  const sourceNameForContent = sourceName === "rlogin.html" ? "login.html" : sourceName;
+  const source = getDeployableSource("hotspot", sourceNameForContent);
   if (!source) throw new Error(`The default reseller portal asset "${sourceName}" is unavailable.`);
   let content = source.content;
-  if (scope && sourceName === "login.html") {
+  if (scope && sourceNameForContent === "login.html") {
     const config = JSON.stringify({
       apiBase: apiOrigin,
       adminId: scope.adminId,
