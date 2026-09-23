@@ -199,8 +199,15 @@ jobs:
               RECONCILE_RESELLER_PORT="$RECONCILE_RESELLER_PORT" node --input-type=module <<'NODE'
               import crypto from "node:crypto";
 
+              import fs from "node:fs";
+
               const portId = process.env.RECONCILE_RESELLER_PORT;
-              const secret = process.env.SESSION_SECRET;
+              const dotenv = fs.readFileSync("/var/www/ocholasupernet/.env", "utf8");
+              const dotenvValue = (name) => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
+              const secret = dotenvValue("TOKEN_SIGNING_SECRET")
+                || process.env.TOKEN_SIGNING_SECRET
+                || dotenvValue("SESSION_SECRET")
+                || process.env.SESSION_SECRET;
               if (!secret) throw new Error("SESSION_SECRET is not available for the one-time reconciliation.");
               const time = Math.floor(Date.now() / 1000);
               const payload = `a.3.${time}`;
