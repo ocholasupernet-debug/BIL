@@ -1838,46 +1838,7 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
           { status: "approved", responded_at: finalizedAt, updated_at: finalizedAt },
         );
       }
-      let liveState: Record<string, unknown> | undefined;
-      if (port.id === 7) {
-        const resources = portServiceResourceNames({
-          id: port.id,
-          router_id: port.router_id,
-          interface_name: port.interface_name,
-          bridge_name: port.bridge_name,
-          handoff_mode: "vlan_services",
-          reseller_id: port.reseller_id,
-          assigned_reseller_id: port.assigned_reseller_id,
-          vlan_tag: port.vlan_tag,
-        });
-        const { vlanInterface } = vlanServiceResources(port);
-        const creds = routerCredentials(target);
-        const read = async (command: string[]): Promise<Record<string, string>[]> => {
-          const rows = await runRouterCommand(creds, command);
-          return Array.isArray(rows) ? rows : [];
-        };
-        const hotspotServers = await read(["/ip/hotspot/print", "=.proplist=.id,name,interface,profile,address-pool,disabled,invalid", `?name=${resources.hotspotServer}`]);
-        const hotspotProfiles = await read(["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory,dns-name,login-by,hotspot-address", `?name=${resources.hotspotProfile}`]);
-        const hotspotActive = await read(["/ip/hotspot/active/print", "=.proplist=.id,address,mac-address,user,server,login-by,uptime", `?server=${resources.hotspotServer}`]);
-        const hotspotHosts = await read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime,authorized,bypassed,blocked", `?server=${resources.hotspotServer}`]);
-        const dnsStatic = await read(["/ip/dns/static/print", "=.proplist=.id,name,address,type,disabled,comment"]);
-        const dnsSettings = await read(["/ip/dns/print", "=.proplist=allow-remote-requests,servers,cache-size,max-udp-packet-size"]);
-        liveState = {
-          hotspotActive,
-          hotspotServers,
-          hotspotProfiles,
-          hotspotHosts,
-          dnsStatic,
-          dnsSettings,
-        };
-      }
-      res.json({
-        ok: true,
-        handoff: updated[0] ?? port,
-        // Temporary response-only field for the one-time live port 7 diagnosis.
-        assignment: liveState ? { id: port.id, status: JSON.stringify(liveState) } : undefined,
-        message: `VLAN service ${port.interface_name} was pushed to the MikroTik.`,
-      });
+      res.json({ ok: true, handoff: updated[0] ?? port, message: `VLAN service ${port.interface_name} was pushed to the MikroTik.` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "RouterOS VLAN service provisioning failed.";
       await sbUpdateStrict(
