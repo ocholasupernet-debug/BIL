@@ -1853,6 +1853,88 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
   }
 });
 
+router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const portId = Number(req.params.portId);
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "vlan_services") {
+      res.status(409).json({ ok: false, error: "Only VLAN service assignments can be inspected." });
+      return;
+    }
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const resources = portServiceResourceNames({
+      id: port.id,
+      router_id: port.router_id,
+      interface_name: port.interface_name,
+      bridge_name: port.bridge_name,
+      handoff_mode: "vlan_services",
+      reseller_id: port.reseller_id,
+      assigned_reseller_id: port.assigned_reseller_id,
+      vlan_tag: port.vlan_tag,
+    });
+    const { parentBridge, vlanInterface } = vlanServiceResources(port);
+    const network = portServiceNetwork(port.id, port.subnet_range || "");
+    const creds = routerCredentials(target);
+    const read = async (command: string[]): Promise<Record<string, string>[]> => {
+      const rows = await runRouterCommand(creds, command);
+      return Array.isArray(rows) ? rows : [];
+    };
+    const [
+      bridgeRows,
+      bridgePortRows,
+      bridgeVlanRows,
+      vlanRows,
+      addressRows,
+      dhcpRows,
+      dhcpNetworkRows,
+      leaseRows,
+      hotspotHostRows,
+      arpRows,
+    ] = await Promise.all([
+      read(["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`]),
+      read(["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`]),
+      read(["/interface/bridge/vlan/print", "=.proplist=.id,bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`]),
+      read(["/interface/vlan/print", "=.proplist=.id,name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`]),
+      read(["/ip/address/print", "=.proplist=.id,address,interface,disabled,comment", `?interface=${vlanInterface}`]),
+      read(["/ip/dhcp-server/print", "=.proplist=.id,name,interface,address-pool,disabled,running", `?name=${resources.hotspotDhcp}`]),
+      read(["/ip/dhcp-server/network/print", "=.proplist=.id,address,gateway,dns-server,comment", `?address=${network.network}`]),
+      read(["/ip/dhcp-server/lease/print", "=.proplist=.id,address,mac-address,host-name,status,server,active-address,active-mac-address,expires-after", `?server=${resources.hotspotDhcp}`]),
+      read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime", `?server=${resources.hotspotServer}`]),
+      read(["/ip/arp/print", "=.proplist=.id,address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
+    ]);
+    res.json({
+      ok: true,
+      assignment: {
+        id: port.id,
+        routerId: port.router_id,
+        parentBridge,
+        vlanInterface,
+        vlanTag: port.vlan_tag,
+        subnet: network.network,
+        gateway: network.gateway,
+        hotspotServer: resources.hotspotServer,
+        hotspotDhcp: resources.hotspotDhcp,
+      },
+      router: {
+        name: target.name,
+        vpnIp: target.vpn_ip,
+      },
+      bridge: bridgeRows,
+      bridgePorts: bridgePortRows,
+      bridgeVlans: bridgeVlanRows,
+      vlanInterfaces: vlanRows,
+      addresses: addressRows,
+      dhcpServers: dhcpRows,
+      dhcpNetworks: dhcpNetworkRows,
+      leases: leaseRows,
+      hotspotHosts: hotspotHostRows,
+      arp: arpRows,
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to inspect the live VLAN service." });
+  }
+});
+
 router.delete("/admin/reseller-handoffs/:portId", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
