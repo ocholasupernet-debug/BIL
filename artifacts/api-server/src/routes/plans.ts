@@ -13,7 +13,11 @@ import { logActivity } from "../lib/activity-log.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
-import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
+import {
+  planServicePoolName,
+  portServiceResourceNames,
+  vlanServicePoolRanges,
+} from "../lib/port-service-resources.js";
 
 const router: IRouter = Router();
 
@@ -126,7 +130,53 @@ async function planContextRows(context: PlanContext): Promise<{
   return { plans, bandwidths, routers: filteredRouters, ports, pools: filteredPools };
 }
 
-function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Record<string, unknown> {
+type PlanPoolAssignment = {
+  activeIpPool: string | null;
+  expiredIpPool: string | null;
+};
+
+async function planPoolAssignment(
+  adminId: number,
+  scope: PlanScope,
+  planType: unknown,
+  existingExpiredIpPool?: unknown,
+): Promise<PlanPoolAssignment> {
+  let resources: ReturnType<typeof portServiceResourceNames> | undefined;
+  if (scope.portId !== null) {
+    const ports = await sbSelectStrict<{
+      id: number;
+      router_id: number;
+      interface_name: string;
+      bridge_name: string | null;
+      handoff_mode: string | null;
+      reseller_id: number | null;
+      assigned_reseller_id: number | null;
+      vlan_tag: string | null;
+    }>(
+      "isp_reseller_ports",
+      `id=eq.${scope.portId}&admin_id=eq.${adminId}&router_id=eq.${scope.routerId}&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag&limit=1`,
+    );
+    const port = ports[0];
+    if (!port) throw new Error("The selected service port could not be loaded.");
+    resources = portServiceResourceNames({
+      ...port,
+      handoff_mode: port.handoff_mode as "services" | "isp_router" | "vlan_services" | null,
+    });
+  }
+
+  return {
+    activeIpPool: planServicePoolName(String(planType ?? "hotspot"), resources),
+    expiredIpPool: existingExpiredIpPool === undefined
+      ? null
+      : String(existingExpiredIpPool ?? "").trim() || null,
+  };
+}
+
+function planWritePayload(
+  input: Record<string, unknown>,
+  scope: PlanScope,
+  pools: PlanPoolAssignment,
+): Record<string, unknown> {
   const validity = Number(input.durationDays ?? input.validity ?? 30);
   const sharedUsers = Number(input.sharedUsers ?? 1);
   const speedDown = Number(input.speedDown ?? input.speed ?? 10);
@@ -144,6 +194,8 @@ function planWritePayload(input: Record<string, unknown>, scope: PlanScope): Rec
     shared_users: Number.isFinite(sharedUsers) && sharedUsers > 0 ? sharedUsers : 1,
     router_id: scope.routerId,
     port_id: scope.portId,
+    active_ip_pool: pools.activeIpPool,
+    expired_ip_pool: pools.expiredIpPool,
     data_limit_mb: input.dataLimitMb ?? null,
     is_active: input.isActive ?? true,
     client_can_purchase: input.clientCanPurchase ?? true,
@@ -532,12 +584,13 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
       : "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
   }
+  const pools = await planPoolAssignment(effectiveAdminId, scope, type);
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
     admin_id:     effectiveAdminId,
     ...planWritePayload({
        name, type, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
       description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
-    }, scope),
+     }, scope, pools),
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }
   void logActivity({ adminId: Number(effectiveAdminId), type: "plan", action: "added", subject: name, details: { price: Number(price), type: type ?? "hotspot" } });
@@ -554,9 +607,16 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     return;
   }
   const effectiveAdminId = context.tenantId;
-  const sourceRows = await sbSelect<{ id: number; name: string; router_id: number | null; port_id: number | null }>(
+  const sourceRows = await sbSelect<{
+    id: number;
+    name: string;
+    type: string | null;
+    router_id: number | null;
+    port_id: number | null;
+    expired_ip_pool: string | null;
+  }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=id,name,router_id,port_id&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=id,name,type,router_id,port_id,expired_ip_pool&limit=1`,
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
@@ -576,9 +636,15 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
   }
+  const pools = await planPoolAssignment(
+    effectiveAdminId,
+    scope,
+    req.body.type ?? source.type ?? "hotspot",
+    req.body.expiredIpPool ?? source.expired_ip_pool,
+  );
 
   const updates: Record<string, unknown> = {
-    ...planWritePayload(req.body, scope),
+    ...planWritePayload(req.body, scope, pools),
     updated_at: new Date().toISOString(),
   };
   if (req.body.name === undefined) delete updates.name;
@@ -645,6 +711,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     res.status(400).json({ error: "Choose a different router or port for the copied plan." });
     return;
   }
+  const pools = await planPoolAssignment(effectiveAdminId, scope, source.type ?? "hotspot");
   const copyPayload = {
     admin_id: effectiveAdminId,
     name: String(req.body.name ?? `${String(source.name ?? "Plan")} (Copy)`).trim(),
@@ -658,6 +725,8 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     shared_users: source.shared_users ?? 1,
     router_id: scope.routerId,
     port_id: scope.portId,
+    active_ip_pool: pools.activeIpPool,
+    expired_ip_pool: null,
     data_limit_mb: source.data_limit_mb ?? null,
     is_active: source.is_active ?? true,
     client_can_purchase: source.client_can_purchase ?? true,

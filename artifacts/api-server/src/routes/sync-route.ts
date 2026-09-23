@@ -11,6 +11,7 @@ import {
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import { planServicePoolName, portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const router: IRouter = Router();
 
@@ -460,6 +461,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     plans: Array<{
       id: number; name: string; type: string;
       router_id?: number | null; port_id?: number | null;
+      active_ip_pool?: string | null; expired_ip_pool?: string | null;
       speed_down: number; speed_up: number;
       speed_down_unit: string; speed_up_unit: string;
       validity: number; validity_unit: string;
@@ -494,11 +496,12 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
   const scopedPlans = planIds.length
     ? await sbSelect<{
         id: number; name: string; type: string; router_id: number | null; port_id: number | null;
+         active_ip_pool: string | null; expired_ip_pool: string | null;
         speed_down: number; speed_up: number; speed_down_unit: string; speed_up_unit: string;
         validity: number; validity_unit: string; shared_users: number;
       }>(
         "isp_plans",
-        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users&limit=1000`,
+        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,active_ip_pool,expired_ip_pool,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users&limit=1000`,
       )
     : [];
   if (scopedPlans.length !== planIds.length) {
@@ -517,6 +520,32 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     }
   }
 
+  const scopedPortIds = [...new Set(scopedPlans
+    .map(plan => Number(plan.port_id))
+    .filter(id => Number.isSafeInteger(id) && id > 0))];
+  const scopedPorts = scopedPortIds.length
+    ? await sbSelect<{
+        id: number;
+        router_id: number;
+        interface_name: string;
+        bridge_name: string | null;
+        handoff_mode: string | null;
+        reseller_id: number | null;
+        assigned_reseller_id: number | null;
+        vlan_tag: string | null;
+      }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${scopedPortIds.join(",")})&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag&limit=1000`,
+      )
+    : [];
+  const resourcesByPortId = new Map(scopedPorts.map(port => [
+    Number(port.id),
+    portServiceResourceNames({
+      ...port,
+      handoff_mode: port.handoff_mode as "services" | "isp_router" | "vlan_services" | null,
+    }),
+  ]));
+
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
 
@@ -529,6 +558,11 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
 
     for (const plan of scopedPlans) {
       const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+      const activeIpPool = String(
+        plan.active_ip_pool
+          || planServicePoolName(plan.type, resourcesByPortId.get(Number(plan.port_id)))
+          || "",
+      ).trim();
       const rateLimit   = toRateLimit(
         plan.speed_down,
         plan.speed_up,
@@ -539,11 +573,12 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
 
       if (plan.type === "pppoe") {
         /* ── PPPoE profile ── */
-        log(`▶ PPPoE profile: ${profileName} | rate-limit: ${rateLimit}`);
+         log(`▶ PPPoE profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit}`);
         try {
           const action = await upsertByFilter(conn, "/ppp/profile", "name", profileName, {
             name:         profileName,
             "rate-limit": rateLimit,
+             ...(activeIpPool ? { "remote-address": activeIpPool } : {}),
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
@@ -553,13 +588,14 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
         }
       } else if (plan.type === "hotspot" || plan.type === "trials") {
         /* ── Hotspot user profile ── */
-        log(`▶ Hotspot profile: ${profileName} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users}`);
+         log(`▶ Hotspot profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users}`);
         try {
           const action = await upsertByFilter(conn, "/ip/hotspot/user/profile", "name", profileName, {
             name:              profileName,
             "rate-limit":      rateLimit,
             "session-timeout": sessionTime,
             "shared-users":    String(plan.shared_users || 1),
+             ...(activeIpPool ? { "address-pool": activeIpPool } : {}),
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
@@ -957,6 +993,31 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     const sourceCustomers = customers.filter(customer =>
       Number(customer.router_id) === sourceRouterId || sourcePlanIds.has(Number(customer.plan_id)),
     );
+    const sourcePortIds = [...new Set(plans
+      .map(plan => Number(plan.port_id))
+      .filter(id => Number.isSafeInteger(id) && id > 0))];
+    const sourcePorts = sourcePortIds.length
+      ? await sbSelect<{
+          id: number;
+          router_id: number;
+          interface_name: string;
+          bridge_name: string | null;
+          handoff_mode: string | null;
+          reseller_id: number | null;
+          assigned_reseller_id: number | null;
+          vlan_tag: string | null;
+        }>(
+          "isp_reseller_ports",
+          `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&id=in.(${sourcePortIds.join(",")})&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag&limit=1000`,
+        )
+      : [];
+    const sourceResourcesByPortId = new Map(sourcePorts.map(port => [
+      Number(port.id),
+      portServiceResourceNames({
+        ...port,
+        handoff_mode: port.handoff_mode as "services" | "isp_router" | "vlan_services" | null,
+      }),
+    ]));
     const planNames = new Map(plans.map(plan => [
       Number(plan.id),
       hotspotPlanProfileName(String(plan.name ?? "default"), plan.router_id, plan.port_id),
@@ -982,14 +1043,25 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
       for (const plan of plans) {
         const name = String(plan.name ?? "").trim();
         if (!name) continue;
-        const profileName = hotspotPlanProfileName(name);
+        const profileName = hotspotPlanProfileName(name, plan.router_id, plan.port_id);
         const down = Number(plan.speed_down ?? 10);
         const up = Number(plan.speed_up ?? 10);
         const unit = String(plan.speed_down_unit ?? "Mbps");
         const rateLimit = toRateLimit(down, up, unit);
         const type = String(plan.type ?? "hotspot");
+        const activeIpPool = String(
+          plan.active_ip_pool
+            || planServicePoolName(type, sourceResourcesByPortId.get(Number(plan.port_id)))
+            || "",
+        ).trim();
         const path = type === "pppoe" ? "/ppp/profile" : "/ip/hotspot/user/profile";
-        const props: Record<string, string> = { name: profileName, "rate-limit": rateLimit };
+        const props: Record<string, string> = {
+          name: profileName,
+          "rate-limit": rateLimit,
+          ...(type === "pppoe"
+            ? (activeIpPool ? { "remote-address": activeIpPool } : {})
+            : (activeIpPool ? { "address-pool": activeIpPool } : {})),
+        };
         if (type !== "pppoe") {
           props["session-timeout"] = toSessionTimeout(
             Number(plan.validity ?? plan.validity_days ?? 30),

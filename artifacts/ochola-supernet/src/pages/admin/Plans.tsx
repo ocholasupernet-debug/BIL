@@ -7,7 +7,14 @@ import { Plus, Wifi, Activity, Edit, Trash, Copy, Gauge, ArrowDown, ArrowUp, Use
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
 
-interface DbPool { id: number; name: string; range_start: string; range_end: string; router_id: number | null; }
+interface DbPool {
+  id: number;
+  name: string;
+  range_start: string;
+  range_end: string;
+  router_id: number | null;
+  port_id?: number | null;
+}
 interface DbPort { id: number; router_id: number; interface_name: string; status: string; }
 
 function useTypeParam() {
@@ -133,12 +140,20 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   );
   const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
   const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
-  const [activePool,    setActivePool]    = useState(initialData?.active_ip_pool ?? "");
-  const [expiredPool,   setExpiredPool]   = useState(initialData?.expired_ip_pool ?? "");
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
-  const [customActive,  setCustomActive]  = useState(false);
-  const [customExpired, setCustomExpired] = useState(false);
+  const servicePool = (() => {
+    const router = Number(routerId);
+    const port = portId ? Number(portId) : null;
+    const prefix = isPppoe ? "pppoe_pool_" : "hs_pool_";
+    return pools.find(pool =>
+      Number(pool.router_id) === router
+      && (port === null ? pool.port_id === null : Number(pool.port_id) === port)
+      && (port === null
+        ? pool.name.trim().toLowerCase() === (isPppoe ? "pppoe" : "hotspot pool")
+        : pool.name.trim().toLowerCase().startsWith(prefix))
+    )?.name ?? "";
+  })();
 
   /* ── Data cap (for Limited plans) ── */
   const initDataUnit = (() => {
@@ -431,7 +446,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
           </div>
         </div>
 
-        {isPppoe && (
+        {(isPppoe || isHotspot) && (
           <div style={ROW}>
             <span style={LBL_CYAN}>
               <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
@@ -439,106 +454,12 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
               </span>
             </span>
             <div style={{ flex: 1 }}>
-              {pools.length > 0 ? (
-                <>
-                  {!customActive ? (
-                    <select
-                      style={{ ...SELECT, width: "100%" }}
-                      value={activePool}
-                      onChange={e => {
-                        if (e.target.value === "__custom__") { setCustomActive(true); setActivePool(""); }
-                        else setActivePool(e.target.value);
-                      }}
-                    >
-                      <option value="">— Select IP Pool —</option>
-                      {(routerId
-                        ? pools.filter(p => p.router_id === parseInt(routerId) || p.router_id === null)
-                        : pools
-                      ).map(p => (
-                        <option key={p.id} value={p.name}>
-                          {p.name} ({p.range_start}–{p.range_end})
-                        </option>
-                      ))}
-                      <option value="__custom__">✏ Enter manually…</option>
-                    </select>
-                  ) : (
-                    <div style={{ display: "flex", gap: "0.4rem" }}>
-                      <input
-                        style={{ ...INPUT, flex: 1 }}
-                        value={activePool}
-                        onChange={e => setActivePool(e.target.value)}
-                        placeholder="e.g. active"
-                        autoFocus
-                      />
-                      <button type="button" onClick={() => { setCustomActive(false); setActivePool(""); }}
-                        style={{ padding: "0.45rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "0.78rem" }}>
-                        ← List
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <input style={INPUT} value={activePool} onChange={e => setActivePool(e.target.value)} placeholder="e.g. active" />
-                  <p style={{ ...HINT, color: "#fbbf24" }}>
-                    No IP pools found. <a href="/admin/network/ip-pools" style={{ color: "var(--isp-accent)" }}>Create one on the IP Pools page →</a>
-                  </p>
-                </>
-              )}
+              <input style={INPUT} value={servicePool || initialData?.active_ip_pool || ""} readOnly placeholder="Assigned automatically from the selected service" />
               <p style={HINT}>
-                Pool assigned to active subscribers. Defined in{" "}
-                <a href="/admin/network/ip-pools" style={{ color: "var(--isp-accent)" }}>IP Pools</a>.
+                This plan uses the existing {isPppoe ? "PPPoE" : "Hotspot"} pool owned by the selected
+                {portId ? " VLAN service" : " router"}. The plan does not create a second overlapping range.
+                {!servicePool && " Deploy the selected service first so its pool is available."}
               </p>
-            </div>
-          </div>
-        )}
-
-        {isPppoe && (
-          <div style={ROW}>
-            <span style={LBL}>Expired IP Pool</span>
-            <div style={{ flex: 1 }}>
-              {pools.length > 0 ? (
-                <>
-                  {!customExpired ? (
-                    <select
-                      style={{ ...SELECT, width: "100%" }}
-                      value={expiredPool}
-                      onChange={e => {
-                        if (e.target.value === "__custom__") { setCustomExpired(true); setExpiredPool(""); }
-                        else setExpiredPool(e.target.value);
-                      }}
-                    >
-                      <option value="">— None (optional) —</option>
-                      {(routerId
-                        ? pools.filter(p => p.router_id === parseInt(routerId) || p.router_id === null)
-                        : pools
-                      ).map(p => (
-                        <option key={p.id} value={p.name}>
-                          {p.name} ({p.range_start}–{p.range_end})
-                        </option>
-                      ))}
-                      <option value="__custom__">✏ Enter manually…</option>
-                    </select>
-                  ) : (
-                    <div style={{ display: "flex", gap: "0.4rem" }}>
-                      <input
-                        style={{ ...INPUT, flex: 1 }}
-                        value={expiredPool}
-                        onChange={e => setExpiredPool(e.target.value)}
-                        placeholder="e.g. expired"
-                        autoFocus
-                      />
-                      <button type="button" onClick={() => { setCustomExpired(false); setExpiredPool(""); }}
-                        style={{ padding: "0.45rem 0.75rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", fontSize: "0.78rem" }}>
-                        ← List
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <input style={INPUT} value={expiredPool} onChange={e => setExpiredPool(e.target.value)} placeholder="e.g. expired" />
-              )}
-              <p style={HINT}>Customers are moved to this pool after their plan expires (optional).</p>
             </div>
           </div>
         )}
