@@ -727,6 +727,16 @@ async function provisionVlanResellerServices(
     "=place-before=0",
     `=comment=${commentPrefix}_allow_service_forward`,
   ]);
+  await ensureFilterComment(`${commentPrefix}_block_unauth_service_forward`, [
+    "/ip/firewall/filter/add",
+    "=chain=forward",
+    `=in-interface=${vlanInterface}`,
+    "=out-interface-list=WAN",
+    "=action=drop",
+    "=hotspot=unauth",
+    "=place-before=0",
+    `=comment=${commentPrefix}_block_unauth_service_forward`,
+  ]);
   await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
     "/ip/firewall/filter/add",
     "=chain=input",
