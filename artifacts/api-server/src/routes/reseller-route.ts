@@ -754,9 +754,18 @@ async function provisionVlanResellerServices(
   ]);
   if (allowServiceForwardId && blockServiceForwardId) {
     await runRouterCommand(creds, [
-      "/ip/firewall/filter/set",
+      "/ip/firewall/filter/remove",
       `=.id=${allowServiceForwardId}`,
-      `=place-before=${blockServiceForwardId}`,
+    ]);
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/add",
+      "=chain=forward",
+      `=in-interface=${vlanInterface}`,
+      "=out-interface-list=WAN",
+      "=action=accept",
+      "=hotspot=auth",
+      "=place-before=0",
+      `=comment=${commentPrefix}_allow_service_forward`,
     ]);
   }
   await ensureFilterComment(`${commentPrefix}_block_wan_dns_udp`, [
