@@ -1861,12 +1861,14 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
         const hotspotActive = await read(["/ip/hotspot/active/print", "=.proplist=.id,address,mac-address,user,server,login-by,uptime", `?server=${resources.hotspotServer}`]);
         const hotspotHosts = await read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime,authorized,bypassed,blocked", `?server=${resources.hotspotServer}`]);
         const dnsStatic = await read(["/ip/dns/static/print", "=.proplist=.id,name,address,type,disabled,comment"]);
+        const dnsSettings = await read(["/ip/dns/print", "=.proplist=allow-remote-requests,servers,cache-size,max-udp-packet-size"]);
         liveState = {
           hotspotActive,
           hotspotServers,
           hotspotProfiles,
           hotspotHosts,
           dnsStatic,
+          dnsSettings,
         };
       }
       res.json({
