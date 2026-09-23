@@ -86,7 +86,7 @@ async function fetchCustomers(): Promise<DbCustomer[]> {
   return data ?? [];
 }
 async function fetchPlans(): Promise<PlanLite[]> {
-  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,speed_down,speed_up").eq("admin_id", ADMIN_ID).order("type").order("price");
+  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,speed_down,speed_up").eq("admin_id", ADMIN_ID).is("port_id", null).order("type").order("price");
   if (error) throw error;
   return data ?? [];
 }

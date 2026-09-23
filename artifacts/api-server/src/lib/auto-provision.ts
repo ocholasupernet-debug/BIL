@@ -64,6 +64,8 @@ interface SbPlan {
   speed_down_unit: string | null;
   speed_up_unit: string | null;
   data_limit_mb: number | null;
+  active_ip_pool: string | null;
+  expired_ip_pool: string | null;
 }
 
 interface SbRouter {
@@ -313,7 +315,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -360,22 +362,23 @@ export async function autoProvision(opts: {
   const password = customer.password || "changeme";
   const comment  = username;
   const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
+  const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   let action: "created" | "renewed" | "enabled" = "created";
 
   try {
     if (planType === "pppoe") {
       /* Try to update first; if that fails, create */
       try {
-        await updatePPPSecret(creds, username, { disabled: false, comment });
+        await updatePPPSecret(creds, username, { disabled: false, profile: profileName, comment });
         action = "enabled";
       } catch {
         try {
-          await addPPPSecret(creds, { name: username, password, profile: plan.name, service: "pppoe", comment });
+          await addPPPSecret(creds, { name: username, password, profile: profileName, service: "pppoe", comment });
           action = "created";
         } catch (e2) {
           /* Might already exist — try enable again */
           logger.warn({ err: (e2 as Error).message }, "[provision] PPP add failed, trying set again");
-          await updatePPPSecret(creds, username, { disabled: false });
+          await updatePPPSecret(creds, username, { disabled: false, profile: profileName });
           action = "renewed";
         }
       }
@@ -385,7 +388,7 @@ export async function autoProvision(opts: {
       });
     } else {
       /* Hotspot */
-      const profile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+      const profile = profileName;
       const dataLimitMb = Number(plan.data_limit_mb);
       const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
         ? String(Math.floor(dataLimitMb * 1_000_000))

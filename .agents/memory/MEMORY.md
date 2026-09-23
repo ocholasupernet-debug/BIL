@@ -18,6 +18,7 @@
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
+- [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
@@ -61,6 +62,7 @@
 - [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
+- [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
@@ -76,4 +78,8 @@
 - [Reseller live-data boundary](reseller-live-data-boundary.md) — Verify tenant ownership and assigned-port ownership before fetching live router data or calculating reseller totals.
 - [Reseller consumption reporting](reseller-consumption-reporting.md) — Cumulative customer usage is not a historical monthly series; label cohort charts honestly until snapshots exist.
 - [VLAN service resource identity](vlan-service-resource-identity.md) — Initial handoff and later hotspot deployment must update the same RouterOS resource family.
+- [Plan service pool binding](plan-service-pool-binding.md) — Plans reference the existing scoped VLAN pool; Hotspot uses address-pool and PPPoE uses remote-address.
 - [Reseller payment routing](reseller-payment-routing.md) — Resolve collection accounts by active VLAN port, router, then reseller default; never fall back to the ISP gateway.
+- [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
+- [VLAN handoff portal files](vlan-handoff-portal-files.md) — Direct VLAN provisioning must install login.html and rlogin.html before declaring Hotspot active.
+- [Async port deployment](async-port-deployment.md) — Long-running assigned-port RouterOS work must return quickly and expose persisted completion status.

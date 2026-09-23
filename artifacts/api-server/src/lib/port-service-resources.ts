@@ -34,6 +34,25 @@ export type PortServiceResourceNames = {
   commentPrefix: string;
 };
 
+export type PlanServiceType = "hotspot" | "trials" | "pppoe" | string;
+
+/**
+ * Plans use the pool owned by their scoped service. A plan must not create a
+ * second range inside the VLAN subnet: the service pool is already the
+ * authoritative DHCP/PPPoE allocation range for that port.
+ */
+export function planServicePoolName(
+  planType: PlanServiceType,
+  resources?: Pick<PortServiceResourceNames, "hotspotPool" | "pppoePool">,
+): string | null {
+  const type = String(planType ?? "hotspot").trim().toLowerCase();
+  if (type === "pppoe") return resources?.pppoePool ?? "pppoe";
+  if (type === "hotspot" || type === "trials" || type === "trial") {
+    return resources?.hotspotPool ?? "hotspot pool";
+  }
+  return null;
+}
+
 function resourceSegment(value: string, fallback: string, maxLength = 24): string {
   const result = value
     .trim()

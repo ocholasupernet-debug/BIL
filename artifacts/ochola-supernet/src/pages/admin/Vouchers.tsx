@@ -48,7 +48,7 @@ function fmtDate(d: string) {
 
 /* ─────────────────────────── DB Functions ─────────────────────── */
 async function fetchPlans(): Promise<DbPlanLite[]> {
-  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,validity,speed_down,speed_up").eq("admin_id", ADMIN_ID).eq("type", "hotspot").order("price", { ascending: true });
+  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,validity,speed_down,speed_up").eq("admin_id", ADMIN_ID).eq("type", "hotspot").is("port_id", null).order("price", { ascending: true });
   if (error) throw error;
   return data ?? [];
 }

@@ -591,6 +591,33 @@ async function loadHotspotPortContext(
   return port;
 }
 
+function positivePortalId(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function planMatchesHotspotPortalScope(
+  adminId: number,
+  plan: { router_id: number | null; port_id: number | null },
+  requestedRouterId: unknown,
+  requestedPortId: unknown,
+): Promise<boolean> {
+  const routerId = positivePortalId(requestedRouterId);
+  const portId = positivePortalId(requestedPortId);
+  const hasRouterValue = requestedRouterId !== undefined && requestedRouterId !== null && requestedRouterId !== "";
+  const hasPortValue = requestedPortId !== undefined && requestedPortId !== null && requestedPortId !== "";
+  if (hasRouterValue && routerId === null) return false;
+  if (hasPortValue && portId === null) return false;
+  if (!plan.router_id || (routerId !== null && routerId !== plan.router_id)) return false;
+  if (plan.port_id === null) return portId === null;
+  if (portId === null || plan.port_id !== portId || routerId === null) return false;
+  const ports = await sbSelect<{ id: number }>(
+    "isp_reseller_ports",
+    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&status=neq.disabled&hotspot_enabled=is.true&select=id&limit=1`,
+  );
+  return !!ports[0];
+}
+
 async function loadTenantCompanyName(adminId: number): Promise<string | null> {
   const rows = await sbSelect<{ name: string | null }>(
     "isp_admins",
@@ -1022,6 +1049,8 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
   const deviceName = readDeviceName(req.body?.device_name);
   const deviceRouterId = Number(req.body?.device_router_id);
+  const portalRouterId = positivePortalId(req.body?.router_id);
+  const portalPortId = positivePortalId(req.body?.port_id);
   const requestedService = req.body?.service_type === "pppoe" ? "pppoe" : "hotspot";
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
@@ -1050,6 +1079,10 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   }
   if (serviceType === "other") {
     res.status(409).json({ ok: false, error: "The selected package is not configured for a supported internet service." });
+    return;
+  }
+  if (plan && serviceType === "hotspot" && !await planMatchesHotspotPortalScope(adminId, plan, portalRouterId, portalPortId)) {
+    res.status(409).json({ ok: false, error: "The selected package does not belong to this hotspot service." });
     return;
   }
   if (plan && Number.isSafeInteger(deviceRouterId) && deviceRouterId > 0 && plan.router_id !== deviceRouterId) {
@@ -1136,6 +1169,8 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
       ok: true,
       paymentIntent: generatePaymentIntent({
         adminId, planId, amount, phone, serviceType,
+        ...(portalRouterId ? { routerId: portalRouterId } : {}),
+        ...(portalPortId ? { portId: portalPortId } : {}),
         ...(deviceName ? { deviceName } : {}),
         ...(serviceType === "pppoe" ? { customerId: requestedCustomerId } : {}),
         ...(resolvedMac ? { macAddress: resolvedMac } : {}),
@@ -1375,8 +1410,8 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id, router_id, port_id } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number; router_id?: number; port_id?: number;
   };
   const requestedMac = readMacAddress(mac_address);
   const requestedDeviceName = readDeviceName(device_name);
@@ -1403,6 +1438,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const requestedAmount = Math.ceil(Number(amount));
   const requestedPlanId = Number(plan_id);
   const requestedCustomerId = Number(customer_id);
+  const portalRouterId = positivePortalId(router_id);
+  const portalPortId = positivePortalId(port_id);
   const intent = typeof paymentIntent === "string" ? validatePaymentIntent(paymentIntent) : null;
   const mac = requestedMac.value ? requestedMac : readMacAddress(intent?.macAddress);
   const adminAuth = validateToken(extractToken(req));
@@ -1416,7 +1453,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     intent.amount === requestedAmount &&
     intent.phone === normalised &&
     (intent.serviceType ?? "hotspot") === (service_type === "pppoe" ? "pppoe" : "hotspot") &&
-    (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null);
+    (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null) &&
+    (intent.routerId ?? null) === portalRouterId &&
+    (intent.portId ?? null) === portalPortId;
   if (intent && (intent.macAddress ?? "") !== mac.value) {
     res.status(400).json({ ok: false, error: "The TV MAC address changed. Start the payment again." });
     return;
@@ -1456,9 +1495,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     }
   }
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
-    const plans = await sbSelect<{ id: number; price: number | string; name: string; type?: string }>(
+    const plans = await sbSelect<{ id: number; price: number | string; name: string; type?: string; router_id: number | null; port_id: number | null }>(
       "isp_plans",
-      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type&limit=1`,
+      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type,router_id,port_id&limit=1`,
     );
     const plan = plans[0];
     if (!plan) {
@@ -1472,6 +1511,10 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     }
     if (serviceType === "other") {
       res.status(409).json({ ok: false, error: "The selected package is not configured for a supported internet service." });
+      return;
+    }
+    if (serviceType === "hotspot" && !hasAdminSession && !await planMatchesHotspotPortalScope(scopedAdminId, plan, portalRouterId, portalPortId)) {
+      res.status(409).json({ ok: false, error: "The selected package does not belong to this hotspot service." });
       return;
     }
     if (intent && (intent.serviceType ?? "hotspot") !== serviceType) {

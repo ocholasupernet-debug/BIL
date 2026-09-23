@@ -229,14 +229,16 @@ async function resourceIdentityForPort(port: Pick<PortServiceRow, "admin_id" | "
 function nextAvailableSubnet(rows: Array<{ subnet_range: string | null }>): string {
   const used = new Set(
     rows
-      .map((row) => row.subnet_range?.match(/^192\.168\.(18[0-3])\.0\/24$/)?.[1])
+      .map((row) => row.subnet_range?.match(/^192\.168\.(18[4-7])\.0\/24$/)?.[1])
       .filter((octet): octet is string => Boolean(octet))
       .map(Number),
   );
-  for (let octet = 180; octet <= 183; octet += 1) {
+  // The legacy service bridge owns 192.168.180.0/22. VLAN services must
+  // be allocated outside that aggregate or they will share the gateway.
+  for (let octet = 184; octet <= 187; octet += 1) {
     if (!used.has(octet)) return `192.168.${octet}.0/24`;
   }
-  throw new Error("No isolated /24 network remains inside 192.168.180.0/22 for this router.");
+  throw new Error("No isolated /24 network remains inside 192.168.184.0/22 for this router.");
 }
 
 function savedSubnetConflict(
@@ -439,7 +441,7 @@ export function buildDualServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${network.bridgeName}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${network.bridgeName}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
@@ -577,7 +579,7 @@ function buildVlanServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${vlanInterface}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${hotspotPoolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${vlanInterface}`, `=profile=${resources.hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
