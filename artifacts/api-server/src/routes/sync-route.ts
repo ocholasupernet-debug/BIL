@@ -10,6 +10,7 @@ import {
 } from "../lib/router-management-vpn.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
+import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
 
@@ -452,9 +453,10 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
                validity, validity_unit, shared_users }]
    }
 ═══════════════════════════════════════════════════════════════ */
-router.post("/admin/sync/plans", async (req, res): Promise<void> => {
-  const { host, bridgeIp, username, password, plans } = req.body as {
+router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void> => {
+  const { host, bridgeIp, username, password, routerId, plans } = req.body as {
     host: string; bridgeIp?: string; username: string; password: string;
+    routerId?: number;
     plans: Array<{
       id: number; name: string; type: string;
       speed_down: number; speed_up: number;
@@ -465,6 +467,47 @@ router.post("/admin/sync/plans", async (req, res): Promise<void> => {
   };
 
   if ((!host && !bridgeIp) || !plans?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and plans are required" }); return; }
+
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(403).json({ ok: false, error: "A valid signed-in account is required." });
+    return;
+  }
+  const tenantId = account.parent_id ?? account.id;
+  const requestedRouterId = Number(routerId);
+  if (Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0) {
+    const routerRows = await sbSelect<{ id: number }>(
+      "isp_routers",
+      `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+    );
+    if (!routerRows[0]) {
+      res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
+      return;
+    }
+    if (account.role === "reseller") {
+      const assignedPorts = await sbSelect<{ id: number }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${requestedRouterId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
+      );
+      const assignedPortIds = new Set(assignedPorts.map(port => port.id));
+      const planIds = plans
+        .map(plan => Number(plan.id))
+        .filter(id => Number.isSafeInteger(id) && id > 0);
+      const scopedPlans = planIds.length
+        ? await sbSelect<{ id: number }>(
+            "isp_plans",
+            `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&port_id=in.(${[...assignedPortIds].join(",")})&id=in.(${planIds.join(",")})&select=id&limit=1000`,
+          )
+        : [];
+      if (!assignedPorts.length || scopedPlans.length !== planIds.length) {
+        res.status(403).json({ ok: false, error: "Only plans assigned to your approved VLAN service can be synced." });
+        return;
+      }
+    }
+  } else if (account.role === "reseller") {
+    res.status(400).json({ ok: false, error: "A router assigned to your VLAN service is required." });
+    return;
+  }
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);

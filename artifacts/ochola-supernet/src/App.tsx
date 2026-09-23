@@ -80,6 +80,12 @@ function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
 }
 
+function ResellerBlockedPage() {
+  const [, setLocation] = useLocation();
+  useEffect(() => { setLocation("/admin/dashboard"); }, [setLocation]);
+  return null;
+}
+
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
    the root "/" path redirects straight to that company's login page.
@@ -152,7 +158,7 @@ function Router() {
       {/* Legacy redirects — keep old paths working */}
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
-      <Route path="/admin/network/self-install" component={NetworkSelfInstall} />
+       <Route path="/admin/network/self-install" component={getAdminRole() === "reseller" ? ResellerBlockedPage : NetworkSelfInstall} />
       <Route path="/admin/network/files" component={NetworkFiles} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />

@@ -21,7 +21,7 @@ import {
 } from "../lib/settings-store.js";
 import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
-import { extractToken, validateToken } from "../lib/api-auth.js";
+import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import {
   gatewayConfigMap as routingGatewayConfigMap,
@@ -74,13 +74,15 @@ function isValidLiveCallback(value: string): boolean {
   }
 }
 
-function requireAdminPaymentChange(req: Request, res: Response, adminId: number): boolean {
+async function requireAdminPaymentChange(req: Request, res: Response, adminId: number): Promise<boolean> {
   const auth = validateToken(extractToken(req));
   if (!auth || auth.type !== "a") {
     res.status(401).json({ ok: false, error: "Your ISP Admin session is missing or expired. Sign in again; Super Admin approval is not required." });
     return false;
   }
-  if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId) {
+  const account = auth.uid === "superadmin" ? null : await accountFromRequest(req);
+  const isConnectedReseller = account?.role === "reseller" && account.parent_id === adminId;
+  if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId && !isConnectedReseller) {
     res.status(403).json({ ok: false, error: "You can only change payment routing for your own ISP." });
     return false;
   }
@@ -198,6 +200,30 @@ function adminIdFromRequest(req: Request): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+async function accountFromRequest(req: Request) {
+  if (!req.authUser) {
+    const auth = validateToken(extractToken(req));
+    if (auth?.type === "a") req.authUser = auth;
+  }
+  return authenticatedAccount(req);
+}
+
+async function paymentAdminIdFromRequest(req: Request): Promise<number | null> {
+  const requested = adminIdFromRequest(req);
+  const account = await accountFromRequest(req);
+  if (account?.role === "reseller") return account.parent_id;
+  return requested;
+}
+
+async function rejectResellerPaymentChange(req: Request, res: Response): Promise<boolean> {
+  const account = await accountFromRequest(req);
+  if (account?.role === "reseller") {
+    res.status(403).json({ ok: false, error: "Payment gateway and collection settings belong to your connected ISP account." });
+    return true;
+  }
+  return false;
+}
+
 async function getAdminPaymentSettings(adminId: number | null): Promise<{
   paymentGateway: string;
   bankStkPush: BankStkPushConfig;
@@ -248,7 +274,7 @@ async function getAdminPaymentSettings(adminId: number | null): Promise<{
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
   const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
-    await getAdminPaymentSettings(adminIdFromRequest(req));
+    await getAdminPaymentSettings(await paymentAdminIdFromRequest(req));
   res.json({
     ok: true,
     configured: isMpesaConfigured(s),
@@ -267,13 +293,14 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
 
 /* ── ISP Admin payment gateway preference ── */
 router.post("/admin/payment-gateway", async (req: Request, res: Response): Promise<void> => {
+  if (await rejectResellerPaymentChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const paymentGateway = getPaymentGateway(req.body?.paymentGateway);
   if (!Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
 
   const updated = await sbUpdate(
     "isp_admins",
@@ -289,12 +316,12 @@ router.post("/admin/payment-gateway", async (req: Request, res: Response): Promi
 
 /* ── ISP Admin shared/separate service collection routing ── */
 router.get("/admin/payment-routing", async (req: Request, res: Response): Promise<void> => {
-  const adminId = adminIdFromRequest(req);
+  const adminId = await paymentAdminIdFromRequest(req);
   if (!adminId) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   const settings = await getAdminPaymentSettings(adminId);
   const sharedConfig = settings.paymentGateway === "mpesa_till_push"
     ? settings.mpesaTillPush
@@ -318,13 +345,14 @@ router.get("/admin/payment-routing", async (req: Request, res: Response): Promis
 });
 
 router.post("/admin/payment-routing", async (req: Request, res: Response): Promise<void> => {
+  if (await rejectResellerPaymentChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const mode = paymentCollectionMode(req.body?.mode);
   if (!Number.isInteger(adminId) || adminId <= 0) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   if (req.body?.mode !== "shared" && req.body?.mode !== "separate") {
     res.status(400).json({ ok: false, error: "Choose shared or separate payment collection." });
     return;
@@ -389,6 +417,7 @@ router.get("/admin/bank-stk-push", async (req: Request, res: Response): Promise<
 });
 
 router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise<void> => {
+  if (await rejectResellerPaymentChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const config: BankStkPushConfig = {
     bankName: typeof req.body?.config?.bankName === "string" ? req.body.config.bankName.trim() : "",
@@ -400,7 +429,7 @@ router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   if (!isBankStkPushConfigured(config)) {
     res.status(400).json({ ok: false, error: "Select a bank and enter its PayBill Number plus Account / Business Number." });
     return;
@@ -433,7 +462,7 @@ router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise
 
 /* ── ISP Admin M-Pesa gateway destinations ── */
 router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): Promise<void> => {
-  const adminId = adminIdFromRequest(req);
+  const adminId = await paymentAdminIdFromRequest(req);
   if (!adminId) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
@@ -450,6 +479,7 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
 });
 
 router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): Promise<void> => {
+  if (await rejectResellerPaymentChange(req, res)) return;
   const adminId = Number(req.body?.adminId);
   const gatewayId = req.body?.gatewayId;
   const rawConfig = req.body?.config;
@@ -459,7 +489,7 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  if (!requireAdminPaymentChange(req, res, adminId)) return;
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   if (typeof gatewayId !== "string" || !allowedGatewayIds.has(gatewayId)) {
     res.status(400).json({ ok: false, error: "Unsupported M-Pesa gateway configuration." });
     return;

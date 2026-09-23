@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { getAdminApiToken } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
   ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check,
@@ -334,8 +334,14 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
   const { data: routers = [] } = useQuery<DbRouterMin[]>({
     queryKey: ["isp_routers_sync"],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_routers").select("id,name,host,bridge_ip,vpn_ip,status,router_username,router_secret").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-      return (data ?? []) as DbRouterMin[];
+      const token = getAdminApiToken();
+      const response = await fetch("/api/plans/admin-context", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: "no-store",
+      });
+      const data = await response.json() as { routers?: DbRouterMin[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Routers could not be loaded.");
+      return data.routers ?? [];
     },
   });
 
@@ -355,7 +361,8 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         password: selectedRouter.router_secret   || "",
         ...buildPayload(selectedRouter),
       };
-      const res  = await fetch(apiUrl(endpoint), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+       const token = getAdminApiToken();
+       const res  = await fetch(apiUrl(endpoint), { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(payload) });
       const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
       if (!res.ok) {
         setResult({

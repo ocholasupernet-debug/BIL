@@ -380,8 +380,9 @@ export function AdminLayout({
           ...item,
           children: (isResellerAccount && item.name === "Hotspot Settings"
             ? [{ name: "Assigned VLAN page", href: "/admin/hotspot-settings" }]
-            : item.children
+             : item.children
           )?.filter(child => {
+               if (isResellerAccount && child.href === "/admin/network/self-install") return false;
               if (hiddenNavHrefs.includes(child.href)) return false;
               const childFeatureKey = getAdminFeatureKeyForPath(child.href);
               return !childFeatureKey || isVisible(childFeatureKey);

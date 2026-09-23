@@ -40,6 +40,11 @@ type ResellerResponse = {
 type ResellerTelemetry = {
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
 };
+type ResellerPaymentSettings = {
+  paymentGateway: string;
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+};
 function authHeaders(): HeadersInit {
   const token = getAdminApiToken();
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
@@ -579,6 +584,7 @@ function ResellerDashboard() {
   const [data, setData] = useState<ResellerResponse | null>(null);
   const [telemetry, setTelemetry] = useState<ResellerTelemetry | null>(null);
   const [selectedPortId, setSelectedPortId] = useState("");
+  const [paymentGateway, setPaymentGateway] = useState("manual");
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
   const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "" });
   const [staticClient, setStaticClient] = useState({ name: "", phone: "", ipAddress: "", username: "", password: "" });
@@ -590,12 +596,14 @@ function ResellerDashboard() {
 
   const load = async () => {
     try {
-      const [dashboard, liveTelemetry] = await Promise.all([
+      const [dashboard, liveTelemetry, paymentSettings] = await Promise.all([
         apiJson<ResellerResponse>("/api/reseller/me"),
         apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry").catch(() => null),
+        apiJson<{ ok: boolean; settings: ResellerPaymentSettings }>("/api/reseller/payment-settings").catch(() => null),
       ]);
       setData(dashboard);
       setTelemetry(liveTelemetry);
+      if (paymentSettings?.settings?.paymentGateway) setPaymentGateway(paymentSettings.settings.paymentGateway);
       setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
       setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
     }
@@ -604,7 +612,7 @@ function ResellerDashboard() {
   useEffect(() => { void load(); }, []);
   const provisionClient = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(""); setSuccess("");
-    try { await apiJson("/api/reseller/checkout", { method: "POST", body: JSON.stringify({ ...checkout, portId: Number(checkout.portId), amount: Number(checkout.amount), maxLimitMbps: checkout.maxLimitMbps ? Number(checkout.maxLimitMbps) : undefined, gatewayType: "manual" }) }); setSuccess(port?.handoff_mode === "isp_router" ? "Paid client session recorded." : "Paid client session recorded and client queue provisioned."); setCheckout((current) => ({ ...current, clientReference: "", clientIp: "", paymentReference: "" })); await load(); }
+    try { await apiJson("/api/reseller/checkout", { method: "POST", body: JSON.stringify({ ...checkout, portId: Number(checkout.portId), amount: Number(checkout.amount), maxLimitMbps: checkout.maxLimitMbps ? Number(checkout.maxLimitMbps) : undefined, gatewayType: paymentGateway }) }); setSuccess(port?.handoff_mode === "isp_router" ? "Paid client session recorded." : "Paid client session recorded and client queue provisioned."); setCheckout((current) => ({ ...current, clientReference: "", clientIp: "", paymentReference: "" })); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Client queue provisioning failed."); } finally { setSaving(false); }
   };
   const assignPppoeClient = async (event: React.FormEvent) => {
@@ -740,7 +748,7 @@ function ResellerDashboard() {
          </div>
          <form onSubmit={provisionClient} style={cardStyle}>
            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Record a paid client session</div>
-           <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Record a confirmed manual payment without configuring reseller payment settings. Service-mode ports also receive a child queue; ISP-router handoffs record the paid session for the ISP-controlled router.</p>
+            <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Record a confirmed payment using the selected reseller payment method ({paymentGateway}). Service-mode ports also receive a child queue; ISP-router handoffs record the paid session for the ISP-controlled router.</p>
            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
               <Field label="Assigned port"><select required style={inputStyle} value={checkout.portId || String(port?.id ?? "")} onChange={(e) => { setCheckout({ ...checkout, portId: e.target.value }); setSelectedPortId(e.target.value); }}><option value="">Choose port</option>{data?.ports?.map((item) => <option key={item.id} value={item.id}>{item.router?.name || "Router"} · {item.interface_name} · {item.status}</option>)}</select></Field>
              <Field label="Client reference"><input required style={inputStyle} value={checkout.clientReference} onChange={(e) => setCheckout({ ...checkout, clientReference: e.target.value })} /></Field>
@@ -765,9 +773,9 @@ function ResellerDashboard() {
               <button disabled={staticSaving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "#16a34a", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {staticSaving ? "Assigning…" : "Assign static customer"}</button>
             </form>
           )}
-           <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
-             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> ISP payment gateway</div>
-             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 0 }}>Automated customer payments use the gateway configured by the connected ISP account. Payment gateway changes are managed in ISP Settings so the assigned VLAN and its portal use one merchant destination.</p>
+             <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
+             <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Reseller payment method</div>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 0 }}>Reseller customer payments use the payment method selected in Settings: <strong>{paymentGateway}</strong>. The connected ISP still controls platform credentials and settlement.</p>
            </section>
           {port?.handoff_mode === "vlan_services" && port.pppoe_enabled && (
             <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>

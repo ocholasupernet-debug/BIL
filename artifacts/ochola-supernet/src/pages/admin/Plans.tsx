@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
+import { getAdminApiToken, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
 import { Plus, Wifi, Activity, Edit, Trash, Copy, Gauge, ArrowDown, ArrowUp, Users, X, Loader2, UploadCloud, Share2, Database, Search } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -15,49 +15,47 @@ function useTypeParam() {
   return raw ?? "hotspot";
 }
 
-/* ─── Supabase query helpers ─── */
+interface PlanContextResponse {
+  plans: DbPlan[];
+  bandwidths: DbBandwidth[];
+  routers: DbRouter[];
+  ports: DbPort[];
+  pools: DbPool[];
+}
+
+function adminApiHeaders(): Record<string, string> {
+  const token = getAdminApiToken();
+  return { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+async function fetchPlanContext(): Promise<PlanContextResponse> {
+  const response = await fetch("/api/plans/admin-context", { headers: adminApiHeaders(), cache: "no-store" });
+  const body = await response.json().catch(() => null) as PlanContextResponse & { error?: string } | null;
+  if (!response.ok || !body?.plans) throw new Error(body?.error ?? `Plan data could not be loaded (${response.status}).`);
+  return body;
+}
+
+/* ─── Authenticated plan context helpers ─── */
 async function fetchPlans(type?: string): Promise<DbPlan[]> {
-  let q = supabase.from("isp_plans").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: true });
-  if (type && !["bandwidth", "all"].includes(type)) q = q.eq("type", type);
-  const { data, error } = await q;
-  if (error) throw error;
-  return data ?? [];
+  const context = await fetchPlanContext();
+  if (!type || ["bandwidth", "all"].includes(type)) return context.plans;
+  return context.plans.filter(plan => type === "hotspot" ? ["hotspot", "trials", "trial"].includes(plan.type) : plan.type === type);
 }
 
 async function fetchBandwidths(): Promise<DbBandwidth[]> {
-  const { data, error } = await supabase.from("isp_bandwidth").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  return (await fetchPlanContext()).bandwidths;
 }
 
 async function fetchRouters(): Promise<DbRouter[]> {
-  const { data, error } = await supabase
-    .from("isp_routers")
-    .select("id,name,host,model,bridge_ip,status")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-    .order("name", { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as DbRouter[];
+  return (await fetchPlanContext()).routers;
 }
 
 async function fetchPorts(): Promise<DbPort[]> {
-  const { data, error } = await supabase
-    .from("isp_reseller_ports")
-    .select("id,router_id,interface_name,status")
-    .eq("admin_id", ADMIN_ID)
-    .order("interface_name", { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as DbPort[];
+  return (await fetchPlanContext()).ports;
 }
 
 async function fetchPools(): Promise<DbPool[]> {
-  const { data } = await supabase
-    .from("isp_ip_pools")
-    .select("id,name,range_start,range_end,router_id")
-    .eq("admin_id", ADMIN_ID)
-    .order("name");
-  return (data ?? []) as DbPool[];
+  return (await fetchPlanContext()).pools;
 }
 
 /* ─── Display helpers ─── */
@@ -186,9 +184,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
       if (isEdit && initialData) {
         const response = await fetch(`/api/plans/${initialData.id}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+            headers: adminApiHeaders(),
           body: JSON.stringify({
-            adminId: ADMIN_ID,
             name,
             type: planType,
             speedDown,
@@ -219,9 +216,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
          */
         const response = await fetch("/api/plans", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: adminApiHeaders(),
           body: JSON.stringify({
-            adminId: ADMIN_ID,
             name,
             type: planType,
             speedDown,
@@ -620,11 +616,10 @@ function CopyPlanModal({
     setError(null);
     setSaving(true);
     try {
-      const response = await fetch(`/api/plans/${plan.id}/copy`, {
+       const response = await fetch(`/api/plans/${plan.id}/copy`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+         headers: adminApiHeaders(),
         body: JSON.stringify({
-          adminId: ADMIN_ID,
           name: name.trim(),
           targetRouterId: Number(routerId),
           targetPortId: portId ? Number(portId) : null,
@@ -717,7 +712,6 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
     setSaving(true);
     try {
       const payload = {
-        admin_id:        ADMIN_ID,
         name:            name.trim(),
         speed_down:      parseFloat(dl),
         speed_up:        parseFloat(ul),
@@ -730,15 +724,13 @@ function AddBandwidthForm({ initialData, onCancel, onSaved }: BandwidthFormProps
           !Number.isFinite(payload.speed_up) || payload.speed_up <= 0) {
         throw new Error("Enter a name and positive download and upload rates.");
       }
-      if (isEdit && initialData) {
-        const { error: err } = await supabase.from("isp_bandwidth").update(payload)
-          .eq("id", initialData.id)
-          .eq("admin_id", ADMIN_ID);
-        if (err) throw err;
-      } else {
-        const { error: err } = await supabase.from("isp_bandwidth").insert({ ...payload, is_active: true, created_at: new Date().toISOString() });
-        if (err) throw err;
-      }
+       const response = await fetch(isEdit && initialData ? `/api/plans/bandwidth/${initialData.id}` : "/api/plans/bandwidth", {
+         method: isEdit && initialData ? "PATCH" : "POST",
+         headers: adminApiHeaders(),
+         body: JSON.stringify(payload),
+       });
+       const body = await response.json().catch(() => null) as { error?: string } | null;
+       if (!response.ok) throw new Error(body?.error ?? `Bandwidth profile could not be saved (${response.status}).`);
       onSaved?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -851,9 +843,12 @@ function BandwidthPlansTab() {
   const [deletingBw, setDeletingBw] = useState<DbBandwidth | null>(null);
 
   const deleteMut = useMutation({
-    mutationFn: async (id: number) => {
-      const { error } = await supabase.from("isp_bandwidth").delete().eq("id", id).eq("admin_id", ADMIN_ID);
-      if (error) throw error;
+     mutationFn: async (id: number) => {
+       const response = await fetch(`/api/plans/bandwidth/${id}`, { method: "DELETE", headers: adminApiHeaders() });
+       if (!response.ok) {
+         const body = await response.json().catch(() => null) as { error?: string } | null;
+         throw new Error(body?.error ?? `Bandwidth profile could not be deleted (${response.status}).`);
+       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["isp_bandwidth"] }); setDeletingBw(null); },
   });
@@ -941,18 +936,18 @@ export default function Plans() {
   });
 
   const { data: routers = [] } = useQuery({
-    queryKey: ["isp_routers_plans", ADMIN_ID],
+    queryKey: ["isp_routers_plans"],
     queryFn:  fetchRouters,
   });
 
   const { data: ports = [] } = useQuery<DbPort[]>({
-    queryKey: ["isp_reseller_ports_plans", ADMIN_ID],
+    queryKey: ["isp_reseller_ports_plans"],
     queryFn: fetchPorts,
     staleTime: 30_000,
   });
 
   const { data: pools = [] } = useQuery<DbPool[]>({
-    queryKey: ["isp_ip_pools_plans", ADMIN_ID],
+    queryKey: ["isp_ip_pools_plans"],
     queryFn:  fetchPools,
     staleTime: 30_000,
   });
@@ -987,7 +982,7 @@ export default function Plans() {
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
-      const response = await fetch(`/api/plans/${id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`, { method: "DELETE" });
+       const response = await fetch(`/api/plans/${id}`, { method: "DELETE", headers: adminApiHeaders() });
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error ?? `Delete failed (${response.status}).`);

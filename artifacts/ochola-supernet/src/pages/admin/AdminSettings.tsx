@@ -244,6 +244,12 @@ const ADMIN_PAYMENT_GATEWAY_OPTIONS = [
   { id: "manual", label: "Cash / Manual" },
 ];
 
+interface ResellerPaymentSettings {
+  paymentGateway: string;
+  mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+  bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+}
+
 type PaymentTestStatus = "idle" | "sending" | "pending" | "paid" | "failed" | "expired";
 
 function AdminPaymentTestCard({ currency }: { currency: string }) {
@@ -484,6 +490,92 @@ function AdminPaymentGatewayCard() {
           <Save size={13} /> {saving ? "Saving…" : "Save Payment Gateway"}
         </button>
       </Row>
+    </Card>
+  );
+}
+
+function ResellerPaymentGatewayCard() {
+  const [state, setState] = useState<{
+    paymentGateway: string;
+    mpesa: { enabled: boolean; merchantIdentifier: string; accountReference: string; destinationType: "till" | "paybill" };
+    bank: { enabled: boolean; merchantIdentifier: string; accountReference: string; bankName: string };
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/reseller/payment-settings", { headers: adminApiHeaders(), cache: "no-store" })
+      .then(async response => {
+        const data = await response.json() as { settings?: ResellerPaymentSettings; error?: string };
+        if (!response.ok || !data.settings) throw new Error(data.error || "Could not load reseller payment settings.");
+        setState(data.settings);
+      })
+      .catch(error => setError(error instanceof Error ? error.message : "Could not load reseller payment settings."));
+  }, []);
+
+  const save = async () => {
+    if (!state) return;
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      const response = await fetch("/api/reseller/payment-settings", {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify(state),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the reseller payment method.");
+      setSaved(true);
+      window.dispatchEvent(new Event("ochola-payment-gateway-change"));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save the reseller payment method.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title="Reseller Payment Method" desc="Choose the payment method your reseller customers use.">
+      {error ? (
+        <p style={{ color: "#f87171", fontSize: "0.76rem", margin: "0 0 10px" }}>{error}</p>
+      ) : !state ? (
+        <p style={{ color: C.muted, fontSize: "0.76rem", margin: 0 }}>Loading payment methods…</p>
+      ) : (
+        <>
+          <p style={{ color: C.muted, fontSize: "0.78rem", lineHeight: 1.55, margin: "0 0 14px" }}>
+            Select the method to record for reseller customer payments. The connected ISP remains responsible for platform payment credentials and settlement.
+          </p>
+          <Field label="Payment method">
+            <Select
+              value={state.paymentGateway}
+              onChange={event => {
+                setState(current => current ? { ...current, paymentGateway: event.target.value } : current);
+                setSaved(false);
+              }}
+            >
+              {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </Select>
+          </Field>
+          <p style={{ color: C.muted, fontSize: "0.72rem", lineHeight: 1.5, margin: "10px 0 0" }}>
+            Current M-Pesa and bank destination details remain stored with this reseller account and are not changed by selecting a method.
+          </p>
+          {saved && <p style={{ color: "#34d399", fontSize: "0.74rem", margin: "10px 0 0" }}>Payment method saved.</p>}
+          <Row>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: saving ? "wait" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+            >
+              <Save size={13} /> {saving ? "Saving…" : "Save Payment Method"}
+            </button>
+          </Row>
+        </>
+      )}
     </Card>
   );
 }
@@ -1746,6 +1838,17 @@ const GATEWAYS: GatewayDef[] = [
 ];
 
 function PaymentGatewaysTab() {
+  const isReseller = getAdminRole() === "reseller";
+  if (isReseller) {
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
+          This section is available for visibility, while payment ownership remains with your connected ISP.
+        </div>
+        <ResellerPaymentGatewayCard />
+      </>
+    );
+  }
   const brand = useBrand();
   const [selectedGw, setSelectedGw] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
@@ -2302,7 +2405,7 @@ export default function AdminSettings() {
   const [location, setLocation] = useLocation();
   const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
   const isReseller = getAdminRole() === "reseller";
-  const visibleTabs = isReseller ? TABS.filter(item => item.id !== "gateways") : TABS;
+  const visibleTabs = TABS;
   const initialTab = visibleTabs.some(item => item.id === requestedTab) ? requestedTab! : "profile";
   const [tab, setTab] = useState(initialTab);
 
@@ -2362,7 +2465,7 @@ export default function AdminSettings() {
 
           {tab === "profile"       && <IspProfileTab />}
           {tab === "billing"       && <BillingTab />}
-          {tab === "gateways"      && !isReseller && <PaymentGatewaysTab />}
+           {tab === "gateways"      && <PaymentGatewaysTab />}
           {tab === "dashboard"     && <DashboardBuilderTab />}
           {tab === "typography"    && <TypographyTab />}
           {tab === "sms"           && <SmsEmailTab />}
