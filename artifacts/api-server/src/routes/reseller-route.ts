@@ -355,6 +355,19 @@ router.get("/reseller-portal-source/:token", (req, res): void => {
   res.send(entry.content);
 });
 
+router.get("/captive-portal", (req, res): void => {
+  const portalHostname = validPortalHostname(req.query.portal) ?? null;
+  if (!portalHostname) {
+    res.status(400).json({ error: "A valid captive portal hostname is required." });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.type("application/captive+json").json({
+    captive: true,
+    "user-portal-url": `http://${portalHostname}/`,
+  });
+});
+
 function buildVlanInterfaceScript(
   port: Pick<ResellerPortRow, "interface_name" | "bridge_name" | "reseller_id" | "vlan_tag">,
 ): string {
@@ -549,7 +562,8 @@ async function provisionVlanResellerServices(
     `=comment=${commentPrefix}_pppoe_pool`,
   ]);
   const captivePortalOption = `${commentPrefix}_captive_portal`;
-  const captivePortalUrl = `http://${hotspotDnsName}/`;
+  const captivePortalApiHostname = validPortalHostname(new URL(apiOrigin).hostname);
+  const captivePortalUrl = `${apiOrigin}/api/captive-portal?portal=${encodeURIComponent(hotspotDnsName)}`;
   const dhcpOptionRows = await runRouterCommand(creds, [
     "/ip/dhcp-server/option/print",
     "=.proplist=.id,name,code,value",
@@ -682,6 +696,19 @@ async function provisionVlanResellerServices(
         `=comment=${commentPrefix}_${suffix}`,
       ]);
     }
+  }
+  if (
+    captivePortalApiHostname
+    && captivePortalApiHostname !== warningHostname
+    && captivePortalApiHostname !== hotspotDnsName
+    && (!Array.isArray(gardenRows) || !gardenRows.some((row) => String((row as Record<string, unknown>).comment ?? "") === `${commentPrefix}_captive_portal_api_walled_garden`))
+  ) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/walled-garden/ip/add",
+      `=dst-host=${captivePortalApiHostname}`,
+      "=action=accept",
+      `=comment=${commentPrefix}_captive_portal_api_walled_garden`,
+    ]);
   }
   const natRows = await runRouterCommand(creds, [
     "/ip/firewall/nat/print",
