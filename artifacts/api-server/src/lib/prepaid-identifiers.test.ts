@@ -27,3 +27,18 @@ test("uses the same normalized profile name as plan sync", () => {
   assert.equal(hotspotPlanProfileName("  Night  10 Mbps "), "night-10-mbps");
   assert.notEqual(hotspotPlanProfileName("Night 10 Mbps"), "ochola-plan-23");
 });
+
+test("scopes equal plan names to their router and physical service", () => {
+  assert.equal(
+    hotspotPlanProfileName("Night 10 Mbps", 12, 34),
+    "night-10-mbps-r12-p34",
+  );
+  assert.notEqual(
+    hotspotPlanProfileName("Night 10 Mbps", 12, 34),
+    hotspotPlanProfileName("Night 10 Mbps", 12, 35),
+  );
+  assert.notEqual(
+    hotspotPlanProfileName("Night 10 Mbps", 12),
+    hotspotPlanProfileName("Night 10 Mbps", 13),
+  );
+});

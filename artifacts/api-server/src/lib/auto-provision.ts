@@ -58,6 +58,7 @@ interface SbPlan {
   validity_unit: string | null;
   validity_days: number;
   router_id: number | null;
+  port_id: number | null;
   speed_down: number | null;
   speed_up: number | null;
   speed_down_unit: string | null;
@@ -312,7 +313,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
+    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -384,7 +385,7 @@ export async function autoProvision(opts: {
       });
     } else {
       /* Hotspot */
-      const profile = hotspotPlanProfileName(plan.name);
+      const profile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
       const dataLimitMb = Number(plan.data_limit_mb);
       const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
         ? String(Math.floor(dataLimitMb * 1_000_000))

@@ -76,13 +76,13 @@ async function requireExistingRouterProfile(
 
 async function cleanupLegacyPlanProfiles(
   conn: RouterOSAPI,
-  plans: Array<{ id: number; name: string }>,
+  plans: Array<{ id: number; name: string; router_id?: number | null; port_id?: number | null }>,
   log: (message: string) => void,
 ): Promise<void> {
   const legacyToCurrent = new Map<string, string>(
     plans
       .filter(plan => Number.isSafeInteger(Number(plan.id)) && Number(plan.id) > 0)
-      .map(plan => [`ochola-plan-${Number(plan.id)}`, hotspotPlanProfileName(plan.name)] as const),
+      .map(plan => [`ochola-plan-${Number(plan.id)}`, hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id)] as const),
   );
   if (legacyToCurrent.size === 0) return;
 
@@ -459,6 +459,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     routerId?: number;
     plans: Array<{
       id: number; name: string; type: string;
+      router_id?: number | null; port_id?: number | null;
       speed_down: number; speed_up: number;
       speed_down_unit: string; speed_up_unit: string;
       validity: number; validity_unit: string;
@@ -475,38 +476,45 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
   }
   const tenantId = account.parent_id ?? account.id;
   const requestedRouterId = Number(routerId);
-  if (Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0) {
-    const routerRows = await sbSelect<{ id: number }>(
-      "isp_routers",
-      `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+  if (!Number.isSafeInteger(requestedRouterId) || requestedRouterId < 1) {
+    res.status(400).json({ ok: false, error: "A router assigned to these plans is required." });
+    return;
+  }
+  const routerRows = await sbSelect<{ id: number }>(
+    "isp_routers",
+    `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+  );
+  if (!routerRows[0]) {
+    res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
+    return;
+  }
+  const planIds = [...new Set(plans
+    .map(plan => Number(plan.id))
+    .filter(id => Number.isSafeInteger(id) && id > 0))];
+  const scopedPlans = planIds.length
+    ? await sbSelect<{
+        id: number; name: string; type: string; router_id: number | null; port_id: number | null;
+        speed_down: number; speed_up: number; speed_down_unit: string; speed_up_unit: string;
+        validity: number; validity_unit: string; shared_users: number;
+      }>(
+        "isp_plans",
+        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users&limit=1000`,
+      )
+    : [];
+  if (scopedPlans.length !== planIds.length) {
+    res.status(403).json({ ok: false, error: "Only plans assigned to the selected router can be synced." });
+    return;
+  }
+  if (account.role === "reseller") {
+    const assignedPorts = await sbSelect<{ id: number }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${requestedRouterId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
     );
-    if (!routerRows[0]) {
-      res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
+    const assignedPortIds = new Set(assignedPorts.map(port => port.id));
+    if (!assignedPorts.length || scopedPlans.some(plan => !plan.port_id || !assignedPortIds.has(plan.port_id))) {
+      res.status(403).json({ ok: false, error: "Only plans assigned to your approved VLAN service can be synced." });
       return;
     }
-    if (account.role === "reseller") {
-      const assignedPorts = await sbSelect<{ id: number }>(
-        "isp_reseller_ports",
-        `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${requestedRouterId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
-      );
-      const assignedPortIds = new Set(assignedPorts.map(port => port.id));
-      const planIds = plans
-        .map(plan => Number(plan.id))
-        .filter(id => Number.isSafeInteger(id) && id > 0);
-      const scopedPlans = planIds.length
-        ? await sbSelect<{ id: number }>(
-            "isp_plans",
-            `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&port_id=in.(${[...assignedPortIds].join(",")})&id=in.(${planIds.join(",")})&select=id&limit=1000`,
-          )
-        : [];
-      if (!assignedPorts.length || scopedPlans.length !== planIds.length) {
-        res.status(403).json({ ok: false, error: "Only plans assigned to your approved VLAN service can be synced." });
-        return;
-      }
-    }
-  } else if (account.role === "reseller") {
-    res.status(400).json({ ok: false, error: "A router assigned to your VLAN service is required." });
-    return;
   }
 
   const logs: string[] = [];
@@ -515,12 +523,12 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
   let conn!: RouterOSAPI;
   try {
     ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
-    log(`  pushing ${plans.length} plan profile(s)\n`);
+    log(`  pushing ${scopedPlans.length} plan profile(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
 
-    for (const plan of plans) {
-      const profileName = hotspotPlanProfileName(plan.name);
+    for (const plan of scopedPlans) {
+      const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
       const rateLimit   = toRateLimit(
         plan.speed_down,
         plan.speed_up,
@@ -565,7 +573,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
       }
     }
 
-    await cleanupLegacyPlanProfiles(conn, plans, log);
+    await cleanupLegacyPlanProfiles(conn, scopedPlans, log);
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} plan profiles`]);
     log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
     conn.close();
@@ -755,6 +763,17 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
 
   if ((!host && !bridgeIp) || !users?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and users are required" }); return; }
 
+  const planIds = [...new Set(users
+    .map(user => Number(user.plan_id))
+    .filter(id => Number.isSafeInteger(id) && id > 0))];
+  const planRows = planIds.length
+    ? await sbSelect<{ id: number; name: string; router_id: number | null; port_id: number | null }>(
+        "isp_plans",
+        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&select=id,name,router_id,port_id&limit=1000`,
+      )
+    : [];
+  const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
+
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
 
@@ -766,7 +785,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     let created = 0, updated = 0, skipped = 0;
 
     for (const u of users) {
-      const profileName = u.plan_name ? hotspotPlanProfileName(u.plan_name) : "default";
+      const plan = u.plan_id ? plansById.get(Number(u.plan_id)) : undefined;
+      const profileName = plan
+        ? hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id)
+        : u.plan_name
+          ? hotspotPlanProfileName(u.plan_name)
+          : "default";
       const comment = u.type === "hotspot" ? u.username : (u.comment || u.username);
       const expiresAt = u.expires_at ? Date.parse(u.expires_at) : NaN;
       const enabled = String(u.status ?? "active").toLowerCase() === "active" &&
@@ -918,7 +942,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     ));
 
     const plans = categories.includes("plans")
-      ? await sbSelect<Record<string, unknown>>("isp_plans", `admin_id=eq.${adminId}&select=*&order=id.asc`)
+      ? await sbSelect<Record<string, unknown>>("isp_plans", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`)
       : [];
     const pools = categories.includes("ipPools")
       ? await sbSelect<Record<string, unknown>>("isp_ip_pools", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=*&order=id.asc`)
@@ -929,7 +953,14 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     const customers = categories.includes("users")
       ? await sbSelect<Record<string, unknown>>("isp_customers", `admin_id=eq.${adminId}&select=*&order=id.asc`)
       : [];
-    const planNames = new Map(plans.map(plan => [Number(plan.id), String(plan.name ?? "default")]));
+    const sourcePlanIds = new Set(plans.map(plan => Number(plan.id)));
+    const sourceCustomers = customers.filter(customer =>
+      Number(customer.router_id) === sourceRouterId || sourcePlanIds.has(Number(customer.plan_id)),
+    );
+    const planNames = new Map(plans.map(plan => [
+      Number(plan.id),
+      hotspotPlanProfileName(String(plan.name ?? "default"), plan.router_id, plan.port_id),
+    ]));
 
     const runCategory = async (
       category: CopyCategory,
@@ -1013,7 +1044,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     await runCategory("users", async () => {
       const categoryLogs: string[] = [];
       let count = 0;
-      for (const customer of customers) {
+      for (const customer of sourceCustomers) {
         const name = String(customer.username ?? customer.pppoe_username ?? "").trim();
         if (!name) continue;
         const type = String(customer.type ?? "hotspot");

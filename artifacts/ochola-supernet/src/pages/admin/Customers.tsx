@@ -800,6 +800,7 @@ export default function Customers() {
               username:      c.username ?? "",
               password:      c.password ?? "",
               type:          c.type ?? "hotspot",
+              plan_id:       c.plan_id ?? undefined,
               plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
               pppoe_username: c.pppoe_username ?? undefined,
               mac_address:   c.mac_address ?? undefined,
