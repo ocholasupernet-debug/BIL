@@ -14,6 +14,7 @@ import { reconcilePppoeUserAccess, runRouterCommand, type RouterCredentials } fr
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
+import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
 import {
   compileResellerActivation,
   compileResellerPaymentNoticeNatComment,
@@ -245,9 +246,39 @@ async function provisionVlanResellerServices(
   }
   const segment = vlanServiceSegment(port);
   const network = portServiceNetwork(port.id, port.subnet_range || "");
-  const networkPrefix = network.network.split(".").slice(0, 3).join(".");
-  const pppoePool = `${networkPrefix}.200-${networkPrefix}.254`;
-  const hotspotPool = `${networkPrefix}.10-${networkPrefix}.199`;
+  const resources = portServiceResourceNames({
+    id: port.id,
+    router_id: port.router_id,
+    interface_name: port.interface_name,
+    bridge_name: port.bridge_name,
+    handoff_mode: "vlan_services",
+    reseller_id: port.reseller_id,
+    assigned_reseller_id: port.assigned_reseller_id,
+    vlan_tag: port.vlan_tag,
+  });
+  const defaults = vlanServicePoolRanges(port.subnet_range);
+  const poolRows = await sbSelectStrict<{ name: string; range_start: string; range_end: string }>(
+    "isp_ip_pools",
+    `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&name=in.(${encodeURIComponent(resources.hotspotPool)},${encodeURIComponent(resources.pppoePool)})&select=name,range_start,range_end`,
+  );
+  const pools = new Map(poolRows.map(row => [row.name, `${row.range_start}-${row.range_end}`]));
+  const hotspotPool = pools.get(resources.hotspotPool) || defaults.hotspot;
+  const pppoePool = pools.get(resources.pppoePool) || defaults.pppoe;
+  for (const [name, range] of [[resources.hotspotPool, hotspotPool], [resources.pppoePool, pppoePool]] as const) {
+    if (!pools.has(name)) {
+      const [rangeStart, rangeEnd] = range.split("-");
+      await sbInsertStrict("isp_ip_pools", {
+        admin_id: port.admin_id,
+        router_id: port.router_id,
+        port_id: port.id,
+        name,
+        range_start: rangeStart,
+        range_end: rangeEnd,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
   const creds = routerCredentials(target);
   const commentPrefix = `OcholaSupernet_${segment}`;
   const existingInterfaces = await runRouterCommand(creds, [
@@ -307,9 +338,9 @@ async function provisionVlanResellerServices(
       `=comment=${commentPrefix}_gateway`,
     ]);
   }
-  await ensureNamed("/ip/pool/print", `HS_POOL_${segment}`, [
+  await ensureNamed("/ip/pool/print", resources.hotspotPool, [
     "/ip/pool/add",
-    `=name=HS_POOL_${segment}`,
+    `=name=${resources.hotspotPool}`,
     `=ranges=${hotspotPool}`,
     `=comment=${commentPrefix}_hotspot_pool`,
   ]);
@@ -327,26 +358,26 @@ async function provisionVlanResellerServices(
       `=comment=${commentPrefix}_hotspot_network`,
     ]);
   }
-  await ensureNamed("/ip/dhcp-server/print", `HS_DHCP_${segment}`, [
+  await ensureNamed("/ip/dhcp-server/print", resources.hotspotDhcp, [
     "/ip/dhcp-server/add",
-    `=name=HS_DHCP_${segment}`,
+    `=name=${resources.hotspotDhcp}`,
     `=interface=${vlanInterface}`,
-    `=address-pool=HS_POOL_${segment}`,
+    `=address-pool=${resources.hotspotPool}`,
     "=disabled=no",
   ]);
-  await ensureNamed("/ip/hotspot/profile/print", `HS_PROFILE_${segment}`, [
+  await ensureNamed("/ip/hotspot/profile/print", resources.hotspotProfile, [
     "/ip/hotspot/profile/add",
-    `=name=HS_PROFILE_${segment}`,
+    `=name=${resources.hotspotProfile}`,
     `=hotspot-address=${gateway}`,
-    `=html-directory=${port.hotspot_template_path || `hotspot/reseller_${segment}_page`}`,
+    `=html-directory=${resources.hotspotDirectory}`,
     "=login-by=http-chap,http-pap,cookie",
   ]);
-  await ensureNamed("/ip/hotspot/print", `HS_${segment}`, [
+  await ensureNamed("/ip/hotspot/print", resources.hotspotServer, [
     "/ip/hotspot/add",
-    `=name=HS_${segment}`,
+    `=name=${resources.hotspotServer}`,
     `=interface=${vlanInterface}`,
-    `=profile=HS_PROFILE_${segment}`,
-    `=address-pool=HS_POOL_${segment}`,
+    `=profile=${resources.hotspotProfile}`,
+    `=address-pool=${resources.hotspotPool}`,
     "=disabled=no",
   ]);
   const gardenRows = await runRouterCommand(creds, [
@@ -376,11 +407,11 @@ async function provisionVlanResellerServices(
       `=comment=${commentPrefix}_hotspot_nat`,
     ]);
   }
-  await ensureNamed("/ppp/profile/print", `PPPOE_PROFILE_${segment}`, [
+  await ensureNamed("/ppp/profile/print", resources.pppoeProfile, [
     "/ppp/profile/add",
-    `=name=PPPOE_PROFILE_${segment}`,
+    `=name=${resources.pppoeProfile}`,
     `=local-address=${gateway}`,
-    `=remote-address=${pppoePool}`,
+    `=remote-address=${resources.pppoePool}`,
     `=dns-server=${gateway},8.8.8.8`,
     "=only-one=yes",
     "=change-tcp-mss=yes",
@@ -389,12 +420,12 @@ async function provisionVlanResellerServices(
   const pppoeRows = await runRouterCommand(creds, [
     "/interface/pppoe-server/server/print",
     "=.proplist=.id,service-name",
-    `?service-name=PPPoE_${segment}`,
+    `?service-name=${resources.pppoeService}`,
   ]);
   const pppoeRow = Array.isArray(pppoeRows) ? pppoeRows[0] as Record<string, unknown> | undefined : undefined;
   const pppoeFields = [
     `=interface=${vlanInterface}`,
-    `=default-profile=PPPOE_PROFILE_${segment}`,
+    `=default-profile=${resources.pppoeProfile}`,
     "=one-session-per-host=yes",
     "=disabled=no",
   ];
@@ -403,20 +434,20 @@ async function provisionVlanResellerServices(
   } else {
     await runRouterCommand(creds, [
       "/interface/pppoe-server/server/add",
-      `=service-name=PPPoE_${segment}`,
+      `=service-name=${resources.pppoeService}`,
       ...pppoeFields,
       /* RouterOS 6 has no comment property on PPPoE server entries. */
     ]);
   }
   await runRouterCommand(creds, [
     "/queue/simple/add",
-    `=name=RESELLER_ROOT_${segment}`,
+    `=name=${resources.parentQueue}`,
     `=target=${vlanInterface}`,
     `=max-limit=${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M/${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M`,
     "=priority=2/2",
     `=comment=${commentPrefix}_root_queue`,
   ]).catch(async (error) => {
-    const rows = await runRouterCommand(creds, ["/queue/simple/print", "=.proplist=.id", `?name=RESELLER_ROOT_${segment}`]);
+    const rows = await runRouterCommand(creds, ["/queue/simple/print", "=.proplist=.id", `?name=${resources.parentQueue}`]);
     const id = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined)?.[".id"] : undefined;
     if (id) await runRouterCommand(creds, ["/queue/simple/set", `=.id=${id}`, `=target=${vlanInterface}`, `=max-limit=${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M/${Math.round(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)}M`, "=disabled=no"]);
     else throw error;

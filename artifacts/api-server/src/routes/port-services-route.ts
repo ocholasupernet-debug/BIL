@@ -7,7 +7,11 @@ import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
-import { portServiceResourceNames, type PortServiceResourceNames } from "../lib/port-service-resources.js";
+import {
+  portServiceResourceNames,
+  vlanServicePoolRanges,
+  type PortServiceResourceNames,
+} from "../lib/port-service-resources.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
@@ -349,6 +353,39 @@ async function deployPortalContent(
   }
 }
 
+async function vlanPoolRangesForDeployment(
+  port: PortServiceRow,
+  resources: PortServiceResourceNames,
+): Promise<{ hotspot: string; pppoe: string }> {
+  const defaults = vlanServicePoolRanges(port.subnet_range);
+  if (port.handoff_mode !== "vlan_services") return defaults;
+  const rows = await sbSelectStrict<{ name: string; range_start: string; range_end: string }>(
+    "isp_ip_pools",
+    `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&name=in.(${encodeURIComponent(resources.hotspotPool)},${encodeURIComponent(resources.pppoePool)})&select=name,range_start,range_end`,
+  );
+  const byName = new Map(rows.map(row => [row.name, `${row.range_start}-${row.range_end}`]));
+  const ranges = {
+    hotspot: byName.get(resources.hotspotPool) || defaults.hotspot,
+    pppoe: byName.get(resources.pppoePool) || defaults.pppoe,
+  };
+  for (const [name, range] of [[resources.hotspotPool, ranges.hotspot], [resources.pppoePool, ranges.pppoe]] as const) {
+    if (!byName.has(name)) {
+      const [rangeStart, rangeEnd] = range.split("-");
+      await sbInsertStrict("isp_ip_pools", {
+        admin_id: port.admin_id,
+        router_id: port.router_id,
+        port_id: port.id,
+        name,
+        range_start: rangeStart,
+        range_end: rangeEnd,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+  return ranges;
+}
+
 export function buildDualServiceCommands(
   port: PortServiceRow,
   hotspotPath: string | null,
@@ -361,6 +398,8 @@ export function buildDualServiceCommands(
     companyName?: string | null;
     routerName?: string | null;
     paymentHostnames?: string[];
+    hotspotPoolRange?: string;
+    pppoePoolRange?: string;
   } = {},
 ): string[][] {
   const validAssignedInterface = port.handoff_mode === "vlan_services"
@@ -507,6 +546,8 @@ function buildVlanServiceCommands(
     hotspotDnsName?: string | null;
     pppoeDnsName?: string | null;
     paymentHostnames?: string[];
+    hotspotPoolRange?: string;
+    pppoePoolRange?: string;
   },
 ): string[][] {
   const vlanInterface = port.interface_name.trim();
@@ -520,6 +561,11 @@ function buildVlanServiceCommands(
     throw new Error("The VLAN service is missing a valid VLAN interface, parent bridge, or VLAN tag.");
   }
   const network = portServiceNetwork(port, { ...resources, bridgeName: vlanInterface });
+  const defaultPoolRanges = port.handoff_mode === "vlan_services"
+    ? vlanServicePoolRanges(port.subnet_range)
+    : { hotspot: network.poolRange, pppoe: `${network.network.split(".").slice(0, 3).join(".")}.200-${network.network.split(".").slice(0, 3).join(".")}.254` };
+  const hotspotPoolRange = options.hotspotPoolRange || defaultPoolRanges.hotspot;
+  const pppoePoolRange = options.pppoePoolRange || defaultPoolRanges.pppoe;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined) ?? resources.defaultDnsName;
   const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined) ?? resources.defaultDnsName;
   const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
@@ -529,7 +575,7 @@ function buildVlanServiceCommands(
   if (hotspotPath) {
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${vlanInterface}`, `=comment=${comment("hotspot_gateway")}`],
-      ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
+      ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${hotspotPoolRange}`, `=comment=${comment("hotspot_pool")}`],
       ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway},8.8.8.8`, `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`],
@@ -562,10 +608,9 @@ function buildVlanServiceCommands(
     ]);
   }
   if (pppoePath) {
-    const pppoePool = `${network.network.split(".").slice(0, 3).join(".")}.200-${network.network.split(".").slice(0, 3).join(".")}.254`;
     commands.push(
-      ["/ip/pool/add", `=name=PPPOE_POOL_${resources.resourceName}`, `=ranges=${pppoePool}`, `=comment=${comment("pppoe_pool")}`],
-      ["/ppp/profile/add", `=name=${resources.pppoeProfile}`, `=local-address=${network.gateway}`, `=remote-address=PPPOE_POOL_${resources.resourceName}`, `=dns-server=${network.gateway},8.8.8.8`, "=only-one=yes", `=comment=${comment("pppoe_profile")}`],
+      ["/ip/pool/add", `=name=${resources.pppoePool}`, `=ranges=${pppoePoolRange}`, `=comment=${comment("pppoe_pool")}`],
+      ["/ppp/profile/add", `=name=${resources.pppoeProfile}`, `=local-address=${network.gateway}`, `=remote-address=${resources.pppoePool}`, `=dns-server=${network.gateway},8.8.8.8`, "=only-one=yes", `=comment=${comment("pppoe_profile")}`],
       ["/interface/pppoe-server/server/add", `=service-name=${resources.pppoeService}`, `=interface=${vlanInterface}`, `=default-profile=${resources.pppoeProfile}`, "=disabled=no", "=one-session-per-host=yes"],
       ["/ip/dns/static/add", `=name=${pppoeDnsName}`, `=address=${network.gateway}`, `=comment=${comment("pppoe_dns")}`],
       ["/ip/firewall/nat/add", "=chain=srcnat", "=action=masquerade", `=src-address=${network.network}`, "=out-interface-list=WAN", `=comment=${comment("pppoe_nat")}`],
@@ -688,8 +733,12 @@ function isPortServiceComment(resources: PortServiceResourceNames, row: RouterRe
 
 async function removePortServiceFiles(
   creds: RouterCredentials,
+  port: PortServiceRow,
   resources: PortServiceResourceNames,
 ): Promise<void> {
+  /* VLAN services share this directory with their sibling VLANs. Removing
+     one assignment must never delete the files used by the others. */
+  if (port.handoff_mode === "vlan_services") return;
   const directories = [resources.hotspotDirectory, resources.pppoeDirectory];
   const rows = await runRouterCommand(creds, ["/file/print", "=.proplist=.id,name"]);
   const ownedRows = rows
@@ -789,7 +838,7 @@ export async function removePortServiceResources(
     creds,
     "/ip/pool/print",
     ".id,name,comment",
-    row => [resources.hotspotPool].includes(row.name) && ownedComment(row),
+    row => [resources.hotspotPool, resources.pppoePool].includes(row.name) && ownedComment(row),
   );
   await removeRouterResourceRows(
     creds,
@@ -811,7 +860,7 @@ export async function removePortServiceResources(
       row => row.name === port.interface_name && ownedComment(row),
     );
   }
-  await removePortServiceFiles(creds, resources);
+  await removePortServiceFiles(creds, port, resources);
 
   logger.info(
     { portId: port.id, routerId: port.router_id, interfaceName: port.interface_name },
@@ -1187,34 +1236,42 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
         updated_at: new Date().toISOString(),
       });
     }
+    const sharedPortalDirectory = resources.hotspotDirectory;
     const hotspotDestination = portalHtml
-      ? `${resources.hotspotDirectory}/login.html`
-      : hotspotSource ? `${resources.hotspotDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
-    const pppoeDestination = pppoeSource ? `${resources.pppoeDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
-    for (const directory of [resources.hotspotDirectory, resources.pppoeDirectory]) {
+      ? `${sharedPortalDirectory}/login.html`
+      : hotspotSource ? `${sharedPortalDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
+    const pppoeDestination = pppoeSource ? `${sharedPortalDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
+    for (const directory of [...new Set([resources.hotspotDirectory, resources.pppoeDirectory])]) {
       await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
     }
+    const deployedDestinations = new Set<string>();
+    const deploySourceOnce = async (sourcePath: string, destinationPath: string): Promise<void> => {
+      if (deployedDestinations.has(destinationPath)) return;
+      await deployApprovedSource(found.creds, req, sourcePath, destinationPath);
+      deployedDestinations.add(destinationPath);
+    };
     if (portalHtml && hotspotDestination) {
       await deployPortalContent(found.creds, req, portalHtml, hotspotDestination);
-      await deployPortalContent(found.creds, req, portalHtml, `${resources.hotspotDirectory}/rlogin.html`);
+      deployedDestinations.add(hotspotDestination);
+      const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
+      await deployPortalContent(found.creds, req, portalHtml, rloginDestination);
+      deployedDestinations.add(rloginDestination);
     } else if (hotspotSource && hotspotDestination) {
-      await deployApprovedSource(found.creds, req, hotspotSource, hotspotDestination);
+      await deploySourceOnce(hotspotSource, hotspotDestination);
       const selectedHotspotName = sourceNameFromPath(hotspotSource);
       const companionPortal = selectedHotspotName === "rlogin.html"
         ? getDeployableSource("hotspot", "login.html")
         : getDeployableSource("hotspot", "rlogin.html");
       if (companionPortal) {
-        await deployApprovedSource(
-          found.creds,
-          req,
-          companionPortal.source.name,
-          `${resources.hotspotDirectory}/${sourceNameFromPath(companionPortal.source.name)}`,
-        );
+        await deploySourceOnce(companionPortal.source.name, `${sharedPortalDirectory}/${sourceNameFromPath(companionPortal.source.name)}`);
       }
     }
-    if (pppoeSource && pppoeDestination) await deployApprovedSource(found.creds, req, pppoeSource, pppoeDestination);
+    if (pppoeSource && pppoeDestination) await deploySourceOnce(pppoeSource, pppoeDestination);
     const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
     const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
+    const poolRanges = deploymentPort.handoff_mode === "vlan_services"
+      ? await vlanPoolRangesForDeployment(deploymentPort, resources)
+      : null;
     const portalHostname = new URL(requestOrigin(req)).hostname;
     const commands = buildDualServiceCommands(
       deploymentPort,
@@ -1228,6 +1285,10 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
         companyName: identity.companyName,
         routerName: identity.routerName,
         paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
+        ...(poolRanges ? {
+          hotspotPoolRange: poolRanges.hotspot,
+          pppoePoolRange: poolRanges.pppoe,
+        } : {}),
       },
     );
     for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);

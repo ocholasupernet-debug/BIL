@@ -116,9 +116,28 @@ test("a VLAN service keeps reseller resources separate from shared hotspot files
     assigned_reseller_id: 42,
   });
 
-  assert.equal(resources.hotspotDirectory, "flash/hotspot/hs_p12-ether2");
+  assert.equal(resources.hotspotDirectory, "flash/hotspot/ochola_shared_r3");
+  assert.equal(resources.pppoeDirectory, resources.hotspotDirectory);
+  assert.equal(resources.pppoePool, "PPPOE_POOL_RS42_VLAN210");
   assert.equal(resources.hotspotServer, "HS_RS42_VLAN210");
   assert.notEqual(resources.hotspotDirectory, "flash/hotspot");
+});
+
+test("a VLAN service uses editable non-overlapping Hotspot and PPPoE pool ranges", () => {
+  const commands = buildDualServiceCommands(
+    { ...port, handoff_mode: "vlan_services", vlan_tag: "210", bridge_name: "isp-bridge" },
+    "flash/hotspot/ochola_shared_r3",
+    "flash/hotspot/ochola_shared_r3",
+    "10.8.5.2",
+    {
+      hotspotPoolRange: "192.168.30.20-192.168.30.120",
+      pppoePoolRange: "192.168.30.150-192.168.30.220",
+    },
+  );
+  const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
+  assert.match(script, /name=HS_POOL_RS9_VLAN210 =ranges=192\.168\.30\.20-192\.168\.30\.120/);
+  assert.match(script, /name=PPPOE_POOL_RS9_VLAN210 =ranges=192\.168\.30\.150-192\.168\.30\.220/);
+  assert.match(script, /remote-address=PPPOE_POOL_RS9_VLAN210/);
 });
 
 test("legacy hotspot directory placeholders resolve to approved portal files", () => {
