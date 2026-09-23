@@ -1841,24 +1841,19 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
       let diagnosticSummary: Record<string, unknown>;
       try {
         const creds = routerCredentials(target);
-        const captures: Record<string, unknown> = {};
-        for (const interfaceName of ["ether3", "ether4", "ether5", "wlan2"]) {
-          try {
-            captures[interfaceName] = await runRouterCommand(creds, [
-              "/tool/sniffer/quick",
-              "=.proplist=interface,direction,src-mac-address,dst-mac-address,ip-protocol,src-address,dst-address,src-port,dst-port",
-              `=interface=${interfaceName}`,
-              "=ip-protocol=udp",
-              "=port=67,68",
-              "=duration=8s",
-            ]);
-          } catch (captureError) {
-            captures[interfaceName] = {
-              error: captureError instanceof Error ? captureError.message.slice(0, 500) : String(captureError),
-            };
-          }
-        }
-        diagnosticSummary = { dhcpCaptures: captures };
+        const [arp, bridgeHosts] = await Promise.all([
+          runRouterCommand(creds, [
+            "/ip/arp/print",
+            "=.proplist=address,mac-address,interface,complete,disabled",
+            "?address=192.168.183.254",
+          ]),
+          runRouterCommand(creds, [
+            "/interface/bridge/host/print",
+            "=.proplist=mac-address,bridge,on-interface,local,external-learn,static,disabled",
+            "?bridge=co-hotspot-bridge",
+          ]),
+        ]);
+        diagnosticSummary = { arp, bridgeHosts };
       } catch (diagnosticError) {
         diagnosticSummary = {
           error: diagnosticError instanceof Error ? diagnosticError.message.slice(0, 500) : String(diagnosticError),
