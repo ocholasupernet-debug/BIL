@@ -350,6 +350,24 @@ function AdminResellerManagement() {
       setError(e instanceof Error ? e.message : "Unable to push the VLAN service to the MikroTik.");
     } finally { setLinkSaving(null); }
   };
+  const openAssignment = (requestId: number, mode: "isp_router" | "vlan_services" = "vlan_services") => {
+    const candidate = requestResellers.find((item) => item.id === connectionRequests.find((request) => request.id === requestId)?.reseller_id);
+    setHandoffRequestId(requestId);
+    setHandoffRouterId(routerId || String(routers[0]?.id || ""));
+    setHandoffType(mode === "vlan_services" ? "vlan" : "physical");
+    setHandoffMode(mode);
+    setHandoffInterfaceName("");
+    setHandoffVlanTag("");
+    setHandoffVlanName(candidate?.username || "");
+    setXponIdentifier("");
+    setHandoffCap("30");
+    setError("");
+    setSuccess("");
+  };
+  const approvedUnassignedRequests = connectionRequests.filter((request) =>
+    request.status === "approved"
+    && !assignments.some((assignment) => (assignment.assigned_reseller_id ?? assignment.reseller_id) === request.reseller_id),
+  );
 
   return (
     <AdminLayout>
@@ -388,6 +406,29 @@ function AdminResellerManagement() {
         <a href="/admin/network/carrier-controls" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", alignSelf: "start", width: "fit-content", padding: "10px 13px", borderRadius: 9, background: "var(--isp-accent)", color: "#fff", textDecoration: "none", fontSize: 13, fontWeight: 800 }}>
           Open carrier link approvals
         </a>
+        {approvedUnassignedRequests.length > 0 && (
+          <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.4)", background: "linear-gradient(135deg, rgba(37,99,235,.12), var(--isp-card) 65%)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 900 }}><RouterIcon size={18} /> Approved resellers ready for VLAN assignment</div>
+                <div style={{ marginTop: 5, color: "var(--isp-text-muted)", fontSize: 13 }}>Choose a reseller below to assign the ISP router, VLAN, and bandwidth settings.</div>
+              </div>
+              <span className="isp-badge isp-badge-amber">{approvedUnassignedRequests.length} ready</span>
+            </div>
+            <div style={{ display: "grid", gap: 8, marginTop: 13 }}>
+              {approvedUnassignedRequests.map((request) => {
+                const reseller = requestResellers.find((candidate) => candidate.id === request.reseller_id);
+                return <div key={request.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 12px", border: "1px solid var(--isp-border)", borderRadius: 9, background: "var(--isp-card)" }}>
+                  <div>
+                    <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>{reseller?.company_name || reseller?.name || `Reseller #${request.reseller_id}`}</div>
+                    <div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 3 }}>@{reseller?.username || "unknown"} · {reseller?.email || reseller?.phone || "Account details available"}</div>
+                  </div>
+                  <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "9px 12px", background: "var(--isp-accent)", color: "#fff", fontWeight: 850, cursor: "pointer" }}>Assign VLAN / reseller</button>
+                </div>;
+              })}
+            </div>
+          </section>
+        )}
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14 }}>
             <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Approve an account connection before assigning a physical port or enabling wholesale traffic.</div></div>
@@ -407,7 +448,7 @@ function AdminResellerManagement() {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
                   {request.status === "pending" && <><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "#16a34a", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "Saving…" : "Approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
-                  {request.status === "approved" && (assignment?.handoff_mode === "isp_router" || assignment?.handoff_mode === "vlan_services" ? <span style={{ color: "#15803d", fontSize: 12, fontWeight: 800 }}>{assignment.handoff_mode === "vlan_services" ? "Reseller assigned · VLAN pushed" : "Reseller assigned · handoff ready"}</span> : <button type="button" onClick={() => { const candidate = requestResellers.find((item) => item.id === request.reseller_id); setHandoffRequestId(request.id); setHandoffRouterId(routerId || String(routers[0]?.id || "")); setHandoffType("physical"); setHandoffMode("isp_router"); setHandoffVlanName(candidate?.username || ""); setHandoffCap("30"); }} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Assign reseller</button>)}
+                  {request.status === "approved" && (assignment?.handoff_mode === "isp_router" || assignment?.handoff_mode === "vlan_services" ? <span style={{ color: "#15803d", fontSize: 12, fontWeight: 800 }}>{assignment.handoff_mode === "vlan_services" ? "Reseller assigned · VLAN pushed" : "Reseller assigned · handoff ready"}</span> : <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>Assign VLAN / reseller</button>)}
                 </div>
               </div>;
             })}
@@ -486,7 +527,9 @@ function AdminResellerManagement() {
              </div>
           </form>
         )}
-        <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start" }}>
+        <details style={{ ...cardStyle, padding: 0 }}>
+          <summary style={{ cursor: "pointer", padding: "15px 16px", color: "var(--isp-text)", fontWeight: 850 }}>Manual reseller provisioning and safeguards</summary>
+        <div className="reseller-admin-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.35fr) minmax(300px,.65fr)", gap: 16, alignItems: "start", padding: "0 16px 16px" }}>
           <form onSubmit={submit} style={cardStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", marginBottom: 20 }}>
               <div>
@@ -546,6 +589,7 @@ function AdminResellerManagement() {
             </div>
           </div>
         </div>
+        </details>
         <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
              <div><div style={{ fontWeight: 800, color: "var(--isp-text)" }}>Resellers and assigned ports</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Provisioning state is separate from the wholesale payment link. Activate or suspend traffic independently.</div></div>
