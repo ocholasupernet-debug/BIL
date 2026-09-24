@@ -3519,6 +3519,9 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
 .plans-row--pppoe {
   border-left-color: #06b6d4;
 }
+.plans-row--vlan {
+  border-left-color: #6366f1;
+}
 .plans-row--hotspot {
   border-left-color: #10b981;
 }
@@ -3542,6 +3545,11 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   background: rgba(6, 182, 212, 0.1);
   border-color: rgba(6, 182, 212, 0.24);
 }
+.plans-service-badge--vlan {
+  color: #4f46e5;
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.24);
+}
 .plans-service-badge--hotspot {
   color: #047857;
   background: rgba(16, 185, 129, 0.1);
@@ -3553,6 +3561,7 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   border-color: rgba(245, 158, 11, 0.22);
 }
 [data-theme="dark"] .plans-service-badge--pppoe { color: #67e8f9; }
+[data-theme="dark"] .plans-service-badge--vlan { color: #a5b4fc; }
 [data-theme="dark"] .plans-service-badge--hotspot { color: #6ee7b7; }
 [data-theme="dark"] .plans-service-badge--other { color: #fcd34d; }
 .plans-row-name {

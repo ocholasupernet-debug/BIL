@@ -1,4 +1,10 @@
-export type PlanServiceType = "hotspot" | "pppoe" | "other";
+export type PlanServiceType = "hotspot" | "pppoe" | "vlan" | "other";
+
+const PLAN_TYPES = new Set(["hotspot", "pppoe", "static", "vlan", "trial", "trials"]);
+
+export function isSupportedPlanType(value: unknown): boolean {
+  return PLAN_TYPES.has(String(value ?? "").trim().toLowerCase());
+}
 
 /**
  * Convert the stored plan category into the service that provisions access.
@@ -12,5 +18,6 @@ export function normalizePlanServiceType(value: unknown): PlanServiceType {
     return "hotspot";
   }
   if (normalized === "pppoe") return "pppoe";
+  if (normalized === "vlan") return "vlan";
   return "other";
 }

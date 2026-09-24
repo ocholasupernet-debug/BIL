@@ -19,7 +19,7 @@ interface Plan   {
   id: number; name: string; type: string; price: number; speed_down: number; speed_up: number;
   speed_down_unit?: string; speed_up_unit?: string;
   validity?: number; validity_days?: number; validity_unit?: string; data_limit_mb?: number | null;
-  router_id?: number | null;
+  router_id?: number | null; port_id?: number | null;
 }
 interface Router { id: number; name: string; host: string; status: string; bridge_ip: string | null; }
 
@@ -93,6 +93,7 @@ function normalizePhone(phone?: string | null) {
 }
 function purchaseUsername(user: Customer) {
   const type = String(user.type ?? "").toLowerCase();
+  if (type === "vlan") return user.ip_address || `VLAN customer #${user.id}`;
   const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
   if (actual) return actual;
   return `prepaid-${user.id}`;
@@ -119,11 +120,21 @@ function formatUsageBytes(bytes: number | null | undefined) {
   return `${mb.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} MB`;
 }
 function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
-  const live = [user.username, user.pppoe_username, purchaseUsername(user)]
+  const isVlan = String(user.type ?? "").toLowerCase() === "vlan";
+  const live = [user.username, user.pppoe_username, user.ip_address, purchaseUsername(user)]
     .map(normalizeLiveIdentity)
     .map(identity => liveUsage.get(identity))
     .find(value => value !== undefined);
   if (live !== undefined) return live;
+  if (isVlan && !user.last_seen) return null;
+  if (isVlan) {
+    const rawBytes = user.data_used_bytes;
+    const vlanBytes = rawBytes === null || rawBytes === undefined || rawBytes === "" ? Number.NaN : Number(rawBytes);
+    if (Number.isFinite(vlanBytes)) return Math.max(0, vlanBytes);
+    if (user.data_used_mb === null || user.data_used_mb === undefined) return null;
+    const vlanMb = Number(user.data_used_mb);
+    return Number.isFinite(vlanMb) ? Math.max(0, vlanMb * 1_000_000) : null;
+  }
   const persisted = Number(user.data_used_bytes);
   if (Number.isFinite(persisted)) return persisted;
   const mb = Number(user.data_used_mb);
@@ -131,6 +142,7 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
 }
 function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
   if (isExpired(user.expires_at)) return false;
+  if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
   return [user.username, user.pppoe_username, purchaseUsername(user)]
     .filter(Boolean)
     .some(value => onlineUsers.has(String(value).toLowerCase()));
@@ -149,6 +161,7 @@ const TYPE_META: Record<string, { label: string; color: string; bg: string; icon
   hotspot: { label: "Hotspot", color: "var(--isp-accent)", bg: "var(--isp-accent-glow)",  icon: <Wifi    size={10} /> },
   pppoe:   { label: "PPPoE",   color: "var(--isp-accent)", bg: "var(--isp-accent-glow)", icon: <Network size={10} /> },
   static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)", icon: <Globe   size={10} /> },
+  vlan:    { label: "VLAN",    color: "#818cf8", bg: "rgba(129,140,248,0.12)", icon: <Network size={10} /> },
 };
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; icon: React.ReactNode }> = {
@@ -228,10 +241,12 @@ async function fetchCustomers(): Promise<Customer[]> {
 async function fetchPlans(): Promise<Plan[]> {
   const { data } = await supabase
     .from("isp_plans")
-    .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id")
+    .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id,port_id")
     .eq("admin_id", ADMIN_ID)
-    .is("port_id", null);
-  return (data ?? []) as Plan[];
+    .or("port_id.is.null,type.eq.vlan");
+  return ((data ?? []).filter(plan =>
+    plan.port_id == null ? plan.type !== "vlan" : plan.type === "vlan",
+  )) as Plan[];
 }
 async function fetchRouters(): Promise<Router[]> {
   return (await fetchAdminRouterContext()).routers.map(router => ({
@@ -321,29 +336,35 @@ function EditUserDialog({
   onClose: () => void;
   onSave: (updates: Record<string, unknown>) => Promise<void>;
 }) {
+  const isVlan = String(user.type ?? "").toLowerCase() === "vlan";
   const [name, setName] = useState(user.name ?? "");
   const [phone, setPhone] = useState(user.phone ?? "");
   const [username, setUsername] = useState(user.username ?? user.pppoe_username ?? "");
+  const [ipAddress, setIpAddress] = useState(user.ip_address ?? "");
   const [planId, setPlanId] = useState(String(user.plan_id ?? ""));
   const [routerId, setRouterId] = useState(String(user.router_id ?? ""));
   const [expiresAt, setExpiresAt] = useState(() => toDateTimeLocal(user.expires_at));
   const [saving, setSaving] = useState(false);
+  const selectedPlan = plans.find(plan => String(plan.id) === planId);
   const inputStyle: React.CSSProperties = {
     width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
     background: "var(--isp-input-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)",
     font: "inherit", fontSize: "0.8rem",
   };
   const submit = async () => {
-    if (!name.trim() || !username.trim()) return;
+    if (!name.trim() || (isVlan ? !ipAddress.trim() : !username.trim())) return;
+    if (isVlan && (!selectedPlan || !selectedPlan.router_id || !selectedPlan.port_id)) return;
     if (expiresAt && !fromDateTimeLocal(expiresAt)) return;
     setSaving(true);
     try {
       await onSave({
         name: name.trim(),
         phone: phone.trim(),
-        ...(user.type === "pppoe" ? { pppoe_username: username.trim() } : { username: username.trim() }),
+        ...(isVlan
+          ? { ip_address: ipAddress.trim() }
+          : user.type === "pppoe" ? { pppoe_username: username.trim() } : { username: username.trim() }),
         plan_id: planId ? Number(planId) : null,
-        router_id: routerId ? Number(routerId) : null,
+        router_id: isVlan ? selectedPlan?.router_id ?? null : routerId ? Number(routerId) : null,
         expires_at: fromDateTimeLocal(expiresAt),
       });
       onClose();
@@ -364,15 +385,19 @@ function EditUserDialog({
         <div className="prepaid-form-grid">
           <label>Name<input style={inputStyle} value={name} onChange={event => setName(event.target.value)} /></label>
           <label>Phone used for purchase<input style={inputStyle} value={phone} onChange={event => setPhone(event.target.value)} /></label>
-          <label>Username<input style={inputStyle} value={username} onChange={event => setUsername(event.target.value)} /></label>
+          {isVlan
+            ? <label>Assigned IP address<input style={inputStyle} inputMode="decimal" value={ipAddress} onChange={event => setIpAddress(event.target.value)} /></label>
+            : <label>Username<input style={inputStyle} value={username} onChange={event => setUsername(event.target.value)} /></label>}
           <label>Plan<select style={inputStyle} value={planId} onChange={event => setPlanId(event.target.value)}>
-            <option value="">No plan</option>
+            <option value="">{isVlan ? "Choose a VLAN plan" : "No plan"}</option>
              {plans.filter(plan => !user.type || String(plan.type).toLowerCase() === String(user.type).toLowerCase()).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price.toFixed(2)}</option>)}
           </select></label>
-          <label>Router<select style={inputStyle} value={routerId} onChange={event => setRouterId(event.target.value)}>
-            <option value="">Unassigned</option>
-            {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
-          </select></label>
+          {isVlan
+            ? <label>Assigned router / VLAN port<input style={inputStyle} readOnly value={selectedPlan ? `${routers.find(router => router.id === selectedPlan.router_id)?.name ?? `Router #${selectedPlan.router_id}`} · VLAN service port #${selectedPlan.port_id}` : "Select a VLAN plan"} /></label>
+            : <label>Router<select style={inputStyle} value={routerId} onChange={event => setRouterId(event.target.value)}>
+                <option value="">Unassigned</option>
+                {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
+              </select></label>}
           <label style={{ gridColumn: "1 / -1" }}>
             Expiry date and time
             <input
@@ -386,7 +411,7 @@ function EditUserDialog({
         </div>
         <div className="prepaid-modal-actions">
           <button type="button" onClick={onClose} className="prepaid-secondary-button">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={saving || !name.trim() || !username.trim()} className="prepaid-primary-button">
+          <button type="button" onClick={() => void submit()} disabled={saving || !name.trim() || (isVlan ? !ipAddress.trim() || !selectedPlan?.router_id || !selectedPlan?.port_id : !username.trim())} className="prepaid-primary-button">
             {saving ? <Loader2 size={13} className="prepaid-spin" /> : <Save size={13} />} Save changes
           </button>
         </div>
@@ -616,7 +641,8 @@ export default function PrepaidUsers() {
         (c.username ?? "").toLowerCase().includes(q) ||
         (c.pppoe_username ?? "").toLowerCase().includes(q) ||
         (c.phone  ?? "").includes(q) ||
-        (c.email  ?? "").toLowerCase().includes(q)
+        (c.email  ?? "").toLowerCase().includes(q) ||
+        (c.ip_address ?? "").toLowerCase().includes(q)
       );
     }
     return list;
@@ -634,7 +660,7 @@ export default function PrepaidUsers() {
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
     log("Starting user sync…");
-    const ok = await syncUsersToRouter(router, customers.filter(c => (c as any).router_id === router.id || true), plans, log);
+    const ok = await syncUsersToRouter(router, customers.filter(c => c.type !== "vlan" && ((c as any).router_id === router.id || true)), plans, log);
     log(ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
     setSyncOk(ok);
     setSyncing(false);
@@ -643,9 +669,9 @@ export default function PrepaidUsers() {
 
   /* ── Export CSV ── */
   function exportCSV() {
-    const header = "Name,Username,Phone,Type,Plan,Status,Expires";
+    const header = "Name,Username / IP,Phone,Type,Plan,Status,Expires";
     const rows   = filtered.map(c => [
-      c.name ?? "", c.username ?? c.pppoe_username ?? "", c.phone ?? "",
+      c.name ?? "", c.username ?? c.pppoe_username ?? c.ip_address ?? "", c.phone ?? "",
       c.type ?? "", c.plan_id ? (planMap[c.plan_id]?.name ?? "") : "",
       c.status, c.expires_at ? fmtDate(c.expires_at) : "",
     ].map(v => `"${v}"`).join(","));
@@ -888,10 +914,10 @@ export default function PrepaidUsers() {
         <div className="prepaid-toolbar-card">
           <div className="prepaid-filter-grid">
             <label className="prepaid-filter-field">
-              <span className="prepaid-filter-label">Username Search</span>
+              <span className="prepaid-filter-label">Username / IP Search</span>
               <span className="prepaid-search-control">
                 <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-                  placeholder="Search name, username, phone…"
+                  placeholder="Search name, username, IP, phone…"
                   style={INPUT} />
                 <button type="button" onClick={() => setPage(1)}>Search</button>
               </span>
@@ -967,6 +993,7 @@ export default function PrepaidUsers() {
                 <option value="hotspot">Hotspot</option>
                 <option value="pppoe">PPPoE</option>
                 <option value="static">Static IP</option>
+                <option value="vlan">VLAN</option>
               </select>
               <Filter size={11} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
             </div>
@@ -978,7 +1005,7 @@ export default function PrepaidUsers() {
              <table className="prepaid-table" style={{ width: "100%", minWidth: 1160, borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={TH}>Username</th>
+                <th style={TH}>User / IP</th>
                 <th style={TH}>Type</th>
                 <th style={TH}>Plan</th>
                  <th className="prepaid-col-optional" style={TH}>Created (date &amp; time)</th>
@@ -1037,7 +1064,7 @@ export default function PrepaidUsers() {
                           {username}
                         </button>
                       </td>
-                      <td style={TD}><span className="prepaid-plain-value">{user.type === "pppoe" ? "PPPoE" : user.type === "hotspot" ? "Hotspot" : user.type || "—"}</span></td>
+                      <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
                       <td style={TD}>
                         <div className="prepaid-plain-value">
                           {displayedPlan?.name || (payment?.plan_id ? `Plan #${payment.plan_id}` : "No plan")}
@@ -1131,7 +1158,7 @@ export default function PrepaidUsers() {
               <Avt name={detailUser.name} id={detailUser.id} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 800, fontSize: "1rem", color: "var(--isp-text)" }}>
-                  {detailUser.name || detailUser.username || `User #${detailUser.id}`}
+                  {detailUser.name || detailUser.ip_address || detailUser.username || `User #${detailUser.id}`}
                 </div>
                 <div style={{ display: "flex", gap: "0.375rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
                   <TypeBadge type={detailUser.type} />
@@ -1145,7 +1172,7 @@ export default function PrepaidUsers() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
               {[
-                { icon: <Users size={13} />,       label: "Username",   value: detailUser.pppoe_username || detailUser.username || "—" },
+                { icon: <Users size={13} />,       label: detailUser.type === "vlan" ? "VLAN identity" : "Username", value: detailUser.type === "vlan" ? detailUser.ip_address || "—" : detailUser.pppoe_username || detailUser.username || "—" },
                 { icon: <Phone size={13} />,       label: "Phone",      value: detailUser.phone || "—" },
                 { icon: <Mail  size={13} />,       label: "Email",      value: detailUser.email || "—" },
                 { icon: <Server size={13} />,      label: "IP Address", value: detailUser.ip_address || "—" },

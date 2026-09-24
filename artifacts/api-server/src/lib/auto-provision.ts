@@ -25,12 +25,16 @@ import {
   requireHotspotUserProfile,
   scheduleHotspotUserExpiry,
   schedulePppUserExpiry,
+  reconcileVlanCustomerQueue,
   classifyRouterConnectionFailure,
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
 import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
 import { planValiditySeconds } from "./plan-validity.js";
+import { normalizePlanServiceType } from "./plan-service-type.js";
+import { isValidIpv4, isValidVlanTag, ipv4InSubnet } from "./vlan-customer-queue.js";
+import { portServiceResourceNames } from "./port-service-resources.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
 interface SbCustomer {
@@ -47,10 +51,13 @@ interface SbCustomer {
   status: string;
   pppoe_username: string | null;
   expires_at: string | null;
+  router_id?: number | null;
+  port_id?: number | null;
 }
 
 interface SbPlan {
   id: number;
+  admin_id?: number;
   name: string;
   type: string;
   plan_type: string;
@@ -78,11 +85,28 @@ interface SbRouter {
   router_secret: string | null;
 }
 
+interface SbVlanPort {
+  id: number;
+  admin_id: number;
+  router_id: number;
+  interface_name: string;
+  bridge_name: string | null;
+  handoff_mode: "vlan_services";
+  reseller_id: number | null;
+  assigned_reseller_id: number | null;
+  vlan_tag: string | null;
+  subnet_range: string | null;
+  status: string;
+}
+
 export interface PppoeRenewalAccessResult {
   ok: boolean;
   skipped?: boolean;
   routerName?: string;
   username?: string;
+  expiresAt?: string;
+  routerId?: number;
+  portId?: number;
   error?: string;
   rollback?: () => Promise<void>;
 }
@@ -210,6 +234,117 @@ export async function reactivatePppoeAccess(opts: {
   }
 }
 
+export async function reactivateVlanAccess(opts: {
+  adminId: number;
+  customerId: number;
+  planId: number;
+  reference: string;
+}): Promise<PppoeRenewalAccessResult> {
+  const plans = await sbSelect<SbPlan>(
+    "isp_plans",
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
+  );
+  const plan = plans[0];
+  if (!plan || normalizePlanServiceType(plan.plan_type || plan.type) !== "vlan") {
+    return { ok: true, skipped: true };
+  }
+  if (!plan.router_id || !plan.port_id) {
+    return { ok: false, error: "The VLAN plan is not assigned to a router and service port." };
+  }
+
+  const customers = await sbSelect<SbCustomer>(
+    "isp_customers",
+    `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}&type=eq.vlan&select=id,admin_id,type,ip_address,router_id,port_id,status,expires_at&limit=1`,
+  );
+  const customer = customers[0];
+  if (!customer || !isValidIpv4(customer.ip_address)) {
+    return { ok: false, error: "The verified VLAN customer account or its assigned static IP was not found." };
+  }
+  if (
+    (customer.router_id && customer.router_id !== plan.router_id)
+    || (customer.port_id && customer.port_id !== plan.port_id)
+  ) {
+    return { ok: false, error: "The VLAN customer router and port do not match the selected plan." };
+  }
+
+  const ports = await sbSelect<SbVlanPort>(
+    "isp_reseller_ports",
+    `id=eq.${plan.port_id}&admin_id=eq.${opts.adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+  );
+  const port = ports[0];
+  const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
+  if (
+    !port
+    || !isValidVlanTag(port.vlan_tag)
+    || !Number.isSafeInteger(ownerId)
+    || Number(ownerId) < 1
+    || !ipv4InSubnet(customer.ip_address, port.subnet_range)
+  ) {
+    return { ok: false, error: "The VLAN service port, tag, or assigned customer IP is no longer valid." };
+  }
+  const resources = portServiceResourceNames(port);
+  const routers = await sbSelect<SbRouter>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${opts.adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  );
+  const router = routers[0];
+  const vpnIp = isRouterManagementVpnIp(router?.vpn_ip) ? router.vpn_ip!.trim() : "";
+  const host = router?.host?.trim() || vpnIp;
+  if (!router || !host) {
+    return { ok: false, error: "The VLAN router has no public host or management VPN address." };
+  }
+  const credentials = {
+    host,
+    port: 8728,
+    username: router.router_username || "admin",
+    password: router.router_secret || "",
+    useSSL: false,
+    bridgeIp: vpnIp || router.bridge_ip?.trim() || undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+  const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
+  const wasEnabled = customer.status === "active" &&
+    (!customer.expires_at || Date.parse(customer.expires_at) > Date.now());
+  const oldExpiry = customer.expires_at;
+  const maxLimit = hotspotRateLimit(plan) ?? "0/0";
+
+  try {
+    await reconcileVlanCustomerQueue(credentials, {
+      adminId: opts.adminId,
+      customerId: customer.id,
+      ipAddress: customer.ip_address,
+      parentQueue: resources.parentQueue,
+      parentComment: `${resources.commentPrefix}_parent_queue`,
+      maxLimit,
+      enabled: true,
+      expiresAt,
+    });
+    const rollback = async (): Promise<void> => {
+      const restoreEnabled = wasEnabled && (!oldExpiry || Date.parse(oldExpiry) > Date.now());
+      await reconcileVlanCustomerQueue(credentials, {
+        adminId: opts.adminId,
+        customerId: customer.id,
+        ipAddress: customer.ip_address!,
+        parentQueue: resources.parentQueue,
+        parentComment: `${resources.commentPrefix}_parent_queue`,
+        maxLimit,
+        enabled: restoreEnabled,
+        expiresAt: oldExpiry,
+      });
+    };
+    return { ok: true, routerName: router.name, routerId: router.id, portId: plan.port_id, expiresAt, rollback };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const diagnosis = classifyRouterConnectionFailure(error);
+    logger.warn(
+      { err: message, failureProfile: diagnosis.profile, customerId: opts.customerId, planId: opts.planId },
+      "[provision] VLAN renewal access restore failed",
+    );
+    return { ok: false, error: `Router VLAN access could not be restored: ${message}` };
+  }
+}
+
 /* ── Result type ─────────────────────────────────────────────────────────── */
 export interface ProvisionResult {
   ok: boolean;
@@ -283,29 +418,48 @@ export async function autoProvision(opts: {
   paymentMethod: string;
   gateway:       string;
   adminId?:      number;
+  customerId?:   number;
 }): Promise<ProvisionResult> {
-  const { phone, amount, reference, paymentMethod, gateway, adminId } = opts;
+  const { phone, amount, reference, paymentMethod, gateway, adminId, customerId } = opts;
   const phoneVariants = normalizePhone(phone);
 
   logger.info({ phone, phoneVariants, amount, reference, gateway }, "[provision] Starting auto-provision");
 
   /* ── 1. Find customer by phone ── */
   let customer: SbCustomer | null = null;
+  const matchingCustomers = new Map<number, SbCustomer>();
   for (const p of phoneVariants) {
-    const filter = adminId
-      ? `phone=eq.${p}&admin_id=eq.${adminId}&select=*&limit=1`
-      : `phone=eq.${p}&select=*&limit=1`;
+    const filter = customerId
+      ? `id=eq.${customerId}${adminId ? `&admin_id=eq.${adminId}` : ""}&select=*&limit=1`
+      : adminId
+        ? `phone=eq.${p}&admin_id=eq.${adminId}&select=*&limit=100`
+        : `phone=eq.${p}&select=*&limit=100`;
     const rows = await sbSelect<SbCustomer>("isp_customers", filter);
-    if (rows.length) { customer = rows[0]; break; }
+    for (const row of rows) matchingCustomers.set(row.id, row);
+    if (customerId && rows.length) break;
   }
-
+  const candidates = [...matchingCustomers.values()];
+  const vlanCandidates = candidates.filter(row => String(row.type ?? "").toLowerCase() === "vlan");
+  customer = candidates[0] ?? null;
+  if (!customerId && vlanCandidates.length > 0 && candidates.length > 1) {
+    const msg = "Multiple customer accounts share this payment phone. Select the intended VLAN customer account before renewing service.";
+    await logEvent({ event: "provision_failed", gateway, reference, phone, amount, error: msg });
+    return { ok: false, error: msg };
+  }
   if (!customer) {
     const msg = `No customer found for phone variants: ${phoneVariants.join(", ")}`;
     logger.warn({ phone }, `[provision] ${msg}`);
     await logEvent({ event: "provision_failed", gateway, reference, phone, amount, error: msg });
     return { ok: false, error: msg };
   }
-
+  if (
+    customerId
+    && !phoneVariants.some(variant => normalizePhone(customer.phone ?? "").includes(variant))
+  ) {
+    const msg = "The selected customer account does not match the payment phone number.";
+    await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+    return { ok: false, error: msg };
+  }
   /* ── 2. Load plan ── */
   if (!customer.plan_id) {
     const msg = `Customer ${customer.id} has no plan assigned`;
@@ -315,7 +469,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&select=id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -324,8 +478,40 @@ export async function autoProvision(opts: {
     return { ok: false, error: msg };
   }
 
+  const planType = normalizePlanServiceType(plan.plan_type || plan.type || "hotspot");
+  if (planType === "vlan") {
+    if (String(customer.type ?? "").toLowerCase() !== "vlan") {
+      const msg = "A VLAN plan can only renew an existing VLAN customer account.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+      return { ok: false, error: msg };
+    }
+    if (!plan.router_id || !plan.port_id) {
+      const msg = "The VLAN plan must be assigned to a router and VLAN service port before renewal.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+      return { ok: false, error: msg };
+    }
+    if (
+      (customer.router_id && customer.router_id !== plan.router_id)
+      || (customer.port_id && customer.port_id !== plan.port_id)
+    ) {
+      const msg = "The VLAN customer's saved router and port do not match the selected plan.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+      return { ok: false, error: msg };
+    }
+    if (!isValidIpv4(customer.ip_address)) {
+      const msg = "The VLAN customer has no valid assigned static IPv4 address.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+      return { ok: false, error: msg };
+    }
+  }
+
   /* ── 3. Load router ── */
   if (!plan.router_id) {
+    if (planType === "vlan") {
+      const msg = "The VLAN plan is not assigned to a router.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
+      return { ok: false, error: msg };
+    }
     /* No router assigned — still record the transaction but skip router provisioning */
     logger.warn({ planId: plan.id }, "[provision] Plan has no router_id — skipping router provisioning");
     await recordTransaction(customer, amount, paymentMethod, reference, plan);
@@ -335,7 +521,7 @@ export async function autoProvision(opts: {
 
   const routers = await sbSelect<SbRouter & { name: string }>(
     "isp_routers",
-    `id=eq.${plan.router_id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`
+    `id=eq.${plan.router_id}&admin_id=eq.${customer.admin_id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`
   );
   const router = routers[0];
    if (!router || (!router.host && !router.bridge_ip && !router.vpn_ip)) {
@@ -354,9 +540,10 @@ export async function autoProvision(opts: {
   };
 
   /* ── 4. Provision on router ── */
-  const planType = (plan.plan_type || plan.type || "hotspot").toLowerCase();
   const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address);
-  const username = planType === "pppoe"
+  const username = planType === "vlan"
+    ? ""
+    : planType === "pppoe"
     ? (customer.pppoe_username || customer.username || `user_${customer.id}`)
     : (customer.username || generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
   const password = customer.password || "changeme";
@@ -366,7 +553,35 @@ export async function autoProvision(opts: {
   let action: "created" | "renewed" | "enabled" = "created";
 
   try {
-    if (planType === "pppoe") {
+    if (planType === "vlan") {
+      const ports = await sbSelect<SbVlanPort>(
+        "isp_reseller_ports",
+        `id=eq.${plan.port_id}&admin_id=eq.${customer.admin_id}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+      );
+      const port = ports[0];
+      const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
+      if (
+        !port
+        || !isValidVlanTag(port.vlan_tag)
+        || !Number.isSafeInteger(ownerId)
+        || Number(ownerId) < 1
+        || !ipv4InSubnet(customer.ip_address, port.subnet_range)
+      ) {
+        throw new Error("The VLAN service port, VLAN tag, or assigned customer IP is no longer valid.");
+      }
+      const resources = portServiceResourceNames(port);
+      await reconcileVlanCustomerQueue(creds, {
+        adminId: customer.admin_id,
+        customerId: customer.id,
+        ipAddress: customer.ip_address!,
+        parentQueue: resources.parentQueue,
+        parentComment: `${resources.commentPrefix}_parent_queue`,
+        maxLimit: hotspotRateLimit(plan) ?? "0/0",
+        enabled: true,
+        expiresAt,
+      });
+      action = "renewed";
+    } else if (planType === "pppoe") {
       /* Try to update first; if that fails, create */
       try {
         await updatePPPSecret(creds, username, { disabled: false, profile: profileName, comment });
@@ -439,7 +654,15 @@ export async function autoProvision(opts: {
     const msg = `Router provisioning failed: ${(routerErr as Error).message}`;
     logger.error({ err: routerErr }, "[provision] Router provisioning error");
     await recordTransaction(customer, amount, paymentMethod, reference, plan);
-    await activateCustomer(customer, plan, username);
+      if (planType === "vlan") {
+        await sbUpdate(
+          "isp_customers",
+          `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
+          { status: "payment_cleared_router_pending", updated_at: new Date().toISOString() },
+        );
+      } else {
+        await activateCustomer(customer, plan, username);
+      }
     await logEvent({
       event: "provision_router_error", gateway, reference,
       customer_id: customer.id, plan_id: plan.id, router_id: router.id,
@@ -449,7 +672,12 @@ export async function autoProvision(opts: {
   }
 
   /* ── 5. Update customer in Supabase ── */
-  await activateCustomer(customer, plan, username);
+  await activateCustomer(
+    customer,
+    plan,
+    planType !== "pppoe" && planType !== "vlan" ? username : undefined,
+    expiresAt,
+  );
 
   /* ── 6. Record transaction ── */
   await recordTransaction(customer, amount, paymentMethod, reference, plan);
@@ -472,11 +700,18 @@ export async function autoProvision(opts: {
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
-async function activateCustomer(customer: SbCustomer, plan: SbPlan, username?: string): Promise<void> {
-  await sbUpdate("isp_customers", `id=eq.${customer.id}`, {
+async function activateCustomer(
+  customer: SbCustomer,
+  plan: SbPlan,
+  username?: string,
+  expiresAt?: string,
+): Promise<void> {
+  const planType = normalizePlanServiceType(plan.plan_type || plan.type);
+  await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
     status:     "active",
-    expires_at: calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
-    ...(username && plan.plan_type !== "pppoe" ? { username } : {}),
+    expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
+    ...(username && planType !== "pppoe" && planType !== "vlan" ? { username } : {}),
+    ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
     updated_at: new Date().toISOString(),
   });
 }

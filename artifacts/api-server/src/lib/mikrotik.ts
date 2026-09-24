@@ -25,6 +25,12 @@ import {
   SHARED_HOTSPOT_PROFILE_NAME,
   SHARED_HOTSPOT_SERVER_NAME,
 } from "./shared-hotspot-resources.js";
+import {
+  isVlanCustomerQueueName,
+  isValidSimpleQueueRateLimit,
+  parseVlanQueueCounters,
+  vlanCustomerQueueIdentity,
+} from "./vlan-customer-queue.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -1742,9 +1748,23 @@ export interface TrafficStats {
   txBitsPerSecond: number;
 }
 
+export interface VlanCustomerQueueLiveData {
+  name: string;
+  target: string;
+  parent: string;
+  comment: string;
+  disabled: boolean;
+  bytesIn: number | null;
+  bytesOut: number | null;
+  rate: string;
+  statsAvailable: boolean;
+}
+
 export interface RouterLiveData {
   hotspotUsers: ActiveHotspotUser[];
   pppoeUsers: ActivePPPoESession[];
+  vlanCustomerQueues: VlanCustomerQueueLiveData[];
+  vlanQueueStatsAvailable: boolean;
   interfaces: RouterInterface[];
   traffic: TrafficStats[];
   fetchedAt: string;
@@ -2429,6 +2449,172 @@ export async function addHotspotIpBinding(
 
 function hotspotRateQueueName(username: string): string {
   return `ochola-rate-${username.replace(/[^A-Za-z0-9_-]/g, "-").slice(-52)}`;
+}
+
+function vlanCustomerExpirySchedulerName(adminId: number, customerId: number): string {
+  return `ochola-vlan-exp-${adminId}-${customerId}`;
+}
+
+async function removeVlanCustomerExpiryScheduler(
+  conn: RouterOSAPI,
+  schedulerName: string,
+  requestMs: number,
+): Promise<void> {
+  const schedulers = await withTimeout(
+    conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+    requestMs,
+  ) as Record<string, string>[];
+  for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+    if (scheduler[".id"]) {
+      await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), requestMs);
+    }
+  }
+}
+
+/**
+ * Reconcile a VLAN customer's assigned-IP queue beneath the already provisioned
+ * VLAN aggregate queue. The account id and tenant id are part of the generated
+ * RouterOS identity; the address is the queue target, never the sole identity.
+ */
+export async function reconcileVlanCustomerQueue(
+  creds: RouterCredentials,
+  opts: {
+    adminId: number;
+    customerId: number;
+    ipAddress: string;
+    parentQueue: string;
+    parentComment: string;
+    maxLimit: string;
+    enabled: boolean;
+    expiresAt?: string | null;
+  },
+): Promise<void> {
+  const identity = vlanCustomerQueueIdentity(opts.adminId, opts.customerId, opts.ipAddress);
+  const parentQueue = String(opts.parentQueue ?? "").trim();
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(parentQueue)) {
+    throw new Error("The VLAN aggregate bandwidth queue name is invalid.");
+  }
+  if (!isValidSimpleQueueRateLimit(opts.maxLimit)) {
+    throw new Error("A valid per-customer download and upload speed is required for the VLAN queue.");
+  }
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : Number.NaN;
+  if (opts.expiresAt && !Number.isFinite(expiryMs)) {
+    throw new Error("A valid expiry date is required for the VLAN customer queue.");
+  }
+  const isEnabled = opts.enabled && (!Number.isFinite(expiryMs) || expiryMs > Date.now());
+  const schedulerName = vlanCustomerExpirySchedulerName(opts.adminId, opts.customerId);
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const parentRows = await withTimeout(
+      conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${parentQueue}`]),
+      ms,
+    ) as Record<string, string>[];
+    if (
+      !Array.isArray(parentRows)
+      || !parentRows.some(row => row.name === parentQueue && row.comment === opts.parentComment)
+    ) {
+      throw new Error(`The VLAN aggregate bandwidth queue "${parentQueue}" is not deployed on the router.`);
+    }
+
+    const rows = await withTimeout(
+      conn.write([
+        "/queue/simple/print",
+        "=.proplist=.id,name,target,parent,max-limit,disabled,comment,bytes,rate",
+        `?name=${identity.name}`,
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const matches = (Array.isArray(rows) ? rows : []).filter(row => row.name === identity.name);
+    if (matches.length > 1) {
+      throw new Error(`Multiple RouterOS queues use the VLAN customer identity "${identity.name}".`);
+    }
+    const existing = matches[0];
+    if (existing && existing.comment !== identity.comment) {
+      throw new Error(`The RouterOS queue "${identity.name}" is owned by another resource and was not changed.`);
+    }
+
+    const command = existing?.[".id"]
+      ? ["/queue/simple/set", `=.id=${existing[".id"]}`]
+      : ["/queue/simple/add", `=name=${identity.name}`];
+    command.push(
+      `=target=${identity.target}`,
+      `=parent=${parentQueue}`,
+      `=max-limit=${opts.maxLimit}`,
+      `=comment=${identity.comment}`,
+      `=disabled=${isEnabled ? "no" : "yes"}`,
+    );
+    await withTimeout(conn.write(command), ms);
+
+    try {
+      if (isEnabled && Number.isFinite(expiryMs)) {
+        const clockRows = await withTimeout(conn.write(["/system/clock/print"]), ms) as Record<string, string>[];
+        const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+        if (!routerNow) throw new Error("The VLAN router did not provide a usable clock for expiry scheduling.");
+        const expiresAt = new Date(routerNow.getTime() + Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)) * 1000);
+        const expiryScript =
+          `/queue simple set [find where name="${identity.name}"] disabled=yes; ` +
+          `/system scheduler remove [find where name="${schedulerName}"]`;
+        const schedulers = await withTimeout(
+          conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+          ms,
+        ) as Record<string, string>[];
+        const schedulerCommand = schedulers[0]?.[".id"]
+          ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+          : ["/system/scheduler/add", `=name=${schedulerName}`];
+        schedulerCommand.push(
+          `=start-date=${formatRouterDate(expiresAt)}`,
+          `=start-time=${formatRouterTime(expiresAt)}`,
+          "=interval=00:00:00",
+          "=disabled=no",
+          `=on-event=${expiryScript}`,
+          "=comment=OcholaSupernet VLAN customer expiry",
+        );
+        await withTimeout(conn.write(schedulerCommand), ms);
+      } else {
+        await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms);
+      }
+    } catch (error) {
+      const currentRows = await withTimeout(
+        conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${identity.name}`]),
+        ms,
+      ).catch(() => [] as Record<string, string>[]) as Record<string, string>[];
+      for (const row of Array.isArray(currentRows) ? currentRows : []) {
+        if (row[".id"] && row.name === identity.name && row.comment === identity.comment) {
+          await withTimeout(
+            conn.write(["/queue/simple/set", `=.id=${row[".id"]}`, "=disabled=yes"]),
+            ms,
+          ).catch(() => {});
+        }
+      }
+      await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms).catch(() => {});
+      throw error;
+    }
+  });
+}
+
+export async function removeVlanCustomerQueue(
+  creds: RouterCredentials,
+  opts: { adminId: number; customerId: number; ipAddress: string; preserveExpiry?: boolean },
+): Promise<void> {
+  const identity = vlanCustomerQueueIdentity(opts.adminId, opts.customerId, opts.ipAddress);
+  const schedulerName = vlanCustomerExpirySchedulerName(opts.adminId, opts.customerId);
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${identity.name}`]),
+      ms,
+    ) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row.name !== identity.name || row.comment !== identity.comment) continue;
+      if (row[".id"]) {
+        await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
+    }
+    if (!opts.preserveExpiry) {
+      await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms);
+    }
+  });
 }
 
 /**
@@ -3173,6 +3359,20 @@ export async function fetchRouterLiveData(
       requestMs
     ).catch(e => { logger.warn({ err: e.message }, "pppoe fetch failed"); return [] as Record<string, string>[]; });
 
+    /* Simple queues are the real accounting source for static-IP VLAN users. */
+    let vlanQueueStatsAvailable = true;
+    const vlanQueueRows = await withTimeout(
+      conn.write([
+        "/queue/simple/print",
+        "=.proplist=name,target,parent,comment,disabled,bytes,rate",
+      ]),
+      requestMs,
+    ).catch(e => {
+      vlanQueueStatsAvailable = false;
+      logger.warn({ err: e.message }, "VLAN customer queue fetch failed");
+      return [] as Record<string, string>[];
+    });
+
     /* Interfaces */
     const ifaceRows = await withTimeout(
       conn.write(["/interface/print"]),
@@ -3235,6 +3435,23 @@ export async function fetchRouterLiveData(
         bytesOut: parseBytes(r["bytes-out"]),
         service:  r.service       ?? "",
       })),
+      vlanCustomerQueues: (Array.isArray(vlanQueueRows) ? vlanQueueRows : [])
+        .filter(row => isVlanCustomerQueueName(row.name))
+        .map(row => {
+          const counters = parseVlanQueueCounters(row.bytes, row["bytes-in"], row["bytes-out"]);
+          return {
+            name: row.name ?? "",
+            target: row.target ?? "",
+            parent: row.parent ?? "",
+            comment: row.comment ?? "",
+            disabled: parseBool(row.disabled),
+            bytesIn: counters?.bytesIn ?? null,
+            bytesOut: counters?.bytesOut ?? null,
+            rate: row.rate ?? "",
+            statsAvailable: counters !== null,
+          };
+        }),
+      vlanQueueStatsAvailable,
       interfaces,
       traffic,
       fetchedAt: new Date().toISOString(),

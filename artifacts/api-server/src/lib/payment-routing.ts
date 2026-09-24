@@ -1,4 +1,4 @@
-export type PaymentService = "hotspot" | "pppoe";
+export type PaymentService = "hotspot" | "pppoe" | "vlan";
 export type PaymentCollectionMode = "shared" | "separate";
 
 export interface ServicePaymentConfig {
@@ -91,7 +91,7 @@ export function servicePaymentConfigMap(value: unknown): Partial<Record<PaymentS
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const map = value as Record<string, unknown>;
   return Object.fromEntries(
-    (["hotspot", "pppoe"] as PaymentService[])
+    (["hotspot", "pppoe", "vlan"] as PaymentService[])
       .map(service => {
         const raw = map[service];
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;

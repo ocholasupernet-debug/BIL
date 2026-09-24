@@ -29,11 +29,13 @@ app.listen(port, (err) => {
    * First sweep runs 30 seconds after startup to let the server settle.
    * ─────────────────────────────────────────────────────────────────────── */
   const SWEEP_INTERVAL_MS = 5 * 60 * 1000; /* 5 minutes */
-  setTimeout(() => {
-    sweepAllRouters().catch(e => logger.error({ err: e }, "[monitor] initial sweep failed"));
-    setInterval(() => {
-      sweepAllRouters().catch(e => logger.error({ err: e }, "[monitor] sweep failed"));
-    }, SWEEP_INTERVAL_MS);
-    logger.info({ intervalMin: 5 }, "[monitor] Router health monitor started");
-  }, 30_000);
+  if (process.env.NODE_ENV === "production") {
+    setTimeout(() => {
+      sweepAllRouters().catch(e => logger.error({ err: e }, "[monitor] initial sweep failed"));
+      setInterval(() => {
+        sweepAllRouters().catch(e => logger.error({ err: e }, "[monitor] sweep failed"));
+      }, SWEEP_INTERVAL_MS);
+      logger.info({ intervalMin: 5 }, "[monitor] Router health monitor started");
+    }, 30_000);
+  }
 });

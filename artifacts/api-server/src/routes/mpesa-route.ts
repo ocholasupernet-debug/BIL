@@ -12,6 +12,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { billingSelect } from "../lib/platform-billing-store.js";
 import { logger } from "../lib/logger.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
@@ -44,13 +45,14 @@ import {
   servicePaymentConfigMap,
   type PaymentService,
 } from "../lib/payment-routing.js";
-import { reactivatePppoeAccess } from "../lib/auto-provision.js";
+import { reactivatePppoeAccess, reactivateVlanAccess } from "../lib/auto-provision.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import { bankBusinessNumberFor, resolveResellerGatewayRoute } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
@@ -683,6 +685,64 @@ function hotspotPortResources(
   };
 }
 
+type VlanPaymentPlan = { router_id: number | null; port_id: number | null };
+
+async function validateVlanPaymentCustomer(
+  adminId: number,
+  plan: VlanPaymentPlan,
+  customerId: number,
+): Promise<{ customer: { id: number; type: string; ip_address: string; router_id: number | null; port_id: number | null } | null; error?: string }> {
+  if (!plan.router_id || !plan.port_id) {
+    return { customer: null, error: "The VLAN plan is not assigned to a router and service port." };
+  }
+  const customers = await sbSelectStrict<{
+    id: number;
+    type: string;
+    ip_address: string | null;
+    router_id: number | null;
+    port_id: number | null;
+  }>(
+    "isp_customers",
+    `id=eq.${customerId}&admin_id=eq.${adminId}&type=eq.vlan&select=id,type,ip_address,router_id,port_id&limit=1`,
+  );
+  const customer = customers[0];
+  if (!customer || !isValidIpv4(customer.ip_address)) {
+    return { customer: null, error: "The verified VLAN customer account or its assigned static IP was not found." };
+  }
+  if (
+    (customer.router_id && customer.router_id !== plan.router_id)
+    || (customer.port_id && customer.port_id !== plan.port_id)
+  ) {
+    return { customer: null, error: "The VLAN customer router and port do not match the selected plan." };
+  }
+  const ports = await sbSelectStrict<{
+    id: number;
+    router_id: number;
+    interface_name: string;
+    bridge_name: string | null;
+    handoff_mode: string | null;
+    reseller_id: number | null;
+    assigned_reseller_id: number | null;
+    vlan_tag: string | null;
+    subnet_range: string | null;
+  }>(
+    "isp_reseller_ports",
+    `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range&limit=1`,
+  );
+  const port = ports[0];
+  const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
+  if (
+    !port
+    || !isValidVlanTag(port.vlan_tag)
+    || !Number.isSafeInteger(ownerId)
+    || Number(ownerId) < 1
+    || !ipv4InSubnet(customer.ip_address, port.subnet_range)
+  ) {
+    return { customer: null, error: "The VLAN service port, tag, or assigned customer IP is no longer valid." };
+  }
+  return { customer: { ...customer, ip_address: customer.ip_address } };
+}
+
 function extractMpesaReceipt(message: unknown): string {
   if (typeof message !== "string") return "";
   const text = message.trim();
@@ -836,6 +896,20 @@ export interface MpesaCallbackDependencies {
     planId: number;
     reference: string;
   }) => Promise<{ ok: boolean; skipped?: boolean; rollback?: () => Promise<void>; error?: string }>;
+  reactivateVlanAccess: (opts: {
+    adminId: number;
+    customerId: number;
+    planId: number;
+    reference: string;
+  }) => Promise<{
+    ok: boolean;
+    skipped?: boolean;
+    expiresAt?: string;
+    routerId?: number;
+    portId?: number;
+    rollback?: () => Promise<void>;
+    error?: string;
+  }>;
   settle: (args: {
     p_transaction_id: number;
     p_status: "completed" | "failed";
@@ -852,6 +926,7 @@ export async function processMpesaCallback(
     getSettings: async () => getMpesaSettings(),
     verifyStk: queryDarajaStkResult,
     reactivatePppoeAccess,
+    reactivateVlanAccess,
     settle: args => sbRpc<SettlementResult>("settle_verified_mpesa_transaction", args),
     ...overrides,
   };
@@ -905,17 +980,21 @@ export async function processMpesaCallback(
     }
   }
   let rollbackPppoeAccess: (() => Promise<void>) | undefined;
+  let rollbackVlanAccess: (() => Promise<void>) | undefined;
+  let vlanRenewalExpiry: string | undefined;
+  let vlanRenewalRouterId: number | undefined;
+  let vlanRenewalPortId: number | undefined;
   let routerPendingFailure: string | undefined;
   if (isSuccessful && transaction.admin_id && transaction.customer_id && transaction.plan_id) {
-    const access = await dependencies.reactivatePppoeAccess({
+    const pppoeAccess = await dependencies.reactivatePppoeAccess({
       adminId: transaction.admin_id,
       customerId: transaction.customer_id,
       planId: transaction.plan_id,
       reference: checkoutId,
     });
-    if (!access.ok && !access.skipped) {
+    if (!pppoeAccess.ok && !pppoeAccess.skipped) {
       const diagnosis = logRouterConnectionFailure(
-        access.error ?? "RouterOS PPPoE activation failed.",
+        pppoeAccess.error ?? "RouterOS PPPoE activation failed.",
         {
           checkoutId,
           adminId: transaction.admin_id,
@@ -926,7 +1005,39 @@ export async function processMpesaCallback(
       );
       routerPendingFailure = `${diagnosis.userMessage} Retry the account setup after the router-management VPN is online.`;
     }
-    rollbackPppoeAccess = access.rollback;
+    rollbackPppoeAccess = pppoeAccess.rollback;
+    const vlanAccess = await dependencies.reactivateVlanAccess({
+      adminId: transaction.admin_id,
+      customerId: transaction.customer_id,
+      planId: transaction.plan_id,
+      reference: checkoutId,
+    });
+    if (!vlanAccess.ok && !vlanAccess.skipped) {
+      const diagnosis = logRouterConnectionFailure(
+        vlanAccess.error ?? "RouterOS VLAN activation failed.",
+        {
+          checkoutId,
+          adminId: transaction.admin_id,
+          customerId: transaction.customer_id,
+          planId: transaction.plan_id,
+        },
+        "[mpesa/callback] RouterOS VLAN activation deferred after payment",
+      );
+      routerPendingFailure = `${diagnosis.userMessage} Retry the account setup after the router-management VPN is online.`;
+    }
+    rollbackVlanAccess = vlanAccess.rollback;
+    if (vlanAccess.ok && !vlanAccess.skipped) {
+      vlanRenewalExpiry = vlanAccess.expiresAt;
+      vlanRenewalRouterId = vlanAccess.routerId;
+      vlanRenewalPortId = vlanAccess.portId;
+    }
+  }
+  if (isSuccessful && routerPendingFailure) {
+    logger.warn(
+      { checkoutId, transactionId: transaction.id, customerId: transaction.customer_id, error: routerPendingFailure },
+      "[mpesa/callback] Payment remains pending until RouterOS access can be restored",
+    );
+    return false;
   }
   let settlements: SettlementResult[];
   try {
@@ -945,12 +1056,49 @@ export async function processMpesaCallback(
         logger.error({ err: rollbackError, checkoutId }, "[mpesa/callback] PPPoE access rollback failed");
       });
     }
+    if (rollbackVlanAccess) {
+      await rollbackVlanAccess().catch(rollbackError => {
+        logger.error({ err: rollbackError, checkoutId }, "[mpesa/callback] VLAN access rollback failed");
+      });
+    }
     throw error;
   }
   const settlement = settlements[0];
   if (!settlement?.settled) {
+    if (rollbackPppoeAccess) await rollbackPppoeAccess().catch(error => logger.error({ err: error, checkoutId }, "[mpesa/callback] PPPoE access rollback failed"));
+    if (rollbackVlanAccess) await rollbackVlanAccess().catch(error => logger.error({ err: error, checkoutId }, "[mpesa/callback] VLAN access rollback failed"));
     logger.info({ checkoutId }, "[mpesa/callback] Callback replay ignored after state transition");
     return false;
+  }
+
+  if (isSuccessful && vlanRenewalExpiry && transaction.admin_id && transaction.customer_id) {
+    try {
+      const updated = await sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${transaction.customer_id}&admin_id=eq.${transaction.admin_id}&type=eq.vlan`,
+        {
+          status: "active",
+          expires_at: vlanRenewalExpiry,
+          router_id: vlanRenewalRouterId,
+          port_id: vlanRenewalPortId,
+          updated_at: new Date().toISOString(),
+        },
+      );
+      if (!updated.length) throw new Error("The VLAN customer record was not updated after payment settlement.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ err: error, checkoutId, customerId: transaction.customer_id }, "[mpesa/callback] VLAN renewal status persistence failed");
+      try {
+        await markPaymentClearedRouterPending({
+          transactionId: transaction.id,
+          adminId: transaction.admin_id,
+          customerId: transaction.customer_id,
+          failureMessage: `VLAN access was renewed but its expiry could not be saved: ${message}`,
+        });
+      } catch (stateError) {
+        logger.error({ err: stateError, checkoutId, customerId: transaction.customer_id }, "[mpesa/callback] Could not persist VLAN renewal pending status");
+      }
+    }
   }
 
   if (isSuccessful && routerPendingFailure && transaction.admin_id && transaction.customer_id) {
@@ -1092,7 +1240,11 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const deviceRouterId = Number(req.body?.device_router_id);
   const portalRouterId = positivePortalId(req.body?.router_id);
   const portalPortId = positivePortalId(req.body?.port_id);
-  const requestedService = req.body?.service_type === "pppoe" ? "pppoe" : "hotspot";
+  const requestedService = req.body?.service_type === "pppoe"
+    ? "pppoe"
+    : req.body?.service_type === "vlan"
+      ? "vlan"
+      : "hotspot";
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
@@ -1130,8 +1282,13 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(409).json({ ok: false, error: "Choose a package assigned to the selected device's router." });
     return;
   }
-  if (serviceType === "pppoe" && (!Number.isSafeInteger(requestedCustomerId) || requestedCustomerId < 1)) {
-    res.status(400).json({ ok: false, error: "A verified PPPoE customer account is required for this package." });
+  if ((serviceType === "pppoe" || serviceType === "vlan") && (!Number.isSafeInteger(requestedCustomerId) || requestedCustomerId < 1)) {
+    res.status(400).json({
+      ok: false,
+      error: serviceType === "vlan"
+        ? "A verified VLAN customer account is required for this package."
+        : "A verified PPPoE customer account is required for this package.",
+    });
     return;
   }
   if (serviceType === "pppoe") {
@@ -1141,6 +1298,16 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     );
     if (!customers[0]) {
       res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+      return;
+    }
+  }
+  if (serviceType === "vlan") {
+    const validation = await validateVlanPaymentCustomer(adminId, plan!, requestedCustomerId);
+    if (!validation.customer) {
+      res.status(validation.error?.includes("not found") ? 404 : 409).json({
+        ok: false,
+        error: validation.error ?? "The VLAN customer account is not valid for this package.",
+      });
       return;
     }
   }
@@ -1213,7 +1380,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
         ...(portalRouterId ? { routerId: portalRouterId } : {}),
         ...(portalPortId ? { portId: portalPortId } : {}),
         ...(deviceName ? { deviceName } : {}),
-        ...(serviceType === "pppoe" ? { customerId: requestedCustomerId } : {}),
+        ...(serviceType === "pppoe" || serviceType === "vlan" ? { customerId: requestedCustomerId } : {}),
         ...(resolvedMac ? { macAddress: resolvedMac } : {}),
       }),
       amount,
@@ -1492,12 +1659,17 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     (adminAuth.uid === "superadmin" || Number(adminAuth.uid) === scopedAdminId);
   const superAdminToken = typeof req.headers["x-sa-token"] === "string" ? req.headers["x-sa-token"] : "";
   const hasSuperAdminSession = isActiveSuperAdminToken(superAdminToken);
+  const requestedServiceType = service_type === "pppoe"
+    ? "pppoe"
+    : service_type === "vlan"
+      ? "vlan"
+      : "hotspot";
   const hasMatchingIntent = !!intent &&
     intent.adminId === scopedAdminId &&
     intent.planId === requestedPlanId &&
     intent.amount === requestedAmount &&
     intent.phone === normalised &&
-    (intent.serviceType ?? "hotspot") === (service_type === "pppoe" ? "pppoe" : "hotspot") &&
+    (intent.serviceType ?? "hotspot") === requestedServiceType &&
     (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null) &&
     (intent.routerId ?? null) === portalRouterId &&
     (intent.portId ?? null) === portalPortId;
@@ -1520,7 +1692,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       res.status(400).json({ ok: false, error: "A valid authenticated billing invoice is required." });
       return;
     }
-    const invoiceRows = await sbSelectStrict<{
+    const invoiceRows = await billingSelect<{
       id: number;
       account_id: number;
       amount_due: number | string;
@@ -1536,6 +1708,10 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     }
     if (Math.ceil(Number(amount)) !== Math.ceil(Number(platformBillingInvoice.amount_due))) {
       res.status(400).json({ ok: false, error: "The payment amount does not match the billing invoice." });
+      return;
+    }
+    if (!supabaseServiceRoleConfigured) {
+      res.status(503).json({ ok: false, error: "Renewal payments are unavailable in this preview." });
       return;
     }
   }
@@ -1566,18 +1742,34 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       res.status(400).json({ ok: false, error: "The payment checkout service changed. Start the payment again." });
       return;
     }
-    if (serviceType === "pppoe") {
+    if (serviceType === "pppoe" || serviceType === "vlan") {
       if (!intent?.customerId || intent.customerId !== requestedCustomerId) {
-        res.status(401).json({ ok: false, error: "Create a new verified PPPoE checkout before requesting payment." });
+        res.status(401).json({
+          ok: false,
+          error: serviceType === "vlan"
+            ? "Create a new verified VLAN checkout before requesting payment."
+            : "Create a new verified PPPoE checkout before requesting payment.",
+        });
         return;
       }
-      const customers = await sbSelect<{ id: number }>(
-        "isp_customers",
-        `id=eq.${intent.customerId}&admin_id=eq.${scopedAdminId}&type=eq.pppoe&select=id&limit=1`,
-      );
-      if (!customers[0]) {
-        res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
-        return;
+      if (serviceType === "pppoe") {
+        const customers = await sbSelect<{ id: number }>(
+          "isp_customers",
+          `id=eq.${intent.customerId}&admin_id=eq.${scopedAdminId}&type=eq.pppoe&select=id&limit=1`,
+        );
+        if (!customers[0]) {
+          res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+          return;
+        }
+      } else {
+        const validation = await validateVlanPaymentCustomer(scopedAdminId, plan, intent.customerId);
+        if (!validation.customer) {
+          res.status(validation.error?.includes("not found") ? 404 : 409).json({
+            ok: false,
+            error: validation.error ?? "The VLAN customer account is not valid for this package.",
+          });
+          return;
+        }
       }
     }
     if (requestedAmount !== Math.ceil(Number(plan.price))) {
@@ -1616,7 +1808,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   }
 
   try {
-      const serviceType = intent?.serviceType ?? (service_type === "pppoe" ? "pppoe" : "hotspot");
+      const serviceType = intent?.serviceType ?? requestedServiceType;
        const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = resellerRoute
          ? resellerRoute
         : await getAdminPaymentSettings(

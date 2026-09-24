@@ -15,7 +15,14 @@ interface DbPool {
   router_id: number | null;
   port_id?: number | null;
 }
-interface DbPort { id: number; router_id: number; interface_name: string; status: string; }
+interface DbPort {
+  id: number;
+  router_id: number;
+  interface_name: string;
+  status: string;
+  handoff_mode?: string | null;
+  vlan_tag?: string | number | null;
+}
 
 function useTypeParam() {
   const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
@@ -118,9 +125,10 @@ interface ServicePlanFormProps {
 
 function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports, pools, onCancel, onSaved }: ServicePlanFormProps) {
   const isEdit   = !!initialData;
-  const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "trials" ? "Trial" : "Static IP";
+  const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "vlan" ? "VLAN" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
   const isHotspot= planType === "hotspot" || planType === "trials";
+  const isVlan = planType === "vlan";
 
   const [status,        setStatus]        = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
   const [canBuy,        setCanBuy]        = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
@@ -142,6 +150,12 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
+  const vlanPorts = ports.filter(port =>
+    port.router_id === Number(routerId)
+    && port.status !== "disabled"
+    && (port.handoff_mode ? port.handoff_mode === "vlan_services" : Boolean(port.vlan_tag)),
+  );
+  const selectedVlanPort = vlanPorts.find(port => String(port.id) === portId);
   const servicePool = (() => {
     const router = Number(routerId);
     const port = portId ? Number(portId) : null;
@@ -180,6 +194,10 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (isVlan && (!routerId || !portId || !selectedVlanPort)) {
+      setError("Choose a router and an existing VLAN service port for this plan.");
+      return;
+    }
     setSaving(true);
     try {
       const sharedUsers = sharingAllowed === "yes" ? (parseInt(maxSharedUsers) || 5) : 1;
@@ -303,7 +321,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
           <input style={INPUT} value={name} onChange={e => setName(e.target.value)} placeholder={`e.g. ${typeLabel} 10Mbps Daily`} required />
         </div>
 
-        {isHotspot && (
+        {(isHotspot || isVlan) && (
           <div style={ROW}>
             <span style={LBL}>Plan Type</span>
             <div style={{ display: "flex", gap: "1.25rem", paddingTop: "0.45rem" }}>
@@ -313,7 +331,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
           </div>
         )}
 
-        {isHotspot && planKind === "limited" && (
+        {(isHotspot || isVlan) && planKind === "limited" && (
           <div style={ROW}>
             <span style={{ ...LBL_CYAN, display: "flex", alignItems: "center", gap: "0.35rem" }}>
               Data Cap
@@ -363,6 +381,11 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             {bandwidths.map(b => <option key={b.id} value={b.id}>{b.name} ({b.speed_down}/{b.speed_up} {b.speed_down_unit})</option>)}
           </select>
         </div>
+        {isVlan && (
+          <p style={{ ...HINT, margin: "-0.65rem 0 0 187px" }}>
+            This plan speed is per VLAN customer. The VLAN service port’s aggregate bandwidth cap remains a separate network limit.
+          </p>
+        )}
 
         <div style={ROW}>
           <span style={LBL}>Plan Price</span>
@@ -432,16 +455,21 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
                     </option>
                   ))}
                 </select>
-                <select style={{ ...SELECT, width: "100%" }} value={portId} onChange={e => setPortId(e.target.value)} disabled={!routerId}>
-                  <option value="">Router-wide — available on this router</option>
-                  {ports.filter(p => p.router_id === Number(routerId) && p.status !== "disabled").map(p => (
-                    <option key={p.id} value={p.id}>Port only — {p.interface_name}</option>
+                <select required={isVlan} style={{ ...SELECT, width: "100%" }} value={portId} onChange={e => setPortId(e.target.value)} disabled={!routerId}>
+                  {!isVlan && <option value="">Router-wide — available on this router</option>}
+                  {isVlan && <option value="">Choose an existing VLAN service port</option>}
+                  {(isVlan ? vlanPorts : ports.filter(p => p.router_id === Number(routerId) && p.status !== "disabled")).map(p => (
+                    <option key={p.id} value={p.id}>
+                      {isVlan ? "VLAN service" : "Port only"} — {p.interface_name}{p.vlan_tag ? ` · VLAN ${p.vlan_tag}` : ""}
+                    </option>
                   ))}
                 </select>
               </div>
             )}
             <p style={HINT}>
-              Every plan is isolated to one router. Choose a port to make it available only on that physical interface; leave the port set to Router-wide to share it across that router's ports.
+              {isVlan
+                ? "A VLAN plan must use an active VLAN service port. Its per-customer speed is enforced separately from the port's aggregate VLAN cap."
+                : "Every plan is isolated to one router. Choose a port to make it available only on that physical interface; leave the port set to Router-wide to share it across that router's ports."}
             </p>
           </div>
         </div>
@@ -530,11 +558,21 @@ function CopyPlanModal({
   const [name, setName] = useState(`${plan.name} (Copy)`);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const targetPorts = ports.filter((port) => port.router_id === Number(routerId) && port.status !== "disabled");
+  const isVlan = plan.type === "vlan";
+  const targetPorts = ports.filter((port) =>
+    port.router_id === Number(routerId)
+    && port.status !== "disabled"
+    && (!isVlan || (port.handoff_mode ? port.handoff_mode === "vlan_services" : Boolean(port.vlan_tag))),
+  );
+  const selectedVlanPort = targetPorts.find(port => String(port.id) === portId);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
+    if (isVlan && (!portId || !selectedVlanPort)) {
+      setError("Choose an existing VLAN service port for the copied plan.");
+      return;
+    }
     setSaving(true);
     try {
        const response = await fetch(`/api/plans/${plan.id}/copy`, {
@@ -582,15 +620,19 @@ function CopyPlanModal({
             </select>
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: 6, color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 700 }}>
-            Target scope
-            <select style={{ ...SELECT, width: "100%" }} value={portId} onChange={(event) => setPortId(event.target.value)} disabled={!routerId}>
-              <option value="">Router-wide — available on this router</option>
-              {targetPorts.map((port) => <option key={port.id} value={port.id}>Port only — {port.interface_name}</option>)}
+              {isVlan ? "Target VLAN service port" : "Target scope"}
+            <select required={isVlan} style={{ ...SELECT, width: "100%" }} value={portId} onChange={(event) => setPortId(event.target.value)} disabled={!routerId}>
+              {isVlan
+                ? <option value="">Choose an existing VLAN service port</option>
+                : <option value="">Router-wide — available on this router</option>}
+              {targetPorts.map((port) => <option key={port.id} value={port.id}>
+                {isVlan ? "VLAN service" : "Port only"} — {port.interface_name}{port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}
+              </option>)}
             </select>
           </label>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, paddingTop: 6 }}>
             <button type="button" onClick={onCancel} style={{ padding: "0.55rem 1rem", borderRadius: 8, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-            <button type="submit" disabled={saving || !routerId} style={{ padding: "0.55rem 1rem", borderRadius: 8, background: saving ? "rgba(37,99,235,0.6)" : "var(--isp-accent)", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+            <button type="submit" disabled={saving || !routerId || (isVlan && (!portId || !selectedVlanPort))} style={{ padding: "0.55rem 1rem", borderRadius: 8, background: saving ? "rgba(37,99,235,0.6)" : "var(--isp-accent)", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
               {saving && <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
               {saving ? "Copying…" : "Copy plan"}
             </button>
@@ -822,7 +864,7 @@ function BandwidthPlansTab() {
    MAIN PLANS PAGE
 ═══════════════════════════════════════════════════════════ */
 const TAB_LABELS: Record<string, string> = {
-  all: "All Plans", hotspot: "Hotspot Plans", pppoe: "PPPoE Plans", static: "Static IP Plans",
+  all: "All Plans", hotspot: "Hotspot Plans", pppoe: "PPPoE Plans", static: "Static IP Plans", vlan: "VLAN Plans",
   bandwidth: "Bandwidth Plans", trials: "Hotspot Trials", fup: "FUP",
 };
 
@@ -835,7 +877,7 @@ export default function Plans() {
   const [copyingPlan,  setCopyingPlan] = useState<DbPlan | null>(null);
   const [showAddForm,  setShowAddForm]  = useState(false);
   const [planSearch, setPlanSearch] = useState("");
-  const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot">("all");
+  const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot" | "vlan">("all");
   const [routerFilter, setRouterFilter] = useState("all");
   const [portFilter, setPortFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
@@ -883,7 +925,7 @@ export default function Plans() {
   const visiblePlans = useMemo(() => {
     const query = planSearch.trim().toLowerCase();
     const filtered = plans.filter((plan) => {
-      const normalizedType = plan.type === "pppoe" ? "pppoe" : plan.type === "hotspot" || plan.type === "trials" ? "hotspot" : "other";
+      const normalizedType = plan.type === "pppoe" ? "pppoe" : plan.type === "vlan" ? "vlan" : plan.type === "hotspot" || plan.type === "trials" ? "hotspot" : "other";
       const matchesService = serviceFilter === "all" || normalizedType === serviceFilter;
       const matchesRouter = routerFilter === "all" || String(plan.router_id) === routerFilter;
       const matchesPort = portFilter === "all"
@@ -958,6 +1000,7 @@ export default function Plans() {
             { id: "hotspot",   label: "Hotspot Plans" },
             { id: "pppoe",     label: "PPPoE Plans" },
             { id: "static",    label: "Static IP Plans" },
+            { id: "vlan",      label: "VLAN Plans" },
             { id: "bandwidth", label: "Bandwidth Plans" },
             { id: "trials",    label: "Hotspot Trials" },
             { id: "fup",       label: "FUP" },
@@ -1015,10 +1058,11 @@ export default function Plans() {
             </label>
             <label className="plans-filter">
               <span>Service</span>
-              <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot")}>
+              <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot" | "vlan")}>
                 <option value="all">All services</option>
                 <option value="pppoe">PPPoE</option>
                 <option value="hotspot">Hotspot</option>
+                <option value="vlan">VLAN</option>
               </select>
             </label>
             <label className="plans-filter">
@@ -1103,8 +1147,8 @@ export default function Plans() {
                   <span>Service</span><span>Plan / scope</span><span>Speed</span><span>Price</span><span>Validity</span><span>Status</span><span className="plans-actions-heading">Actions</span>
                 </div>
                 {visiblePlans.map((p) => {
-                  const serviceType = p.type === "pppoe" ? "pppoe" : p.type === "hotspot" || p.type === "trials" ? "hotspot" : "other";
-                  const serviceLabel = serviceType === "pppoe" ? "PPPoE" : serviceType === "hotspot" ? "Hotspot" : p.type;
+                  const serviceType = p.type === "pppoe" ? "pppoe" : p.type === "vlan" ? "vlan" : p.type === "hotspot" || p.type === "trials" ? "hotspot" : "other";
+                  const serviceLabel = serviceType === "pppoe" ? "PPPoE" : serviceType === "vlan" ? "VLAN" : serviceType === "hotspot" ? "Hotspot" : p.type;
                   const speed = p.speed_down === p.speed_up ? `${p.speed_down} Mbps` : `${p.speed_down}/${p.speed_up} Mbps`;
                   const router = routers.find((item) => item.id === p.router_id);
                   const port = p.port_id ? ports.find((item) => item.id === p.port_id) : null;

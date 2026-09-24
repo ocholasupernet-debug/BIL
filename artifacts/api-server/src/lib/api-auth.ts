@@ -33,7 +33,7 @@ export interface PaymentIntentPayload {
   planId: number;
   amount: number;
   phone: string;
-  serviceType?: "hotspot" | "pppoe";
+  serviceType?: "hotspot" | "pppoe" | "vlan";
   routerId?: number;
   portId?: number;
   customerId?: number;
@@ -116,7 +116,7 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
     if (!Number.isSafeInteger(payload.adminId) || !Number.isSafeInteger(payload.planId) ||
         !Number.isFinite(payload.amount) || payload.amount <= 0 ||
         !/^2547\d{8}$/.test(payload.phone) || !payload.nonce ||
-        (payload.serviceType !== undefined && payload.serviceType !== "hotspot" && payload.serviceType !== "pppoe") ||
+         (payload.serviceType !== undefined && payload.serviceType !== "hotspot" && payload.serviceType !== "pppoe" && payload.serviceType !== "vlan") ||
          (payload.routerId !== undefined && (!Number.isSafeInteger(payload.routerId) || payload.routerId <= 0)) ||
          (payload.portId !== undefined && (!Number.isSafeInteger(payload.portId) || payload.portId <= 0)) ||
         (payload.customerId !== undefined && (!Number.isSafeInteger(payload.customerId) || payload.customerId <= 0)) ||

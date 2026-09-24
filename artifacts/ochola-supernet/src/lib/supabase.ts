@@ -233,7 +233,7 @@ export interface DbCustomer {
   password: string | null;
   email: string | null;
   phone: string | null;
-  type: string | null;           // 'hotspot' | 'pppoe' | 'static'
+  type: string | null;           // 'hotspot' | 'pppoe' | 'static' | 'vlan'
   plan_id: number | null;
   status: string;                // 'active' | 'expired' | 'suspended'
   ip_address: string | null;

@@ -41,6 +41,7 @@ import {
   listDeployableSources,
   type DeployableSourceType,
 } from "../lib/portal-assets.js";
+import { vlanCustomerQueueIdentity, vlanQueueHasTraffic } from "../lib/vlan-customer-queue.js";
 import { generateVpsOvpnSetupScript, describeVpnArchitecture } from "../lib/vpn-utils";
 import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
@@ -327,8 +328,10 @@ interface SbRouter {
 
 type PrepaidPresenceRow = {
   id: number;
+  type: string | null;
   username: string | null;
   pppoe_username: string | null;
+  ip_address: string | null;
   expires_at: string | null;
   last_seen: string | null;
   data_used_mb: number | string | null;
@@ -375,7 +378,7 @@ async function persistPrepaidLiveState(
     : `&router_id=eq.${routerId}`;
   const customers = await sbSelect<PrepaidPresenceRow>(
     "isp_customers",
-    `admin_id=eq.${adminId}${customerScope}&select=id,username,pppoe_username,expires_at,last_seen,data_used_mb,data_used_bytes,service_online`,
+    `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,ip_address,expires_at,last_seen,data_used_mb,data_used_bytes,service_online`,
   );
   if (customers.length === 0) return;
 
@@ -383,12 +386,30 @@ async function persistPrepaidLiveState(
   const observedAt = data.fetchedAt || new Date().toISOString();
   const observedAtMs = Date.parse(observedAt);
   for (const customer of customers) {
-    const sessionBytes = prepaidIdentityKeys(customer)
+    if (customer.type === "vlan" && !data.vlanQueueStatsAvailable) continue;
+    let sessionBytes = prepaidIdentityKeys(customer)
       .map(identity => usage.get(identity))
       .find(value => value !== undefined);
     const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
-    const online = sessionBytes !== undefined && !expired;
+    let online = sessionBytes !== undefined && !expired;
+    if (customer.type === "vlan" && data.vlanQueueStatsAvailable) {
+      let queue: (typeof data.vlanCustomerQueues)[number] | undefined;
+      try {
+        const identity = vlanCustomerQueueIdentity(adminId, customer.id, customer.ip_address);
+        queue = data.vlanCustomerQueues.find(candidate =>
+          candidate.name === identity.name
+          && candidate.comment === identity.comment
+          && candidate.target === identity.target,
+        );
+      } catch {
+        queue = undefined;
+      }
+      sessionBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
+        ? queue.bytesIn + queue.bytesOut
+        : undefined;
+      online = !!queue && !queue.disabled && vlanQueueHasTraffic(queue.rate) && !expired;
+    }
     const payload: Record<string, unknown> = {
       service_online: online,
     };

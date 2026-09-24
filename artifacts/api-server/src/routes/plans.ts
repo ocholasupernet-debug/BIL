@@ -13,6 +13,8 @@ import { logActivity } from "../lib/activity-log.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import { isSupportedPlanType, normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import {
   planServicePoolName,
   portServiceResourceNames,
@@ -44,23 +46,43 @@ async function validatePlanScope(
   routerValue: unknown,
   portValue: unknown,
   restrictions?: Pick<PlanContext, "allowedRouterIds" | "allowedPortIds">,
+  planType?: unknown,
 ): Promise<PlanScope | null> {
+  const vlanPlan = normalizePlanServiceType(planType) === "vlan";
   const requestedRouterId = parseOptionalId(routerValue);
   const requestedPortId = parseOptionalId(portValue);
   if (routerValue !== undefined && routerValue !== null && routerValue !== "" && requestedRouterId === null) return null;
   if (portValue !== undefined && portValue !== null && portValue !== "" && portValue !== "null" && requestedPortId === null) return null;
+  if (vlanPlan && requestedPortId === null) return null;
   if (restrictions?.allowedPortIds) {
     if (requestedPortId === null || !restrictions.allowedPortIds.has(requestedPortId)) return null;
   }
 
   let routerId = requestedRouterId;
   if (requestedPortId !== null) {
-    const ports = await sbSelect<{ id: number; router_id: number; status: string }>(
+    const ports = await sbSelect<{
+      id: number;
+      router_id: number;
+      status: string;
+      handoff_mode: string | null;
+      vlan_tag: string | null;
+      reseller_id: number | null;
+      assigned_reseller_id: number | null;
+    }>(
       "isp_reseller_ports",
-      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&select=id,router_id,status&limit=1`,
+      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&select=id,router_id,status,handoff_mode,vlan_tag,reseller_id,assigned_reseller_id&limit=1`,
     );
     const port = ports[0];
     if (!port || port.status === "disabled") return null;
+    if (
+      vlanPlan
+      && (
+        port.handoff_mode !== "vlan_services"
+        || !isValidVlanTag(port.vlan_tag)
+        || !Number.isSafeInteger(port.assigned_reseller_id ?? port.reseller_id)
+        || Number(port.assigned_reseller_id ?? port.reseller_id) < 1
+      )
+    ) return null;
     if (routerId !== null && port.router_id !== routerId) return null;
     routerId = port.router_id;
   }
@@ -120,7 +142,7 @@ async function planContextRows(context: PlanContext): Promise<{
         context.allowedRouterIds!.has(Number(plan.router_id))
         && context.allowedPortIds!.has(Number(plan.port_id)),
       )
-    : allPlans.filter(plan => plan.port_id == null);
+    : allPlans.filter(plan => plan.port_id == null || String(plan.type ?? "").toLowerCase() === "vlan");
   const filteredRouters = context.allowedRouterIds
     ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
     : routers;
@@ -229,6 +251,8 @@ router.get("/plans", async (req, res): Promise<void> => {
     ? "&type=in.(hotspot,trials,trial)"
     : requestedType === "pppoe"
       ? "&type=eq.pppoe"
+      : requestedType.toLowerCase() === "vlan"
+        ? "&type=eq.vlan"
     : "";
   const requestedRouterId = parseOptionalId(req.query.routerId);
   const requestedPortId = parseOptionalId(req.query.portId);
@@ -561,6 +585,11 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     validityUnit,
     validity_unit,
   } = req.body;
+  const normalizedType = String(type ?? "hotspot").trim().toLowerCase();
+  if (!isSupportedPlanType(normalizedType)) {
+    res.status(400).json({ error: "type must be hotspot, pppoe, static, trial, or vlan." });
+    return;
+  }
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
     return;
@@ -582,18 +611,26 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     return;
   }
   const effectiveAdminId = context.tenantId;
-  const scope = await validatePlanScope(effectiveAdminId, routerId, portId, context);
+  const scope = await validatePlanScope(effectiveAdminId, routerId, portId, context, normalizedType);
   if (!scope) {
     res.status(400).json({ error: context.account.role === "reseller"
       ? "Choose one of your assigned VLAN service ports for this plan."
       : "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
   }
-  const pools = await planPoolAssignment(effectiveAdminId, scope, type);
+  if (normalizedType === "vlan") {
+    const down = Number(speedDown ?? speed ?? 10);
+    const up = Number(speedUp ?? speed ?? 10);
+    if (!Number.isFinite(down) || down <= 0 || !Number.isFinite(up) || up <= 0) {
+      res.status(400).json({ error: "VLAN plans need positive download and upload speeds." });
+      return;
+    }
+  }
+  const pools = await planPoolAssignment(effectiveAdminId, scope, normalizedType);
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
     admin_id:     effectiveAdminId,
     ...planWritePayload({
-       name, type, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
+       name, type: normalizedType, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
       description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
      }, scope, pools),
   });
@@ -625,14 +662,21 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
+  const normalizedType = String(req.body.type ?? source.type ?? "hotspot").trim().toLowerCase();
+  if (!isSupportedPlanType(normalizedType)) {
+    res.status(400).json({ error: "type must be hotspot, pppoe, static, trial, or vlan." });
+    return;
+  }
 
   const hasScopeInput = Object.prototype.hasOwnProperty.call(req.body, "routerId")
     || Object.prototype.hasOwnProperty.call(req.body, "portId");
-  const scope = hasScopeInput
-    ? await validatePlanScope(effectiveAdminId, req.body.routerId, req.body.portId, context)
-    : source.router_id
-      ? { routerId: source.router_id, portId: source.port_id }
-      : null;
+  const scope = await validatePlanScope(
+    effectiveAdminId,
+    hasScopeInput ? req.body.routerId : source.router_id,
+    hasScopeInput ? req.body.portId : source.port_id,
+    context,
+    normalizedType,
+  );
   if (context.allowedPortIds && (!context.allowedPortIds.has(Number(source.port_id)) || !context.allowedRouterIds?.has(Number(source.router_id)))) {
     res.status(403).json({ error: "This plan is outside your assigned VLAN service scope." });
     return;
@@ -644,7 +688,7 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   const pools = await planPoolAssignment(
     effectiveAdminId,
     scope,
-    req.body.type ?? source.type ?? "hotspot",
+    normalizedType,
     req.body.expiredIpPool ?? source.expired_ip_pool,
   );
 
@@ -706,7 +750,13 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     res.status(404).json({ error: "Source plan not found." });
     return;
   }
-  const scope = await validatePlanScope(effectiveAdminId, req.body.targetRouterId, req.body.targetPortId, context);
+  const scope = await validatePlanScope(
+    effectiveAdminId,
+    req.body.targetRouterId,
+    req.body.targetPortId,
+    context,
+    source.type ?? "hotspot",
+  );
   if (!scope) {
     res.status(400).json({ error: "Choose a target router, or a target port belonging to that router." });
     return;

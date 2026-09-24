@@ -66,6 +66,15 @@ async function bundleRenewalHelper() {
               }
               export async function addHotspotUser() {}
               export async function updateHotspotUser() {}
+              export async function resetHotspotUserCounters() {}
+              export async function disconnectHotspotActiveUser() {}
+              export async function requireHotspotUserProfile() {}
+              export async function scheduleHotspotUserExpiry() {}
+              export async function schedulePppUserExpiry() {}
+              export async function reconcileVlanCustomerQueue() {}
+              export function classifyRouterConnectionFailure() {
+                return { profile: "unknown", summary: "Router unavailable", message: "Router unavailable" };
+              }
             `,
             "logger": `export const logger = { info() {}, warn() {}, error() {} };`,
             "router-vpn-ip": `export function isRouterManagementVpnIp(value) { return /^10\\.8\\.(5|6)\\./.test(value || ""); }`,
@@ -150,6 +159,7 @@ function callbackFixture(overrides = {}) {
         rollback: async () => { state.routerEnabled = false; },
       };
     },
+    reactivateVlanAccess: async () => ({ ok: true, skipped: true }),
     settle: async args => {
       state.settleCalls += 1;
       if (state.failSettlement) throw new Error("staging database unavailable");

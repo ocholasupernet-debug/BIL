@@ -62,6 +62,22 @@ test("payment intents bind PPPoE customer and service and reject tampering", () 
   assert.equal(payload.serviceType, "pppoe");
   assert.equal(payload.customerId, 101);
   assert.equal(auth.validatePaymentIntent(`${intent}tampered`), null);
+
+  const vlanIntent = auth.generatePaymentIntent({
+    adminId: 7,
+    planId: 23,
+    amount: 1800,
+    phone: "254712345678",
+    serviceType: "vlan",
+    customerId: 102,
+    routerId: 5,
+    portId: 9,
+  });
+  const vlanPayload = auth.validatePaymentIntent(vlanIntent);
+  assert.equal(vlanPayload.serviceType, "vlan");
+  assert.equal(vlanPayload.customerId, 102);
+  assert.equal(vlanPayload.routerId, 5);
+  assert.equal(vlanPayload.portId, 9);
 });
 
 test("incomplete or unsupported service configurations are not checkout-ready", () => {

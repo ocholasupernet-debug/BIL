@@ -600,7 +600,7 @@ function buildVlanServiceCommands(
       commands.push(["/ip/hotspot/walled-garden/ip/add", `=dst-host=${hostname}`, "=action=accept", `=comment=${comment("walled_garden")}`]);
     }
   }
-  if (hotspotPath || pppoePath) {
+  if (hotspotPath || pppoePath || port.handoff_mode === "vlan_services") {
     commands.push([
       "/queue/simple/add",
       `=name=${resources.parentQueue}`,

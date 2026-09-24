@@ -214,8 +214,9 @@ const SIDEBAR_COLLAPSED_W = 64;
 
 type PlatformBillingState = {
   eligible: boolean;
+  paymentsAvailable: boolean;
   invoice?: {
-    id: number;
+    id?: number;
     amount_due: number;
     due_date: string;
     status: string;
@@ -269,7 +270,12 @@ function PlatformBillingBanner() {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
       });
-      const prepared = await prepare.json() as { ok?: boolean; error?: string; invoiceId?: number; amount?: number; adminId?: number; accountReference?: string };
+      const prepared = await prepare.json() as { ok?: boolean; paid?: boolean; error?: string; invoiceId?: number; amount?: number; adminId?: number; accountReference?: string };
+      if (prepare.ok && prepared.ok && prepared.paid) {
+        setMessage("Payment already confirmed. Your account is renewed.");
+        await load();
+        return;
+      }
       if (!prepare.ok || !prepared.ok || !prepared.invoiceId || !prepared.amount) throw new Error(prepared.error || "Could not prepare the payment.");
       const stk = await fetch("/api/mpesa/stk", {
         method: "POST",
@@ -321,17 +327,19 @@ function PlatformBillingBanner() {
           KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")} due by {new Date(`${state.invoice.due_date}T00:00:00.000Z`).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}.
           {" "}Time left: <strong>{countdown}</strong>
         </span>
+        {!state.paymentsAvailable && <small style={{ display: "block", marginTop: 6 }}>Renewal payments are unavailable in this preview.</small>}
         {message && <small style={{ display: "block", marginTop: 6, color: message.includes("confirmed") ? "#86efac" : "var(--isp-text-muted)" }}>{message}</small>}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "1 1 320px", maxWidth: 430 }}>
         <input
           value={phone}
           onChange={event => setPhone(event.target.value)}
+          disabled={!state.paymentsAvailable}
           placeholder="07xx xxx xxx"
           aria-label="M-Pesa phone number"
           style={{ flex: 1, minWidth: 145, padding: "9px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(0,0,0,0.15)", color: "inherit" }}
         />
-        <button type="button" onClick={() => void renew()} disabled={busy || !phone.trim()} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "#f59e0b", color: "#1c1917", fontWeight: 800, cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+        <button type="button" onClick={() => void renew()} disabled={!state.paymentsAvailable || busy || !phone.trim()} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "#f59e0b", color: "#1c1917", fontWeight: 800, cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
           {busy ? "Waiting…" : "Renew"}
         </button>
       </div>

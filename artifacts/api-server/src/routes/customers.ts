@@ -3,6 +3,7 @@ import {
   sbSelect,
   sbSelectStrict,
   sbInsert,
+  sbInsertStrict,
   sbUpdate,
   sbUpdateStrict,
   sbDelete,
@@ -11,6 +12,8 @@ import {
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
 import {
+  reconcileVlanCustomerQueue,
+  removeVlanCustomerQueue,
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
@@ -26,6 +29,9 @@ import { hotspotPlanProfileName, isPrepaidHotspotUsername, prepaidHotspotUsernam
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 
 const router: IRouter = Router();
 
@@ -51,6 +57,7 @@ type CustomerRow = {
 type PlanRow = {
   id: number;
   name: string;
+  is_active?: boolean;
   type: string | null;
   plan_type: string | null;
   router_id: number | null;
@@ -72,6 +79,81 @@ type RouterRow = {
   router_username: string | null;
   router_secret: string | null;
 };
+
+type VlanPortRow = {
+  id: number;
+  admin_id: number;
+  router_id: number;
+  interface_name: string;
+  bridge_name: string | null;
+  handoff_mode: "vlan_services";
+  reseller_id: number | null;
+  assigned_reseller_id: number | null;
+  vlan_tag: string | null;
+  subnet_range: string | null;
+  status: string;
+};
+
+async function loadVlanCustomerContext(
+  adminId: number,
+  plan: PlanRow,
+  requestedRouterId?: unknown,
+  requestedPortId?: unknown,
+): Promise<{ router: RouterRow; port: VlanPortRow; parentQueue: string; parentComment: string }> {
+  if (normalizePlanServiceType(plan.plan_type || plan.type) !== "vlan") {
+    throw new Error("Choose a VLAN plan for this customer.");
+  }
+  if (!plan.router_id || !plan.port_id) {
+    throw new Error("The VLAN plan must be assigned to a router and VLAN service port.");
+  }
+  const selectedRouterId = requestedRouterId === undefined || requestedRouterId === null || requestedRouterId === ""
+    ? plan.router_id
+    : Number(requestedRouterId);
+  const selectedPortId = requestedPortId === undefined || requestedPortId === null || requestedPortId === ""
+    ? plan.port_id
+    : Number(requestedPortId);
+  if (selectedRouterId !== plan.router_id || selectedPortId !== plan.port_id) {
+    throw new Error("The VLAN customer router and port must match the selected plan.");
+  }
+
+  const ports = await sbSelectStrict<VlanPortRow>(
+    "isp_reseller_ports",
+    `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+  );
+  const port = ports[0];
+  if (
+    !port
+    || !isValidVlanTag(port.vlan_tag)
+    || !Number.isSafeInteger(port.assigned_reseller_id ?? port.reseller_id)
+    || Number(port.assigned_reseller_id ?? port.reseller_id) < 1
+  ) {
+    throw new Error("The VLAN plan's service port must be owned by this ISP, use VLAN services, and have a valid VLAN tag.");
+  }
+  const routers = await sbSelectStrict<RouterRow>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  );
+  const router = routers[0];
+  if (!router) throw new Error("The VLAN plan's router was not found for this ISP account.");
+  const resources = portServiceResourceNames(port);
+  return {
+    router,
+    port,
+    parentQueue: resources.parentQueue,
+    parentComment: `${resources.commentPrefix}_parent_queue`,
+  };
+}
+
+function validateVlanCustomerAddress(ipAddress: unknown, port: VlanPortRow): string {
+  const address = String(ipAddress ?? "").trim();
+  if (!isValidIpv4(address)) {
+    throw new Error("A valid assigned static IPv4 address is required for a VLAN customer.");
+  }
+  if (!port.subnet_range || !ipv4InSubnet(address, port.subnet_range)) {
+    throw new Error("The assigned static IP must belong to the VLAN service subnet.");
+  }
+  return address;
+}
 
 function asOptionalIso(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
@@ -139,7 +221,10 @@ async function reconcileCustomerAccess(
         `id=eq.${nextPlanId}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
       ))[0]
     : undefined;
-  const planType = String(plan?.plan_type || plan?.type || nextType).toLowerCase();
+  const planType = normalizePlanServiceType(plan?.plan_type || plan?.type || nextType);
+  if (planType === "vlan" && !plan) {
+    throw new Error("An active VLAN plan is required for this customer.");
+  }
   if (planType === "hotspot") {
     const generated = prepaidHotspotUsername(
       updates.phone ?? current.phone,
@@ -161,9 +246,12 @@ async function reconcileCustomerAccess(
   let routerSynced = false;
   let syncedRouterId: number | null = null;
   let syncedRouterName: string | null = null;
-  if (nextName && plan) {
+  if (plan && (nextName || planType === "vlan")) {
     const routerId = nextRouterId ?? plan.router_id;
     if (!routerId) throw new Error("Assign this prepaid user to a router before saving changes");
+    if (planType === "vlan" && routerId !== plan.router_id) {
+      throw new Error("The VLAN customer router must match the selected VLAN plan.");
+    }
     const router = (await sbSelect<RouterRow>(
       "isp_routers",
       `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
@@ -182,7 +270,7 @@ async function reconcileCustomerAccess(
       plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
     );
 
-    if (currentName && currentName !== nextName) {
+    if (planType !== "vlan" && currentName && currentName !== nextName) {
       if (planType === "pppoe") {
         await disconnectPPPActiveByName(creds, currentName).catch(() => {});
         await removePPPSecretByName(creds, currentName).catch(() => {});
@@ -192,7 +280,47 @@ async function reconcileCustomerAccess(
       }
     }
 
-    if (planType === "pppoe") {
+    if (planType === "vlan") {
+      const vlanContext = await loadVlanCustomerContext(
+        adminId,
+        plan,
+        routerId,
+        updates.port_id ?? current.port_id ?? plan.port_id,
+      );
+      const address = validateVlanCustomerAddress(updates.ip_address ?? current.ip_address, vlanContext.port);
+      const assignedAddresses = await sbSelectStrict<{ id: number }>(
+        "isp_customers",
+        `admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&port_id=eq.${plan.port_id}&ip_address=eq.${encodeURIComponent(address)}&id=neq.${current.id}&select=id&limit=1`,
+      );
+      if (assignedAddresses[0]) throw new Error("This static IP address is already assigned to another customer.");
+      await reconcileVlanCustomerQueue(creds, {
+        adminId,
+        customerId: current.id,
+        ipAddress: address,
+        parentQueue: vlanContext.parentQueue,
+        parentComment: vlanContext.parentComment,
+        maxLimit: rateLimit ?? "0/0",
+        enabled,
+        expiresAt: nextExpiry,
+      });
+      const previousAddress = String(current.ip_address ?? "").trim();
+      if (previousAddress && previousAddress !== address && isValidIpv4(previousAddress)) {
+        try {
+          await removeVlanCustomerQueue(creds, {
+            adminId,
+            customerId: current.id,
+            ipAddress: previousAddress,
+            preserveExpiry: true,
+          });
+        } catch (error) {
+          await removeVlanCustomerQueue(creds, { adminId, customerId: current.id, ipAddress: address }).catch(() => {});
+          throw error;
+        }
+      }
+      updates.type = "vlan";
+      updates.router_id = plan.router_id;
+      updates.port_id = plan.port_id;
+    } else if (planType === "pppoe") {
       await reconcilePppoeUserAccess(creds, {
         name: nextName,
         password: nextPassword,
@@ -222,7 +350,7 @@ async function reconcileCustomerAccess(
     syncedRouterName = router.name;
   }
 
-  if (nextName && plan) {
+  if (nextName && plan && planType !== "vlan") {
     await syncRadiusCustomer({
       username: nextName,
       password: nextPassword,
@@ -258,7 +386,10 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
 });
 
 router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
-  const { adminId = 1, ispId, name, phone, email, planId, type, ipAddress, macAddress, status, expiryDate, pppoeUsername } = req.body;
+  const {
+    adminId = 1, ispId, name, phone, email, planId, type, ipAddress, macAddress,
+    status, expiryDate, pppoeUsername, routerId, portId,
+  } = req.body;
   if (!name || !phone) {
     res.status(400).json({ error: "name and phone are required" });
     return;
@@ -268,6 +399,129 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
     return;
   }
+
+  const requestedPlanId = Number(planId);
+  const mayInferVlanFromPlan = type === undefined || type === null || type === "";
+  const needsVlanPlanCheck = String(type ?? "").trim().toLowerCase() === "vlan" || mayInferVlanFromPlan;
+  let plan: PlanRow | undefined;
+  if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
+    const planFilter =
+      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active&limit=1`;
+    const planRows = needsVlanPlanCheck
+      ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
+      : await sbSelect<PlanRow>("isp_plans", planFilter);
+    plan = planRows[0];
+  }
+  const planServiceType = normalizePlanServiceType(plan?.plan_type || plan?.type);
+  const requestedType = String(type ?? (planServiceType === "vlan" ? "vlan" : "hotspot")).trim().toLowerCase();
+  if (planServiceType === "vlan" && requestedType !== "vlan") {
+    res.status(400).json({ error: "The selected plan is VLAN service; create the customer as type vlan." });
+    return;
+  }
+  if (requestedType === "vlan") {
+    if (!plan || !plan.is_active || planServiceType !== "vlan") {
+      res.status(400).json({ error: "Select an active VLAN plan owned by this ISP account." });
+      return;
+    }
+    let vlanContext: Awaited<ReturnType<typeof loadVlanCustomerContext>>;
+    let address: string;
+    let expiresAt: string | null;
+    try {
+      vlanContext = await loadVlanCustomerContext(effectiveAdminId, plan, routerId, portId);
+      address = validateVlanCustomerAddress(ipAddress, vlanContext.port);
+      expiresAt = asOptionalIso(expiryDate) ?? null;
+      const assignedAddresses = await sbSelectStrict<{ id: number }>(
+        "isp_customers",
+        `admin_id=eq.${effectiveAdminId}&router_id=eq.${plan.router_id}&port_id=eq.${plan.port_id}&ip_address=eq.${encodeURIComponent(address)}&select=id&limit=1`,
+      );
+      if (assignedAddresses[0]) throw new Error("This static IP address is already assigned to another customer.");
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid VLAN customer assignment." });
+      return;
+    }
+    const requestedStatus = String(status ?? "active").trim().toLowerCase();
+    const enabled = requestedStatus === "active" &&
+      (!expiresAt || Date.parse(expiresAt) > Date.now());
+    const creds = routerCredentials(vlanContext.router);
+    const [pending] = await sbInsertStrict<CustomerRow>("isp_customers", {
+      admin_id: effectiveAdminId,
+      name,
+      phone,
+      email: email ?? null,
+      plan_id: plan.id,
+      type: "vlan",
+      router_id: plan.router_id,
+      port_id: plan.port_id,
+      ip_address: address,
+      mac_address: macAddress ?? null,
+      status: "provisioning",
+      expires_at: expiresAt,
+      pppoe_username: null,
+      username: null,
+    });
+    if (!pending?.id) {
+      res.status(500).json({ error: "The VLAN customer account could not be reserved." });
+      return;
+    }
+    try {
+      await reconcileVlanCustomerQueue(creds, {
+        adminId: effectiveAdminId,
+        customerId: pending.id,
+        ipAddress: address,
+        parentQueue: vlanContext.parentQueue,
+        parentComment: `${portServiceResourceNames(vlanContext.port).commentPrefix}_parent_queue`,
+        maxLimit: routerRateLimit(
+          plan.speed_down,
+          plan.speed_up,
+          plan.speed_down_unit ?? "Mbps",
+          plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+        ) ?? "0/0",
+        enabled,
+        expiresAt,
+      });
+      const [row] = await sbUpdateStrict<CustomerRow>(
+        "isp_customers",
+        `id=eq.${pending.id}&admin_id=eq.${effectiveAdminId}`,
+        { status: requestedStatus, updated_at: new Date().toISOString() },
+      );
+      if (!row) throw new Error("The VLAN customer status could not be saved after RouterOS provisioning.");
+      void logActivity({
+        adminId: Number(effectiveAdminId),
+        type: "customer",
+        action: "added",
+        subject: name,
+        details: { phone, type: "vlan", ipAddress: address, planId: plan.id },
+      });
+      res.status(201).json(row);
+      return;
+    } catch (error) {
+      const cleanupErrors: string[] = [];
+      await removeVlanCustomerQueue(creds, {
+        adminId: effectiveAdminId,
+        customerId: pending.id,
+        ipAddress: address,
+      }).catch(cleanupError => cleanupErrors.push(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      ));
+      await sbDeleteStrict("isp_customers", `id=eq.${pending.id}&admin_id=eq.${effectiveAdminId}`)
+        .catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+      logger.warn({
+        customerId: pending.id,
+        adminId: effectiveAdminId,
+        err: error instanceof Error ? error.message : String(error),
+        cleanupErrors,
+      }, "[customers] VLAN creation rolled back after RouterOS provisioning failure");
+      res.status(503).json({
+        error: `The VLAN customer was not created because RouterOS provisioning failed: ${
+          error instanceof Error ? error.message : String(error)
+        }${cleanupErrors.length ? ` Cleanup requires administrator attention: ${cleanupErrors.join("; ")}` : ""}`,
+      });
+      return;
+    }
+  }
+
   const [row] = await sbInsert<Record<string, unknown>>("isp_customers", {
     admin_id:       effectiveAdminId,
     name,
@@ -289,7 +543,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
 router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> => {
   const id = req.params.id;
   const {
-    adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id,
+    adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id, portId, port_id,
     type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
     password, fup_limit_mb,
   } = req.body;
@@ -317,6 +571,7 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
   if (email      !== undefined) updates.email      = email;
   if (planId !== undefined || plan_id !== undefined) updates.plan_id = planId ?? plan_id;
   if (routerId !== undefined || router_id !== undefined) updates.router_id = routerId ?? router_id;
+  if (portId !== undefined || port_id !== undefined) updates.port_id = portId ?? port_id;
   if (type       !== undefined) updates.type       = type;
   if (ipAddress !== undefined || ip_address !== undefined) updates.ip_address = ipAddress ?? ip_address;
   if (mac_address !== undefined) updates.mac_address = mac_address;
@@ -699,22 +954,59 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   }
 });
 
-router.delete("/customers/:id", async (req, res): Promise<void> => {
-  const requestedAdminId = Number(req.query.adminId ?? req.body?.adminId);
-  const customerFilter = Number.isSafeInteger(requestedAdminId) && requestedAdminId > 0
-    ? `id=eq.${req.params.id}&admin_id=eq.${requestedAdminId}&select=id,name,admin_id,username,pppoe_username&limit=1`
-    : `id=eq.${req.params.id}&select=id,name,admin_id,username,pppoe_username&limit=1`;
+router.delete("/customers/:id", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId ?? req.body?.adminId);
+  if (!Number.isSafeInteger(adminId) || adminId < 1) {
+    res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
+    return;
+  }
   const rows = await sbSelectStrict<{
     id: number;
     name: string;
     admin_id: number;
     username: string | null;
     pppoe_username: string | null;
-  }>("isp_customers", customerFilter);
+    type: string | null;
+    ip_address: string | null;
+    router_id: number | null;
+    port_id: number | null;
+  }>(
+    "isp_customers",
+    `id=eq.${req.params.id}&admin_id=eq.${adminId}&select=id,name,admin_id,username,pppoe_username,type,ip_address,router_id,port_id&limit=1`,
+  );
   const row = rows[0];
   if (!row) {
     res.status(404).json({ error: "Customer not found" });
     return;
+  }
+
+  if (row.type === "vlan") {
+    if (!row.router_id || !row.ip_address) {
+      res.status(409).json({ error: "The VLAN customer has no saved router or assigned IP to remove from RouterOS." });
+      return;
+    }
+    const routers = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${row.router_id}&admin_id=eq.${row.admin_id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    if (!routers[0]) {
+      res.status(409).json({ error: "The VLAN customer's router is no longer available for queue cleanup." });
+      return;
+    }
+    try {
+      await removeVlanCustomerQueue(routerCredentials(routers[0]), {
+        adminId: row.admin_id,
+        customerId: row.id,
+        ipAddress: row.ip_address,
+      });
+    } catch (error) {
+      res.status(503).json({
+        error: `The VLAN customer queue could not be removed, so the account was not deleted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+      return;
+    }
   }
 
   const transactions = await sbSelectStrict<{

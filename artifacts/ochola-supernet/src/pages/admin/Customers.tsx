@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID, type DbCustomer } from "@/lib/supabase";
+import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
 import {
   Search, Plus, Edit, Trash, Download, Loader2, Users,
   Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
@@ -11,12 +11,22 @@ import {
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
+import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 
 /* ══════════════════════════ Types ══════════════════════════ */
-interface PlanLite { id: number; name: string; type: string; price: number; speed_down: number; speed_up: number; }
+interface PlanLite {
+  id: number;
+  name: string;
+  type: string;
+  price: number;
+  speed_down: number;
+  speed_up: number;
+  router_id?: number | null;
+  port_id?: number | null;
+}
 interface RouterLite { id: number; name: string; host: string; status: string; }
 
-type CustomerType = "hotspot" | "pppoe" | "static";
+type CustomerType = "hotspot" | "pppoe" | "static" | "vlan";
 
 interface NewCustomerForm {
   type: CustomerType;
@@ -47,6 +57,7 @@ const TYPE_META: Record<CustomerType, { label: string; color: string; bg: string
   hotspot: { label: "Hotspot", color: "var(--isp-accent)", bg: "var(--isp-accent-glow)",   icon: <Wifi    size={11} /> },
   pppoe:   { label: "PPPoE",   color: "var(--isp-accent)", bg: "var(--isp-accent-glow)",  icon: <Network size={11} /> },
   static:  { label: "Static",  color: "#34d399", bg: "rgba(16,185,129,0.12)",  icon: <Globe   size={11} /> },
+  vlan:    { label: "VLAN",    color: "#818cf8", bg: "rgba(129,140,248,0.12)", icon: <Network size={11} /> },
 };
 
 const AVATAR_COLORS = ["var(--isp-accent)","#8b5cf6","#f59e0b","#10b981","#ec4899","#f87171","#60a5fa"];
@@ -86,9 +97,17 @@ async function fetchCustomers(): Promise<DbCustomer[]> {
   return data ?? [];
 }
 async function fetchPlans(): Promise<PlanLite[]> {
-  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,speed_down,speed_up").eq("admin_id", ADMIN_ID).is("port_id", null).order("type").order("price");
+  const { data, error } = await supabase
+    .from("isp_plans")
+    .select("id,name,type,price,speed_down,speed_up,router_id,port_id")
+    .eq("admin_id", ADMIN_ID)
+    .or("port_id.is.null,type.eq.vlan")
+    .order("type")
+    .order("price");
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).filter(plan =>
+    plan.port_id == null ? plan.type !== "vlan" : plan.type === "vlan",
+  );
 }
 async function fetchRouters(): Promise<RouterLite[]> {
   const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
@@ -99,6 +118,38 @@ async function fetchRouters(): Promise<RouterLite[]> {
 async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise<void> {
   const plan = plans.find(p => p.id === form.plan_id);
   const radUsername = form.type === "pppoe" ? (form.pppoe_username || form.username) : form.username;
+
+  if (form.type === "vlan") {
+    if (!form.ip_address.trim()) throw new Error("An assigned IP address is required for a VLAN customer.");
+    if (!form.phone.trim()) throw new Error("A phone number is required for a VLAN customer.");
+    if (!plan || plan.type !== "vlan" || !plan.router_id || !plan.port_id) {
+      throw new Error("Select a VLAN plan attached to a router and VLAN service port.");
+    }
+    const token = getAdminApiToken();
+    const response = await fetch(apiUrl("/api/customers"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        adminId: ADMIN_ID,
+        name: form.name.trim(),
+        phone: form.phone.trim() || null,
+        email: form.email.trim() || null,
+        planId: plan.id,
+        routerId: plan.router_id,
+        portId: plan.port_id,
+        type: "vlan",
+        ipAddress: form.ip_address.trim(),
+        status: "active",
+        expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+      }),
+    });
+    const payload = await parseJsonResponse<{ error?: string }>(response);
+    if (!response.ok) throw new Error(payload.error || `VLAN customer could not be created (${response.status}).`);
+    return;
+  }
 
   // 1. Insert to isp_customers
   const { error: custErr } = await supabase.from("isp_customers").insert({
@@ -298,8 +349,9 @@ function CustomerModal({
 
   const hotspotPlans = plans.filter(p => p.type === "hotspot");
   const pppoePlans   = plans.filter(p => p.type === "pppoe");
-  const allPlans     = form.type === "pppoe" ? pppoePlans : form.type === "hotspot" ? hotspotPlans : plans;
-  const selectedPlan = plans.find(p => p.id === form.plan_id);
+  const vlanPlans    = plans.filter(p => p.type === "vlan" && p.port_id != null && p.router_id != null);
+  const allPlans     = form.type === "pppoe" ? pppoePlans : form.type === "hotspot" ? hotspotPlans : form.type === "vlan" ? vlanPlans : plans.filter(p => p.type !== "vlan");
+  const selectedPlan = allPlans.find(p => p.id === form.plan_id);
 
   const set = (k: keyof NewCustomerForm, v: string | number) =>
     setForm(f => ({ ...f, [k]: v }));
@@ -309,10 +361,12 @@ function CustomerModal({
   };
 
   const handleNameBlur = () => {
+    if (form.type === "vlan") return;
     if (form.name && !form.username && !form.phone) set("username", genUsername(form.name));
     if (form.name && !form.pppoe_username && !form.phone) set("pppoe_username", genUsername(form.name));
   };
   const handlePhoneBlur = () => {
+    if (form.type === "vlan") return;
     if (!form.phone) return;
     const generated = genUsername(form.phone);
     if (!form.username || /^(\d{4})-/.test(form.username)) set("username", generated);
@@ -321,13 +375,20 @@ function CustomerModal({
 
   const handleSubmit = async () => {
     if (!form.name.trim()) return;
+    if (form.type === "vlan" && (!form.ip_address.trim() || !form.plan_id)) return;
+    if (form.type === "vlan" && (!selectedPlan || !selectedPlan.router_id || !selectedPlan.port_id)) return;
+    if (form.type === "vlan") {
+      setSaving(true);
+      onSave(form);
+      return;
+    }
     if (form.type !== "pppoe" && !form.username.trim()) return;
     if (form.type === "pppoe" && !form.pppoe_username.trim() && !form.username.trim()) return;
     setSaving(true);
     onSave(form);
   };
 
-  const tabs: CustomerType[] = ["hotspot", "pppoe", "static"];
+  const tabs: CustomerType[] = ["hotspot", "pppoe", "static", "vlan"];
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
@@ -364,7 +425,7 @@ function CustomerModal({
                     {m.icon} {m.label}
                   </span>
                   <span style={{ fontSize: "0.65rem", color: active ? m.color : "var(--isp-text-sub)", opacity: 0.8 }}>
-                    {t === "hotspot" ? "Voucher / MAC" : t === "pppoe" ? "Dial-up / DSL" : "Fixed IP"}
+                    {t === "hotspot" ? "Voucher / MAC" : t === "pppoe" ? "Dial-up / DSL" : t === "vlan" ? "Assigned IP / queue" : "Fixed IP"}
                   </span>
                 </button>
               );
@@ -387,9 +448,9 @@ function CustomerModal({
                   onChange={e => set("name", e.target.value)}
                   onBlur={handleNameBlur} />
               </Field>
-              <Field label="Phone Number">
+              <Field label="Phone Number" required={form.type === "vlan"}>
                 <input style={inp} value={form.phone} placeholder="+254 7XX XXX XXX"
-                  onChange={e => set("phone", e.target.value)} onBlur={handlePhoneBlur} />
+                  onChange={e => set("phone", e.target.value)} onBlur={handlePhoneBlur} required={form.type === "vlan"} />
               </Field>
             </div>
 
@@ -400,7 +461,7 @@ function CustomerModal({
 
             {/* ─── CONNECTION ─── */}
             <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
-              {form.type === "hotspot" ? "Hotspot Credentials" : form.type === "pppoe" ? "PPPoE Credentials" : "Static IP Credentials"}
+              {form.type === "hotspot" ? "Hotspot Credentials" : form.type === "pppoe" ? "PPPoE Credentials" : form.type === "vlan" ? "VLAN IP Assignment" : "Static IP Credentials"}
             </div>
 
             {/* Hotspot fields */}
@@ -511,6 +572,19 @@ function CustomerModal({
                 </div>
               </>
             )}
+            {form.type === "vlan" && (
+              <Field label="Assigned IP Address" required hint="This address identifies the customer for their per-user VLAN bandwidth queue.">
+                <input
+                  style={inp}
+                  type="text"
+                  inputMode="decimal"
+                  value={form.ip_address}
+                  placeholder="e.g. 192.168.1.100"
+                  onChange={e => set("ip_address", e.target.value)}
+                  required
+                />
+              </Field>
+            )}
 
             {/* ─── PLAN & ROUTER ─── */}
             <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
@@ -518,22 +592,44 @@ function CustomerModal({
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
-              <Field label={`${form.type === "pppoe" ? "PPPoE" : form.type === "hotspot" ? "Hotspot" : ""} Plan`} required>
-                <select style={sel} value={form.plan_id} onChange={e => set("plan_id", Number(e.target.value))}>
+              <Field label={`${form.type === "pppoe" ? "PPPoE" : form.type === "hotspot" ? "Hotspot" : form.type === "vlan" ? "VLAN" : ""} Plan`} required>
+                <select
+                  style={sel}
+                  value={form.plan_id}
+                  onChange={e => {
+                    const planId = e.target.value ? Number(e.target.value) : "";
+                    const nextPlan = allPlans.find(p => p.id === planId);
+                    setForm(current => ({
+                      ...current,
+                      plan_id: planId,
+                      ...(current.type === "vlan" ? { router_id: nextPlan?.router_id ?? "" } : {}),
+                    }));
+                  }}
+                >
                   <option value="">— Select plan —</option>
                   {allPlans.map(p => (
                     <option key={p.id} value={p.id}>{p.name} · {getCurrencySymbol()} {p.price}{p.speed_down ? ` · ${p.speed_down}/${p.speed_up}Mbps` : ""}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="Router" required>
-                <select style={sel} value={form.router_id} onChange={e => set("router_id", Number(e.target.value))}>
-                  <option value="">— Select router —</option>
-                  {routers.map(r => (
-                    <option key={r.id} value={r.id}>{r.name} ({r.status === "online" ? "🟢" : "🔴"} {r.host})</option>
-                  ))}
-                </select>
-              </Field>
+              {form.type === "vlan" ? (
+                <Field label="Assigned Router / VLAN Port" required>
+                  <div style={{ ...inp, display: "flex", alignItems: "center", minHeight: 38, color: selectedPlan ? "var(--isp-text)" : "var(--isp-text-muted)" }}>
+                    {selectedPlan
+                      ? `${routers.find(router => router.id === selectedPlan.router_id)?.name ?? `Router #${selectedPlan.router_id}`} · VLAN service port #${selectedPlan.port_id}`
+                      : "Select a VLAN plan to load its router and service port"}
+                  </div>
+                </Field>
+              ) : (
+                <Field label="Router" required>
+                  <select style={sel} value={form.router_id} onChange={e => set("router_id", e.target.value ? Number(e.target.value) : "")}>
+                    <option value="">— Select router —</option>
+                    {routers.map(r => (
+                      <option key={r.id} value={r.id}>{r.name} ({r.status === "online" ? "🟢" : "🔴"} {r.host})</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
             </div>
 
             {/* Plan preview */}
@@ -563,17 +659,19 @@ function CustomerModal({
             </Field>
 
             {/* Password regenerate */}
-            <button type="button"
+            {form.type !== "vlan" && <button type="button"
               onClick={() => set("password", genPassword())}
               style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", alignSelf: "flex-start" }}>
               <RotateCcw size={12} /> Regenerate Password
-            </button>
+            </button>}
 
             {/* ─── CUSTOM FIELDS ─── */}
-            <CustomFieldsSection
-              fields={form.custom_fields}
-              setFields={(fn) => setForm(f => ({ ...f, custom_fields: fn(f.custom_fields) }))}
-            />
+            {form.type !== "vlan" && (
+              <CustomFieldsSection
+                fields={form.custom_fields}
+                setFields={(fn) => setForm(f => ({ ...f, custom_fields: fn(f.custom_fields) }))}
+              />
+            )}
 
           </div>
         </div>
@@ -583,8 +681,8 @@ function CustomerModal({
           <button onClick={onClose} style={{ flex: 1, padding: "0.7rem", borderRadius: 10, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.875rem", cursor: "pointer", fontFamily: "inherit" }}>
             Cancel
           </button>
-          <button onClick={handleSubmit} disabled={saving || !form.name.trim()}
-            style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: saving || !form.name.trim() ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !form.name.trim() ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+          <button onClick={handleSubmit} disabled={saving || !form.name.trim() || (form.type === "vlan" && (!form.phone.trim() || !form.ip_address.trim() || !form.plan_id || !selectedPlan?.router_id || !selectedPlan?.port_id))}
+            style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: saving || !form.name.trim() || (form.type === "vlan" && (!form.phone.trim() || !form.ip_address.trim() || !form.plan_id || !selectedPlan?.router_id || !selectedPlan?.port_id)) ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: saving || !form.name.trim() || (form.type === "vlan" && (!form.phone.trim() || !form.ip_address.trim() || !form.plan_id || !selectedPlan?.router_id || !selectedPlan?.port_id)) ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
             {saving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={15} />}
             {saving ? "Saving…" : isEdit ? "Save Changes" : `Add ${TYPE_META[form.type].label} Customer`}
           </button>
@@ -683,6 +781,7 @@ export default function Customers() {
   const hotspots = customers.filter(c => c.type === "hotspot").length;
   const pppoes   = customers.filter(c => c.type === "pppoe").length;
   const statics  = customers.filter(c => c.type === "static").length;
+  const vlans    = customers.filter(c => c.type === "vlan").length;
 
   /* ─── Filter ─── */
   const planMap = useMemo(() => {
@@ -748,7 +847,7 @@ export default function Customers() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Customers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>
-              {isLoading ? "Loading…" : `${total} total · ${hotspots} hotspot · ${pppoes} PPPoE · ${statics} static`}
+              {isLoading ? "Loading…" : `${total} total · ${hotspots} hotspot · ${pppoes} PPPoE · ${statics} static · ${vlans} VLAN`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -774,7 +873,7 @@ export default function Customers() {
           <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "1rem 1.25rem" }}>
             <div style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.5rem" }}>By Type</div>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-              {([["hotspot", hotspots], ["pppoe", pppoes], ["static", statics]] as [CustomerType, number][]).map(([t, n]) => {
+              {([["hotspot", hotspots], ["pppoe", pppoes], ["static", statics], ["vlan", vlans]] as [CustomerType, number][]).map(([t, n]) => {
                 const m = TYPE_META[t];
                 return (
                   <div key={t} style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
@@ -791,12 +890,12 @@ export default function Customers() {
         {/* ─── Sync to Router ─── */}
         <RouterSyncBar
           label="Sync Customers to Router"
-          description="Push all hotspot customers as MikroTik hotspot users, and PPPoE customers as PPPoE secrets — direct via API, no terminal needed."
+          description="Push Hotspot and PPPoE customer accounts to MikroTik. VLAN customer access is provisioned with its plan through the customer creation flow."
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
           color="var(--isp-accent)"
           buildPayload={() => ({
-            users: customers.map(c => ({
+            users: customers.filter(c => c.type !== "vlan").map(c => ({
               username:      c.username ?? "",
               password:      c.password ?? "",
               type:          c.type ?? "hotspot",
@@ -827,6 +926,7 @@ export default function Customers() {
               <option value="hotspot">Hotspot</option>
               <option value="pppoe">PPPoE</option>
               <option value="static">Static</option>
+              <option value="vlan">VLAN</option>
             </select>
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem", color: "var(--isp-text)", fontSize: "0.8125rem", fontFamily: "inherit" }}>
@@ -878,10 +978,10 @@ export default function Customers() {
                   </td></tr>
                 ) : filtered.map(c => {
                   const color = avatarColor(c.id);
-                  const name  = c.name ?? c.username ?? c.pppoe_username ?? `#${c.id}`;
+                  const name  = c.name ?? c.username ?? c.pppoe_username ?? c.ip_address ?? `#${c.id}`;
                   const typeM = TYPE_META[(c.type ?? "hotspot") as CustomerType] ?? TYPE_META.hotspot;
                   const statusVal = c.status ?? "active";
-                  const loginId   = c.type === "pppoe" ? (c.pppoe_username ?? c.username) : c.username;
+                  const loginId   = c.type === "vlan" ? c.ip_address : c.type === "pppoe" ? (c.pppoe_username ?? c.username) : c.username;
                   return (
                     <tr key={c.id} className="crow" style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
                       {/* Customer */}
