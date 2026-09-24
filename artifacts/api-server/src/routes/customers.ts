@@ -28,7 +28,8 @@ import { syncRadiusCustomer } from "../lib/radius.js";
 import { hotspotPlanProfileName, isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
-import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { authenticatedAccount, authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
@@ -68,6 +69,7 @@ type PlanRow = {
   speed_up_unit: string | null;
   data_limit_mb: number | null;
   shared_users: number | null;
+  owner_reseller_id?: number | null;
 };
 
 type RouterRow = {
@@ -93,6 +95,37 @@ type VlanPortRow = {
   subnet_range: string | null;
   status: string;
 };
+
+async function loadScopedCustomerPlan(
+  account: NonNullable<Awaited<ReturnType<typeof authenticatedAccount>>>,
+  planId: number,
+  requestedType: string,
+  routerId?: unknown,
+  portId?: unknown,
+): Promise<PlanRow | undefined> {
+  const tenantId = account.parent_id ?? account.id;
+  const ownerId = account.role === "reseller" ? account.id : null;
+  const type = normalizePlanServiceType(requestedType);
+  const typeFilter = type === "hotspot" ? "type=in.(hotspot,trials,trial)" : `type=eq.${encodeURIComponent(type)}`;
+  const routerFilter = Number.isSafeInteger(Number(routerId)) && Number(routerId) > 0 ? `&router_id=eq.${Number(routerId)}` : "";
+  const portFilter = Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? `&port_id=eq.${Number(portId)}` : "";
+  const rows = await sbSelectStrict<PlanRow>(
+    "isp_plans",
+    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&is_active=is.true&${typeFilter}${routerFilter}${portFilter}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
+  );
+  const plan = rows[0];
+  if (!plan) return undefined;
+  if (account.role === "reseller") {
+    if (type !== "hotspot" && type !== "pppoe") return undefined;
+    if (!plan.port_id || !plan.router_id) return undefined;
+    const ports = await sbSelectStrict<VlanPortRow>(
+      "isp_reseller_ports",
+      `id=eq.${plan.port_id}&admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=eq.active&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+    );
+    if (!ports[0]) return undefined;
+  }
+  return plan;
+}
 
 async function loadVlanCustomerContext(
   adminId: number,
@@ -387,7 +420,7 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
 
 router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   const {
-    adminId = 1, ispId, name, phone, email, planId, type, ipAddress, macAddress,
+    adminId, ispId, name, phone, email, planId, type, ipAddress, macAddress,
     status, expiryDate, pppoeUsername, routerId, portId,
   } = req.body;
   if (!name || !phone) {
@@ -399,6 +432,15 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
     return;
   }
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(401).json({ error: "A valid signed-in account is required." });
+    return;
+  }
+  if (account.role === "reseller") {
+    res.status(403).json({ error: "Reseller customer creation must use the assigned Hotspot or PPPoE service path." });
+    return;
+  }
 
   const requestedPlanId = Number(planId);
   const mayInferVlanFromPlan = type === undefined || type === null || type === "";
@@ -406,16 +448,24 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   let plan: PlanRow | undefined;
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const planFilter =
-      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active&limit=1`;
+      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`;
     const planRows = needsVlanPlanCheck
       ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
       : await sbSelect<PlanRow>("isp_plans", planFilter);
     plan = planRows[0];
+    if (!plan) {
+      res.status(400).json({ error: "The selected package is not owned by this ISP account." });
+      return;
+    }
   }
   const planServiceType = normalizePlanServiceType(plan?.plan_type || plan?.type);
   const requestedType = String(type ?? (planServiceType === "vlan" ? "vlan" : "hotspot")).trim().toLowerCase();
   if (planServiceType === "vlan" && requestedType !== "vlan") {
     res.status(400).json({ error: "The selected plan is VLAN service; create the customer as type vlan." });
+    return;
+  }
+  if (plan && planServiceType !== requestedType) {
+    res.status(400).json({ error: "The selected package does not match the requested customer service." });
     return;
   }
   if (requestedType === "vlan") {
@@ -543,7 +593,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
 router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> => {
   const id = req.params.id;
   const {
-    adminId = 1, ispId, name, phone, email, planId, plan_id, routerId, router_id, portId, port_id,
+    adminId, ispId, name, phone, email, planId, plan_id, routerId, router_id, portId, port_id,
     type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
     password, fup_limit_mb,
   } = req.body;
@@ -584,6 +634,36 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
   if (normalizedExpiry !== undefined && status === undefined) {
     const expiryMs = normalizedExpiry ? Date.parse(normalizedExpiry) : NaN;
     updates.status = Number.isFinite(expiryMs) && expiryMs <= Date.now() ? "expired" : "active";
+  }
+
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(401).json({ error: "A valid signed-in account is required." });
+    return;
+  }
+  const resultingPlanId = Number(updates.plan_id ?? current.plan_id);
+  const resultingType = String(updates.type ?? current.type ?? "hotspot").trim().toLowerCase();
+  if (Number.isSafeInteger(resultingPlanId) && resultingPlanId > 0) {
+    const resultingPlan = await loadScopedCustomerPlan(
+      account,
+      resultingPlanId,
+      resultingType,
+      updates.router_id ?? current.router_id,
+      updates.port_id ?? current.port_id,
+    );
+    if (!resultingPlan) {
+      res.status(400).json({ error: account.role === "reseller"
+        ? "The selected package must belong to your reseller account and assigned active VLAN service."
+        : "The selected package is not owned by this ISP account." });
+      return;
+    }
+    updates.plan_id = resultingPlan.id;
+    updates.router_id = resultingPlan.router_id;
+    updates.port_id = resultingPlan.port_id;
+    updates.type = resultingType;
+  } else if (account.role === "reseller") {
+    res.status(403).json({ error: "Reseller customers must remain linked to an owned package and assigned VLAN service." });
+    return;
   }
 
   let reconciliation: { routerSynced: boolean; routerId: number | null; routerName: string | null };

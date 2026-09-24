@@ -17,6 +17,7 @@ import { logger } from "../lib/logger.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
+import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
   addHotspotIpBinding,
@@ -157,6 +158,7 @@ function logRouterConnectionFailure(
 async function markPaymentClearedRouterPending(opts: {
   transactionId: number;
   adminId: number;
+  customerAdminId?: number;
   customerId: number;
   routerName?: string | null;
   failureMessage: string;
@@ -165,7 +167,7 @@ async function markPaymentClearedRouterPending(opts: {
   await Promise.all([
     sbUpdateStrict(
       "isp_customers",
-      `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}`,
+      `id=eq.${opts.customerId}&admin_id=eq.${opts.customerAdminId ?? opts.adminId}`,
       {
         status: "payment_cleared_router_pending",
         updated_at: new Date().toISOString(),
@@ -385,9 +387,13 @@ async function getResellerPaymentRoute(
   adminId: number,
   planId: number,
 ): Promise<ResellerPaymentRoute | null> {
-  const plans = await sbSelectStrict<{ port_id: number | null; router_id: number | null }>(
+  const plans = await sbSelectStrict<{
+    port_id: number | null;
+    router_id: number | null;
+    owner_reseller_id: number | null;
+  }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&select=port_id,router_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&select=port_id,router_id,owner_reseller_id&limit=1`,
   );
   const portId = Number(plans[0]?.port_id);
   const routerId = Number(plans[0]?.router_id);
@@ -403,7 +409,14 @@ async function getResellerPaymentRoute(
     `id=eq.${portId}&admin_id=eq.${adminId}&select=id,assigned_reseller_id,status,link_status&limit=1`,
   );
   const port = ports[0];
+  const planOwnerId = plans[0]?.owner_reseller_id ?? null;
+  if (planOwnerId !== null && (!port || !planBelongsToOwner({ owner_reseller_id: planOwnerId }, port.assigned_reseller_id ?? null))) {
+    throw new Error("The selected package does not belong to the reseller assigned to this service.");
+  }
   if (!port?.assigned_reseller_id) return null;
+  if (!planBelongsToOwner({ owner_reseller_id: planOwnerId }, port.assigned_reseller_id)) {
+    throw new Error("The selected package does not belong to the reseller assigned to this service.");
+  }
   if (port.status !== "active" || port.link_status !== "active") {
     throw new Error("This reseller link is not active for checkout.");
   }
@@ -641,7 +654,7 @@ function positivePortalId(value: unknown): number | null {
 
 async function planMatchesHotspotPortalScope(
   adminId: number,
-  plan: { router_id: number | null; port_id: number | null },
+  plan: { router_id: number | null; port_id: number | null; owner_reseller_id?: number | null },
   requestedRouterId: unknown,
   requestedPortId: unknown,
 ): Promise<boolean> {
@@ -652,13 +665,13 @@ async function planMatchesHotspotPortalScope(
   if (hasRouterValue && routerId === null) return false;
   if (hasPortValue && portId === null) return false;
   if (!plan.router_id || (routerId !== null && routerId !== plan.router_id)) return false;
-  if (plan.port_id === null) return portId === null;
+  if (plan.port_id === null) return portId === null && planBelongsToOwner(plan, null);
   if (portId === null || plan.port_id !== portId || routerId === null) return false;
-  const ports = await sbSelect<{ id: number }>(
+  const ports = await sbSelect<{ id: number; assigned_reseller_id: number | null }>(
     "isp_reseller_ports",
-    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&status=neq.disabled&hotspot_enabled=is.true&select=id&limit=1`,
+    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&status=neq.disabled&hotspot_enabled=is.true&select=id,assigned_reseller_id&limit=1`,
   );
-  return !!ports[0];
+  return !!ports[0] && planBelongsToOwner(plan, ports[0].assigned_reseller_id ?? null);
 }
 
 async function loadTenantCompanyName(adminId: number): Promise<string | null> {
@@ -685,7 +698,11 @@ function hotspotPortResources(
   };
 }
 
-type VlanPaymentPlan = { router_id: number | null; port_id: number | null };
+type VlanPaymentPlan = {
+  router_id: number | null;
+  port_id: number | null;
+  owner_reseller_id: number | null;
+};
 
 async function validateVlanPaymentCustomer(
   adminId: number,
@@ -703,7 +720,7 @@ async function validateVlanPaymentCustomer(
     port_id: number | null;
   }>(
     "isp_customers",
-    `id=eq.${customerId}&admin_id=eq.${adminId}&type=eq.vlan&select=id,type,ip_address,router_id,port_id&limit=1`,
+    `id=eq.${customerId}&admin_id=eq.${plan.owner_reseller_id ?? adminId}&type=eq.vlan&select=id,type,ip_address,router_id,port_id&limit=1`,
   );
   const customer = customers[0];
   if (!customer || !isValidIpv4(customer.ip_address)) {
@@ -730,17 +747,62 @@ async function validateVlanPaymentCustomer(
     `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range&limit=1`,
   );
   const port = ports[0];
-  const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
   if (
     !port
     || !isValidVlanTag(port.vlan_tag)
-    || !Number.isSafeInteger(ownerId)
-    || Number(ownerId) < 1
+    || !planBelongsToOwner(plan, port.assigned_reseller_id ?? null)
     || !ipv4InSubnet(customer.ip_address, port.subnet_range)
   ) {
     return { customer: null, error: "The VLAN service port, tag, or assigned customer IP is no longer valid." };
   }
   return { customer: { ...customer, ip_address: customer.ip_address } };
+}
+
+/**
+ * PPPoE purchases must be tied to the same VLAN service as the package.  A
+ * customer/router match alone is not sufficient: two reseller services can
+ * share a MikroTik router, so an omitted port would allow cross-reseller
+ * package assignment.
+ */
+async function validatePppoePaymentCustomer(
+  adminId: number,
+  plan: VlanPaymentPlan,
+  customerId: number,
+): Promise<{ customer: { id: number; admin_id: number; router_id: number | null; port_id: number | null } | null; error?: string }> {
+  if (!plan.router_id || !plan.port_id) {
+    return { customer: null, error: "The PPPoE plan is not assigned to a router and service port." };
+  }
+  const customers = await sbSelectStrict<{
+    id: number;
+    admin_id: number;
+    router_id: number | null;
+    port_id: number | null;
+  }>(
+    "isp_customers",
+    `id=eq.${customerId}&admin_id=eq.${plan.owner_reseller_id ?? adminId}&type=eq.pppoe&select=id,admin_id,router_id,port_id&limit=1`,
+  );
+  const customer = customers[0];
+  if (!customer) {
+    return { customer: null, error: "The verified PPPoE customer account was not found." };
+  }
+  if (customer.router_id !== plan.router_id || customer.port_id !== plan.port_id) {
+    return { customer: null, error: "The PPPoE customer service port does not match the selected package." };
+  }
+  const ports = await sbSelectStrict<{
+    id: number;
+    assigned_reseller_id: number | null;
+    status: string;
+    link_status: string | null;
+  }>(
+    "isp_reseller_ports",
+    `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,assigned_reseller_id,status,link_status&limit=1`,
+  );
+  const port = ports[0];
+  if (!port || port.status !== "active" || port.link_status !== "active"
+    || !planBelongsToOwner(plan, port.assigned_reseller_id ?? null)) {
+    return { customer: null, error: "The PPPoE service port is no longer assigned to the selected package owner." };
+  }
+  return { customer };
 }
 
 function extractMpesaReceipt(message: unknown): string {
@@ -1075,7 +1137,7 @@ export async function processMpesaCallback(
     try {
       const updated = await sbUpdateStrict(
         "isp_customers",
-        `id=eq.${transaction.customer_id}&admin_id=eq.${transaction.admin_id}&type=eq.vlan`,
+         `id=eq.${transaction.customer_id}&admin_id=eq.${transaction.reseller_id ?? transaction.admin_id}&type=eq.vlan`,
         {
           status: "active",
           expires_at: vlanRenewalExpiry,
@@ -1092,6 +1154,7 @@ export async function processMpesaCallback(
         await markPaymentClearedRouterPending({
           transactionId: transaction.id,
           adminId: transaction.admin_id,
+          customerAdminId: transaction.reseller_id ?? transaction.admin_id,
           customerId: transaction.customer_id,
           failureMessage: `VLAN access was renewed but its expiry could not be saved: ${message}`,
         });
@@ -1260,9 +1323,16 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
-  const plans = await sbSelect<{ id: number; price: number | string; type?: string; router_id: number | null; port_id: number | null }>(
+  const plans = await sbSelect<{
+    id: number;
+    price: number | string;
+    type?: string;
+    router_id: number | null;
+    port_id: number | null;
+    owner_reseller_id: number | null;
+  }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   const serviceType = normalizePlanServiceType(plan?.type);
@@ -1292,12 +1362,12 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     return;
   }
   if (serviceType === "pppoe") {
-    const customers = await sbSelect<{ id: number; admin_id: number; type: string }>(
-      "isp_customers",
-      `id=eq.${requestedCustomerId}&admin_id=eq.${adminId}&type=eq.pppoe&select=id,admin_id,type&limit=1`,
-    );
-    if (!customers[0]) {
-      res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+    const validation = await validatePppoePaymentCustomer(adminId, plan!, requestedCustomerId);
+    if (!validation.customer) {
+      res.status(validation.error?.includes("not found") ? 404 : 409).json({
+        ok: false,
+        error: validation.error ?? "The PPPoE customer account is not valid for this package.",
+      });
       return;
     }
   }
@@ -1398,10 +1468,23 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
  * Formats phone to 2547XXXXXXXX and sends STK Push via Daraja API.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void> => {
-  const { phone, amount, account_ref, adminId, mac_address } = req.body as {
+  const { phone, amount, account_ref, adminId, mac_address, plan_id, customer_id, reseller_id, port_id } = req.body as {
     phone?: string; amount?: number; account_ref?: string; adminId?: number; mac_address?: string;
+    plan_id?: number; customer_id?: number; reseller_id?: number; port_id?: number;
   };
   const mac = readMacAddress(mac_address);
+
+  // This legacy endpoint has no plan/customer/port binding and deliberately
+  // uses the ISP's shared Daraja credentials. Never let it masquerade as a
+  // reseller sale; reseller purchases must use /mpesa/intent or /mpesa/stk,
+  // which perform package and service-owner validation.
+  if ([plan_id, customer_id, reseller_id, port_id].some(value => value !== undefined && value !== null)) {
+    res.status(409).json({
+      ok: false,
+      error: "The legacy STK endpoint cannot process reseller-scoped sales. Use the reseller package checkout flow.",
+    });
+    return;
+  }
 
   if (!phone || !amount) {
     res.status(400).json({ ok: false, error: "phone and amount are required" });
@@ -1716,9 +1799,17 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     }
   }
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
-    const plans = await sbSelect<{ id: number; price: number | string; name: string; type?: string; router_id: number | null; port_id: number | null }>(
+    const plans = await sbSelect<{
+      id: number;
+      price: number | string;
+      name: string;
+      type?: string;
+      router_id: number | null;
+      port_id: number | null;
+      owner_reseller_id: number | null;
+    }>(
       "isp_plans",
-      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type,router_id,port_id&limit=1`,
+      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type,router_id,port_id,owner_reseller_id&limit=1`,
     );
     const plan = plans[0];
     if (!plan) {
@@ -1753,12 +1844,12 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
         return;
       }
       if (serviceType === "pppoe") {
-        const customers = await sbSelect<{ id: number }>(
-          "isp_customers",
-          `id=eq.${intent.customerId}&admin_id=eq.${scopedAdminId}&type=eq.pppoe&select=id&limit=1`,
-        );
-        if (!customers[0]) {
-          res.status(404).json({ ok: false, error: "The verified PPPoE customer account was not found." });
+        const validation = await validatePppoePaymentCustomer(scopedAdminId, plan, intent.customerId);
+        if (!validation.customer) {
+          res.status(validation.error?.includes("not found") ? 404 : 409).json({
+            ok: false,
+            error: validation.error ?? "The PPPoE customer account is not valid for this package.",
+          });
           return;
         }
       } else {
@@ -2048,11 +2139,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     speed_up_unit: string | null;
     data_limit_mb: number | null;
     shared_users: number | null;
+    owner_reseller_id: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -2064,6 +2156,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     res.status(409).json({ ok: false, error: "The paid plan is not configured as a hotspot plan." });
     return;
   }
+  const customerAdminId = plan.owner_reseller_id ?? adminId;
   if (!plan.router_id) {
     res.status(503).json({ ok: false, error: "The hotspot plan is not assigned to a MikroTik router yet." });
     return;
@@ -2196,7 +2289,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     expires_at: string | null;
   }>(
     "isp_customers",
-     `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,expires_at&limit=1`,
+     `id=eq.${transaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,expires_at&limit=1`,
    )
      : [];
   const now = Date.now();
@@ -2217,7 +2310,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
        const candidate = prepaidHotspotUsername(paymentPhone, mac);
        const collision = await sbSelect<{ id: number }>(
          "isp_customers",
-         `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(candidate)}&select=id&limit=1`,
+          `admin_id=eq.${customerAdminId}&type=eq.hotspot&username=eq.${encodeURIComponent(candidate)}&select=id&limit=1`,
        );
        if (!collision[0]) {
          hotspotUsername = candidate;
@@ -2231,7 +2324,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
   const collision = await sbSelect<{ id: number }>(
     "isp_customers",
-    `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(hotspotUsername)}&select=id&limit=1`,
+    `admin_id=eq.${customerAdminId}&type=eq.hotspot&username=eq.${encodeURIComponent(hotspotUsername)}&select=id&limit=1`,
   );
   if (collision[0] && collision[0].id !== reusableCustomer?.id) {
     res.status(409).json({ ok: false, error: "This device identifier is already assigned to another hotspot account." });
@@ -2244,7 +2337,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
 
   const customerFields = {
-    admin_id: adminId,
+    admin_id: customerAdminId,
     name: requestedDeviceName || `Hotspot ${paymentPhone}`,
     phone: paymentPhone,
     username: hotspotUsername,
@@ -2265,7 +2358,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
      * the transaction makes the same checkout or receipt retryable.
      */
     const customerRows = reusableCustomer
-      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${adminId}`, customerFields)
+      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${customerAdminId}`, customerFields)
       : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
     customer = customerRows[0] as { id: number } | undefined;
     if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");

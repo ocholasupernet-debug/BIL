@@ -42,6 +42,7 @@ type ColorSettings = typeof DEFAULT_COLORS;
 
 interface HSettings {
   ispName: string;
+  portalHostname: string;
   freeTrial: string;
   vouchers: string;
   tagline: string;
@@ -142,6 +143,7 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
 
 const DEFAULT_SETTINGS: HSettings = {
   ispName: "OCHOLASUPERNET",
+  portalHostname: "",
   freeTrial: "Disable",
   vouchers: "Yes",
   tagline: "Fast & Reliable Internet",
@@ -781,6 +783,33 @@ export default function HotspotSettings() {
   }, [appearanceSaving, preferences.portalBackground, preferences.portalPackageShape]);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/admin/hotspot-branding", { headers: adminApiHeaders(), cache: "no-store" })
+      .then(async response => {
+        const data = await parseApiResponse<{ branding?: { portalHostname?: unknown; settings?: unknown } }>(
+          response, "Hotspot branding could not be loaded.",
+        );
+        if (!response.ok) throw new Error(data.error || "Hotspot branding could not be loaded.");
+        return data.branding;
+      })
+      .then(branding => {
+        if (cancelled || !branding) return;
+        const persisted = branding.settings && typeof branding.settings === "object" && !Array.isArray(branding.settings)
+          ? branding.settings as Partial<HSettings> : {};
+        setSettings(previous => ({
+          ...previous,
+          ...persisted,
+          portalHostname: typeof branding.portalHostname === "string" ? branding.portalHostname : previous.portalHostname,
+          colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
+        }));
+      })
+      .catch(() => {
+        /* Local storage remains an offline fallback for older deployments. */
+      });
+    return () => { cancelled = true; };
+  }, [adminId]);
+
+  useEffect(() => {
     const requestedRouterId = new URLSearchParams(window.location.search).get("routerId");
     if (requestedRouterId && /^\d+$/.test(requestedRouterId)) {
       setSettings(previous => ({ ...previous, routerId: requestedRouterId }));
@@ -1022,6 +1051,13 @@ export default function HotspotSettings() {
     setNotice(null);
     try {
       localStorage.setItem(storageKey, JSON.stringify(settings));
+      const brandingResponse = await fetch("/api/admin/hotspot-branding", {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ branding: { portalHostname: settings.portalHostname, settings } }),
+      });
+      const brandingData = await parseApiResponse<{ ok?: boolean }>(brandingResponse, "Hotspot branding could not be saved.");
+      if (!brandingResponse.ok) throw new Error(brandingData.error || "Hotspot branding could not be saved.");
       await savePreferences({
         ...preferences,
         portalBackground,
@@ -1358,6 +1394,9 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
+               <Field label="Customer portal hostname" help="Persisted for this tenant. Point DNS to the shared application separately; saving does not change DNS or RouterOS.">
+                 <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
+               </Field>
               <Field label="Tagline" help="A short promise shown below the portal title.">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>

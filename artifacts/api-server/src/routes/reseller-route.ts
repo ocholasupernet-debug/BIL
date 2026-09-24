@@ -10,10 +10,12 @@ import {
   sbUpsertStrict,
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
-import { reconcilePppoeUserAccess, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
+import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
@@ -739,7 +741,7 @@ async function provisionVlanResellerServices(
             validity_unit: string;
           }>(
             "isp_plans",
-            `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
+            `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&${planOwnerFilter(port.assigned_reseller_id ?? null)}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
           )).map(plan => ({
             ...plan,
             price: Number(plan.price),
@@ -1232,6 +1234,48 @@ async function ownedPort(req: Request, portId: number): Promise<ResellerPortRow>
     throw new Error("This port belongs to an ISP connection that has not approved your reseller account.");
   }
   return rows[0];
+}
+
+type ResellerCustomerPlan = {
+  id: number;
+  name: string;
+  type: string;
+  router_id: number;
+  port_id: number;
+  speed_up: number | string | null;
+  speed_down: number | string | null;
+  speed_up_unit: string | null;
+  speed_down_unit: string | null;
+  shared_users: number | null;
+  data_limit_mb: number | string | null;
+  validity: number | null;
+  validity_unit: string | null;
+};
+
+async function ownedResellerPlan(account: { id: number; parent_id: number | null }, planId: number, port: ResellerPortRow, type: "hotspot" | "pppoe"): Promise<ResellerCustomerPlan> {
+  const rows = await sbSelectStrict<ResellerCustomerPlan>(
+    "isp_plans",
+    `id=eq.${planId}&admin_id=eq.${port.admin_id}&owner_reseller_id=eq.${account.id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&type=eq.${type}&is_active=is.true&select=id,name,type,router_id,port_id,speed_up,speed_down,speed_up_unit,speed_down_unit,shared_users,data_limit_mb,validity,validity_unit&limit=1`,
+  );
+  if (!rows[0]) throw new Error("Choose an active package owned by your reseller account and assigned to this VLAN service.");
+  return rows[0];
+}
+
+async function sharedUsernameExists(username: string): Promise<boolean> {
+  const encoded = encodeURIComponent(username);
+  const [customers, radcheck] = await Promise.all([
+    sbSelectStrict<{ id: number }>("isp_customers", `username=eq.${encoded}&or=(pppoe_username.eq.${encoded})&select=id&limit=1`),
+    sbSelectStrict<{ id: number }>("radcheck", `username=eq.${encoded}&select=id&limit=1`),
+  ]);
+  return Boolean(customers[0] || radcheck[0]);
+}
+
+function planExpiry(plan: ResellerCustomerPlan): string | null {
+  const validity = Number(plan.validity);
+  if (!Number.isFinite(validity) || validity <= 0) return null;
+  const unit = String(plan.validity_unit || "days").toLowerCase();
+  const milliseconds = unit.startsWith("hour") ? validity * 3600000 : unit.startsWith("min") ? validity * 60000 : validity * 86400000;
+  return new Date(Date.now() + milliseconds).toISOString();
 }
 
 /** Reusable ownership middleware for every reseller-port mutation. */
@@ -2784,6 +2828,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
 
 router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise<void> => {
   let customerId = 0;
+  let provisionedCredentials: RouterCredentials | null = null;
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -2791,12 +2836,13 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
       return;
     }
     const portId = Number(req.body?.portId);
+    const planId = Number(req.body?.planId);
     const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 120) : "";
     const phone = typeof req.body?.phone === "string" ? req.body.phone.trim().slice(0, 40) : "";
     const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
     const password = typeof req.body?.password === "string" ? req.body.password : "";
-    if (!Number.isSafeInteger(portId) || portId <= 0 || name.length < 2 || !phone || !/^[A-Za-z0-9._-]{3,64}$/.test(username) || password.length < 8) {
-      res.status(400).json({ ok: false, error: "Provide a client name, phone, valid PPPoE username, and a password of at least 8 characters." });
+    if (!Number.isSafeInteger(portId) || portId <= 0 || !Number.isSafeInteger(planId) || planId <= 0 || name.length < 2 || !phone || !/^[A-Za-z0-9._-]{3,64}$/.test(username) || password.length < 8) {
+      res.status(400).json({ ok: false, error: "Provide a package, client name, phone, valid PPPoE username, and a password of at least 8 characters." });
       return;
     }
     const port = await ownedPort(req, portId);
@@ -2808,12 +2854,18 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
       res.status(409).json({ ok: false, error: "Activate the reseller VLAN service before assigning PPPoE clients." });
       return;
     }
+    const plan = await ownedResellerPlan(account, planId, port, "pppoe");
+    const expiresAt = planExpiry(plan);
     const [byUsername, byPppoeUsername] = await Promise.all([
       sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${account.id}&username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
       sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${account.id}&pppoe_username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
     ]);
     if (byUsername[0] || byPppoeUsername[0]) {
       res.status(409).json({ ok: false, error: "That PPPoE username is already assigned in your reseller account." });
+      return;
+    }
+    if (await sharedUsernameExists(username)) {
+      res.status(409).json({ ok: false, error: "That username is already in use. Choose a different username." });
       return;
     }
     const inserted = await sbInsertStrict<{ id: number; name: string; username: string; pppoe_username: string; type: string; status: string }>(
@@ -2827,9 +2879,10 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
         password,
         type: "pppoe",
         router_id: port.router_id,
-        plan_id: null,
+        port_id: port.id,
+        plan_id: plan.id,
         status: "active",
-        expires_at: null,
+        expires_at: expiresAt,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
@@ -2837,14 +2890,29 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
     customerId = Number(inserted[0]?.id);
     if (!customerId) throw new Error("The PPPoE client record could not be created.");
     const target = await tenantRouter(port.admin_id, port.router_id);
-    await reconcilePppoeUserAccess(routerCredentials(target), {
+    provisionedCredentials = routerCredentials(target);
+    await reconcilePppoeUserAccess(provisionedCredentials, {
       name: username,
       password,
-      profile: `PPPOE_PROFILE_${vlanServiceSegment(port)}`,
+        profile: `PPPOE_PROFILE_${vlanServiceSegment(port)}`,
       comment: `Reseller ${account.id} · ${name}`,
       enabled: true,
-      expiresAt: null,
+        expiresAt,
     });
+      await syncRadiusCustomer({
+        username,
+        password,
+        planId: plan.id,
+        planType: "pppoe",
+        enabled: true,
+        fullname: name,
+        sharedUsers: 1,
+        rateUp: Number(plan.speed_up),
+        rateUpUnit: plan.speed_up_unit ?? "Mbps",
+        rateDown: Number(plan.speed_down),
+        rateDownUnit: plan.speed_down_unit ?? "Mbps",
+        expiresAt,
+      });
     res.status(201).json({
       ok: true,
       customer: { id: customerId, name, phone, username, pppoe_username: username, type: "pppoe", status: "active" },
@@ -2854,7 +2922,111 @@ router.post("/reseller/pppoe-clients", requireAdmin(), async (req, res): Promise
     if (customerId) {
       await sbDeleteStrict("isp_customers", `id=eq.${customerId}`).catch(() => undefined);
     }
+    if (customerId && provisionedCredentials && typeof req.body?.username === "string") {
+      await removePPPSecretByName(provisionedCredentials, req.body.username).catch(() => undefined);
+      await removeRadiusCustomer(req.body.username).catch(() => undefined);
+    }
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the PPPoE client." });
+  }
+});
+
+router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promise<void> => {
+  let customerId = 0;
+  let provisionedCredentials: RouterCredentials | null = null;
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "This endpoint is for reseller accounts." });
+      return;
+    }
+    const portId = Number(req.body?.portId);
+    const planId = Number(req.body?.planId);
+    const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 120) : "";
+    const phone = typeof req.body?.phone === "string" ? req.body.phone.trim().slice(0, 40) : "";
+    const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!Number.isSafeInteger(portId) || portId <= 0 || !Number.isSafeInteger(planId) || planId <= 0 || name.length < 2 || !phone || !/^[A-Za-z0-9._-]{3,64}$/.test(username) || password.length < 8) {
+      res.status(400).json({ ok: false, error: "Provide a package, client name, phone, valid hotspot username, and a password of at least 8 characters." });
+      return;
+    }
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "vlan_services" || !port.hotspot_enabled || port.status !== "active" || port.link_status !== "active") {
+      res.status(409).json({ ok: false, error: "Hotspot customer assignment is available only on an active VLAN Hotspot service." });
+      return;
+    }
+    const plan = await ownedResellerPlan(account, planId, port, "hotspot");
+    const expiresAt = planExpiry(plan);
+    const duplicate = await sbSelectStrict<{ id: number }>(
+      "isp_customers",
+      `admin_id=eq.${account.id}&username=eq.${encodeURIComponent(username)}&select=id&limit=1`,
+    );
+    if (duplicate[0]) {
+      res.status(409).json({ ok: false, error: "That hotspot username is already assigned in your reseller account." });
+      return;
+    }
+    if (await sharedUsernameExists(username || `static_${safeSegment(name, "client")}`)) {
+      res.status(409).json({ ok: false, error: "That username is already in use. Choose a different username." });
+      return;
+    }
+    const inserted = await sbInsertStrict<Record<string, unknown>>("isp_customers", {
+      admin_id: account.id,
+      name,
+      phone,
+      username,
+      password,
+      type: "hotspot",
+      router_id: port.router_id,
+      port_id: port.id,
+      plan_id: plan.id,
+      status: "provisioning",
+      expires_at: expiresAt,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    customerId = Number(inserted[0]?.id);
+    if (!customerId) throw new Error("The Hotspot customer record could not be created.");
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const resources = vlanServiceResources(port);
+    const profile = `HS_PROFILE_${vlanServiceSegment(port)}`;
+    provisionedCredentials = routerCredentials(target);
+    await reconcileHotspotUserAccess(provisionedCredentials, {
+      name: username,
+      password,
+      profile,
+      comment: `Reseller ${account.id} · ${name}`,
+      expiresAt,
+      enabled: true,
+      sharedUsers: Number(plan.shared_users) || 1,
+      limitBytesTotal: Number(plan.data_limit_mb) > 0 ? String(Math.floor(Number(plan.data_limit_mb) * 1_000_000)) : undefined,
+    });
+    await syncRadiusCustomer({
+      username,
+      password,
+      planId: plan.id,
+      planType: "hotspot",
+      enabled: true,
+      fullname: name,
+      sharedUsers: Number(plan.shared_users) || 1,
+      rateUp: Number(plan.speed_up),
+      rateUpUnit: plan.speed_up_unit ?? "Mbps",
+      rateDown: Number(plan.speed_down),
+      rateDownUnit: plan.speed_down_unit ?? "Mbps",
+      dataLimitMb: Number(plan.data_limit_mb) || null,
+      expiresAt,
+    });
+    const [row] = await sbUpdateStrict<Record<string, unknown>>(
+      "isp_customers",
+      `id=eq.${customerId}&admin_id=eq.${account.id}`,
+      { status: "active", updated_at: new Date().toISOString() },
+    );
+    res.status(201).json({ ok: true, customer: row ?? inserted[0], message: `Hotspot customer assigned to ${resources.vlanInterface}.` });
+  } catch (error) {
+    if (customerId) await sbDeleteStrict("isp_customers", `id=eq.${customerId}`).catch(() => undefined);
+    if (customerId && provisionedCredentials && typeof req.body?.username === "string") {
+      await removeHotspotUser(provisionedCredentials, req.body.username).catch(() => undefined);
+      await removeRadiusCustomer(req.body.username).catch(() => undefined);
+    }
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to assign the Hotspot customer." });
   }
 });
 

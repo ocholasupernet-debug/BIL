@@ -69,6 +69,7 @@ interface SbPlan {
   speed_down: number | null;
   speed_up: number | null;
   speed_down_unit: string | null;
+  owner_reseller_id?: number | null;
   speed_up_unit: string | null;
   data_limit_mb: number | null;
   active_ip_pool: string | null;
@@ -134,9 +135,11 @@ export async function reactivatePppoeAccess(opts: {
     type: string | null;
     plan_type: string | null;
     router_id: number | null;
+    port_id: number | null;
+    owner_reseller_id: number | null;
   }>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,router_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,router_id,port_id,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   const planType = String(plan?.plan_type || plan?.type || "").toLowerCase();
@@ -145,13 +148,16 @@ export async function reactivatePppoeAccess(opts: {
     return { ok: false, error: "The PPPoE plan is not assigned to a router." };
   }
 
-  const customers = await sbSelect<Pick<SbCustomer, "id" | "admin_id" | "type" | "username" | "pppoe_username" | "password">>(
+  const customers = await sbSelect<Pick<SbCustomer, "id" | "admin_id" | "type" | "username" | "pppoe_username" | "password" | "router_id" | "port_id">>(
     "isp_customers",
-    `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}&type=eq.pppoe&select=id,admin_id,type,username,pppoe_username,password&limit=1`,
+    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.pppoe&select=id,admin_id,type,username,pppoe_username,password,router_id,port_id&limit=1`,
   );
   const customer = customers[0];
   if (!customer) {
     return { ok: false, error: "The verified PPPoE customer account was not found." };
+  }
+  if (customer.router_id !== plan.router_id || customer.port_id !== plan.port_id) {
+    return { ok: false, error: "The PPPoE customer service port does not match the selected plan." };
   }
 
   const routers = await sbSelect<SbRouter>(
@@ -242,7 +248,7 @@ export async function reactivateVlanAccess(opts: {
 }): Promise<PppoeRenewalAccessResult> {
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.plan_type || plan.type) !== "vlan") {
@@ -254,15 +260,15 @@ export async function reactivateVlanAccess(opts: {
 
   const customers = await sbSelect<SbCustomer>(
     "isp_customers",
-    `id=eq.${opts.customerId}&admin_id=eq.${opts.adminId}&type=eq.vlan&select=id,admin_id,type,ip_address,router_id,port_id,status,expires_at&limit=1`,
+    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.vlan&select=id,admin_id,type,ip_address,router_id,port_id,status,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer || !isValidIpv4(customer.ip_address)) {
     return { ok: false, error: "The verified VLAN customer account or its assigned static IP was not found." };
   }
   if (
-    (customer.router_id && customer.router_id !== plan.router_id)
-    || (customer.port_id && customer.port_id !== plan.port_id)
+    customer.router_id !== plan.router_id
+    || customer.port_id !== plan.port_id
   ) {
     return { ok: false, error: "The VLAN customer router and port do not match the selected plan." };
   }

@@ -31,6 +31,7 @@ import adminSettingsRouter from "./admin-settings-route.js";
 import resellerRouter from "./reseller-route.js";
 import portServicesRouter from "./port-services-route.js";
 import billingRouter from "./billing-route.js";
+import hotspotBrandingRouter from "./hotspot-branding-route.js";
 
 const router: IRouter = Router();
 
@@ -66,5 +67,6 @@ router.use(dashboardPreferencesRouter);
   router.use(resellerRouter);
   router.use(portServicesRouter);
   router.use(billingRouter);
+  router.use(hotspotBrandingRouter);
 
 export default router;

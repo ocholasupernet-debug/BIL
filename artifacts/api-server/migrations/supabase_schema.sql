@@ -123,6 +123,7 @@ grant select, insert, update on table isp_dashboard_preferences to service_role;
 create table if not exists isp_plans (
   id             bigserial primary key,
   admin_id       bigint not null references isp_admins(id) on delete cascade,
+  owner_reseller_id bigint references isp_admins(id) on delete cascade,
   name           text not null,
   type           text not null default 'hotspot',   -- hotspot | pppoe | static
   speed_down     numeric(10,2) not null default 10, -- Mbps
@@ -141,6 +142,7 @@ create table if not exists isp_plans (
   updated_at     timestamptz not null default now()
 );
 create index if not exists isp_plans_admin_id_idx on isp_plans(admin_id);
+create index if not exists isp_plans_owner_reseller_idx on isp_plans(admin_id, owner_reseller_id);
 
 -- Reusable bandwidth profiles
 create table if not exists isp_bandwidth (

@@ -103,9 +103,25 @@ begin
      and p.admin_id = tx.admin_id
      and p.is_active = true
      and lower(coalesce(p.type, '')) = 'pppoe'
+    join isp_reseller_ports as rp
+      on rp.id = p.port_id
+     and rp.admin_id = p.admin_id
+     and rp.router_id = p.router_id
+     and rp.handoff_mode = 'vlan_services'
+     and rp.status <> 'disabled'
+     and rp.status = 'active'
+     and rp.link_status = 'active'
+     and (
+       (p.owner_reseller_id is null and rp.assigned_reseller_id is null)
+       or p.owner_reseller_id = rp.assigned_reseller_id
+     )
     where c.id = tx.customer_id
-      and c.admin_id = tx.admin_id
-      and c.type = 'pppoe';
+      and c.admin_id = case when p.owner_reseller_id is null then tx.admin_id else p.owner_reseller_id end
+      and c.type = 'pppoe'
+      -- A shared router is not a tenant boundary. Require the customer to
+      -- carry the exact service port selected by the package.
+      and c.router_id = p.router_id
+      and c.port_id = p.port_id;
 
     if matching_customer_id is null then
       update isp_transactions
@@ -132,7 +148,11 @@ begin
            ), make_interval(days => 1)),
            updated_at = now()
      where c.id = tx.customer_id
-       and c.admin_id = tx.admin_id
+        and c.admin_id = case when (
+          select owner_reseller_id from isp_plans where id = tx.plan_id
+        ) is null then tx.admin_id else (
+          select owner_reseller_id from isp_plans where id = tx.plan_id
+        ) end
        and c.type = 'pppoe'
        and exists (
          select 1 from isp_plans as active_plan

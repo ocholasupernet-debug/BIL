@@ -94,6 +94,15 @@ function hotspotApiUrl(path: string): string {
   return `${HOTSPOT_RUNTIME_CONFIG.apiBase}${path}`;
 }
 
+type PortalBranding = {
+  ispName?: string;
+  tagline?: string;
+  logoUrl?: string;
+  supportPhone?: string;
+  supportEmail?: string;
+  portalHostname?: string;
+};
+
 function formatValidity(plan: Plan): string {
   const days = plan.validity_days ?? plan.validity ?? 0;
   const unit = plan.validity_unit ?? "days";
@@ -205,6 +214,37 @@ function isDarajaGateway(paymentGateway: string): boolean {
 
 export default function HotspotLogin() {
   const brand = useBrand();
+  const [portalBranding, setPortalBranding] = useState<PortalBranding>({});
+  useEffect(() => {
+    if (!HOTSPOT_RUNTIME_CONFIG.adminId) return;
+    let cancelled = false;
+    fetch(hotspotApiUrl(`/api/public/hotspot-branding?adminId=${encodeURIComponent(String(HOTSPOT_RUNTIME_CONFIG.adminId))}`), {
+      cache: "no-store",
+    })
+      .then(response => response.ok ? response.json() as Promise<{ branding?: { portalHostname?: unknown; settings?: unknown } }> : null)
+      .then(payload => {
+        const settings = payload?.branding?.settings;
+        if (cancelled || !settings || typeof settings !== "object" || Array.isArray(settings)) return;
+        const row = settings as Record<string, unknown>;
+        setPortalBranding({
+          ispName: typeof row.ispName === "string" ? row.ispName : undefined,
+          tagline: typeof row.tagline === "string" ? row.tagline : undefined,
+          logoUrl: typeof row.logoUrl === "string" && row.logoUrl.length <= 2_000_000 ? row.logoUrl : undefined,
+          supportPhone: typeof row.supportPhone === "string" ? row.supportPhone : undefined,
+          supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
+          portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
+        });
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  const portalBrand = {
+    ...brand,
+    ispName: portalBranding.ispName || brand.ispName,
+    phone: portalBranding.supportPhone || brand.phone,
+    supportEmail: portalBranding.supportEmail || brand.supportEmail,
+    domain: portalBranding.portalHostname || brand.domain,
+  };
   const [activeTab, setActiveTab] = useState<Tab>("plans");
 
   const portalContext = (() => {
@@ -508,7 +548,7 @@ export default function HotspotLogin() {
           ...(adminId ? { adminId } : {}),
           ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
-          account_ref: brand.ispName,
+          account_ref: portalBrand.ispName,
           paymentIntent: intentData.paymentIntent,
           ...(macAddress ? { mac_address: macAddress } : {}),
           ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
@@ -1292,9 +1332,9 @@ export default function HotspotLogin() {
         {/* Header */}
         <header className="hp-header">
           <div className="hp-logo">
-            <img className="hp-logo-image" src="/ocholasupernet-logo.png" alt={brand.ispName} />
+            <img className="hp-logo-image" src={portalBranding.logoUrl || "/ocholasupernet-logo.png"} alt={portalBrand.ispName} />
             <div>
-              <div className="hp-logo-sub">{brand.domain}</div>
+              <div className="hp-logo-sub">{portalBrand.domain}</div>
             </div>
           </div>
           <div className="hp-status">
@@ -1313,7 +1353,7 @@ export default function HotspotLogin() {
               </div>
             </div>
              <h1 className="hp-title">Your world, connected.</h1>
-             <p className="hp-subtitle">Fast, reliable internet for your phone, home and TV — powered by {brand.ispName}.</p>
+             <p className="hp-subtitle">{portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
             <div className="hp-badges">
               <span className="hp-badge"><Shield size={12} /> Secure</span>
               <span className="hp-badge"><Zap size={12} /> Instant</span>
@@ -1999,7 +2039,7 @@ export default function HotspotLogin() {
             </span>
           </div>
           <div className="hp-footer">
-            {new Date().getFullYear()} {brand.ispName} &middot; {brand.domain}
+            {new Date().getFullYear()} {portalBrand.ispName} &middot; {portalBrand.domain}
           </div>
         </main>
       </div>

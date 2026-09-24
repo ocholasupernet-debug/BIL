@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const migration = await readFile("migrations/2026_plan_purchase_visibility.sql", "utf8");
+const resellerOwnershipMigration = await readFile("migrations/2026_reseller_plan_ownership.sql", "utf8");
 const speedMigration = await readFile("migrations/2026_plan_speed_units.sql", "utf8");
 const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
 const schema = await readFile("migrations/supabase_schema.sql", "utf8");
@@ -10,6 +11,14 @@ const schema = await readFile("migrations/supabase_schema.sql", "utf8");
 test("plan purchase visibility migration adds the column idempotently", () => {
   assert.match(migration, /alter table public\.isp_plans/);
   assert.match(migration, /add column if not exists client_can_purchase boolean not null default true/);
+});
+
+test("reseller plan ownership is additive and deployed before the API starts", () => {
+  assert.match(resellerOwnershipMigration, /add column if not exists owner_reseller_id bigint/);
+  assert.match(resellerOwnershipMigration, /references public\.isp_admins\(id\) on delete cascade/);
+  assert.match(resellerOwnershipMigration, /create index if not exists isp_plans_owner_reseller_idx/);
+  assert.match(runner, /2026_reseller_plan_ownership\.sql/);
+  assert.match(schema, /owner_reseller_id bigint references isp_admins\(id\) on delete cascade/);
 });
 
 test("deployment runner applies plan purchase visibility before the API starts", () => {

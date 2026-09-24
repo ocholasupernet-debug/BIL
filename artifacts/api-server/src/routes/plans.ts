@@ -15,6 +15,7 @@ import { normalizePlanValidityUnit } from "../lib/plan-validity.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import { isSupportedPlanType, normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { isValidVlanTag } from "../lib/vlan-customer-queue.js";
+import { planBelongsToOwner, planOwnerFilter } from "../lib/plan-ownership.js";
 import {
   planServicePoolName,
   portServiceResourceNames,
@@ -122,8 +123,12 @@ async function planContextRows(context: PlanContext): Promise<{
   ports: Record<string, unknown>[];
   pools: Record<string, unknown>[];
 }> {
+  const ownerResellerId = context.account.role === "reseller" ? context.account.id : null;
   const [allPlans, bandwidths, routers, ports, pools] = await Promise.all([
-    sbSelect<Record<string, unknown>>("isp_plans", `admin_id=eq.${context.tenantId}&select=*&order=created_at.asc`),
+    sbSelect<Record<string, unknown>>(
+      "isp_plans",
+      `admin_id=eq.${context.tenantId}&${planOwnerFilter(ownerResellerId)}&select=*&order=created_at.asc`,
+    ),
     sbSelect<Record<string, unknown>>("isp_bandwidth", `admin_id=eq.${context.tenantId}&select=*&order=created_at.asc`),
     sbSelect<Record<string, unknown>>(
       "isp_routers",
@@ -139,10 +144,15 @@ async function planContextRows(context: PlanContext): Promise<{
   ]);
   const plans = context.account.role === "reseller"
     ? allPlans.filter(plan =>
+        planBelongsToOwner(plan, ownerResellerId)
+        &&
         context.allowedRouterIds!.has(Number(plan.router_id))
         && context.allowedPortIds!.has(Number(plan.port_id)),
       )
-    : allPlans.filter(plan => plan.port_id == null || String(plan.type ?? "").toLowerCase() === "vlan");
+    : allPlans.filter(plan =>
+        planBelongsToOwner(plan, null)
+        && (plan.port_id == null || String(plan.type ?? "").toLowerCase() === "vlan"),
+      );
   const filteredRouters = context.allowedRouterIds
     ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
     : routers;
@@ -269,9 +279,9 @@ router.get("/plans", async (req, res): Promise<void> => {
     purchasableOnly ? "client_can_purchase=is.true" : "",
   ].filter(Boolean).map(filter => `&${filter}`).join("");
   if (adminId && requestedPortId) {
-    const ports = await sbSelect<{ id: number; router_id: number }>(
+    const ports = await sbSelect<{ id: number; router_id: number; assigned_reseller_id: number | null }>(
       "isp_reseller_ports",
-      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&status=neq.disabled&select=id,router_id&limit=1`,
+      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&status=neq.disabled&select=id,router_id,assigned_reseller_id&limit=1`,
     );
     if (!ports[0] || (requestedRouterId !== null && ports[0].router_id !== requestedRouterId)) {
       res.json([]);
@@ -281,6 +291,15 @@ router.get("/plans", async (req, res): Promise<void> => {
     // know the port from the RouterOS service but do not have to duplicate
     // its router id in the browser request.
     scopedRouterId = ports[0].router_id;
+    const assignedResellerId = parseOptionalId(ports[0].assigned_reseller_id);
+    const ownerFilter = planOwnerFilter(assignedResellerId);
+    const scopeFilter = `&router_id=eq.${scopedRouterId}&port_id=eq.${requestedPortId}`;
+    const rows = await sbSelect(
+      "isp_plans",
+      `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${ownerFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`,
+    );
+    res.json(rows);
+    return;
   }
   const scopeFilter = scopedRouterId
     ? requestedPortId
@@ -288,7 +307,7 @@ router.get("/plans", async (req, res): Promise<void> => {
       : `&router_id=eq.${scopedRouterId}&port_id=is.null`
     : "";
   const rows = adminId && scopedRouterId
-    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`)
+    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${planOwnerFilter(null)}${availabilityFilters}&select=*&order=price.asc,name.asc`)
     : [];
   res.json(rows);
 });
@@ -629,6 +648,7 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
   const pools = await planPoolAssignment(effectiveAdminId, scope, normalizedType);
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", {
     admin_id:     effectiveAdminId,
+    owner_reseller_id: context.account.role === "reseller" ? context.account.id : null,
     ...planWritePayload({
        name, type: normalizedType, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
       description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
@@ -658,7 +678,7 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     expired_ip_pool: string | null;
   }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=id,name,type,router_id,port_id,expired_ip_pool&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool&limit=1`,
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
@@ -719,7 +739,7 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   }
   const [row] = await sbUpdate<Record<string, unknown>>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}`,
     updates,
   );
   if (!row) { res.status(404).json({ error: "Plan not found" }); return; }
@@ -743,7 +763,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
   const effectiveAdminId = context.tenantId;
   const sources = await sbSelect<Record<string, unknown>>(
     "isp_plans",
-    `id=eq.${sourceId}&admin_id=eq.${effectiveAdminId}&select=*&limit=1`,
+    `id=eq.${sourceId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=*&limit=1`,
   );
   const source = sources[0];
   if (!source) {
@@ -769,6 +789,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
   const pools = await planPoolAssignment(effectiveAdminId, scope, source.type ?? "hotspot");
   const copyPayload = {
     admin_id: effectiveAdminId,
+    owner_reseller_id: context.account.role === "reseller" ? context.account.id : null,
     name: String(req.body.name ?? `${String(source.name ?? "Plan")} (Copy)`).trim(),
     type: source.type ?? "hotspot",
     speed_down: source.speed_down ?? 10,
@@ -808,7 +829,7 @@ router.delete("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   const effectiveAdminId = context.tenantId;
   const rows = await sbSelect<{ name: string; admin_id: number; router_id: number | null; port_id: number | null }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=name,admin_id,router_id,port_id&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=name,admin_id,router_id,port_id&limit=1`,
   );
   const row = rows[0];
   if (row && context.allowedPortIds) {
@@ -818,7 +839,10 @@ router.delete("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
       return;
     }
   }
-  await sbDelete("isp_plans", `id=eq.${id}&admin_id=eq.${effectiveAdminId}`);
+  await sbDelete(
+    "isp_plans",
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}`,
+  );
   if (row) void logActivity({ adminId: row.admin_id, type: "plan", action: "deleted", subject: row.name });
   res.sendStatus(204);
 });

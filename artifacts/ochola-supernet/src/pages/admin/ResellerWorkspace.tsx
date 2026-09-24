@@ -53,6 +53,7 @@ type ResellerGatewayRoute = {
   scopeType: "default" | "router" | "port";
   isActive: boolean;
 };
+type ResellerPlan = { id: number; name: string; type: string; port_id: number | null; router_id: number | null; price: number | string; validity: number; validity_unit?: string | null };
 function authHeaders(): HeadersInit {
   const token = getAdminApiToken();
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
@@ -691,7 +692,9 @@ function ResellerDashboard() {
   const [paymentGateway, setPaymentGateway] = useState("manual");
   const [gatewayRoutes, setGatewayRoutes] = useState<ResellerGatewayRoute[]>([]);
   const [checkout, setCheckout] = useState({ portId: "", clientReference: "", clientIp: "", amount: "0", paymentReference: "", maxLimitMbps: "" });
-  const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "" });
+  const [pppoeClient, setPppoeClient] = useState({ name: "", phone: "", username: "", password: "", planId: "" });
+  const [hotspotClient, setHotspotClient] = useState({ name: "", phone: "", username: "", password: "", planId: "" });
+  const [plans, setPlans] = useState<ResellerPlan[]>([]);
   const [staticClient, setStaticClient] = useState({ name: "", phone: "", ipAddress: "", username: "", password: "" });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -701,14 +704,16 @@ function ResellerDashboard() {
 
   const load = async () => {
     try {
-      const [dashboard, liveTelemetry, paymentSettings] = await Promise.all([
+      const [dashboard, liveTelemetry, paymentSettings, planContext] = await Promise.all([
         apiJson<ResellerResponse>("/api/reseller/me"),
         apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry").catch(() => null),
         apiJson<{ ok: boolean; routes: ResellerGatewayRoute[] }>("/api/reseller/payment-gateways").catch(() => ({ routes: [] })),
+        apiJson<{ plans?: ResellerPlan[] }>("/api/plans/admin-context").catch(() => ({ plans: [] })),
       ]);
       setData(dashboard);
       setTelemetry(liveTelemetry);
       setGatewayRoutes(paymentSettings?.routes || []);
+      setPlans(planContext.plans ?? []);
       setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
       setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
     }
@@ -737,14 +742,28 @@ function ResellerDashboard() {
     try {
       await apiJson("/api/reseller/pppoe-clients", {
         method: "POST",
-        body: JSON.stringify({ ...pppoeClient, portId: Number(port?.id) }),
+        body: JSON.stringify({ ...pppoeClient, portId: Number(port?.id), planId: Number(pppoeClient.planId) }),
       });
       setSuccess("PPPoE client assigned to your VLAN service.");
-      setPppoeClient({ name: "", phone: "", username: "", password: "" });
+       setPppoeClient({ name: "", phone: "", username: "", password: "", planId: "" });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to assign the PPPoE client.");
     } finally { setPppoeSaving(false); }
+  };
+  const assignHotspotClient = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true); setError(""); setSuccess("");
+    try {
+      await apiJson("/api/reseller/hotspot-clients", {
+        method: "POST",
+        body: JSON.stringify({ ...hotspotClient, portId: Number(port?.id), planId: Number(hotspotClient.planId) }),
+      });
+      setSuccess("Hotspot customer assigned to your VLAN service.");
+      setHotspotClient({ name: "", phone: "", username: "", password: "", planId: "" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to assign the Hotspot customer.");
+    } finally { setSaving(false); }
   };
   const assignStaticClient = async (event: React.FormEvent) => {
     event.preventDefault(); setStaticSaving(true); setError(""); setSuccess("");
@@ -898,7 +917,8 @@ function ResellerDashboard() {
             <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>
               <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="var(--isp-accent)" /> Assign a PPPoE client</div>
               <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Create a client login on your assigned VLAN. The client receives the ISP-defined PPPoE profile and remains inside your locked reseller speed cap.</p>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+               <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+                 <Field label="PPPoE package"><select required style={inputStyle} value={pppoeClient.planId} onChange={(e) => setPppoeClient({ ...pppoeClient, planId: e.target.value })}><option value="">Choose package</option>{plans.filter((item) => item.type === "pppoe" && Number(item.port_id) === Number(port.id)).map((item) => <option key={item.id} value={item.id}>{item.name} · {money(item.price)}</option>)}</select></Field>
                 <Field label="Client name"><input required style={inputStyle} value={pppoeClient.name} onChange={(e) => setPppoeClient({ ...pppoeClient, name: e.target.value })} /></Field>
                 <Field label="Phone"><input required style={inputStyle} value={pppoeClient.phone} onChange={(e) => setPppoeClient({ ...pppoeClient, phone: e.target.value })} /></Field>
                 <Field label="PPPoE username"><input required pattern="[A-Za-z0-9._-]{3,64}" style={inputStyle} value={pppoeClient.username} onChange={(e) => setPppoeClient({ ...pppoeClient, username: e.target.value })} /></Field>
@@ -907,6 +927,20 @@ function ResellerDashboard() {
               <button disabled={pppoeSaving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "var(--isp-accent)", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {pppoeSaving ? "Assigning…" : "Assign PPPoE client"}</button>
             </form>
           )}
+           {port?.handoff_mode === "vlan_services" && port.hotspot_enabled && (
+             <form onSubmit={assignHotspotClient} style={{ ...cardStyle, borderColor: "rgba(16,185,129,.3)" }}>
+               <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><RouterIcon size={18} color="#16a34a" /> Assign a Hotspot customer</div>
+               <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Create a tenant-scoped Hotspot login using one of your packages. The package, RADIUS profile, expiry, and RouterOS account are linked together.</p>
+               <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 13, marginTop: 17 }}>
+                 <Field label="Hotspot package"><select required style={inputStyle} value={hotspotClient.planId} onChange={(e) => setHotspotClient({ ...hotspotClient, planId: e.target.value })}><option value="">Choose package</option>{plans.filter((item) => ["hotspot", "trials", "trial"].includes(item.type) && Number(item.port_id) === Number(port.id)).map((item) => <option key={item.id} value={item.id}>{item.name} · {money(item.price)}</option>)}</select></Field>
+                 <Field label="Client name"><input required style={inputStyle} value={hotspotClient.name} onChange={(e) => setHotspotClient({ ...hotspotClient, name: e.target.value })} /></Field>
+                 <Field label="Phone"><input required style={inputStyle} value={hotspotClient.phone} onChange={(e) => setHotspotClient({ ...hotspotClient, phone: e.target.value })} /></Field>
+                 <Field label="Username"><input required pattern="[A-Za-z0-9._-]{3,64}" style={inputStyle} value={hotspotClient.username} onChange={(e) => setHotspotClient({ ...hotspotClient, username: e.target.value })} /></Field>
+                 <Field label="Password"><input required minLength={8} type="password" style={inputStyle} value={hotspotClient.password} onChange={(e) => setHotspotClient({ ...hotspotClient, password: e.target.value })} /></Field>
+               </div>
+               <button disabled={saving || linkStatus !== "active"} type="submit" style={{ marginTop: 17, border: 0, borderRadius: 10, padding: "11px 15px", color: "#fff", background: "#16a34a", fontWeight: 800, cursor: "pointer", display: "inline-flex", gap: 8, alignItems: "center" }}><Plus size={16} /> {saving ? "Assigning…" : "Assign Hotspot customer"}</button>
+             </form>
+           )}
         <div style={cardStyle}>
           <div style={{ fontWeight: 800, color: "var(--isp-text)", marginBottom: 12 }}>Recent sales on your port</div>
           <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Client", "Address", "Gateway", "Amount", "Status", "Date"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>{data?.sales?.map((sale) => <tr key={sale.id}><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 600 }}>{sale.client_reference}</td><td style={{ padding: "10px 8px" }}><code className="reseller-mono">{sale.client_ip}</code></td><td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{sale.gateway_type}</td><td style={{ padding: "10px 8px", color: "var(--isp-text)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{money(sale.amount)}</td><td style={{ padding: "10px 8px" }}><StatusBadge status={sale.status} /></td><td style={{ padding: "10px 8px", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{new Date(sale.created_at).toLocaleString()}</td></tr>)}{!data?.sales?.length && <tr><td colSpan={6} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No sales recorded yet.</td></tr>}</tbody></table></div>
