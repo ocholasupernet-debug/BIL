@@ -2213,6 +2213,163 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
   }
 });
 
+router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const portId = Number(req.params.portId);
+    if (!Number.isSafeInteger(portId) || portId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid reseller assignment." });
+      return;
+    }
+    if (req.body?.overwrite !== true) {
+      res.status(400).json({ ok: false, error: "Confirm overwrite:true before replacing the VLAN portal files." });
+      return;
+    }
+
+    const port = await ownedPort(req, portId);
+    if (port.handoff_mode !== "vlan_services" || port.status !== "active") {
+      res.status(409).json({ ok: false, error: "Only an active VLAN service assignment can receive a portal-only update." });
+      return;
+    }
+    const assignedResellerId = Number(port.assigned_reseller_id);
+    if (!Number.isSafeInteger(assignedResellerId) || assignedResellerId <= 0) {
+      res.status(409).json({ ok: false, error: "This VLAN service does not have an assigned reseller package owner." });
+      return;
+    }
+
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const resources = portServiceResourceNames({
+      id: port.id,
+      router_id: port.router_id,
+      interface_name: port.interface_name,
+      bridge_name: port.bridge_name,
+      handoff_mode: "vlan_services",
+      reseller_id: port.reseller_id,
+      assigned_reseller_id: port.assigned_reseller_id,
+      vlan_tag: port.vlan_tag,
+    });
+    const { vlanInterface } = vlanServiceResources(port);
+    const creds = routerCredentials(target);
+    const serverRows = await runRouterCommand(creds, [
+      "/ip/hotspot/print",
+      "=.proplist=name,interface,profile,disabled",
+      `?name=${resources.hotspotServer}`,
+    ]);
+    const server = Array.isArray(serverRows)
+      ? serverRows.find(row => String((row as Record<string, unknown>).name ?? "") === resources.hotspotServer) as Record<string, unknown> | undefined
+      : undefined;
+    if (
+      !server
+      || String(server.interface ?? "") !== vlanInterface
+      || String(server.profile ?? "") !== resources.hotspotProfile
+      || /^(?:true|yes)$/i.test(String(server.disabled ?? "").trim())
+    ) {
+      res.status(409).json({
+        ok: false,
+        error: "The active VLAN Hotspot server does not match this assignment; no portal files were changed.",
+      });
+      return;
+    }
+
+    const profileRows = await runRouterCommand(creds, [
+      "/ip/hotspot/profile/print",
+      "=.proplist=name,html-directory",
+    ]);
+    const profile = Array.isArray(profileRows)
+      ? profileRows.find(row => String((row as Record<string, unknown>).name ?? "") === resources.hotspotProfile) as Record<string, unknown> | undefined
+      : undefined;
+    const routerDirectory = profile
+      ? cleanServicePath(profile["html-directory"], "hotspot")
+      : "";
+    if (!profile || routerDirectory !== resources.hotspotDirectory) {
+      res.status(409).json({
+        ok: false,
+        error: "The VLAN Hotspot profile does not point to its isolated portal directory; no files were changed.",
+      });
+      return;
+    }
+
+    const resellerRows = await sbSelectStrict<{ subdomain: string | null }>(
+      "isp_admins",
+      `id=eq.${assignedResellerId}&parent_id=eq.${port.admin_id}&role=eq.reseller&select=subdomain&limit=1`,
+    );
+    const apiOrigin = resellerTenantOrigin(resellerRows[0]?.subdomain);
+    const sourceOrigin = requestOrigin(req);
+    if (!apiOrigin || !sourceOrigin.startsWith("https://")) {
+      res.status(409).json({ ok: false, error: "The reseller portal origin could not be verified; no files were changed." });
+      return;
+    }
+
+    const plans = await sbSelectStrict<{
+      id: number;
+      name: string;
+      price: number | string;
+      validity: number;
+      validity_unit: string;
+    }>(
+      "isp_plans",
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&owner_reseller_id=eq.${assignedResellerId}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
+    );
+    if (!plans.length) {
+      res.status(409).json({
+        ok: false,
+        error: "No active, purchasable reseller Hotspot plans are assigned to this VLAN service.",
+      });
+      return;
+    }
+
+    const portalScope = {
+      adminId: port.admin_id,
+      routerId: port.router_id,
+      portId: port.id,
+      plans: plans.map(plan => ({ ...plan, price: Number(plan.price) })),
+    };
+    for (const fileName of ["login.html", "rlogin.html"] as const) {
+      await deployDefaultResellerPortalFile(
+        creds,
+        sourceOrigin,
+        apiOrigin,
+        fileName,
+        `${resources.hotspotDirectory}/${fileName}`,
+        portalScope,
+      );
+    }
+
+    logger.info({
+      portId: port.id,
+      routerId: port.router_id,
+      resellerId: assignedResellerId,
+      vlanTag: port.vlan_tag,
+      directory: resources.hotspotDirectory,
+      planIds: plans.map(plan => plan.id),
+    }, "Reseller VLAN portal refreshed without service reconciliation");
+    res.status(201).json({
+      ok: true,
+      portId: port.id,
+      routerId: port.router_id,
+      resellerId: assignedResellerId,
+      vlanTag: port.vlan_tag,
+      directory: resources.hotspotDirectory,
+      plans: plans.map(plan => ({
+        id: plan.id,
+        name: plan.name,
+        price: Number(plan.price),
+        validity: plan.validity,
+        validity_unit: plan.validity_unit,
+      })),
+      deployedFiles: [
+        `${resources.hotspotDirectory}/login.html`,
+        `${resources.hotspotDirectory}/rlogin.html`,
+      ],
+      serviceConfigurationChanged: false,
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to refresh the reseller VLAN portal.",
+    });
+  }
+});
+
 router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const portId = Number(req.params.portId);
