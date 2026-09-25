@@ -7,6 +7,13 @@ export type VlanCustomerQueueIdentity = {
   comment: string;
 };
 
+type VlanCustomerQueuePresenceFields = {
+  name: string;
+  target: string;
+  comment: string;
+  disabled: boolean;
+  rate: string;
+};
 function ipv4ToNumber(value: unknown): number | null {
   const raw = String(value ?? "").trim();
   if (!/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(raw)) return null;
@@ -97,4 +104,34 @@ export function parseVlanQueueCounters(
 export function vlanQueueHasTraffic(rate: unknown): boolean {
   const pair = /^(\d+)\/(\d+)$/.exec(String(rate ?? "").trim());
   return !!pair && (Number(pair[1]) > 0 || Number(pair[2]) > 0);
+}
+
+export function vlanCustomerQueuePresence<T extends VlanCustomerQueuePresenceFields>(
+  adminId: number,
+  customer: { id: number; ipAddress: unknown; expiresAt: string | null },
+  queues: readonly T[],
+  statsAvailable: boolean,
+  observedAtMs: number,
+): { statsAvailable: boolean; online: boolean; queue: T | null } {
+  if (!statsAvailable) return { statsAvailable: false, online: false, queue: null };
+
+  let queue: T | undefined;
+  try {
+    const identity = vlanCustomerQueueIdentity(adminId, customer.id, customer.ipAddress);
+    queue = queues.find(candidate =>
+      candidate.name === identity.name
+      && candidate.comment === identity.comment
+      && candidate.target === identity.target,
+    );
+  } catch {
+    queue = undefined;
+  }
+
+  const expiresAtMs = customer.expiresAt ? Date.parse(customer.expiresAt) : Number.NaN;
+  const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
+  return {
+    statsAvailable: true,
+    online: !!queue && !queue.disabled && vlanQueueHasTraffic(queue.rate) && !expired,
+    queue: queue ?? null,
+  };
 }
