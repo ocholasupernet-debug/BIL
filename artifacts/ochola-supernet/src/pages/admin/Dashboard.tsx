@@ -42,7 +42,7 @@ import {
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 
-type LiveCounts = { hotspot: number; pppoe: number };
+type LiveCounts = { hotspot: number; pppoe: number; vlan: number | null };
 type RevenueSummary = {
   incomeToday: number;
   incomeMonth: number;
@@ -117,11 +117,18 @@ async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
   const res = await fetch(`/api/router/${routerId}/live`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!res.ok) return { hotspot: 0, pppoe: 0 };
-  const data = await res.json();
+  if (!res.ok) return { hotspot: 0, pppoe: 0, vlan: null };
+  const data = await res.json() as {
+    hotspotUsers?: unknown[];
+    pppoeUsers?: unknown[];
+    onlineVlanUsers?: unknown;
+  };
   return {
-    hotspot: data.hotspotUsers?.length ?? 0,
-    pppoe: data.pppoeUsers?.length ?? 0,
+    hotspot: Array.isArray(data.hotspotUsers) ? data.hotspotUsers.length : 0,
+    pppoe: Array.isArray(data.pppoeUsers) ? data.pppoeUsers.length : 0,
+    vlan: typeof data.onlineVlanUsers === "number" && Number.isFinite(data.onlineVlanUsers) && data.onlineVlanUsers >= 0
+      ? data.onlineVlanUsers
+      : null,
   };
 }
 
@@ -435,11 +442,25 @@ export default function Dashboard() {
   });
   const onlineHotspotUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.hotspot ?? 0), 0);
   const onlinePppoeUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.pppoe ?? 0), 0);
+  const onlineVlanUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.vlan ?? 0), 0);
+  const vlanCountUnavailable = liveCountResults.some(result =>
+    result.isError || (result.data !== undefined && result.data.vlan === null),
+  );
   const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
   const activeUsers = customers.filter((customer) => customer.status === "active" && !customerIsExpired(customer.expires_at)).length;
   const expiredUsers = customers.filter((customer) => customer.status === "expired" || customerIsExpired(customer.expires_at)).length;
-  const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineStaticUsers;
+  const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineVlanUsers + onlineStaticUsers;
   const liveCountLoading = liveCountResults.some((result) => result.isLoading);
+  const totalOnlineValue = vlanCountUnavailable
+    ? "—"
+    : liveCountLoading && totalOnlineNow === 0
+      ? "…"
+      : String(totalOnlineNow);
+  const onlineVlanValue = vlanCountUnavailable
+    ? "—"
+    : liveCountLoading && onlineVlanUsers === 0
+      ? "…"
+      : String(onlineVlanUsers);
 
   const monthlyData = useMemo(() => MONTHS.map((month, index) => ({
     month,
@@ -542,9 +563,10 @@ export default function Dashboard() {
         </section>
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
-          <StatMiniCard label="Total online users" value={liveCountLoading && totalOnlineNow === 0 ? "…" : String(totalOnlineNow)} href="/admin/customers" icon={<Users size={16} />} tone="green" />
+          <StatMiniCard label="Total online users" value={totalOnlineValue} href="/admin/customers" icon={<Users size={16} />} tone="green" />
           <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="accent" />
           <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
+          <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="accent" />
            <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
            <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="green" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
