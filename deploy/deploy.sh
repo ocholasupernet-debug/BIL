@@ -390,6 +390,12 @@ if [ -f "$PORTAL_REFRESH_MARKER" ]; then
   node "$PROJECT_DIR/deploy/refresh-hotspot-portals-once.mjs" "$PORTAL_REFRESH_MARKER"
 fi
 
+VLAN_INSPECTION_MARKER="$PROJECT_DIR/deploy/vlan-200-inspection-once.json"
+if [ -f "$VLAN_INSPECTION_MARKER" ]; then
+  echo "[13/13] Checking the requested VLAN tag through the production read-only API..."
+  node "$PROJECT_DIR/deploy/inspect-vlan-200-once.mjs" "$VLAN_INSPECTION_MARKER"
+fi
+
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
   echo "[11/11] Verifying router-management OpenVPN state..."
   bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
