@@ -41,9 +41,9 @@ import {
   listDeployableSources,
   type DeployableSourceType,
 } from "../lib/portal-assets.js";
-import { vlanCustomerQueueIdentity, vlanQueueHasTraffic } from "../lib/vlan-customer-queue.js";
+import { vlanCustomerQueuePresence } from "../lib/vlan-customer-queue.js";
 import { generateVpsOvpnSetupScript, describeVpnArchitecture } from "../lib/vpn-utils";
-import { sbInsert, sbSelect, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
+import { sbInsert, sbSelect, sbSelectStrict, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
@@ -367,7 +367,7 @@ async function persistPrepaidLiveState(
   routerId: number,
   adminId: number,
   data: Awaited<ReturnType<typeof fetchRouterLiveData>>,
-): Promise<void> {
+): Promise<number | null> {
   const routerPlans = await sbSelect<{ id: number }>(
     "isp_plans",
     `admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id`,
@@ -380,35 +380,40 @@ async function persistPrepaidLiveState(
     "isp_customers",
     `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,ip_address,expires_at,last_seen,data_used_mb,data_used_bytes,service_online`,
   );
-  if (customers.length === 0) return;
+  if (customers.length === 0) return data.vlanQueueStatsAvailable ? 0 : null;
 
   const usage = prepaidLiveUsage(data);
   const observedAt = data.fetchedAt || new Date().toISOString();
   const observedAtMs = Date.parse(observedAt);
+  let onlineVlanUsers = 0;
   for (const customer of customers) {
-    if (customer.type === "vlan" && !data.vlanQueueStatsAvailable) continue;
+    const vlanPresence = customer.type === "vlan"
+      ? vlanCustomerQueuePresence(
+        adminId,
+        {
+          id: customer.id,
+          ipAddress: customer.ip_address,
+          expiresAt: customer.expires_at,
+        },
+        data.vlanCustomerQueues,
+        data.vlanQueueStatsAvailable,
+        observedAtMs,
+      )
+      : null;
+    if (vlanPresence && !vlanPresence.statsAvailable) continue;
     let sessionBytes = prepaidIdentityKeys(customer)
       .map(identity => usage.get(identity))
       .find(value => value !== undefined);
     const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
     let online = sessionBytes !== undefined && !expired;
-    if (customer.type === "vlan" && data.vlanQueueStatsAvailable) {
-      let queue: (typeof data.vlanCustomerQueues)[number] | undefined;
-      try {
-        const identity = vlanCustomerQueueIdentity(adminId, customer.id, customer.ip_address);
-        queue = data.vlanCustomerQueues.find(candidate =>
-          candidate.name === identity.name
-          && candidate.comment === identity.comment
-          && candidate.target === identity.target,
-        );
-      } catch {
-        queue = undefined;
-      }
+    if (vlanPresence) {
+      const queue = vlanPresence.queue;
       sessionBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
         ? queue.bytesIn + queue.bytesOut
         : undefined;
-      online = !!queue && !queue.disabled && vlanQueueHasTraffic(queue.rate) && !expired;
+      online = vlanPresence.online;
+      if (online) onlineVlanUsers += 1;
     }
     const payload: Record<string, unknown> = {
       service_online: online,
@@ -436,6 +441,7 @@ async function persistPrepaidLiveState(
       payload,
     );
   }
+  return data.vlanQueueStatsAvailable ? onlineVlanUsers : null;
 }
 
 /* ─── Build MikroTik credentials from a Supabase row ────────────────────── */
@@ -723,11 +729,11 @@ router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, 
  * The admin id is required so a router id cannot be used to inspect another
  * administrator's router.
  */
-router.get("/router/:id/files", async (req, res): Promise<void> => {
+router.get("/router/:id/files", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId query param is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
 
   const found = await getRouterCreds(id, adminId);
   if (!found) {
@@ -766,15 +772,15 @@ router.get("/router/:id/files", async (req, res): Promise<void> => {
  *   { adminId, sourceType: "hotspot", sourceName,
  *     destinationDirectory? , destinationPath?, overwrite? }
  */
-router.post("/router/:id/files/deploy", async (req, res): Promise<void> => {
+router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
   const sourceType = req.body?.sourceType as DeployableSourceType;
   const sourceName = String(req.body?.sourceName ?? "").trim();
   const overwrite = req.body?.overwrite === true;
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   if (sourceType !== "hotspot") {
     res.status(400).json({ error: "sourceType must be hotspot" });
     return;
@@ -987,16 +993,16 @@ async function runBulkFileDeployment(
   }
 }
 
-router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => {
+router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
   const destinationDirectory = String(req.body?.destinationDirectory ?? "flash/hotspot")
     .trim()
     .replaceAll("\\", "/")
     .replace(/^\/+|\/+$/g, "");
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   const scope = String(req.body?.scope ?? "hotspot").trim().toLowerCase();
   if (scope !== "hotspot" && scope !== "all") {
     res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
@@ -1059,11 +1065,11 @@ router.post("/router/:id/files/deploy-bulk", async (req, res): Promise<void> => 
   void runBulkFileDeployment(job, found.creds, requestOrigin(req));
 });
 
-router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<void> => {
+router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.query.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
 
   cleanBulkDeployJobs();
   const job = bulkDeployJobs.get(String(req.params.jobId));
@@ -1099,9 +1105,9 @@ router.get("/router/:id/files/deploy-bulk/:jobId", async (req, res): Promise<voi
  * server-side. The artifact is exposed through the one-time source endpoint
  * only while the atomic RouterOS transfer is in progress.
  */
-router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void> => {
+router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
   const overwrite = req.body?.overwrite === true;
   const directory = String(req.body?.destinationDirectory ?? "hotspot")
     .trim()
@@ -1110,7 +1116,7 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
   const portal = validateGeneratedHotspotPortal(req.body?.html);
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
   if (!/^(?:(?:flash|disk1)\/)?hotspot$/i.test(directory)) {
     res.status(400).json({ error: "Hotspot portals must be deployed to hotspot, flash/hotspot, or disk1/hotspot" });
@@ -1208,12 +1214,173 @@ router.post("/router/:id/hotspot-portal/deploy", async (req, res): Promise<void>
   }
 });
 
+/* ─── POST /api/admin/router/:id/hotspot-portal/bridge-deploy ─────────────── */
+/**
+ * Refresh only the payment-first portal files used by a named existing
+ * Hotspot bridge. RouterOS service configuration is read for verification
+ * but never changed here.
+ */
+router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const bridgeName = String(req.body?.bridgeName ?? "").trim();
+  if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeName)) {
+    res.status(400).json({ error: "A valid existing Hotspot bridge name is required." });
+    return;
+  }
+  if (req.body?.overwrite !== true) {
+    res.status(400).json({ error: "Confirm overwrite:true before replacing the bridge portal files." });
+    return;
+  }
+
+  const origin = requestOrigin(req);
+  if (!origin.startsWith("https://")) {
+    res.status(400).json({ error: "Portal deployment requires an HTTPS public request origin." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+
+  const read = async (command: string[]): Promise<Record<string, unknown>[]> => {
+    const rows = await runRouterCommand(found.creds, command);
+    return Array.isArray(rows) ? rows as Record<string, unknown>[] : [];
+  };
+  try {
+    const servers = await read([
+      "/ip/hotspot/print",
+      "=.proplist=name,interface,profile,disabled",
+      `?interface=${bridgeName}`,
+    ]);
+    const bridgeServers = servers.filter(row =>
+      String(row.interface ?? "") === bridgeName
+      && !/^(?:true|yes)$/i.test(String(row.disabled ?? "").trim()),
+    );
+    if (bridgeServers.length !== 1) {
+      res.status(409).json({
+        error: bridgeServers.length
+          ? `More than one active Hotspot server uses ${bridgeName}; no files were changed.`
+          : `No active Hotspot server uses ${bridgeName}; no files were changed.`,
+      });
+      return;
+    }
+
+    const profileName = String(bridgeServers[0].profile ?? "").trim();
+    const profiles = await read(["/ip/hotspot/profile/print", "=.proplist=name,html-directory"]);
+    const profile = profiles.find(row => String(row.name ?? "") === profileName);
+    if (!profile) {
+      res.status(409).json({ error: "The bridge Hotspot profile could not be verified; no files were changed." });
+      return;
+    }
+    const directory = String(profile["html-directory"] ?? "hotspot")
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "") || "hotspot";
+    const directoryParts = directory.split("/");
+    if (
+      !/^(?:(?:flash|disk1)\/)?hotspot(?:\/[A-Za-z0-9._-]+)*$/i.test(directory)
+      || directoryParts.some(part => part === "." || part === "..")
+    ) {
+      res.status(409).json({
+        error: "The bridge Hotspot profile uses an unsupported portal directory; no files were changed.",
+      });
+      return;
+    }
+
+    const plans = await sbSelectStrict<{
+      id: number;
+      name: string;
+      price: number | string;
+      validity: number;
+      validity_unit: string;
+    }>(
+      "isp_plans",
+      `admin_id=eq.${adminId}&router_id=eq.${id}&port_id=is.null&owner_reseller_id=is.null&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
+    );
+    const source = getDeployableSource("hotspot", "login.html");
+    if (!source) {
+      res.status(500).json({ error: "The approved default Hotspot portal asset is unavailable." });
+      return;
+    }
+    const config = JSON.stringify({
+      apiBase: origin,
+      adminId,
+      routerId: id,
+      plans: plans.map(plan => ({ ...plan, price: Number(plan.price) })),
+    }).replace(/</g, "\\u003c");
+    const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${config};</script>`;
+    const template = source.content.toString("utf8");
+    if (!/<\/head>/i.test(template)) {
+      res.status(500).json({ error: "The approved Hotspot portal has no head section for its tenant configuration." });
+      return;
+    }
+    const existingConfig = /<script>window\.__HOTSPOT_CONFIG__\s*=[\s\S]*?<\/script>/;
+    const html = existingConfig.test(template)
+      ? template.replace(existingConfig, bootstrap)
+      : template.replace(/<\/head>/i, `${bootstrap}\n</head>`);
+    const content = Buffer.from(html, "utf8");
+    const deployedFiles: Array<{ destinationPath: string; size: number; replaced: boolean }> = [];
+    for (const fileName of ["login.html", "rlogin.html"] as const) {
+      const token = createPendingRouterFileSource({
+        content,
+        contentType: "text/html; charset=utf-8",
+        fileName,
+      });
+      try {
+        const result = await deployRouterFile(found.creds, {
+          destinationPath: `${directory}/${fileName}`,
+          sourceUrl: `${origin}/api/router-file-source/${token}`,
+          overwrite: true,
+          uploadId: token.slice(0, 16),
+        });
+        deployedFiles.push({
+          destinationPath: result.destinationPath,
+          size: result.size,
+          replaced: result.replaced,
+        });
+      } finally {
+        pendingRouterFileSources.delete(token);
+      }
+    }
+
+    logger.info({
+      routerId: id,
+      adminId,
+      bridgeName,
+      directory,
+      planIds: plans.map(plan => plan.id),
+      deployedFiles,
+    }, "ISP Hotspot bridge portal refreshed");
+    res.status(201).json({
+      ok: true,
+      routerId: id,
+      routerName: found.row.name,
+      bridgeName,
+      directory,
+      plans: plans.map(plan => ({
+        id: plan.id,
+        name: plan.name,
+        price: Number(plan.price),
+        validity: plan.validity,
+        validity_unit: plan.validity_unit,
+      })),
+      deployedFiles,
+    });
+  } catch (err) {
+    routerErrorResponse(res, err);
+  }
+});
+
 /* ─── POST /api/router/:id/hotspot-portal/sync-tenant-host ───────────────── */
-router.post("/router/:id/hotspot-portal/sync-tenant-host", async (req, res): Promise<void> => {
+router.post("/router/:id/hotspot-portal/sync-tenant-host", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
-  const adminId = parseInt(String(req.body?.adminId ?? ""), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (isNaN(adminId)) { res.status(400).json({ error: "adminId is required" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
 
   const found = await getRouterCreds(id, adminId);
   if (!found) {
@@ -2108,15 +2275,17 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
     const data = await fetchRouterLiveData(found.creds);
+    let onlineVlanUsers: number | null = null;
     try {
-      await persistPrepaidLiveState(id, found.row.admin_id, data);
+      const liveVlanUsers = await persistPrepaidLiveState(id, found.row.admin_id, data);
+      if (account.role !== "reseller") onlineVlanUsers = liveVlanUsers;
     } catch (error) {
       logger.warn(
         { routerId: id, error: error instanceof Error ? error.message : String(error) },
         "prepaid live state could not be persisted",
       );
     }
-    res.json({ routerId: id, ...data });
+    res.json({ routerId: id, ...data, onlineVlanUsers });
   } catch (err) {
     routerErrorResponse(res, err);
   }
