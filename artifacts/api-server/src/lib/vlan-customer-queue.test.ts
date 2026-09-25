@@ -7,6 +7,7 @@ import {
   ipv4InSubnet,
   isVlanCustomerQueueName,
   parseVlanQueueCounters,
+  vlanCustomerQueuePresence,
   vlanCustomerQueueIdentity,
   vlanQueueHasTraffic,
 } from "./vlan-customer-queue.js";
@@ -45,4 +46,49 @@ test("validates per-customer queue speed and parses real queue counters", () => 
   assert.equal(parseVlanQueueCounters("unknown"), null);
   assert.equal(vlanQueueHasTraffic("1/0"), true);
   assert.equal(vlanQueueHasTraffic("0/0"), false);
+});
+
+test("reports a VLAN customer online only from a matching active RouterOS queue", () => {
+  const identity = vlanCustomerQueueIdentity(14, 87, "192.168.10.50");
+  const customer = { id: 87, ipAddress: "192.168.10.50", expiresAt: null };
+  const queue = {
+    ...identity,
+    parent: "vlan-aggregate",
+    disabled: false,
+    bytesIn: 1200,
+    bytesOut: 900,
+    rate: "120/0",
+    statsAvailable: true,
+  };
+  const observedAtMs = Date.parse("2026-09-24T10:00:00.000Z");
+
+  const online = vlanCustomerQueuePresence(14, customer, [queue], true, observedAtMs);
+  assert.equal(online.online, true);
+  assert.equal(online.queue, queue);
+
+  assert.equal(vlanCustomerQueuePresence(
+    14,
+    customer,
+    [{ ...queue, disabled: true }],
+    true,
+    observedAtMs,
+  ).online, false);
+  assert.equal(vlanCustomerQueuePresence(
+    14,
+    customer,
+    [{ ...queue, rate: "0/0" }],
+    true,
+    observedAtMs,
+  ).online, false);
+  assert.equal(vlanCustomerQueuePresence(
+    14,
+    { ...customer, expiresAt: "2026-09-24T09:59:59.000Z" },
+    [queue],
+    true,
+    observedAtMs,
+  ).online, false);
+  assert.deepEqual(
+    vlanCustomerQueuePresence(14, customer, [queue], false, observedAtMs),
+    { statsAvailable: false, online: false, queue: null },
+  );
 });
