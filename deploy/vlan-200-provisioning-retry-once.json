@@ -1,0 +1,8 @@
+{
+  "id": "vlan-tag-200-port-8",
+  "adminId": 3,
+  "portId": 8,
+  "routerId": 85,
+  "vlanTag": 200,
+  "handoffInterface": "ether4"
+}
