@@ -2419,6 +2419,15 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime", `?server=${resources.hotspotServer}`]),
       read(["/ip/arp/print", "=.proplist=.id,address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
     ]);
+    const [aggregateQueueResult, customerQueueResult] = await Promise.allSettled([
+      read(["/queue/simple/print", "=.proplist=.id,name,target,parent,max-limit,disabled,bytes,packets", `?name=${resources.parentQueue}`]),
+      read(["/queue/simple/print", "=.proplist=.id,name,target,parent,max-limit,disabled,bytes,packets", `?parent=${resources.parentQueue}`]),
+    ]);
+    const aggregateQueueRows = aggregateQueueResult.status === "fulfilled" ? aggregateQueueResult.value : [];
+    const customerQueueRows = customerQueueResult.status === "fulfilled" ? customerQueueResult.value : [];
+    const queueDiagnosticsError = aggregateQueueResult.status === "rejected" || customerQueueResult.status === "rejected"
+      ? "MikroTik aggregate or customer queue counters could not be read."
+      : null;
     const handoffInterface = String(port.handoff_interface ?? "").trim();
     const handoffLink = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(handoffInterface)
       ? await detectRouterInterfaceLink(target, handoffInterface)
@@ -2458,6 +2467,29 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       leases: leaseRows,
       hotspotHosts: hotspotHostRows,
       arp: arpRows,
+      aggregateQueue: aggregateQueueRows[0] ? {
+        id: aggregateQueueRows[0][".id"] ?? null,
+        name: aggregateQueueRows[0].name ?? null,
+        target: aggregateQueueRows[0].target ?? null,
+        parent: aggregateQueueRows[0].parent ?? null,
+        maxLimit: aggregateQueueRows[0]["max-limit"] ?? null,
+        disabled: aggregateQueueRows[0].disabled ?? null,
+        bytes: aggregateQueueRows[0].bytes ?? null,
+        packets: aggregateQueueRows[0].packets ?? null,
+      } : null,
+      customerQueues: customerQueueRows
+        .filter(row => String(row.parent ?? "") === resources.parentQueue)
+        .map(row => ({
+          id: row[".id"] ?? null,
+          name: row.name ?? null,
+          target: row.target ?? null,
+          parent: row.parent ?? null,
+          maxLimit: row["max-limit"] ?? null,
+          disabled: row.disabled ?? null,
+          bytes: row.bytes ?? null,
+          packets: row.packets ?? null,
+        })),
+      queueDiagnosticsError,
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to inspect the live VLAN service." });
