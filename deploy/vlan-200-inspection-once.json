@@ -1,5 +1,5 @@
 {
-  "id": "vlan-tag-200-direct-link",
+  "id": "vlan-tag-200-post-provision",
   "adminId": 3,
   "vlanTag": 200
 }
