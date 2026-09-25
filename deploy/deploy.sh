@@ -389,6 +389,12 @@ if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
   bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
 fi
 
+PORTAL_REFRESH_MARKER="$PROJECT_DIR/deploy/portal-refresh-once.json"
+if [ -f "$PORTAL_REFRESH_MARKER" ]; then
+  echo "[12/12] Applying the requested one-time Hotspot portal refresh..."
+  node "$PROJECT_DIR/deploy/refresh-hotspot-portals-once.mjs" "$PORTAL_REFRESH_MARKER"
+fi
+
 echo ""
 echo "✓ Deployment complete!"
 echo "  Commit: $(git log -1 --format='%h — %s')"
