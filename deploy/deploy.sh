@@ -396,6 +396,12 @@ if [ -f "$VLAN_INSPECTION_MARKER" ]; then
   node "$PROJECT_DIR/deploy/inspect-vlan-200-once.mjs" "$VLAN_INSPECTION_MARKER"
 fi
 
+VLAN_PROVISION_RETRY_MARKER="$PROJECT_DIR/deploy/vlan-200-provisioning-retry-once.json"
+if [ -f "$VLAN_PROVISION_RETRY_MARKER" ]; then
+  echo "[14/14] Retrying the authorized VLAN 200 service provisioning..."
+  node "$PROJECT_DIR/deploy/retry-vlan-200-provisioning-once.mjs" "$VLAN_PROVISION_RETRY_MARKER"
+fi
+
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
   echo "[11/11] Verifying router-management OpenVPN state..."
   bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
