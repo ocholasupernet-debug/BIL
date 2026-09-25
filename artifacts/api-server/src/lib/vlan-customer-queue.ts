@@ -14,6 +14,7 @@ type VlanCustomerQueuePresenceFields = {
   disabled: boolean;
   rate: string;
 };
+
 function ipv4ToNumber(value: unknown): number | null {
   const raw = String(value ?? "").trim();
   if (!/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(raw)) return null;

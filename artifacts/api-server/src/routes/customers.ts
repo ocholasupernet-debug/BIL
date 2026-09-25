@@ -8,6 +8,7 @@ import {
   sbUpdateStrict,
   sbDelete,
   sbDeleteStrict,
+  SupabaseHttpError,
 } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
@@ -20,12 +21,23 @@ import {
   fetchHotspotUsers,
   connectHotspotUser,
   removeHotspotIpBinding,
+  hasPaidHotspotAccess,
+  removeHotspotUserExpiry,
+  removeHotspotUserRateQueue,
   disconnectPPPActiveByName,
+  removePppUserExpiry,
   removeHotspotUser,
   removePPPSecretByName,
 } from "../lib/mikrotik.js";
-import { syncRadiusCustomer } from "../lib/radius.js";
-import { hotspotPlanProfileName, isPrepaidHotspotUsername, prepaidHotspotUsername, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import {
+  assertRadiusTargetEmptyStrict,
+  hasRadiusCustomerStrict,
+  moveRadiusCustomerStrict,
+  removeRadiusCustomerStrict,
+  rollbackRadiusCustomerMoveStrict,
+  syncRadiusCustomerStrict,
+} from "../lib/radius.js";
+import { hotspotPlanProfileName, prepaidHotspotUsernameForEdit, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { authenticatedAccount, authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -33,6 +45,8 @@ import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
+import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
+import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
 
 const router: IRouter = Router();
 
@@ -102,6 +116,7 @@ async function loadScopedCustomerPlan(
   requestedType: string,
   routerId?: unknown,
   portId?: unknown,
+  allowInactive = false,
 ): Promise<PlanRow | undefined> {
   const tenantId = account.parent_id ?? account.id;
   const ownerId = account.role === "reseller" ? account.id : null;
@@ -111,7 +126,7 @@ async function loadScopedCustomerPlan(
   const portFilter = Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? `&port_id=eq.${Number(portId)}` : "";
   const rows = await sbSelectStrict<PlanRow>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&is_active=is.true&${typeFilter}${routerFilter}${portFilter}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&${allowInactive ? "" : "is_active=is.true&"}${typeFilter}${routerFilter}${portFilter}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
   );
   const plan = rows[0];
   if (!plan) return undefined;
@@ -196,6 +211,18 @@ function asOptionalIso(value: unknown): string | null | undefined {
   return parsed.toISOString();
 }
 
+function customerFieldsMatch(row: CustomerRow, fields: Record<string, unknown>): boolean {
+  const saved = row as unknown as Record<string, unknown>;
+  return Object.entries(fields).every(([key, value]) => {
+    if (key === "updated_at") return true;
+    const actual = saved[key];
+    if (key === "expires_at" && actual && value) {
+      return Date.parse(String(actual)) === Date.parse(String(value));
+    }
+    return (actual ?? null) === (value ?? null);
+  });
+}
+
 function isManagementVpnIp(ip: string | null | undefined): boolean {
   return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(String(ip ?? "").trim());
 }
@@ -231,12 +258,25 @@ async function reconcileCustomerAccess(
   current: CustomerRow,
   updates: Record<string, unknown>,
   adminId: number,
+  options: {
+    allowInactivePlan?: boolean;
+    restoreIdentity?: boolean;
+    skipRadius?: boolean;
+    onRouterMutation?: () => Promise<void>;
+    onRadiusIdentity?: (exists: boolean) => void;
+    onRadiusMutation?: () => void;
+    assertLock?: () => Promise<void>;
+  } = {},
 ): Promise<{ routerSynced: boolean; routerId: number | null; routerName: string | null }> {
-  const currentName = current.pppoe_username || current.username || "";
+  const currentName = current.type === "pppoe"
+    ? current.pppoe_username || current.username || ""
+    : current.username || current.pppoe_username || "";
   let nextName = String(
-    updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? currentName,
+    updates[current.type === "pppoe" ? "pppoe_username" : "username"] === undefined
+      ? currentName
+      : updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? "",
   ).trim();
-  const nextPassword = String(updates.password ?? current.password ?? "");
+  const nextPassword = String(updates.password === undefined ? current.password ?? "" : updates.password ?? "");
   const nextType = String(updates.type ?? current.type ?? "hotspot").toLowerCase();
   const nextPlanId = updates.plan_id !== undefined
     ? (updates.plan_id === null || updates.plan_id === "" ? null : Number(updates.plan_id))
@@ -249,29 +289,53 @@ async function reconcileCustomerAccess(
     ? (updates.expires_at as string | null)
     : current.expires_at;
   const plan = nextPlanId
-    ? (await sbSelect<PlanRow>(
+    ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&${options.allowInactivePlan ? "" : "is_active=is.true&"}select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
       ))[0]
     : undefined;
   const planType = normalizePlanServiceType(plan?.plan_type || plan?.type || nextType);
-  if (planType === "vlan" && !plan) {
-    throw new Error("An active VLAN plan is required for this customer.");
+  if (!plan) {
+    throw new Error("An existing plan linked to MikroTik is required before editing this prepaid user.");
+  }
+  if (planType !== "vlan" && planType !== "pppoe" && planType !== "hotspot") {
+    throw new Error("This prepaid service type cannot be synchronized to MikroTik by the customer editor.");
+  }
+  if (planType !== normalizePlanServiceType(nextType)) {
+    throw new Error("The customer's service type does not match the selected MikroTik plan.");
   }
   if (planType === "hotspot") {
-    const generated = prepaidHotspotUsername(
-      updates.phone ?? current.phone,
-      updates.mac_address ?? current.mac_address,
-    );
-    if (generated) {
-      const identityChanged = updates.phone !== undefined || updates.mac_address !== undefined;
-      nextName = !identityChanged && isPrepaidHotspotUsername(currentName) ? currentName : generated;
-    } else if (!isPrepaidHotspotUsername(nextName)) {
-      throw new Error("A hotspot user needs a valid phone number and device MAC address");
+    if (options.restoreIdentity) {
+      nextName = String(updates.username ?? current.username ?? "").trim();
+    } else {
+      nextName = prepaidHotspotUsernameForEdit(currentName, current.phone, updates.phone ?? current.phone);
     }
+    if (!nextName) throw new Error("A valid phone and hotspot login are required for this customer.");
     updates.username = nextName;
   } else if (planType === "pppoe") {
+    if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(nextName)) {
+      throw new Error("The PPPoE username must use only letters, digits, dots, underscores, @ or hyphens.");
+    }
     updates.pppoe_username = nextName;
+  }
+  if (planType === "hotspot" && !/^[A-Za-z0-9_.:@-]{1,64}$/.test(nextName)) {
+    throw new Error("The hotspot username contains characters that are unsafe for MikroTik scripts.");
+  }
+  if (planType !== "vlan") {
+    if (!currentName) throw new Error("The existing MikroTik login is missing. Repair it before editing this prepaid user.");
+    if (planType === "hotspot" && !current.username) {
+      throw new Error("The existing Hotspot login is missing. Repair it before editing this prepaid user.");
+    }
+    const column = planType === "pppoe" ? "pppoe_username" : "username";
+    const duplicates = await sbSelectStrict<{ id: number }>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&${column}=eq.${encodeURIComponent(nextName)}&id=neq.${current.id}&select=id&limit=1`,
+    );
+    if (duplicates[0]) throw new Error("Another customer already has this MikroTik username.");
+    if (!options.restoreIdentity && !options.skipRadius) {
+      options.onRadiusIdentity?.(await hasRadiusCustomerStrict(currentName));
+      if (nextName !== currentName) await assertRadiusTargetEmptyStrict(nextName);
+    }
   }
   const enabled = nextStatus === "active" &&
     (!nextExpiry || (Number.isFinite(Date.parse(nextExpiry)) && Date.parse(nextExpiry) > Date.now()));
@@ -295,21 +359,31 @@ async function reconcileCustomerAccess(
     const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
       ? String(Math.floor(dataLimitMb * 1_000_000))
       : "0";
-    const address = String(updates.ip_address ?? current.ip_address ?? "").trim();
+    const address = String(
+      updates.ip_address === undefined ? current.ip_address ?? "" : updates.ip_address ?? "",
+    ).trim();
     const rateLimit = routerRateLimit(
       plan.speed_down,
       plan.speed_up,
       plan.speed_down_unit ?? "Mbps",
       plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
     );
-
-    if (planType !== "vlan" && currentName && currentName !== nextName) {
-      if (planType === "pppoe") {
-        await disconnectPPPActiveByName(creds, currentName).catch(() => {});
-        await removePPPSecretByName(creds, currentName).catch(() => {});
-      } else {
-        await disconnectHotspotActiveUser(creds, currentName).catch(() => {});
-        await removeHotspotUser(creds, currentName).catch(() => {});
+    if (planType === "hotspot") {
+      const oldAddress = String(current.ip_address ?? "").trim();
+      const oldMac = String(current.mac_address ?? "").trim().toLowerCase();
+      const newMac = String(updates.mac_address === undefined ? current.mac_address ?? "" : updates.mac_address ?? "").trim().toLowerCase();
+      const sameExpiry = nextExpiry === current.expires_at
+        || Boolean(nextExpiry && current.expires_at && Date.parse(nextExpiry) === Date.parse(current.expires_at));
+      const accessChanged = nextName !== currentName
+        || plan.id !== current.plan_id
+        || nextStatus !== String(current.status ?? "").toLowerCase()
+        || !sameExpiry
+        || address !== oldAddress
+        || newMac !== oldMac;
+      if (accessChanged && await hasPaidHotspotAccess(creds, { name: currentName, macAddress: current.mac_address })) {
+        throw new Error(
+          "This Hotspot user has a paid MikroTik device bypass. Changing access, phone, plan, or expiry here would leave its binding out of sync. No changes were saved.",
+        );
       }
     }
 
@@ -320,12 +394,16 @@ async function reconcileCustomerAccess(
         routerId,
         updates.port_id ?? current.port_id ?? plan.port_id,
       );
-      const address = validateVlanCustomerAddress(updates.ip_address ?? current.ip_address, vlanContext.port);
+      const address = validateVlanCustomerAddress(
+        updates.ip_address === undefined ? current.ip_address : updates.ip_address,
+        vlanContext.port,
+      );
       const assignedAddresses = await sbSelectStrict<{ id: number }>(
         "isp_customers",
         `admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&port_id=eq.${plan.port_id}&ip_address=eq.${encodeURIComponent(address)}&id=neq.${current.id}&select=id&limit=1`,
       );
       if (assignedAddresses[0]) throw new Error("This static IP address is already assigned to another customer.");
+      await options.onRouterMutation?.();
       await reconcileVlanCustomerQueue(creds, {
         adminId,
         customerId: current.id,
@@ -338,6 +416,7 @@ async function reconcileCustomerAccess(
       });
       const previousAddress = String(current.ip_address ?? "").trim();
       if (previousAddress && previousAddress !== address && isValidIpv4(previousAddress)) {
+        await options.assertLock?.();
         try {
           await removeVlanCustomerQueue(creds, {
             adminId,
@@ -354,6 +433,7 @@ async function reconcileCustomerAccess(
       updates.router_id = plan.router_id;
       updates.port_id = plan.port_id;
     } else if (planType === "pppoe") {
+      await options.onRouterMutation?.();
       await reconcilePppoeUserAccess(creds, {
         name: nextName,
         password: nextPassword,
@@ -361,9 +441,10 @@ async function reconcileCustomerAccess(
         comment: nextName,
         expiresAt: nextExpiry,
         enabled,
-        remoteAddress: String(updates.ip_address ?? current.ip_address ?? "").trim() || null,
+        remoteAddress: address || null,
       });
     } else if (planType === "hotspot") {
+      await options.onRouterMutation?.();
       await reconcileHotspotUserAccess(creds, {
         name: nextName,
         password: nextPassword,
@@ -376,15 +457,42 @@ async function reconcileCustomerAccess(
         macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
         rateLimit,
         sharedUsers: plan.shared_users ?? 1,
+        resetCounters: false,
       });
+    }
+    if (planType !== "vlan" && currentName && currentName !== nextName) {
+      await options.assertLock?.();
+      if (planType === "pppoe") {
+        await disconnectPPPActiveByName(creds, currentName);
+        await removePPPSecretByName(creds, currentName);
+        await removePppUserExpiry(creds, currentName);
+      } else {
+        await disconnectHotspotActiveUser(creds, currentName);
+        await removeHotspotUser(creds, currentName);
+        await removeHotspotUserExpiry(creds, currentName);
+        await removeHotspotUserRateQueue(creds, currentName);
+        if (current.mac_address) {
+          await removeHotspotIpBinding(creds, { macAddress: current.mac_address, comment: currentName });
+        }
+      }
     }
     routerSynced = true;
     syncedRouterId = router.id;
     syncedRouterName = router.name;
   }
 
-  if (nextName && plan && planType !== "vlan") {
-    await syncRadiusCustomer({
+  if (nextName && plan && planType !== "vlan" && !options.skipRadius) {
+    await options.assertLock?.();
+    if (currentName !== nextName) {
+      if (options.restoreIdentity) {
+        await rollbackRadiusCustomerMoveStrict(currentName, nextName);
+      } else {
+        await moveRadiusCustomerStrict(currentName, nextName, options.onRadiusMutation);
+      }
+    } else {
+      options.onRadiusMutation?.();
+    }
+    await syncRadiusCustomerStrict({
       username: nextName,
       password: nextPassword,
       planId: plan.id,
@@ -602,18 +710,25 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
     res.status(400).json({ error: "A valid ISP account is required" });
     return;
   }
-  const current = (await sbSelect<CustomerRow>(
+  const customerId = Number(id);
+  if (!Number.isSafeInteger(customerId) || customerId < 1) {
+    res.status(400).json({ error: "A valid customer ID is required." });
+    return;
+  }
+  try {
+    const response = await withCustomerEditLock(effectiveAdminId, customerId, async assertLock => {
+  const customerFilter = `id=eq.${id}&admin_id=eq.${effectiveAdminId}`;
+  const current = (await sbSelectStrict<CustomerRow>(
     "isp_customers",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&select=*&limit=1`,
+    `${customerFilter}&select=*&limit=1`,
   ))[0];
-  if (!current) { res.status(404).json({ error: "Customer not found" }); return; }
+  if (!current) return { status: 404, body: { error: "Customer not found" } };
 
   let normalizedExpiry: string | null | undefined;
   try {
     normalizedExpiry = asOptionalIso(expiryDate !== undefined ? expiryDate : expires_at);
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid expiry date" });
-    return;
+    return { status: 400, body: { error: error instanceof Error ? error.message : "Invalid expiry date" } };
   }
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name       !== undefined) updates.name       = name;
@@ -635,14 +750,38 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
     const expiryMs = normalizedExpiry ? Date.parse(normalizedExpiry) : NaN;
     updates.status = Number.isFinite(expiryMs) && expiryMs <= Date.now() ? "expired" : "active";
   }
+  if (updates.status === null || updates.status === "") {
+    return { status: 400, body: { error: "Choose a valid prepaid user status before saving." } };
+  }
 
   const account = await authenticatedAccount(req);
   if (!account) {
-    res.status(401).json({ error: "A valid signed-in account is required." });
-    return;
+    return { status: 401, body: { error: "A valid signed-in account is required." } };
   }
   const resultingPlanId = Number(updates.plan_id ?? current.plan_id);
   const resultingType = String(updates.type ?? current.type ?? "hotspot").trim().toLowerCase();
+  const unchangedPlan = resultingPlanId === Number(current.plan_id);
+  const currentService = normalizePlanServiceType(current.type);
+  const resultingService = normalizePlanServiceType(resultingType);
+  if (currentService === "other") {
+    return { status: 400, body: { error: "Static IP prepaid edits need a separate MikroTik queue and binding reconciliation. No changes were saved." } };
+  }
+  if (resultingService === "other" || currentService !== resultingService) {
+    return { status: 400, body: { error: "Changing the MikroTik service type requires a dedicated migration. No changes were saved." } };
+  }
+  if (!current.plan_id) {
+    return { status: 400, body: { error: "This customer has no existing MikroTik-linked plan. Set up their router access before editing them as a prepaid user." } };
+  }
+  const previousPlan = await loadScopedCustomerPlan(
+    account, Number(current.plan_id), String(current.type ?? "hotspot"),
+    current.router_id, current.port_id, true,
+  );
+  if (!previousPlan) {
+    return { status: 400, body: { error: "The current MikroTik plan is no longer available to this account. No changes were saved." } };
+  }
+  if (updates.plan_id === null) {
+    return { status: 400, body: { error: "A prepaid user must remain on an existing MikroTik-linked plan." } };
+  }
   if (Number.isSafeInteger(resultingPlanId) && resultingPlanId > 0) {
     const resultingPlan = await loadScopedCustomerPlan(
       account,
@@ -650,25 +789,93 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
       resultingType,
       updates.router_id ?? current.router_id,
       updates.port_id ?? current.port_id,
+      unchangedPlan,
     );
     if (!resultingPlan) {
-      res.status(400).json({ error: account.role === "reseller"
+      return { status: 400, body: { error: account.role === "reseller"
         ? "The selected package must belong to your reseller account and assigned active VLAN service."
-        : "The selected package is not owned by this ISP account." });
-      return;
+        : "The selected package is not owned by this ISP account." } };
     }
     updates.plan_id = resultingPlan.id;
     updates.router_id = resultingPlan.router_id;
     updates.port_id = resultingPlan.port_id;
     updates.type = resultingType;
-  } else if (account.role === "reseller") {
-    res.status(403).json({ error: "Reseller customers must remain linked to an owned package and assigned VLAN service." });
-    return;
+    if (
+      ((current.router_id ?? previousPlan.router_id) && (current.router_id ?? previousPlan.router_id) !== resultingPlan.router_id)
+      || ((current.port_id ?? previousPlan.port_id) && (current.port_id ?? previousPlan.port_id) !== resultingPlan.port_id)
+    ) {
+      return { status: 400, body: { error: "Moving a prepaid user to another router or service port requires a dedicated migration. No changes were saved." } };
+    }
+  } else {
+    return { status: 400, body: { error: "Select an active plan linked to the current MikroTik service before saving." } };
   }
 
-  let reconciliation: { routerSynced: boolean; routerId: number | null; routerName: string | null };
+  const previousFields = Object.fromEntries(
+    Object.keys(updates).map(key => [key, (current as unknown as Record<string, unknown>)[key]]),
+  );
+  const previousLogin = current.type === "pppoe"
+    ? current.pppoe_username || current.username || ""
+    : current.username || current.pppoe_username || "";
+  previousFields.username = current.username;
+  previousFields.pppoe_username = current.type === "pppoe" ? previousLogin : current.pppoe_username;
+  let hadRadiusBefore = false;
+  let radiusMutationAttempted = false;
+  let saved: {
+    row: CustomerRow;
+    router: { routerSynced: boolean; routerId: number | null; routerName: string | null };
+  };
   try {
-    reconciliation = await reconcileCustomerAccess(current, updates, effectiveAdminId);
+    saved = await saveCustomerEditWithRouter({
+      applyRouter: async markMutation => {
+        const result = await reconcileCustomerAccess(current, updates, effectiveAdminId, {
+          onRouterMutation: async () => {
+            markMutation();
+            await assertLock();
+          },
+          onRadiusIdentity: exists => { hadRadiusBefore = exists; },
+          onRadiusMutation: () => { radiusMutationAttempted = true; },
+          assertLock,
+          allowInactivePlan: unchangedPlan,
+        });
+        await assertLock();
+        if (!result.routerSynced) throw new Error("No MikroTik service was updated for this prepaid user.");
+        return result;
+      },
+      restoreRouter: async () => {
+        await assertLock();
+        const attempted = { ...current, ...updates } as CustomerRow;
+        const restored = await reconcileCustomerAccess(attempted, { ...previousFields }, effectiveAdminId, {
+          allowInactivePlan: true,
+          restoreIdentity: true,
+          skipRadius: !radiusMutationAttempted || !hadRadiusBefore,
+          onRouterMutation: assertLock,
+          assertLock,
+        });
+        if (!restored.routerSynced) throw new Error("The previous MikroTik service could not be restored.");
+        if (radiusMutationAttempted && !hadRadiusBefore) {
+          const attemptedLogin = current.type === "pppoe"
+            ? String(updates.pppoe_username ?? previousLogin)
+            : String(updates.username ?? previousLogin);
+          await assertLock();
+          await removeRadiusCustomerStrict(attemptedLogin);
+        }
+      },
+      saveRecord: async () => {
+        await assertLock();
+        const [row] = await sbUpdateStrict<CustomerRow>("isp_customers", customerFilter, updates);
+        if (!row || !customerFieldsMatch(row, updates)) {
+          throw new Error("The customer record did not confirm the requested edit.");
+        }
+        return row;
+      },
+      readRecord: async () => (await sbSelectStrict<CustomerRow>(
+        "isp_customers", `${customerFilter}&select=*&limit=1`,
+      ))[0],
+      matchesRequested: row => customerFieldsMatch(row, updates),
+      matchesBefore: row => customerFieldsMatch(row, previousFields),
+      confirmedRejected: error => error instanceof SupabaseHttpError
+        && [400, 401, 403, 404, 409, 422].includes(error.status),
+    });
   } catch (error) {
     logger.warn({
       customerId: Number(id),
@@ -676,23 +883,19 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
       planId: updates.plan_id ?? current.plan_id,
       expiry: updates.expires_at ?? current.expires_at,
       err: error instanceof Error ? error.message : String(error),
-    }, "[customers] router access reconciliation failed");
-    res.status(503).json({
-      error: `Router access was not updated, so the customer record was not changed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    });
-    return;
+    }, "[customers] customer edit could not be confirmed on both MikroTik and the website");
+    return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
   }
-
-  const [row] = await sbUpdate<Record<string, unknown>>(
-    "isp_customers",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}`,
-    updates,
-  );
-  if (!row) { res.status(404).json({ error: "Customer not found" }); return; }
+  await assertLock();
   void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "updated", subject: String(updates.name ?? id), details: updates });
-  res.json({ ...row, mikrotikSynced: reconciliation.routerSynced, syncedRouter: reconciliation.routerName });
+  return { status: 200, body: { ...saved.row, mikrotikSynced: true, syncedRouter: saved.router.routerName } };
+    });
+    res.status(response.status).json(response.body);
+  } catch (error) {
+    logger.warn({ customerId, adminId: effectiveAdminId, err: error instanceof Error ? error.message : String(error) },
+      "[customers] customer edit lock could not be confirmed");
+    res.status(503).json({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 /*

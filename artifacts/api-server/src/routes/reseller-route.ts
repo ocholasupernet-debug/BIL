@@ -16,7 +16,19 @@ import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
-import { portServiceResourceNames, vlanServicePoolRanges } from "../lib/port-service-resources.js";
+import { routerResourceSetFields } from "../lib/routeros-resource-reconciliation.js";
+import {
+  changeVlanIngressMode,
+  mergeVlanIngressMembership,
+  portServiceResourceNames,
+  vlanServiceInterfaceName,
+  vlanServicePoolRanges,
+  vlanServiceSegment,
+  VlanIngressConflictError,
+  withVlanIngressModeLock,
+  type VlanIngressMode,
+} from "../lib/port-service-resources.js";
+import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
 import {
@@ -79,6 +91,7 @@ type ResellerPortRow = {
   status: string;
   provisioning_error: string | null;
   handoff_interface?: string | null;
+  vlan_ingress_mode?: VlanIngressMode | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
 };
 
@@ -264,16 +277,10 @@ function routerCredentials(row: RouterRow): RouterCredentials {
   };
 }
 
-function vlanServiceSegment(port: Pick<ResellerPortRow, "reseller_id" | "vlan_tag">): string {
-  return safeSegment(`RS${port.reseller_id}_VLAN${port.vlan_tag ?? "0"}`, `RS${port.reseller_id}_VLAN`);
-}
-
-function vlanServiceInterfaceName(port: Pick<ResellerPortRow, "reseller_id" | "vlan_tag"> & { username?: string | null }): string {
-  const fallback = `OCHOLA_RS${port.reseller_id}_VLAN${port.vlan_tag ?? "0"}`;
-  return safeSegment(port.username?.trim() || fallback, safeSegment(fallback, "OCHOLA_RESELLER_VLAN"));
-}
-
-function vlanServiceResources(port: Pick<ResellerPortRow, "interface_name" | "bridge_name" | "reseller_id" | "vlan_tag">) {
+function vlanServiceResources(port: Pick<
+  ResellerPortRow,
+  "interface_name" | "bridge_name" | "reseller_id" | "assigned_reseller_id" | "vlan_tag"
+>) {
   const legacyRecord = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
   return {
     parentBridge: (legacyRecord ? port.interface_name : port.bridge_name) || "",
@@ -377,31 +384,6 @@ router.get("/captive-portal", (req, res): void => {
   });
 });
 
-function buildVlanInterfaceScript(
-  port: Pick<ResellerPortRow, "interface_name" | "bridge_name" | "reseller_id" | "vlan_tag">,
-): string {
-  const resources = vlanServiceResources(port);
-  const vlanTag = Number(port.vlan_tag);
-  if (!validInterface(resources.parentBridge) || !validRouterResourceName(resources.vlanInterface) || !Number.isSafeInteger(vlanTag) || vlanTag < 1 || vlanTag > 4094) {
-    throw new Error("This VLAN assignment does not have valid RouterOS interface details.");
-  }
-  return [
-    "# OcholaSupernet reseller VLAN interface",
-    "# Run on the ISP MikroTik. The service itself remains controlled by the ISP account.",
-    `:local parentBridge "${routerScriptValue(resources.parentBridge)}";`,
-    `:local vlanName "${routerScriptValue(resources.vlanInterface)}";`,
-    `:local vlanId ${vlanTag};`,
-    `:if ([:len [/interface vlan find where name=$vlanName]] = 0) do={`,
-    "  /interface vlan add name=$vlanName vlan-id=$vlanId interface=$parentBridge comment=\"OcholaSupernet reseller VLAN\";",
-    "} else={",
-    "  :local vlanRef [/interface vlan find where name=$vlanName];",
-    "  /interface vlan set $vlanRef vlan-id=$vlanId interface=$parentBridge disabled=no;",
-    "}",
-    ":put (\"Ready: \" . $vlanName . \" on \" . $parentBridge . \" with VLAN \" . $vlanId);",
-    "",
-  ].join("\n");
-}
-
 async function provisionVlanResellerServices(
   target: RouterRow,
   port: ResellerPortRow,
@@ -479,6 +461,10 @@ async function provisionVlanResellerServices(
     throw new Error("Choose an existing ISP Hotspot bridge for the reseller VLAN service.");
   }
   const ingressInterface = normalizedHandoffInterface(ingressOverride ?? port.handoff_interface);
+  const ingressMode = port.vlan_ingress_mode;
+  if (ingressMode !== "tagged" && ingressMode !== "untagged") {
+    throw new Error("Choose whether the XPON ingress carries tagged or untagged VLAN traffic.");
+  }
   if (ingressOverride !== undefined && ingressOverride !== null && !ingressInterface) {
     throw new Error("The XPON VLAN ingress interface is not a valid RouterOS interface.");
   }
@@ -499,7 +485,7 @@ async function provisionVlanResellerServices(
     }
     const ingressPortRows = await runRouterCommand(creds, [
       "/interface/bridge/port/print",
-      "=.proplist=.id,bridge,interface,disabled",
+      "=.proplist=.id,bridge,interface,disabled,pvid",
       `?interface=${ingressInterface}`,
     ]);
     const existingIngressPort = Array.isArray(ingressPortRows)
@@ -513,13 +499,21 @@ async function provisionVlanResellerServices(
         "/interface/bridge/port/add",
         `=bridge=${bridge}`,
         `=interface=${ingressInterface}`,
+        ...(ingressMode === "untagged" ? [`=pvid=${tag}`] : []),
         `=comment=${commentPrefix}_ingress`,
       ]);
-    } else if (String(existingIngressPort.disabled ?? "").toLowerCase() === "true" && existingIngressPort[".id"]) {
+    } else if (
+      existingIngressPort[".id"]
+      && (
+        String(existingIngressPort.disabled ?? "").toLowerCase() === "true"
+        || (ingressMode === "untagged" && String(existingIngressPort.pvid ?? "") !== String(tag))
+      )
+    ) {
       await runRouterCommand(creds, [
         "/interface/bridge/port/set",
         `=.id=${existingIngressPort[".id"]}`,
         "=disabled=no",
+        ...(ingressMode === "untagged" ? [`=pvid=${tag}`] : []),
       ]);
     }
     const bridgeVlanRows = await runRouterCommand(creds, [
@@ -533,21 +527,25 @@ async function provisionVlanResellerServices(
         return value.split(",").map(item => item.trim()).includes(String(tag));
       }) as Record<string, unknown> | undefined
       : undefined;
-    const tagged = new Set(
-      String(vlanEntry?.tagged ?? "")
-        .split(",")
-        .map(item => item.trim())
-        .filter(Boolean),
+    const membership = mergeVlanIngressMembership(
+      String(vlanEntry?.tagged ?? ""),
+      String(vlanEntry?.untagged ?? ""),
+      bridge,
+      ingressInterface,
+      ingressMode,
     );
-    tagged.add(bridge);
-    tagged.add(ingressInterface);
-    const taggedValue = [...tagged].join(",");
+    const taggedValue = membership.tagged;
+    const untaggedValue = membership.untagged;
     if (vlanEntry?.[".id"]) {
-      if (String(vlanEntry.tagged ?? "").split(",").map(item => item.trim()).filter(Boolean).sort().join(",") !== [...tagged].sort().join(",")) {
+      if (
+        String(vlanEntry.tagged ?? "").split(",").map(item => item.trim()).filter(Boolean).sort().join(",") !== taggedValue.split(",").sort().join(",")
+        || String(vlanEntry.untagged ?? "").split(",").map(item => item.trim()).filter(Boolean).sort().join(",") !== untaggedValue.split(",").sort().join(",")
+      ) {
         await runRouterCommand(creds, [
           "/interface/bridge/vlan/set",
           `=.id=${vlanEntry[".id"]}`,
           `=tagged=${taggedValue}`,
+          `=untagged=${untaggedValue}`,
         ]);
       }
     } else {
@@ -556,6 +554,7 @@ async function provisionVlanResellerServices(
         `=bridge=${bridge}`,
         `=vlan-ids=${tag}`,
         `=tagged=${taggedValue}`,
+        ...(ingressMode === "untagged" ? [`=untagged=${untaggedValue}`] : []),
         `=comment=${commentPrefix}_ingress_vlan`,
       ]);
     }
@@ -585,10 +584,40 @@ async function provisionVlanResellerServices(
     printPath: string,
     name: string,
     addCommand: string[],
+    expectedProperties: Record<string, string> = {},
   ): Promise<void> => {
-    const rows = await runRouterCommand(creds, [printPath, "=.proplist=.id,name", `?name=${name}`]);
-    if (!Array.isArray(rows) || !rows.some((row) => String((row as Record<string, unknown>).name ?? "") === name)) {
+    const properties = [...new Set([".id", "name", "comment", ...Object.keys(expectedProperties)])];
+    const rows = await runRouterCommand(creds, [
+      printPath,
+      `=.proplist=${properties.join(",")}`,
+      `?name=${name}`,
+    ]);
+    const existing = Array.isArray(rows)
+      ? rows.find((row) => String((row as Record<string, unknown>).name ?? "") === name) as Record<string, unknown> | undefined
+      : undefined;
+    if (!existing) {
       await runRouterCommand(creds, addCommand);
+      return;
+    }
+    if (!Object.keys(expectedProperties).length) return;
+    const expectedComment = expectedProperties.comment;
+    const existingComment = String(existing.comment ?? "").trim();
+    if (existingComment && expectedComment && existingComment !== expectedComment) {
+      throw new Error(`RouterOS resource "${name}" has a different ownership comment and was not changed.`);
+    }
+    const setFields = routerResourceSetFields(existing, expectedProperties);
+    if (expectedComment && !existingComment && !setFields.some((field) => field.startsWith("=comment="))) {
+      setFields.push(`=comment=${expectedComment}`);
+    }
+    if (setFields.length) {
+      if (!existing[".id"]) {
+        throw new Error(`RouterOS resource "${name}" cannot be reconciled because its ID was not returned.`);
+      }
+      const setPath = printPath.replace(/\/print$/, "/set");
+      if (setPath === printPath) {
+        throw new Error(`RouterOS resource path "${printPath}" cannot be reconciled.`);
+      }
+      await runRouterCommand(creds, [setPath, `=.id=${existing[".id"]}`, ...setFields]);
     }
   };
   const ensureFilterComment = async (
@@ -653,13 +682,19 @@ async function provisionVlanResellerServices(
     `=name=${resources.hotspotPool}`,
     `=ranges=${hotspotPool}`,
     `=comment=${commentPrefix}_hotspot_pool`,
-  ]);
+  ], {
+    ranges: hotspotPool,
+    comment: `${commentPrefix}_hotspot_pool`,
+  });
   await ensureNamed("/ip/pool/print", resources.pppoePool, [
     "/ip/pool/add",
     `=name=${resources.pppoePool}`,
     `=ranges=${pppoePool}`,
     `=comment=${commentPrefix}_pppoe_pool`,
-  ]);
+  ], {
+    ranges: pppoePool,
+    comment: `${commentPrefix}_pppoe_pool`,
+  });
   const captivePortalOption = `${commentPrefix}_captive_portal`;
   const captivePortalApiHostname = validPortalHostname(new URL(apiOrigin).hostname);
   const captivePortalUrl = `${apiOrigin}/api/captive-portal?portal=${encodeURIComponent(hotspotDnsName)}`;
@@ -688,7 +723,7 @@ async function provisionVlanResellerServices(
   }
   const dhcpNetworkRows = await runRouterCommand(creds, [
     "/ip/dhcp-server/network/print",
-    "=.proplist=.id,address,dhcp-option",
+    "=.proplist=.id,address,gateway,dns-server,dhcp-option,comment",
     `?address=${network.network}`,
   ]);
   const dhcpNetwork = Array.isArray(dhcpNetworkRows)
@@ -703,16 +738,33 @@ async function provisionVlanResellerServices(
       `=dhcp-option=${captivePortalOption}`,
       `=comment=${commentPrefix}_hotspot_network`,
     ]);
-  } else if (dhcpNetwork[".id"]) {
+  } else {
     const existingOptions = String(dhcpNetwork["dhcp-option"] ?? "")
       .split(",")
       .map(option => option.trim())
       .filter(Boolean);
-    if (!existingOptions.includes(captivePortalOption)) {
+    const expectedProperties = {
+      gateway,
+      "dns-server": gateway,
+      "dhcp-option": [...new Set([...existingOptions, captivePortalOption])].join(","),
+      comment: `${commentPrefix}_hotspot_network`,
+    };
+    const setFields = routerResourceSetFields(dhcpNetwork, expectedProperties);
+    const existingComment = String(dhcpNetwork.comment ?? "").trim();
+    if (setFields.length && existingComment && existingComment !== expectedProperties.comment) {
+      throw new Error(`DHCP network ${network.network} has a different ownership comment and was not changed.`);
+    }
+    if (setFields.length) {
+      if (!existingComment && !setFields.some((field) => field.startsWith("=comment="))) {
+        setFields.push(`=comment=${expectedProperties.comment}`);
+      }
+      if (!dhcpNetwork[".id"]) {
+        throw new Error(`DHCP network ${network.network} cannot be reconciled because its ID was not returned.`);
+      }
       await runRouterCommand(creds, [
         "/ip/dhcp-server/network/set",
         `=.id=${dhcpNetwork[".id"]}`,
-        `=dhcp-option=${[...existingOptions, captivePortalOption].join(",")}`,
+        ...setFields,
       ]);
     }
   }
@@ -756,7 +808,13 @@ async function provisionVlanResellerServices(
     `=interface=${vlanInterface}`,
     `=address-pool=${resources.hotspotPool}`,
     "=disabled=no",
-  ]);
+    `=comment=${commentPrefix}_hotspot_dhcp`,
+  ], {
+    interface: vlanInterface,
+    "address-pool": resources.hotspotPool,
+    disabled: "no",
+    comment: `${commentPrefix}_hotspot_dhcp`,
+  });
   await ensureNamed("/ip/hotspot/profile/print", resources.hotspotProfile, [
     "/ip/hotspot/profile/add",
     `=name=${resources.hotspotProfile}`,
@@ -764,7 +822,14 @@ async function provisionVlanResellerServices(
     `=html-directory=${resources.hotspotDirectory}`,
     `=dns-name=${hotspotDnsName}`,
     "=login-by=http-chap,http-pap,cookie",
-  ]);
+    `=comment=${commentPrefix}_hotspot_profile`,
+  ], {
+    "hotspot-address": gateway,
+    "html-directory": resources.hotspotDirectory,
+    "dns-name": hotspotDnsName,
+    "login-by": "http-chap,http-pap,cookie",
+    comment: `${commentPrefix}_hotspot_profile`,
+  });
   await ensureNamed("/ip/dns/static/print", hotspotDnsName, [
     "/ip/dns/static/add",
     `=name=${hotspotDnsName}`,
@@ -778,7 +843,14 @@ async function provisionVlanResellerServices(
     `=profile=${resources.hotspotProfile}`,
     `=address-pool=${resources.hotspotPool}`,
     "=disabled=no",
-  ]);
+    `=comment=${commentPrefix}_hotspot_server`,
+  ], {
+    interface: vlanInterface,
+    profile: resources.hotspotProfile,
+    "address-pool": resources.hotspotPool,
+    disabled: "no",
+    comment: `${commentPrefix}_hotspot_server`,
+  });
   const gardenRows = await runRouterCommand(creds, [
     "/ip/hotspot/walled-garden/ip/print",
     "=.proplist=comment",
@@ -938,7 +1010,14 @@ async function provisionVlanResellerServices(
     "=only-one=yes",
     "=change-tcp-mss=yes",
     `=comment=${commentPrefix}_pppoe_profile`,
-  ]);
+  ], {
+    "local-address": gateway,
+    "remote-address": resources.pppoePool,
+    "dns-server": `${gateway},8.8.8.8`,
+    "only-one": "yes",
+    "change-tcp-mss": "yes",
+    comment: `${commentPrefix}_pppoe_profile`,
+  });
   const pppoeRows = await runRouterCommand(creds, [
     "/interface/pppoe-server/server/print",
     "=.proplist=.id,service-name",
@@ -1112,7 +1191,9 @@ async function deployServicesProvisionLayer(
   const portSegment = port.handoff_mode === "vlan_services"
     ? vlanServiceSegment(port)
     : safeSegment(port.interface_name, `PORT_${port.id}`);
-  const parentQueue = `RESELLER_ROOT_${portSegment}`;
+  const parentQueue = port.handoff_mode === "vlan_services"
+    ? portServiceResourceNames(port).parentQueue
+    : `RESELLER_ROOT_${portSegment}`;
   const queueRows = await runRouterCommand(creds, [
     "/queue/simple/print",
     "=.proplist=.id,name,comment",
@@ -1128,16 +1209,19 @@ async function deployServicesProvisionLayer(
   const targetName = port.handoff_mode === "vlan_services"
     ? vlanServiceResources(port).vlanInterface
     : port.bridge_name || port.interface_name;
+  const queueIdentity = port.handoff_mode === "vlan_services"
+    ? portSegment
+    : port.interface_name;
   const scriptBlock = linkStatus === "active"
     ? compileResellerActivation(
-      port.interface_name,
+      queueIdentity,
       Math.round(capMbps),
       router.ros_version,
       targetName,
     )
-    : compileResellerSuspension(port.interface_name, router.ros_version, targetName);
+    : compileResellerSuspension(queueIdentity, router.ros_version, targetName);
 
-  const noticeComment = compileResellerPaymentNoticeNatComment(port.interface_name);
+  const noticeComment = compileResellerPaymentNoticeNatComment(queueIdentity);
   const natRows = await runRouterCommand(creds, [
     "/ip/firewall/nat/print",
     "=.proplist=.id,comment",
@@ -1313,7 +1397,7 @@ router.get("/admin/resellers", requireAdmin(), async (req, res): Promise<void> =
     );
     const ports = await sbSelectStrict(
       "isp_reseller_ports",
-       `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,handoff_interface,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&order=created_at.desc`,
+       `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,handoff_interface,vlan_ingress_mode,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&order=created_at.desc`,
     );
     res.json({ ok: true, resellers: rows, ports });
   } catch (error) {
@@ -1549,7 +1633,7 @@ router.get("/isp/pending-resellers", requireAdmin(), async (req, res): Promise<v
       ),
       sbSelectStrict<ResellerPortRow>(
         "isp_reseller_ports",
-      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,handoff_interface,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,link_provisioning_error&order=created_at.desc`,
+      `admin_id=eq.${account.id}&select=id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,handoff_interface,vlan_ingress_mode,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,link_provisioning_error&order=created_at.desc`,
       ),
       sbSelectStrict<{ id: number; name: string; status: string }>(
         "isp_routers",
@@ -1761,6 +1845,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
     const handoffType = req.body?.handoffType === "vlan" ? "vlan" : "physical";
     const handoffMode = req.body?.handoffMode === "vlan_services" ? "vlan_services" : "isp_router";
     const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
+    const vlanIngressMode = req.body?.vlanIngressMode;
     const requestedUsername = typeof req.body?.resellerUsername === "string"
       ? req.body.resellerUsername.trim()
       : "";
@@ -1782,15 +1867,19 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       return;
     }
     if (handoffMode === "vlan_services" && !handoffInterface) {
-      res.status(400).json({ ok: false, error: "Choose the physical XPON uplink that carries the tagged VLAN." });
+      res.status(400).json({ ok: false, error: "Choose the physical XPON ingress interface." });
       return;
     }
-    if (handoffType === "vlan" && (!/^\d{1,4}$/.test(vlanTag) || Number(vlanTag) < 1 || Number(vlanTag) > 4094)) {
+    if (handoffMode === "vlan_services" && vlanIngressMode !== "tagged" && vlanIngressMode !== "untagged") {
+      res.status(400).json({ ok: false, error: "Choose whether the XPON ingress carries tagged or untagged VLAN traffic." });
+      return;
+    }
+    if ((handoffMode === "vlan_services" || handoffType === "vlan") && (!/^\d{1,4}$/.test(vlanTag) || Number(vlanTag) < 1 || Number(vlanTag) > 4094)) {
       res.status(400).json({ ok: false, error: "Enter a VLAN ID between 1 and 4094 for this handoff." });
       return;
     }
     if (handoffMode === "vlan_services" && handoffType !== "vlan") {
-      res.status(400).json({ ok: false, error: "VLAN Hotspot services require a tagged VLAN handoff." });
+      res.status(400).json({ ok: false, error: "VLAN Hotspot services require a VLAN interface." });
       return;
     }
     if (!Number.isSafeInteger(cap) || cap < 1 || cap > 100000) {
@@ -1886,9 +1975,14 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       assigned_reseller_id: request.reseller_id,
       router_id: routerId,
       interface_name: handoffMode === "vlan_services"
-         ? vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: requestedUsername })
+         ? vlanServiceInterfaceName({
+           reseller_id: request.reseller_id,
+           assigned_reseller_id: request.reseller_id,
+           vlan_tag: vlanTag,
+           username: requestedUsername,
+         })
         : interfaceName,
-      vlan_tag: handoffType === "vlan" ? vlanTag : null,
+      vlan_tag: handoffMode === "vlan_services" || handoffType === "vlan" ? vlanTag : null,
       bridge_name: handoffMode === "vlan_services" ? bridgeName : null,
       hotspot_enabled: handoffMode === "vlan_services",
        hotspot_template_path: handoffMode === "vlan_services" ? "login.html" : null,
@@ -1905,9 +1999,10 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       provisioning_error: null,
       link_status: "pending" as const,
       handoff_mode: handoffMode as "isp_router" | "vlan_services",
-      handoff_type: handoffType as "physical" | "vlan",
+      handoff_type: handoffMode === "vlan_services" ? "vlan" : handoffType as "physical" | "vlan",
       xpon_identifier: xponIdentifier || null,
       handoff_interface: handoffInterface,
+      vlan_ingress_mode: handoffMode === "vlan_services" ? vlanIngressMode as VlanIngressMode : null,
       link_detected: handoffMode === "vlan_services" ? true : link.running,
       last_link_checked_at: now,
       link_detection_error: null,
@@ -1919,7 +2014,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       assigned_reseller_id: request.reseller_id,
       router_id: routerId,
       interface_name: provisionalPort.interface_name,
-      vlan_tag: handoffType === "vlan" ? vlanTag : null,
+      vlan_tag: handoffMode === "vlan_services" || handoffType === "vlan" ? vlanTag : null,
       bridge_name: provisionalPort.bridge_name,
       hotspot_enabled: provisionalPort.hotspot_enabled,
       hotspot_template_path: provisionalPort.hotspot_template_path,
@@ -1932,9 +2027,10 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
       link_status: handoffMode === "vlan_services" ? "active" : link.running ? "active" : "pending",
       link_provisioning_error: null,
       handoff_mode: handoffMode,
-      handoff_type: handoffType,
+      handoff_type: provisionalPort.handoff_type,
       xpon_identifier: xponIdentifier || null,
       handoff_interface: handoffInterface,
+      vlan_ingress_mode: provisionalPort.vlan_ingress_mode,
       link_detected: handoffMode === "vlan_services" ? true : link.running,
       last_link_checked_at: now,
       link_detection_error: null,
@@ -2023,14 +2119,26 @@ router.get("/admin/reseller-handoffs/:portId/vlan-script", requireAdmin(), async
     }
     const rows = await sbSelectStrict<ResellerPortRow>(
       "isp_reseller_ports",
-      `id=eq.${portId}&admin_id=eq.${account.id}&handoff_mode=eq.vlan_services&select=id,interface_name,bridge_name,reseller_id,vlan_tag`,
+      `id=eq.${portId}&admin_id=eq.${account.id}&handoff_mode=eq.vlan_services&select=id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,handoff_interface,vlan_ingress_mode`,
     );
     const port = rows[0];
     if (!port) {
       res.status(404).json({ ok: false, error: "VLAN service assignment not found for this ISP account." });
       return;
     }
-    const script = buildVlanInterfaceScript(port);
+    const ingressInterface = normalizedHandoffInterface(port.handoff_interface);
+    if (!ingressInterface || (port.vlan_ingress_mode !== "tagged" && port.vlan_ingress_mode !== "untagged")) {
+      res.status(409).json({ ok: false, error: "Set a physical ingress interface and explicit tagged or untagged mode before downloading this setup." });
+      return;
+    }
+    const resources = vlanServiceResources(port);
+    const script = buildVlanHandoffScript({
+      bridgeName: resources.parentBridge,
+      ingressInterface,
+      vlanName: resources.vlanInterface,
+      vlanTag: Number(port.vlan_tag),
+      ingressMode: port.vlan_ingress_mode,
+    });
     const filename = `${vlanServiceResources(port).vlanInterface.toLowerCase()}-interface.rsc`;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -2050,12 +2158,18 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
     const requestId = Number(req.params.requestId);
     const routerId = Number(req.body?.routerId);
     const bridgeName = typeof req.body?.bridgeName === "string" ? req.body.bridgeName.trim() : "";
+    const ingressInterface = normalizedHandoffInterface(req.body?.ingressInterface);
+    const ingressMode = req.body?.vlanIngressMode;
     const vlanTag = typeof req.body?.vlanTag === "string" ? req.body.vlanTag.trim() : "";
     const requestedUsername = typeof req.body?.resellerUsername === "string"
       ? req.body.resellerUsername.trim()
       : "";
-    if (!Number.isSafeInteger(requestId) || requestId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(bridgeName)) {
-      res.status(400).json({ ok: false, error: "Choose a valid router and ISP Hotspot bridge." });
+    if (!Number.isSafeInteger(requestId) || requestId <= 0 || !Number.isSafeInteger(routerId) || routerId <= 0 || !validInterface(bridgeName) || !ingressInterface) {
+      res.status(400).json({ ok: false, error: "Choose a valid router, ISP Hotspot bridge, and physical ingress interface." });
+      return;
+    }
+    if (ingressMode !== "tagged" && ingressMode !== "untagged") {
+      res.status(400).json({ ok: false, error: "Choose whether the XPON ingress carries tagged or untagged VLAN traffic." });
       return;
     }
     if (!/^\d{1,4}$/.test(vlanTag) || Number(vlanTag) < 1 || Number(vlanTag) > 4094) {
@@ -2085,13 +2199,25 @@ router.post("/isp/reseller-connection-requests/:requestId/vlan-script", requireA
     }
     await tenantRouter(account.id, routerId);
     const effectiveUsername = requestedUsername || resellerRows[0].username;
-    const script = buildVlanInterfaceScript({
-      interface_name: vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: effectiveUsername }),
-      bridge_name: bridgeName,
+    const vlanName = vlanServiceInterfaceName({
       reseller_id: request.reseller_id,
+      assigned_reseller_id: request.reseller_id,
       vlan_tag: vlanTag,
+      username: effectiveUsername,
     });
-    const filename = `${vlanServiceInterfaceName({ reseller_id: request.reseller_id, vlan_tag: vlanTag, username: effectiveUsername }).toLowerCase()}-interface.rsc`;
+    const script = buildVlanHandoffScript({
+      bridgeName,
+      ingressInterface,
+      vlanName,
+      vlanTag: Number(vlanTag),
+      ingressMode,
+    });
+    const filename = `${vlanServiceInterfaceName({
+      reseller_id: request.reseller_id,
+      assigned_reseller_id: request.reseller_id,
+      vlan_tag: vlanTag,
+      username: effectiveUsername,
+    }).toLowerCase()}-interface.rsc`;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(script);
@@ -2136,6 +2262,104 @@ router.get("/admin/reseller-handoffs/:portId/link", requireAdmin(), async (req, 
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to detect the XPON link." });
+  }
+});
+
+router.post("/admin/reseller-handoffs/:portId/ingress-mode", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the ISP administrator can change a VLAN ingress mode." });
+      return;
+    }
+    const portId = Number(req.params.portId);
+    if (!Number.isSafeInteger(portId) || portId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid VLAN assignment." });
+      return;
+    }
+    const mode = req.body?.vlanIngressMode;
+    if (mode !== "tagged" && mode !== "untagged") {
+      res.status(400).json({ ok: false, error: "Choose tagged or untagged ingress mode." });
+      return;
+    }
+    const lockStore = {
+      acquire: async (token: string, leaseMs: number): Promise<boolean> => {
+        const [lease] = await sbRpc<{ acquired: boolean }>("acquire_vlan_ingress_mode_lock", {
+          p_admin_id: account.id,
+          p_assignment_id: portId,
+          p_lease_token: token,
+          p_lease_seconds: Math.ceil(leaseMs / 1000),
+        });
+        return lease?.acquired === true;
+      },
+      renew: async (token: string, leaseMs: number): Promise<boolean> => {
+        const [lease] = await sbRpc<{ renewed: boolean }>("renew_vlan_ingress_mode_lock", {
+          p_admin_id: account.id,
+          p_assignment_id: portId,
+          p_lease_token: token,
+          p_lease_seconds: Math.ceil(leaseMs / 1000),
+        });
+        return lease?.renewed === true;
+      },
+      release: async (token: string): Promise<void> => {
+        try {
+          await sbRpc<{ released: boolean }>("release_vlan_ingress_mode_lock", {
+            p_admin_id: account.id,
+            p_assignment_id: portId,
+            p_lease_token: token,
+          });
+        } catch (error) {
+          logger.error({ adminId: account.id, portId, error }, "VLAN ingress mode lock release failed; the lease will expire automatically");
+        }
+      },
+    };
+    const result = await withVlanIngressModeLock(`${account.id}:${portId}`, async (assertLock) => {
+      const rows = await sbSelectStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${portId}&admin_id=eq.${account.id}&handoff_mode=eq.vlan_services&select=id,admin_id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,handoff_interface,vlan_ingress_mode,handoff_mode`,
+      );
+      const port = rows[0];
+      if (!port) {
+        return { status: 404 as const, body: { ok: false as const, error: "VLAN service assignment not found for this ISP account." } };
+      }
+      const ingressInterface = normalizedHandoffInterface(port.handoff_interface);
+      const vlanId = Number(port.vlan_tag);
+      if (!ingressInterface || !Number.isSafeInteger(vlanId) || vlanId < 1 || vlanId > 4094) {
+        throw new VlanIngressConflictError("The saved physical ingress or VLAN ID is invalid; correct the assignment before changing its ingress mode.");
+      }
+      if (port.vlan_ingress_mode !== "tagged" && port.vlan_ingress_mode !== "untagged") {
+        throw new VlanIngressConflictError("The assignment has no valid saved ingress mode; no RouterOS changes were made.");
+      }
+
+      const target = await tenantRouter(account.id, port.router_id);
+      const creds = routerCredentials(target);
+      const bridgeName = vlanServiceResources(port).parentBridge;
+      if (!validInterface(bridgeName)) {
+        throw new VlanIngressConflictError("The saved VLAN service bridge is invalid; no RouterOS changes were made.");
+      }
+
+      return changeVlanIngressMode({
+        bridgeName,
+        ingressInterface,
+        vlanId,
+        mode,
+        readRouterCommand: (command) => runRouterCommand(creds, command),
+        writeRouterCommand: (command) => runRouterCommand(creds, command),
+        assertLock,
+        updateAssignment: () => sbUpdateStrict<ResellerPortRow>(
+          "isp_reseller_ports",
+          `id=eq.${port.id}&admin_id=eq.${account.id}&handoff_mode=eq.vlan_services&handoff_interface=eq.${ingressInterface}&vlan_ingress_mode=eq.${port.vlan_ingress_mode}`,
+          { vlan_ingress_mode: mode, updated_at: new Date().toISOString() },
+        ),
+      });
+    }, lockStore);
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    const conflict = error instanceof VlanIngressConflictError;
+    res.status(conflict ? 409 : 502).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to change the VLAN ingress mode.",
+    });
   }
 });
 
@@ -3676,12 +3900,15 @@ router.post("/reseller/checkout", requireAdmin(), async (req, res): Promise<void
     }
     const target = await tenantRouter(tenantId, port.router_id);
     const queueName = `CLIENT_${safeSegment(clientReference, `SALE_${saleId}`)}`;
+    const parentQueue = port.handoff_mode === "vlan_services"
+      ? portServiceResourceNames(port).parentQueue
+      : `RESELLER_ROOT_${safeSegment(port.interface_name, `PORT_${port.id}`)}`;
     try {
       await runRouterCommand(routerCredentials(target), [
         "/queue/simple/add",
         `=name=${queueName}`,
         `=target=${clientIp}`,
-        `=parent=RESELLER_ROOT_${safeSegment(port.interface_name, `PORT_${port.id}`)}`,
+        `=parent=${parentQueue}`,
         `=max-limit=${maxLimit}M/${maxLimit}M`,
         "=comment=OcholaSupernet reseller checkout",
       ]);

@@ -21,7 +21,7 @@ function safePortSegment(portName: string): string {
 
 function safeTargetName(targetName: string): string {
   const target = targetName.trim();
-  if (!target || !/^(ether|sfp|combo|wlan|lte|bridge|vlan)[a-zA-Z0-9._-]*$/i.test(target)) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(target)) {
     throw new Error("The reseller router target is invalid.");
   }
   return target;

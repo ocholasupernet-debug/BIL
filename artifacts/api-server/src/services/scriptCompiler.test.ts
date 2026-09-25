@@ -21,6 +21,18 @@ test("activation compiles a capped parent queue for RouterOS 6 and 7", () => {
   }
 });
 
+test("activation and suspension accept generated custom VLAN interface names", () => {
+  const interfaceName = "OCHOLA_RS42_VLAN210";
+
+  const active = compileResellerActivation("RS42_VLAN210", 40, "7.16.2", interfaceName);
+  const suspended = compileResellerSuspension("RS42_VLAN210", "7.16.2", interfaceName);
+
+  assert.equal(active.queueName, "RESELLER_ROOT_RS42_VLAN210");
+  assert.equal(active.commands[0][2], `=target=${interfaceName}`);
+  assert.equal(suspended.queueName, active.queueName);
+  assert.equal(suspended.commands[0][2], `=target=${interfaceName}`);
+});
+
 test("suspension compiles the 1k queue and local payment notice redirect", () => {
   const block = compileResellerSuspension("ether1", "7.16.2", "bridge-reseller-1");
 

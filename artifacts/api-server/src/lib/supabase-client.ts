@@ -43,7 +43,14 @@ function url(table: string, query = ""): string {
   return `${SUPABASE_URL}/rest/v1/${table}${query ? `?${query}` : ""}`;
 }
 
-async function supabaseFailure(res: Response, operation: string): Promise<Error> {
+export class SupabaseHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "SupabaseHttpError";
+  }
+}
+
+async function supabaseFailure(res: Response, operation: string): Promise<SupabaseHttpError> {
   let detail = "";
   try {
     const body = await res.json() as {
@@ -60,7 +67,7 @@ async function supabaseFailure(res: Response, operation: string): Promise<Error>
   } catch {
     // Keep the stable status-only error when Supabase does not return JSON.
   }
-  return new Error(`Supabase rejected ${operation} (HTTP ${res.status})${detail ? `: ${detail}` : "."}`);
+  return new SupabaseHttpError(`Supabase rejected ${operation} (HTTP ${res.status})${detail ? `: ${detail}` : "."}`, res.status);
 }
 
 /** SELECT rows. Returns [] if Supabase is not configured. */

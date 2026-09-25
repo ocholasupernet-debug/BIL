@@ -128,11 +128,17 @@ load_deploy_env() {
 apply_supabase_migration() {
   local migration_file="$PROJECT_DIR/artifacts/api-server/migrations/2026_admin_initial_password_setup.sql"
   local database_url="${SUPABASE_DB_URL:-${SUPABASE_DATABASE_URL:-}}"
+  local supabase_url="${VITE_SUPABASE_URL:-${SUPABASE_URL:-}}"
+  local service_key="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}"
 
   [ -f "$migration_file" ] || {
     echo "      ✗ Migration file not found: $migration_file"
     exit 1
   }
+  if [ -z "$supabase_url" ] || [ -z "$service_key" ]; then
+    echo "      ✗ Prepaid customer edits require VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the API server."
+    exit 1
+  fi
 
   if [ -n "$database_url" ]; then
     echo "      Applying admin password setup migration..."
@@ -147,14 +153,6 @@ apply_supabase_migration() {
   # A direct Postgres URL is intentionally required for DDL. If the VPS only
   # has REST credentials, verify that this one-time migration is already
   # applied instead of pretending REST can execute arbitrary SQL.
-  local supabase_url="${VITE_SUPABASE_URL:-${SUPABASE_URL:-}}"
-  local service_key="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}"
-  if [ -z "$supabase_url" ] || [ -z "$service_key" ]; then
-    echo "      ✗ Set SUPABASE_DB_URL to apply the Supabase migration, or provide"
-    echo "        VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to verify it."
-    exit 1
-  fi
-
   local schema_status
   schema_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --max-time 20 \
@@ -171,6 +169,34 @@ apply_supabase_migration() {
       exit 1
       ;;
   esac
+
+  # This deployment cannot start an API whose customer edit lock RPCs are
+  # missing: without a direct DB URL, verify the installed PostgREST schema.
+  local openapi
+  openapi=$(curl --fail --silent --show-error --max-time 20 \
+    -H "apikey: $service_key" \
+    -H "Authorization: Bearer $service_key" \
+    -H "Accept: application/openapi+json" \
+    "$supabase_url/rest/v1/") || {
+      echo "      ✗ Cannot verify Supabase customer edit locks. Configure SUPABASE_DB_URL to apply migrations."
+      exit 1
+    }
+  if ! printf '%s' "$openapi" | node -e '
+    let body = "";
+    process.stdin.on("data", chunk => body += chunk);
+    process.stdin.on("end", () => {
+      try {
+        const paths = JSON.parse(body).paths || {};
+        const names = ["acquire_isp_customer_edit_lock", "renew_isp_customer_edit_lock", "release_isp_customer_edit_lock"];
+        if (names.some(name => !paths[`/rpc/${name}`])) process.exitCode = 1;
+      } catch { process.exitCode = 1; }
+    });
+  '; then
+    echo "      ✗ Customer edit lock RPCs are missing or cannot be verified."
+    echo "        Configure SUPABASE_DB_URL so deployment can apply the pending migration."
+    exit 1
+  fi
+  echo "      ✓ Customer edit lock RPCs verified"
 }
 
 load_deploy_env

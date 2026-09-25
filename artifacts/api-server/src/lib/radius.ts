@@ -1,4 +1,14 @@
-import { sbSelect, sbInsert, sbUpdate, sbDelete, supabaseConfigured } from "./supabase-client";
+import {
+  sbSelect,
+  sbInsert,
+  sbUpdate,
+  sbDelete,
+  sbSelectStrict,
+  sbInsertStrict,
+  sbUpdateStrict,
+  sbDeleteStrict,
+  supabaseConfigured,
+} from "./supabase-client";
 
 export interface RadCheckRow {
   id?: number;
@@ -394,10 +404,171 @@ export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<
   }
 }
 
+async function strictUpsertRadCheck(
+  username: string,
+  attribute: string,
+  value: string,
+  op = ":=",
+): Promise<void> {
+  const existing = await sbSelectStrict<RadCheckRow>(
+    "radcheck",
+    `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}&select=id`,
+  );
+  if (existing[0]?.id) {
+    const updated = await sbUpdateStrict<RadCheckRow>(
+      "radcheck",
+      `id=eq.${existing[0].id}`,
+      { value, op },
+    );
+    if (updated.length === 0) {
+      throw new Error(`RADIUS radcheck ${attribute} update matched no rows.`);
+    }
+    return;
+  }
+  const inserted = await sbInsertStrict<RadCheckRow>("radcheck", { username, attribute, op, value });
+  if (inserted.length === 0) {
+    throw new Error(`RADIUS radcheck ${attribute} insert returned no rows.`);
+  }
+}
+
+async function strictDeleteRadCheck(username: string, attribute: string): Promise<void> {
+  await sbDeleteStrict("radcheck", `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}`);
+}
+
+async function strictSetUserGroup(username: string, groupname: string, priority = 1): Promise<void> {
+  const existing = await sbSelectStrict<RadUserGroupRow>(
+    "radusergroup",
+    `username=eq.${enc(username)}&select=id`,
+  );
+  if (existing[0]?.id) {
+    const updated = await sbUpdateStrict<RadUserGroupRow>(
+      "radusergroup",
+      `id=eq.${existing[0].id}`,
+      { groupname, priority },
+    );
+    if (updated.length === 0) {
+      throw new Error("RADIUS radusergroup update matched no rows.");
+    }
+    return;
+  }
+  const inserted = await sbInsertStrict<RadUserGroupRow>("radusergroup", {
+    username,
+    groupname,
+    priority,
+  });
+  if (inserted.length === 0) {
+    throw new Error("RADIUS radusergroup insert returned no rows.");
+  }
+}
+
+/**
+ * Strict variant of syncRadiusCustomer for customer edits. Supabase
+ * configuration, HTTP, and zero-row update failures are surfaced to callers.
+ * Like syncRadiusCustomer, this deliberately leaves radacct untouched.
+ */
+export async function syncRadiusCustomerStrict(opts: RadiusCustomerSyncOpts): Promise<void> {
+  if (opts.password) {
+    await strictUpsertRadCheck(opts.username, "Cleartext-Password", opts.password);
+  } else {
+    await strictDeleteRadCheck(opts.username, "Cleartext-Password");
+  }
+  const simultaneousUse = String(
+    opts.planType === "pppoe" ? 1 : Math.max(1, opts.sharedUsers ?? 1),
+  );
+  await strictUpsertRadCheck(opts.username, "Simultaneous-Use", simultaneousUse);
+  await strictUpsertRadCheck(opts.username, "Port-Limit", simultaneousUse);
+  await strictSetUserGroup(opts.username, `plan_${opts.planId}`);
+
+  await strictDeleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
+  await strictDeleteRadCheck(opts.username, "Max-Data");
+  await strictDeleteRadCheck(opts.username, "Max-All-Session");
+  await strictDeleteRadCheck(opts.username, "WISPr-Session-Terminate-Time");
+  await strictDeleteRadCheck(opts.username, "Expiration");
+
+  const down = Number(opts.rateDown);
+  const up = Number(opts.rateUp);
+  if (Number.isFinite(down) && down > 0 && Number.isFinite(up) && up > 0) {
+    const unitUp = rateUnitToSuffix(opts.rateUpUnit ?? "Mbps");
+    const unitDown = rateUnitToSuffix(opts.rateDownUnit ?? "Mbps");
+    let rate = `${up}${unitUp}/${down}${unitDown}`;
+    if (opts.burst?.trim()) rate = `${rate} ${opts.burst.trim()}`;
+    await strictUpsertRadCheck(opts.username, "Mikrotik-Rate-Limit", rate);
+  }
+
+  const dataLimitMb = Number(opts.dataLimitMb);
+  if (opts.planType === "hotspot" && Number.isFinite(dataLimitMb) && dataLimitMb > 0) {
+    await strictUpsertRadCheck(
+      opts.username,
+      "Max-Data",
+      String(Math.floor(dataLimitMb * 1_000_000)),
+    );
+  }
+
+  if (opts.expiresAt) {
+    const expiresAt = new Date(opts.expiresAt);
+    if (!Number.isNaN(expiresAt.getTime())) {
+      const remainingSeconds = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+      await strictUpsertRadCheck(opts.username, "Max-All-Session", String(remainingSeconds));
+      await strictUpsertRadCheck(
+        opts.username,
+        "Expiration",
+        expiresAt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+          + " " + expiresAt.toTimeString().slice(0, 8),
+      );
+      const isoTerminate = expiresAt.toISOString().replace(/\.\d+Z$/, "+00:00").replace(/Z$/, "+00:00");
+      await strictUpsertRadCheck(
+        opts.username,
+        "WISPr-Session-Terminate-Time",
+        `${isoTerminate.slice(0, 10)}T${isoTerminate.slice(11, 19)}+00:00`,
+      );
+    }
+  }
+
+  await strictDeleteRadCheck(opts.username, "Auth-Type");
+  if (!opts.enabled) {
+    await strictUpsertRadCheck(opts.username, "Auth-Type", "Reject");
+  }
+}
+
 export async function removeRadiusCustomer(username: string): Promise<void> {
   await sbDelete("radcheck", `username=eq.${enc(username)}`);
   await removeUserGroup(username);
   await sbDelete("radreply", `username=eq.${enc(username)}`);
+}
+
+/**
+ * Strictly determine whether this login has any RADIUS authorization records.
+ * Accounting history is deliberately excluded.
+ */
+export async function hasRadiusCustomerStrict(username: string): Promise<boolean> {
+  for (const table of radiusIdentityTables) {
+    const rows = await selectRadiusIdentityRows(table, username);
+    if (rows.length > 0) return true;
+  }
+  return false;
+}
+
+/** Reject a RADIUS login already present in any authorization table. */
+export async function assertRadiusTargetEmptyStrict(username: string): Promise<void> {
+  if (await hasRadiusCustomerStrict(username)) {
+    throw new Error("RADIUS identity already contains records for the target username.");
+  }
+}
+
+/**
+ * Strictly delete only RADIUS authorization identity records, then verify each
+ * table is empty for the username. radacct usage history is never touched.
+ */
+export async function removeRadiusCustomerStrict(username: string): Promise<void> {
+  for (const table of radiusIdentityTables) {
+    await sbDeleteStrict(table, `username=eq.${enc(username)}`);
+  }
+  for (const table of radiusIdentityTables) {
+    const remaining = await selectRadiusIdentityRows(table, username);
+    if (remaining.length > 0) {
+      throw new Error(`RADIUS ${table} still has records for the username after deletion.`);
+    }
+  }
 }
 
 export async function deactivateRadiusCustomer(username: string): Promise<void> {
@@ -419,6 +590,101 @@ export async function changeRadiusUsername(fromName: string, toName: string): Pr
   for (const r of replies) {
     if (r.id) await sbUpdate("radreply", `id=eq.${r.id}`, { username: toName });
   }
+}
+
+type RadiusIdentityTable = "radcheck" | "radusergroup" | "radreply";
+interface RadiusIdentityRow {
+  id?: number;
+  username: string;
+}
+
+const radiusIdentityTables: RadiusIdentityTable[] = ["radcheck", "radusergroup", "radreply"];
+
+async function selectRadiusIdentityRows(
+  table: RadiusIdentityTable,
+  username: string,
+): Promise<RadiusIdentityRow[]> {
+  return sbSelectStrict<RadiusIdentityRow>(
+    table,
+    `username=eq.${enc(username)}&select=id`,
+  );
+}
+
+async function moveRadiusIdentityRows(fromName: string, toName: string): Promise<void> {
+  for (const table of radiusIdentityTables) {
+    const rows = await selectRadiusIdentityRows(table, fromName);
+    for (const row of rows) {
+      if (!row.id) {
+        throw new Error(`Cannot move RADIUS ${table} row without an id.`);
+      }
+      const updated = await sbUpdateStrict<RadiusIdentityRow>(
+        table,
+        `id=eq.${row.id}`,
+        { username: toName },
+      );
+      if (updated.length === 0) {
+        throw new Error(`RADIUS ${table} username move matched no rows (id ${row.id}).`);
+      }
+    }
+  }
+  for (const table of radiusIdentityTables) {
+    const remaining = await selectRadiusIdentityRows(table, fromName);
+    if (remaining.length > 0) {
+      throw new Error(`RADIUS ${table} still has rows for the old username after the move.`);
+    }
+  }
+}
+
+/**
+ * Strictly move RADIUS authorization rows to a new login. All target identities
+ * are checked before any write; a failed partial move is automatically reversed.
+ * Accounting history is intentionally not renamed or otherwise modified.
+ */
+export async function moveRadiusCustomerStrict(
+  fromName: string,
+  toName: string,
+  onPreflightPassed?: () => void,
+): Promise<void> {
+  if (!fromName || !toName) throw new Error("Both RADIUS usernames are required for a move.");
+  if (fromName === toName) return;
+
+  for (const table of radiusIdentityTables) {
+    const targetRows = await selectRadiusIdentityRows(table, toName);
+    if (targetRows.length > 0) {
+      throw new Error(`Cannot move RADIUS identity: ${table} already contains rows for the target username.`);
+    }
+  }
+
+  onPreflightPassed?.();
+  try {
+    await moveRadiusIdentityRows(fromName, toName);
+  } catch (moveError) {
+    try {
+      await rollbackRadiusCustomerMoveStrict(toName, fromName);
+    } catch (rollbackError) {
+      const moveMessage = moveError instanceof Error ? moveError.message : String(moveError);
+      const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      throw new Error(
+        `RADIUS username move failed (${moveMessage}); automatic rollback also failed (${rollbackMessage}).`,
+      );
+    }
+    throw moveError;
+  }
+}
+
+/**
+ * Reverse an earlier strict move, including one that only partly completed.
+ * Existing rows at toName are allowed because they can be the untouched portion
+ * of the original identity following a partial move. This should only be used
+ * to roll back a move whose target was initially verified empty.
+ */
+export async function rollbackRadiusCustomerMoveStrict(
+  fromName: string,
+  toName: string,
+): Promise<void> {
+  if (!fromName || !toName) throw new Error("Both RADIUS usernames are required for a rollback.");
+  if (fromName === toName) return;
+  await moveRadiusIdentityRows(fromName, toName);
 }
 
 export async function clearRadAcct(username: string): Promise<void> {

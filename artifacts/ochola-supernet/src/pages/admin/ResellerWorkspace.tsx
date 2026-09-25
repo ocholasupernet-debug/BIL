@@ -15,6 +15,7 @@ type Assignment = {
   bandwidth_cap_mbps: number; reseller_bandwidth_cap?: number | null; status: string; link_status?: "pending" | "active" | "suspended" | null;
   handoff_mode?: "services" | "isp_router" | "vlan_services" | null; handoff_type?: "physical" | "vlan" | null;
   handoff_interface?: string | null;
+   vlan_ingress_mode?: "tagged" | "untagged" | null;
   xpon_identifier?: string | null; link_detected?: boolean | null; last_link_checked_at?: string | null;
   link_detection_error?: string | null;
   provisioning_error?: string | null; link_provisioning_error?: string | null;
@@ -135,6 +136,7 @@ function AdminResellerManagement() {
   const [handoffMode, setHandoffMode] = useState<"isp_router" | "vlan_services">("isp_router");
   const [handoffInterfaceName, setHandoffInterfaceName] = useState("");
   const [handoffIngressInterface, setHandoffIngressInterface] = useState("");
+  const [handoffVlanIngressMode, setHandoffVlanIngressMode] = useState<"tagged" | "untagged">("tagged");
   const [handoffVlanTag, setHandoffVlanTag] = useState("");
   const [handoffUsername, setHandoffUsername] = useState("");
   const [xponIdentifier, setXponIdentifier] = useState("");
@@ -145,6 +147,9 @@ function AdminResellerManagement() {
   const [handoffScriptSaving, setHandoffScriptSaving] = useState(false);
   const [linkChecking, setLinkChecking] = useState<number | null>(null);
   const [linkDeleting, setLinkDeleting] = useState<number | null>(null);
+  const [ingressModeEditing, setIngressModeEditing] = useState<number | null>(null);
+  const [ingressModeDraft, setIngressModeDraft] = useState<"tagged" | "untagged">("tagged");
+  const [ingressModeSaving, setIngressModeSaving] = useState<number | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{
     companyName: string;
     username: string;
@@ -239,6 +244,7 @@ function AdminResellerManagement() {
             ? { bridgeName: handoffInterfaceName }
             : { interfaceName: handoffInterfaceName }),
            ...(handoffMode === "vlan_services" ? { handoffInterface: handoffIngressInterface } : {}),
+           ...(handoffMode === "vlan_services" ? { vlanIngressMode: handoffVlanIngressMode } : {}),
           handoffType,
           handoffMode,
           resellerUsername: handoffUsername,
@@ -251,6 +257,7 @@ function AdminResellerManagement() {
       setHandoffRequestId(null);
       setHandoffInterfaceName("");
        setHandoffIngressInterface("");
+      setHandoffVlanIngressMode("tagged");
       setHandoffVlanTag("");
       setHandoffUsername("");
       setXponIdentifier("");
@@ -265,7 +272,7 @@ function AdminResellerManagement() {
       const response = await fetch(`/api/admin/reseller-handoffs/${portId}/vlan-script`, { headers: authHeaders() });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error || "Unable to generate the VLAN interface script.");
+        throw new Error(body.error || "Unable to generate the VLAN handoff setup.");
       }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -276,9 +283,9 @@ function AdminResellerManagement() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setSuccess("VLAN interface script downloaded.");
+      setSuccess("VLAN handoff setup downloaded.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to download the VLAN interface script.");
+      setError(e instanceof Error ? e.message : "Unable to download the VLAN handoff setup.");
     }
   };
   const generateVlanScript = async () => {
@@ -291,6 +298,8 @@ function AdminResellerManagement() {
         body: JSON.stringify({
           routerId: Number(handoffRouterId),
           bridgeName: handoffInterfaceName,
+          ingressInterface: handoffIngressInterface,
+          vlanIngressMode: handoffVlanIngressMode,
           vlanTag: handoffVlanTag,
           resellerUsername: handoffUsername,
         }),
@@ -308,9 +317,9 @@ function AdminResellerManagement() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setSuccess("VLAN interface script downloaded.");
+      setSuccess("VLAN handoff setup downloaded.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to generate the VLAN interface script.");
+      setError(e instanceof Error ? e.message : "Unable to generate the VLAN handoff setup.");
     } finally { setHandoffScriptSaving(false); }
   };
   const checkHandoffLink = async (portId: number) => {
@@ -358,6 +367,20 @@ function AdminResellerManagement() {
       setError(e instanceof Error ? e.message : "Unable to push the VLAN service to the MikroTik.");
     } finally { setLinkSaving(null); }
   };
+  const saveIngressMode = async (port: Assignment) => {
+    setIngressModeSaving(port.id); setError(""); setSuccess("");
+    try {
+      const result = await apiJson<{ message?: string }>(`/api/admin/reseller-handoffs/${port.id}/ingress-mode`, {
+        method: "POST",
+        body: JSON.stringify({ vlanIngressMode: ingressModeDraft }),
+      });
+      setIngressModeEditing(null);
+      setSuccess(result.message || "VLAN ingress mode updated.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to change the VLAN ingress mode.");
+    } finally { setIngressModeSaving(null); }
+  };
   const deleteAssignment = async (port: Assignment) => {
     const label = port.handoff_mode === "vlan_services"
       ? `VLAN ${port.vlan_tag || "service"}`
@@ -381,6 +404,8 @@ function AdminResellerManagement() {
     setHandoffType(mode === "vlan_services" ? "vlan" : "physical");
     setHandoffMode(mode);
     setHandoffInterfaceName("");
+    setHandoffIngressInterface("");
+    setHandoffVlanIngressMode("tagged");
     setHandoffVlanTag("");
     setHandoffUsername(candidate?.username || "");
     setXponIdentifier("");
@@ -518,7 +543,7 @@ function AdminResellerManagement() {
             })()}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 13, marginTop: 16 }}>
               <Field label="Service mode">
-                <select required style={inputStyle} value={handoffMode} disabled={pendingHandoff} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); setHandoffIngressInterface(""); }}>
+                <select required style={inputStyle} value={handoffMode} disabled={pendingHandoff} onChange={(event) => { const value = event.target.value === "vlan_services" ? "vlan_services" : "isp_router"; setHandoffMode(value); setHandoffType(value === "vlan_services" ? "vlan" : "physical"); setHandoffInterfaceName(""); setHandoffIngressInterface(""); setHandoffVlanIngressMode("tagged"); }}>
                   {!pendingHandoff && <option value="isp_router">Passive XPON handoff</option>}
                   <option value="vlan_services">VLAN Hotspot + PPPoE service</option>
                 </select>
@@ -541,8 +566,12 @@ function AdminResellerManagement() {
                   <option value="">Choose interface</option>{handoffPorts.map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
                 </select>
               </Field>}
-                {handoffMode === "vlan_services" && <Field label={handoffPortsLoading ? "Tagged XPON uplink (loading…)" : "Tagged XPON uplink"}><select required style={inputStyle} value={handoffIngressInterface} onChange={(event) => setHandoffIngressInterface(event.target.value)} disabled={!handoffRouterId || handoffPortsLoading}>
+                {handoffMode === "vlan_services" && <Field label={handoffPortsLoading ? "Physical VLAN ingress (loading…)" : "Physical VLAN ingress"}><select required style={inputStyle} value={handoffIngressInterface} onChange={(event) => setHandoffIngressInterface(event.target.value)} disabled={!handoffRouterId || handoffPortsLoading}>
                   <option value="">Choose physical uplink</option>{handoffPorts.filter((port) => port.type.toLowerCase() !== "bridge" && port.type.toLowerCase() !== "vlan").map((port) => <option key={port.name} value={port.name}>{port.name} · {port.type}{port.running ? " · link detected" : " · no link"}</option>)}
+                </select></Field>}
+                {handoffMode === "vlan_services" && <Field label="VLAN ingress mode"><select required style={inputStyle} value={handoffVlanIngressMode} onChange={(event) => setHandoffVlanIngressMode(event.target.value === "untagged" ? "untagged" : "tagged")}>
+                  <option value="tagged">Tagged VLAN trunk</option>
+                  <option value="untagged">Untagged access port</option>
                 </select></Field>}
                 {handoffMode === "vlan_services" && <Field label="Reseller username / VLAN identity"><input required minLength={3} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,63}" style={inputStyle} value={handoffUsername} onChange={(event) => setHandoffUsername(event.target.value)} placeholder="username used for the VLAN identity" /></Field>}
                {handoffType === "vlan" && <Field label="VLAN ID"><input required min="1" max="4094" type="number" style={inputStyle} value={handoffVlanTag} onChange={(event) => setHandoffVlanTag(event.target.value)} placeholder="e.g. 240" /></Field>}
@@ -550,12 +579,12 @@ function AdminResellerManagement() {
               <Field label="Bandwidth cap (Mbps)"><input required min="1" max="100000" type="number" style={inputStyle} value={handoffCap} onChange={(event) => setHandoffCap(event.target.value)} /></Field>
             </div>
             <div style={{ marginTop: 13, padding: "10px 12px", borderRadius: 8, background: "rgba(245,158,11,.1)", color: "#92400e", fontSize: 12, lineHeight: 1.5 }}>
-               {handoffMode === "vlan_services"
-                 ? "The selected MikroTik will receive the VLAN interface, Hotspot, and PPPoE service directly with the locked reseller cap."
+                {handoffMode === "vlan_services"
+                  ? `The selected MikroTik will receive the VLAN interface, Hotspot, and PPPoE service directly. The ingress is ${handoffVlanIngressMode === "tagged" ? "tagged" : "untagged"}; shared-bridge VLAN filtering is not enabled automatically.`
                  : "Link detection checks the ISP router&apos;s Ethernet interface. It confirms the XPON router is physically connected; optical registration and internet authentication remain managed by the ISP&apos;s XPON/ISP router equipment."}
             </div>
              <div style={{ display: "flex", flexWrap: "wrap", gap: 9, marginTop: 15 }}>
-                {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN script"}</button>}
+                {handoffMode === "vlan_services" && <button disabled={handoffScriptSaving || !handoffRouterId || !handoffInterfaceName || !handoffIngressInterface || !handoffVlanTag} type="button" onClick={() => void generateVlanScript()} style={{ border: "1px solid var(--isp-accent)", borderRadius: 9, padding: "11px 15px", background: "transparent", color: "var(--isp-accent)", fontWeight: 800, cursor: handoffScriptSaving ? "wait" : "pointer" }}>{handoffScriptSaving ? "Generating…" : "Generate VLAN setup"}</button>}
                 <button disabled={handoffSaving || !handoffRouterId || !handoffInterfaceName || (handoffMode === "vlan_services" && !handoffIngressInterface) || !handoffUsername} type="submit" style={{ border: 0, borderRadius: 9, padding: "11px 15px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: handoffSaving ? "wait" : "pointer" }}>{handoffSaving ? "Assigning and pushing…" : handoffMode === "vlan_services" && pendingHandoff ? "Assign VLAN, push service & approve" : handoffMode === "vlan_services" ? "Assign reseller & push VLAN service" : "Assign reseller & push handoff"}</button>
              </div>
           </form>
@@ -634,15 +663,114 @@ function AdminResellerManagement() {
                const visiblePorts: Array<Assignment | null> = resellerPorts.length ? resellerPorts : [null];
                return visiblePorts.map((port, portIndex) => {
                  const linkStatus = port?.link_status ?? "pending";
-                 const busy = port ? linkSaving === port.id || linkDeleting === port.id : false;
+                 const ingressModeBusy = port ? ingressModeSaving === port.id : false;
+                 const busy = port ? linkSaving === port.id || linkDeleting === port.id || ingressModeBusy : false;
                  return <tr key={`${reseller.id}-${port?.id ?? `none-${portIndex}`}`}>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td>
-                   <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port?.handoff_mode === "vlan_services" ? <><code className="reseller-mono">VLAN {port.vlan_tag}</code><div style={{ marginTop: 5, color: "#15803d", fontSize: 11, fontWeight: 750 }}>Bridge: {port.bridge_name || "—"} · Hotspot + PPPoE service</div></> : <><code className="reseller-mono">{port?.interface_name || "—"}</code>{port?.handoff_mode === "isp_router" && <div style={{ marginTop: 5, color: port.link_detected ? "#15803d" : "#a16207", fontSize: 11, fontWeight: 750 }}>{port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "ISP router"} · {port.link_detected ? "XPON link detected" : "waiting for XPON"} </div>}</>}</td>
+                   <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port?.handoff_mode === "vlan_services" ? <><code className="reseller-mono">VLAN {port.vlan_tag}</code><div style={{ marginTop: 5, color: "#15803d", fontSize: 11, fontWeight: 750 }}>Bridge: {port.bridge_name || "—"} · {port.handoff_interface || "Ingress not set"} · {port.vlan_ingress_mode === "tagged" ? "Tagged trunk" : port.vlan_ingress_mode === "untagged" ? "Untagged access" : "Mode not set"}</div><div style={{ marginTop: 3, color: "var(--isp-text-muted)", fontSize: 11 }}>Hotspot + PPPoE service</div></> : <><code className="reseller-mono">{port?.interface_name || "—"}</code>{port?.handoff_mode === "isp_router" && <div style={{ marginTop: 5, color: port.link_detected ? "#15803d" : "#a16207", fontSize: 11, fontWeight: 750 }}>{port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "ISP router"} · {port.link_detected ? "XPON link detected" : "waiting for XPON"} </div>}</>}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port ? <div style={{ display: "flex", gap: 5, alignItems: "center" }}><input aria-label={`Maximum bandwidth for ${port.interface_name}`} type="number" min="1" max="100000" value={linkCapDraft[port.id] ?? String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)} onChange={(event) => setLinkCapDraft((current) => ({ ...current, [port.id]: event.target.value }))} style={{ ...inputStyle, width: 86, minHeight: 32, padding: "5px 7px" }} /><span>Mbps</span></div> : "—"}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={linkStatus} />{port?.link_provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.link_provisioning_error}</div> : null}</td>
-                  <td style={{ padding: "10px 8px" }}>{port ? <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{port.handoff_mode === "vlan_services" && <>{(port.status === "failed" || port.provisioning_error) && <button type="button" disabled={busy} onClick={() => void retryVlanPush(port.id)} style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{busy ? "Pushing…" : "Push again"}</button>}<button type="button" onClick={() => void downloadVlanScript(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: "pointer", fontSize: 12, fontWeight: 750 }}>Download VLAN script</button></>}{port.handoff_mode === "isp_router" && <button type="button" disabled={linkChecking === port.id} onClick={() => void checkHandoffLink(port.id)} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: linkChecking === port.id ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{linkChecking === port.id ? "Checking…" : "Check XPON link"}</button>}<button type="button" disabled={busy || port.status !== "active"} onClick={() => void updateLink(port, linkStatus === "active" ? "suspended" : "active")} style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy || port.status !== "active" ? "not-allowed" : "pointer", display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, fontWeight: 750 }}>{linkStatus === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}{busy ? "Saving…" : linkStatus === "active" ? "Suspend" : "Activate"}</button><button type="button" disabled={busy} onClick={() => void deleteAssignment(port)} style={{ border: "1px solid rgba(220,38,38,.3)", borderRadius: 8, padding: "7px 9px", background: "rgba(239,68,68,.07)", color: "#b91c1c", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}>{linkDeleting === port.id ? "Deleting…" : "Delete link"}</button></div> : "—"}</td>
+                  <td style={{ padding: "10px 8px" }}>
+                    {port ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center" }}>
+                        {port.handoff_mode === "vlan_services" && (
+                          <>
+                            {(port.status === "failed" || port.provisioning_error) && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void retryVlanPush(port.id)}
+                                style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                              >
+                                {linkSaving === port.id ? "Pushing…" : "Push again"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void downloadVlanScript(port.id)}
+                              style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                            >
+                              Download VLAN script
+                            </button>
+                            {ingressModeEditing === port.id ? (
+                              <>
+                                <select
+                                  aria-label={`Ingress mode for VLAN ${port.vlan_tag}`}
+                                  style={{ ...inputStyle, width: 145, minHeight: 34, padding: "5px 7px" }}
+                                  value={ingressModeDraft}
+                                  disabled={ingressModeBusy}
+                                  onChange={(event) => setIngressModeDraft(event.target.value === "untagged" ? "untagged" : "tagged")}
+                                >
+                                  <option value="tagged">Tagged trunk</option>
+                                  <option value="untagged">Untagged access</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={ingressModeBusy}
+                                  onClick={() => void saveIngressMode(port)}
+                                  style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: ingressModeBusy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                                >
+                                  {ingressModeBusy ? "Saving…" : "Save mode"}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={ingressModeBusy}
+                                  onClick={() => setIngressModeEditing(null)}
+                                  style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: "pointer", fontSize: 12, fontWeight: 750 }}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setIngressModeEditing(port.id);
+                                  setIngressModeDraft(port.vlan_ingress_mode ?? "tagged");
+                                  setError("");
+                                  setSuccess("");
+                                }}
+                                style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                              >
+                                Change ingress mode
+                              </button>
+                            )}
+                          </>
+                        )}
+                        {port.handoff_mode === "isp_router" && (
+                          <button
+                            type="button"
+                            disabled={linkChecking === port.id}
+                            onClick={() => void checkHandoffLink(port.id)}
+                            style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: linkChecking === port.id ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                          >
+                            {linkChecking === port.id ? "Checking…" : "Check XPON link"}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busy || port.status !== "active"}
+                          onClick={() => void updateLink(port, linkStatus === "active" ? "suspended" : "active")}
+                          style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: "7px 9px", background: "transparent", color: "var(--isp-text)", cursor: busy || port.status !== "active" ? "not-allowed" : "pointer", display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, fontWeight: 750 }}
+                        >
+                          {linkStatus === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}
+                          {busy ? "Saving…" : linkStatus === "active" ? "Suspend" : "Activate"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void deleteAssignment(port)}
+                          style={{ border: "1px solid rgba(220,38,38,.3)", borderRadius: 8, padding: "7px 9px", background: "rgba(239,68,68,.07)", color: "#b91c1c", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                        >
+                          {linkDeleting === port.id ? "Deleting…" : "Delete link"}
+                        </button>
+                      </div>
+                    ) : "—"}
+                  </td>
                  </tr>;
                });
              })}

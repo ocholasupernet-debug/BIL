@@ -1922,6 +1922,38 @@ function sameMacAddress(left: string | undefined, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+export function paidHotspotBindingMatchesCustomer(
+  row: Record<string, string>,
+  opts: { name: string; macAddress?: string | null },
+): boolean {
+  return row.comment === opts.name
+    || (Boolean(opts.macAddress) && sameMacAddress(row["mac-address"], opts.macAddress!) && isLegacyPaidHotspotBinding(row));
+}
+
+/** Detect paid bypasses and their expiry schedulers before an admin edit. */
+export async function hasPaidHotspotAccess(
+  creds: RouterCredentials,
+  opts: { name: string; macAddress?: string | null },
+): Promise<boolean> {
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,comment,type"]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its Hotspot bindings.");
+    const bound = rows.some(row => paidHotspotBindingMatchesCustomer(row, opts));
+    if (bound) return true;
+    const schedulerName = hotspotPaidExpirySchedulerName(opts.name);
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(schedulers)) throw new Error("MikroTik did not return its paid Hotspot expiry schedulers.");
+    return schedulers.some(row => row.name === schedulerName);
+  });
+}
+
 export async function removeHotspotIpBinding(
   creds: RouterCredentials,
   opts: { macAddress: string; comment: string },
@@ -2058,6 +2090,7 @@ export async function reconcileHotspotUserAccess(
     macAddress?: string | null;
     rateLimit?: string;
     sharedUsers?: number;
+    resetCounters?: boolean;
   },
 ): Promise<void> {
   const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
@@ -2067,7 +2100,7 @@ export async function reconcileHotspotUserAccess(
     password: opts.password,
     profile: opts.profile,
     disabled: !enabled,
-    ...(opts.address ? { address: opts.address } : {}),
+    ...(opts.address !== undefined ? { address: opts.address ?? "" } : {}),
     ...(opts.comment !== undefined ? { comment: opts.comment } : {}),
     ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
   };
@@ -2089,9 +2122,9 @@ export async function reconcileHotspotUserAccess(
   }
 
   if (!enabled) {
-    await disconnectHotspotActiveUser(creds, opts.name).catch(() => {});
-    await removeHotspotUserRateQueue(creds, opts.name).catch(() => {});
-    await removeHotspotUserExpiry(creds, opts.name).catch(() => {});
+    await disconnectHotspotActiveUser(creds, opts.name);
+    await removeHotspotUserRateQueue(creds, opts.name);
+    await removeHotspotUserExpiry(creds, opts.name);
     if (opts.macAddress) {
       await removeHotspotIpBinding(creds, {
         macAddress: opts.macAddress,
@@ -2101,7 +2134,7 @@ export async function reconcileHotspotUserAccess(
     return;
   }
 
-  if (opts.limitBytesTotal !== undefined) {
+  if (opts.limitBytesTotal !== undefined && opts.resetCounters !== false) {
     await resetHotspotUserCounters(creds, opts.name).catch(() => {});
   }
   if (opts.address && opts.rateLimit) {
@@ -2110,6 +2143,8 @@ export async function reconcileHotspotUserAccess(
       address: opts.address,
       maxLimit: opts.rateLimit,
     });
+  } else if (opts.address !== undefined) {
+    await removeHotspotUserRateQueue(creds, opts.name);
   }
 
   /* Force RouterOS to recreate the active queue with the current profile. */
@@ -2207,8 +2242,8 @@ export async function reconcilePppoeUserAccess(
       profile: opts.profile,
       disabled: !enabled,
       comment: opts.comment,
-      ...(opts.remoteAddress !== undefined && opts.remoteAddress !== null
-        ? { remoteAddress: opts.remoteAddress }
+      ...(opts.remoteAddress !== undefined
+        ? { remoteAddress: opts.remoteAddress ?? "" }
         : {}),
     });
   } else {
@@ -2226,9 +2261,9 @@ export async function reconcilePppoeUserAccess(
     }
   }
 
-  await disconnectPPPActiveByName(creds, opts.name).catch(() => {});
+  await disconnectPPPActiveByName(creds, opts.name);
   if (!enabled) {
-    await removePppUserExpiry(creds, opts.name).catch(() => {});
+    await removePppUserExpiry(creds, opts.name);
   } else if (Number.isFinite(expiryMs)) {
     await schedulePppUserExpiry(creds, {
       name: opts.name,
@@ -2323,7 +2358,8 @@ export async function disconnectHotspotActiveUser(
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
-    for (const row of Array.isArray(rows) ? rows : []) {
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its active Hotspot sessions.");
+    for (const row of rows) {
       const id = row[".id"];
       if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
     }
@@ -3040,8 +3076,10 @@ export async function disconnectPPPActiveByName(creds: RouterCredentials, userna
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(conn.write(["/ppp/active/print", `?name=${username}`]), ms)) as Record<string, string>[];
-    const id = rows[0]?.[".id"];
-    if (id) await withTimeout(conn.write(["/ppp/active/remove", `=.id=${id}`]), ms);
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its active PPPoE sessions.");
+    for (const row of rows) {
+      if (row[".id"]) await withTimeout(conn.write(["/ppp/active/remove", `=.id=${row[".id"]}`]), ms);
+    }
   });
 }
 

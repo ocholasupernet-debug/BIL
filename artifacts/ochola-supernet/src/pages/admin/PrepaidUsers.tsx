@@ -19,12 +19,13 @@ interface Plan   {
   id: number; name: string; type: string; price: number; speed_down: number; speed_up: number;
   speed_down_unit?: string; speed_up_unit?: string;
   validity?: number; validity_days?: number; validity_unit?: string; data_limit_mb?: number | null;
-  router_id?: number | null; port_id?: number | null;
+  router_id?: number | null; port_id?: number | null; is_active?: boolean;
 }
 interface Router { id: number; name: string; host: string; status: string; bridge_ip: string | null; }
 
 interface Customer extends DbCustomer {
   router_id?: number | null;
+  port_id?: number | null;
   last_seen?: string | null;
   data_used_bytes?: number | string | null;
   service_online?: boolean | null;
@@ -90,6 +91,10 @@ function fromDateTimeLocal(value: string) {
 }
 function normalizePhone(phone?: string | null) {
   return (phone ?? "").replace(/\D/g, "");
+}
+function prepaidServiceType(value?: string | null) {
+  const type = String(value ?? "").toLowerCase();
+  return type === "trial" || type === "trials" ? "hotspot" : type;
 }
 function purchaseUsername(user: Customer) {
   const type = String(user.type ?? "").toLowerCase();
@@ -241,12 +246,10 @@ async function fetchCustomers(): Promise<Customer[]> {
 async function fetchPlans(): Promise<Plan[]> {
   const { data } = await supabase
     .from("isp_plans")
-    .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id,port_id")
+    .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id,port_id,is_active")
     .eq("admin_id", ADMIN_ID)
-    .or("port_id.is.null,type.eq.vlan");
-  return ((data ?? []).filter(plan =>
-    plan.port_id == null ? plan.type !== "vlan" : plan.type === "vlan",
-  )) as Plan[];
+    .is("owner_reseller_id", null);
+  return (data ?? []) as Plan[];
 }
 async function fetchRouters(): Promise<Router[]> {
   return (await fetchAdminRouterContext()).routers.map(router => ({
@@ -327,6 +330,176 @@ function iconButton(color: string): React.CSSProperties {
   };
 }
 
+function planExpiryInput(plan?: Plan): string {
+  if (!plan) return "";
+  const amount = Number(plan.validity || plan.validity_days);
+  if (!Number.isFinite(amount) || amount <= 0) return "";
+  const unit = String(plan.validity_unit ?? "days").toLowerCase();
+  const seconds = unit.startsWith("min") ? amount * 60
+    : unit.startsWith("hour") || unit.startsWith("hr") ? amount * 3600
+      : unit.startsWith("week") ? amount * 7 * 86400
+        : unit.startsWith("month") ? amount * 30 * 86400
+          : amount * 86400;
+  return toDateTimeLocal(new Date(Date.now() + seconds * 1000).toISOString());
+}
+
+function AddVlanPrepaidDialog({
+  plans, routers, onClose, onCreated,
+}: {
+  plans: Plan[];
+  routers: Router[];
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const vlanPlans = plans.filter(plan =>
+    String(plan.type).toLowerCase() === "vlan"
+    && plan.router_id != null
+    && plan.port_id != null
+    && plan.is_active === true,
+  );
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [ipAddress, setIpAddress] = useState("");
+  const [planId, setPlanId] = useState(String(vlanPlans[0]?.id ?? ""));
+  const selectedPlan = vlanPlans.find(plan => String(plan.id) === planId);
+  const [expiresAt, setExpiresAt] = useState(() => planExpiryInput(vlanPlans[0]));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const inputStyle: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
+    background: "var(--isp-input-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)",
+    font: "inherit", fontSize: "0.8rem",
+  };
+
+  const submit = async () => {
+    setError("");
+    if (!name.trim() || !phone.trim() || !ipAddress.trim() || !selectedPlan) {
+      setError("Enter the customer details, assigned IP, and an active existing VLAN plan.");
+      return;
+    }
+    if (expiresAt && !fromDateTimeLocal(expiresAt)) {
+      setError("Choose a valid expiry date and time.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const token = getAdminApiToken();
+      const response = await fetch(apiUrl("/api/customers"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          name: name.trim(),
+          phone: phone.trim(),
+          planId: selectedPlan.id,
+          routerId: selectedPlan.router_id,
+          portId: selectedPlan.port_id,
+          type: "vlan",
+          ipAddress: ipAddress.trim(),
+          status: "active",
+          expiryDate: fromDateTimeLocal(expiresAt),
+        }),
+      });
+      const payload = await parseJsonResponse<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || `VLAN user could not be added (${response.status}).`);
+      await onCreated();
+      onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "VLAN user could not be added.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="prepaid-modal" role="dialog" aria-modal="true" aria-labelledby="add-vlan-prepaid-title">
+        <div className="prepaid-modal-heading">
+          <div>
+            <h2 id="add-vlan-prepaid-title">Add VLAN prepaid user</h2>
+            <p>Uses an existing VLAN plan and service port; it does not create a new VLAN.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} style={iconButton("#94a3b8")} aria-label="Close add VLAN user dialog"><X size={15} /></button>
+        </div>
+        {vlanPlans.length === 0 ? (
+          <div role="status" className="prepaid-help">
+            No active VLAN plans with an assigned router and VLAN service port are available. Create or activate a VLAN plan first.
+          </div>
+        ) : (
+          <>
+            <div className="prepaid-form-grid">
+              <label>
+                Customer name
+                <input autoFocus style={inputStyle} value={name} onChange={event => setName(event.target.value)} />
+              </label>
+              <label>
+                Phone number
+                <input style={inputStyle} type="tel" value={phone} onChange={event => setPhone(event.target.value)} />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                Assigned IP address
+                <input style={inputStyle} inputMode="decimal" value={ipAddress} onChange={event => setIpAddress(event.target.value)} placeholder="For example, 10.20.30.45" />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                Existing VLAN plan
+                <select
+                  style={inputStyle}
+                  value={planId}
+                  onChange={event => {
+                    const nextPlanId = event.target.value;
+                    setPlanId(nextPlanId);
+                    setExpiresAt(planExpiryInput(vlanPlans.find(plan => String(plan.id) === nextPlanId)));
+                  }}
+                >
+                  <option value="">Choose a VLAN plan</option>
+                  {vlanPlans.map(plan => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name} · VLAN port #{plan.port_id} · {plan.speed_down}/{plan.speed_up} Mbps · KSh {Number(plan.price).toLocaleString("en-KE")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                Router / VLAN scope
+                <input
+                  style={inputStyle}
+                  readOnly
+                  value={selectedPlan
+                    ? `${routers.find(router => router.id === selectedPlan.router_id)?.name ?? `Router #${selectedPlan.router_id}`} · VLAN service port #${selectedPlan.port_id}`
+                    : ""}
+                />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                Expires at
+                <input style={inputStyle} type="datetime-local" value={expiresAt} onChange={event => setExpiresAt(event.target.value)} />
+                <span className="prepaid-help">Defaults to the selected plan validity. The individual plan speed is enforced below the VLAN’s aggregate cap.</span>
+              </label>
+            </div>
+            {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
+          </>
+        )}
+        <div className="prepaid-modal-actions">
+          <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
+          {vlanPlans.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={saving || !name.trim() || !phone.trim() || !ipAddress.trim() || !selectedPlan}
+              className="prepaid-primary-button"
+            >
+              {saving ? <Loader2 size={13} className="prepaid-spin" /> : <PlusCircle size={13} />}
+              {saving ? "Adding…" : "Add prepaid user"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditUserDialog({
   user, plans, routers, onClose, onSave,
 }: {
@@ -337,6 +510,7 @@ function EditUserDialog({
   onSave: (updates: Record<string, unknown>) => Promise<void>;
 }) {
   const isVlan = String(user.type ?? "").toLowerCase() === "vlan";
+  const isHotspot = ["hotspot", "trial", "trials"].includes(String(user.type ?? "").toLowerCase());
   const [name, setName] = useState(user.name ?? "");
   const [phone, setPhone] = useState(user.phone ?? "");
   const [username, setUsername] = useState(user.username ?? user.pppoe_username ?? "");
@@ -345,6 +519,7 @@ function EditUserDialog({
   const [routerId, setRouterId] = useState(String(user.router_id ?? ""));
   const [expiresAt, setExpiresAt] = useState(() => toDateTimeLocal(user.expires_at));
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const selectedPlan = plans.find(plan => String(plan.id) === planId);
   const inputStyle: React.CSSProperties = {
     width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
@@ -355,6 +530,7 @@ function EditUserDialog({
     if (!name.trim() || (isVlan ? !ipAddress.trim() : !username.trim())) return;
     if (isVlan && (!selectedPlan || !selectedPlan.router_id || !selectedPlan.port_id)) return;
     if (expiresAt && !fromDateTimeLocal(expiresAt)) return;
+    setError("");
     setSaving(true);
     try {
       await onSave({
@@ -368,36 +544,47 @@ function EditUserDialog({
         expires_at: fromDateTimeLocal(expiresAt),
       });
       onClose();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save this user.");
     } finally {
       setSaving(false);
     }
   };
   return (
-    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
       <div className="prepaid-modal" role="dialog" aria-modal="true" aria-labelledby="edit-prepaid-user-title">
         <div className="prepaid-modal-heading">
           <div>
             <h2 id="edit-prepaid-user-title">Edit prepaid user</h2>
             <p>{purchaseUsername(user)}</p>
           </div>
-          <button type="button" onClick={onClose} style={iconButton("#94a3b8")} aria-label="Close edit dialog"><X size={15} /></button>
+          <button type="button" onClick={onClose} disabled={saving} style={iconButton("#94a3b8")} aria-label="Close edit dialog"><X size={15} /></button>
         </div>
         <div className="prepaid-form-grid">
           <label>Name<input style={inputStyle} value={name} onChange={event => setName(event.target.value)} /></label>
-          <label>Phone used for purchase<input style={inputStyle} value={phone} onChange={event => setPhone(event.target.value)} /></label>
+          <label>Phone used for purchase<input style={inputStyle} value={phone} onChange={event => setPhone(event.target.value)} />
+            {isHotspot && <span className="prepaid-help">Changing this phone also changes the Hotspot login on MikroTik.</span>}
+          </label>
           {isVlan
             ? <label>Assigned IP address<input style={inputStyle} inputMode="decimal" value={ipAddress} onChange={event => setIpAddress(event.target.value)} /></label>
-            : <label>Username<input style={inputStyle} value={username} onChange={event => setUsername(event.target.value)} /></label>}
+            : <label>{isHotspot ? "Username (linked to phone)" : "Username"}
+                <input style={inputStyle} value={username} readOnly={isHotspot} onChange={event => setUsername(event.target.value)} />
+              </label>}
           <label>Plan<select style={inputStyle} value={planId} onChange={event => setPlanId(event.target.value)}>
             <option value="">{isVlan ? "Choose a VLAN plan" : "No plan"}</option>
-             {plans.filter(plan => !user.type || String(plan.type).toLowerCase() === String(user.type).toLowerCase()).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price.toFixed(2)}</option>)}
+              {plans.filter(plan =>
+                (!user.type || prepaidServiceType(plan.type) === prepaidServiceType(user.type))
+                && (plan.is_active || plan.id === user.plan_id)
+                && (!user.router_id || plan.router_id === user.router_id)
+                && (!user.port_id || plan.port_id === user.port_id)
+              ).map(plan => <option key={plan.id} value={plan.id}>{plan.name} · {plan.price.toFixed(2)}</option>)}
           </select></label>
           {isVlan
             ? <label>Assigned router / VLAN port<input style={inputStyle} readOnly value={selectedPlan ? `${routers.find(router => router.id === selectedPlan.router_id)?.name ?? `Router #${selectedPlan.router_id}`} · VLAN service port #${selectedPlan.port_id}` : "Select a VLAN plan"} /></label>
-            : <label>Router<select style={inputStyle} value={routerId} onChange={event => setRouterId(event.target.value)}>
+            : <label>Router<select style={inputStyle} value={routerId} disabled={Boolean(user.router_id)} onChange={event => setRouterId(event.target.value)}>
                 <option value="">Unassigned</option>
                 {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
-              </select></label>}
+              </select><span className="prepaid-help">Moving to another router requires a separate service migration.</span></label>}
           <label style={{ gridColumn: "1 / -1" }}>
             Expiry date and time
             <input
@@ -409,8 +596,9 @@ function EditUserDialog({
             <span className="prepaid-help">Use the local date and time shown on this admin panel. Leave blank only for an account with no expiry.</span>
           </label>
         </div>
+        {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
         <div className="prepaid-modal-actions">
-          <button type="button" onClick={onClose} className="prepaid-secondary-button">Cancel</button>
+          <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
           <button type="button" onClick={() => void submit()} disabled={saving || !name.trim() || (isVlan ? !ipAddress.trim() || !selectedPlan?.router_id || !selectedPlan?.port_id : !username.trim())} className="prepaid-primary-button">
             {saving ? <Loader2 size={13} className="prepaid-spin" /> : <Save size={13} />} Save changes
           </button>
@@ -537,6 +725,7 @@ export default function PrepaidUsers() {
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
+  const [addingVlanUser, setAddingVlanUser] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -554,9 +743,11 @@ export default function PrepaidUsers() {
     setActionNotice("");
     setActionBusy(user.id);
     try {
+      const token = getAdminApiToken();
+      if (!token) throw new Error("Your admin session has expired. Sign in again before editing this user.");
       const response = await fetch(apiUrl(`/api/customers/${user.id}`), {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ adminId: ADMIN_ID, ...updates }),
       });
       const payload = await response.json().catch(() => null) as {
@@ -564,15 +755,10 @@ export default function PrepaidUsers() {
         mikrotikSynced?: boolean;
         syncedRouter?: string | null;
       } | null;
-      if (!response.ok) {
-        throw new Error(payload?.error || "The live router account could not be updated.");
-      }
+      if (!response.ok) throw new Error(payload?.error || "The live router account could not be updated.");
+      if (!payload?.mikrotikSynced) throw new Error("The server did not confirm that MikroTik was updated. Refresh this user before trying again.");
       await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
-      setActionNotice(
-        payload?.mikrotikSynced
-          ? `Saved and applied to MikroTik${payload.syncedRouter ? ` (${payload.syncedRouter})` : ""}.`
-          : "Saved, but no MikroTik router was updated because this account has no active plan.",
-      );
+      setActionNotice(`Saved and applied to MikroTik${payload.syncedRouter ? ` (${payload.syncedRouter})` : ""}.`);
     } finally {
       setActionBusy(null);
     }
@@ -795,10 +981,19 @@ export default function PrepaidUsers() {
           plans={plans}
           routers={routers}
           onClose={() => setEditingUser(null)}
-          onSave={updates => updateUser(editingUser, updates).catch(error => {
-            setActionError(error instanceof Error ? error.message : "Could not save this user.");
-            throw error;
-          })}
+          onSave={updates => updateUser(editingUser, updates)}
+        />
+      )}
+      {addingVlanUser && (
+        <AddVlanPrepaidDialog
+          plans={plans}
+          routers={routers}
+          onClose={() => setAddingVlanUser(false)}
+          onCreated={async () => {
+            await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+            setActionError("");
+            setActionNotice("VLAN prepaid user added and applied to the existing VLAN service.");
+          }}
         />
       )}
       {extendingUser && (
@@ -818,7 +1013,7 @@ export default function PrepaidUsers() {
               Prepaid Users
             </h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: 0 }}>
-              Every paid account is recorded here with its assigned username and access history.
+              Manage prepaid accounts, renewals, expiry, service status, and measured usage.
             </p>
           </div>
 
@@ -864,6 +1059,19 @@ export default function PrepaidUsers() {
           <button onClick={() => qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] })}
             style={BTN("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>
             <RefreshCw size={13} /> Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => setAddingVlanUser(true)}
+            title="Add a prepaid user to an existing VLAN service"
+            style={{
+              ...BTN("var(--isp-accent)"),
+              ...(!plans.some(plan => plan.type === "vlan" && plan.router_id != null && plan.port_id != null && plan.is_active === true)
+                ? { opacity: 0.65 }
+                : {}),
+            }}
+          >
+            <PlusCircle size={13} /> Add VLAN user
           </button>
         </div>
 
@@ -1034,7 +1242,7 @@ export default function PrepaidUsers() {
                    <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
                     {search || typeFilter || statusTab !== "all"
                       ? "No users match this filter."
-                      : "No prepaid users yet. Add customers from the Customers section."}
+                      : "No prepaid users yet. Add a VLAN user here, or add Hotspot, PPPoE, and Static customers from the Customers section."}
                   </td>
                 </tr>
               ) : (

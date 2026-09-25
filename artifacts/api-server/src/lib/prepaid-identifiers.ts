@@ -46,6 +46,22 @@ export function isPrepaidHotspotUsername(value: unknown): boolean {
   return typeof value === "string" && /^\d{9,15}-(?:[A-Z0-9]{2}:[A-Z0-9]{2}(?:-[a-zA-Z0-9_-]+)?|[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?)$/i.test(value.trim());
 }
 
+/** Keep the existing login and suffix stable unless the contact phone actually changes. */
+export function prepaidHotspotUsernameForEdit(
+  currentUsername: unknown,
+  currentPhone: unknown,
+  requestedPhone: unknown,
+): string {
+  const phone = normalisePrepaidPhone(requestedPhone);
+  if (!phone) return "";
+  const username = String(currentUsername ?? "").trim();
+  if (username && normalisePrepaidPhone(currentPhone) === phone) return username;
+  if (isPrepaidHotspotUsername(username)) {
+    return `${phone}-${username.slice(username.indexOf("-") + 1)}`;
+  }
+  return prepaidHotspotUsername(phone);
+}
+
 /**
  * The admin plan sync uses a normalized, service-scoped plan name as the
  * RouterOS hotspot user profile. The scope prevents same-named plans on
